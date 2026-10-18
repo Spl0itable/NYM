@@ -152,7 +152,7 @@ Object.assign(NYM.prototype, {
             this.updateUserList();
 
             this.displaySystemMessage(`Blocked keyword: "${keyword}"`);
-            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+            if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
         }
     },
 
@@ -172,13 +172,23 @@ Object.assign(NYM.prototype, {
         this.saveBlockedKeywords();
         this.updateKeywordList();
 
+        const index = typeof this._messageIndex === 'function' ? this._messageIndex() : null;
         document.querySelectorAll('.message').forEach(msg => {
             const author = msg.dataset.author || '';
             const content = msg.querySelector('.message-content');
+            const found = msg.dataset.messageId && index ? index.get(msg.dataset.messageId) : null;
+            if (found && typeof this.isContentHidden === 'function') {
+                msg.classList.toggle('blocked', this.isContentHidden(found));
+                return;
+            }
 
-            if (content && !this.blockedUsers.has(msg.dataset.pubkey)) {
+            const cleanAuthor = this.parseNymFromDisplay(author);
+            const personHidden = typeof this.isPersonHidden === 'function'
+                ? this.isPersonHidden(msg.dataset.pubkey || '', cleanAuthor)
+                : this.blockedUsers.has(msg.dataset.pubkey);
+            if (content && !personHidden) {
                 const contentText = content.textContent.toLowerCase();
-                const cleanNick = this.parseNymFromDisplay(author).toLowerCase();
+                const cleanNick = cleanAuthor.toLowerCase();
                 const hasBlockedKeyword = Array.from(this.blockedKeywords).some(kw =>
                     contentText.includes(kw) || (cleanNick && cleanNick.includes(kw))
                 );
@@ -193,7 +203,7 @@ Object.assign(NYM.prototype, {
         this.updateUserList();
 
         this.displaySystemMessage(`Unblocked keyword: "${keyword}"`);
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
     },
 
     updateKeywordList() {
@@ -951,15 +961,26 @@ Object.assign(NYM.prototype, {
         const clean = this.parseNymFromDisplay(baseNym).substring(0, 20);
         if (!clean || clean.toLowerCase() === 'nym') return;
         const display = `${clean}#${this.getPubkeySuffix(pubkey)}`;
-        const sweep = (store, persist) => {
+        const judge = typeof this.isContentHidden === 'function' && pubkey !== this.pubkey;
+        const deltas = new Map();
+        let flipped = false;
+        const sweep = (store, persist, channels) => {
             if (!store || typeof store.forEach !== 'function') return;
             store.forEach((list, key) => {
                 if (!Array.isArray(list)) return;
+                const lastRead = (channels && this.channelLastRead && this.channelLastRead.get(key)) || 0;
                 let touched = false;
                 for (const m of list) {
                     if (!m || m.pubkey !== pubkey || m.author === display) continue;
+                    const was = judge ? this.isContentHidden(m) : false;
                     m.author = display;
                     touched = true;
+                    if (!judge) continue;
+                    const now = this.isContentHidden(m);
+                    if (now === was) continue;
+                    flipped = true;
+                    if (!channels || m.isOwn || m.slowHeld || m._spamGated || (m.created_at || 0) <= lastRead) continue;
+                    deltas.set(key, (deltas.get(key) || 0) + (now ? -1 : 1));
                 }
                 if (!touched) return;
                 if (this.channelDOMCache) this.channelDOMCache.delete(key);
@@ -968,13 +989,24 @@ Object.assign(NYM.prototype, {
                 }
             });
         };
-        sweep(this.messages, this.persistChannelMessages);
-        sweep(this.pmMessages, this.persistPMMessages);
+        sweep(this.messages, this.persistChannelMessages, true);
+        sweep(this.pmMessages, this.persistPMMessages, false);
         const safePk = this._safePubkey(pubkey);
-        if (!safePk) return;
-        document.querySelectorAll(`.message[data-pubkey="${safePk}"]`).forEach(el => {
-            el.dataset.author = display;
-        });
+        if (safePk) {
+            document.querySelectorAll(`.message[data-pubkey="${safePk}"]`).forEach(el => {
+                el.dataset.author = display;
+            });
+        }
+        if (!flipped) return;
+        for (const [key, delta] of deltas) {
+            if (!key.startsWith('#') || !this.unreadCounts) continue;
+            const next = Math.max(0, (this.unreadCounts.get(key) || 0) + delta);
+            if (typeof this._setUnreadCount === 'function') this._setUnreadCount(key, next);
+            else this.unreadCounts.set(key, next);
+            if (typeof this._renderUnreadBadge === 'function') this._renderUnreadBadge(key, next);
+        }
+        if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged({ force: true });
+        if (typeof this._refreshRenderedVisibility === 'function') this._refreshRenderedVisibility(pubkey);
     },
 
     updateRenderedAvatars(pubkey, avatarUrl) {
@@ -1415,6 +1447,7 @@ Object.assign(NYM.prototype, {
 
     handleFriendPresenceRumor(rumor, pubkey) {
         if (!pubkey || pubkey === this.pubkey) return;
+        if (this.blockedUsers && this.blockedUsers.has(pubkey)) return;
         // Only honor presence from known users or friends so strangers can't inject themselves as online.
         if (!this.isFriend?.(pubkey) && !this.users.has(pubkey)) return;
         const statusTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'status');
@@ -1467,6 +1500,7 @@ Object.assign(NYM.prototype, {
         const eventTime = event.created_at || 0;
 
         if (pubkey === this.pubkey) return;
+        if (this.blockedUsers && this.blockedUsers.has(pubkey)) return;
 
         if (!this.presenceTimestamps) this.presenceTimestamps = new Map();
         const lastTimestamp = this.presenceTimestamps.get(pubkey) || 0;
@@ -1617,6 +1651,12 @@ Object.assign(NYM.prototype, {
         });
     },
 
+    _userListHidden(pubkey, nym) {
+        if (!pubkey || pubkey === this.pubkey) return false;
+        if (this.blockedUsers && this.blockedUsers.has(pubkey)) return true;
+        return typeof this.isPersonHidden === 'function' && this.isPersonHidden(pubkey, nym);
+    },
+
     _doUpdateUserList() {
         const userListContent = document.getElementById('userListContent');
         if (!userListContent) return;
@@ -1636,7 +1676,6 @@ Object.assign(NYM.prototype, {
 
         const themeBitchat = this.settings.theme === 'bitchat';
         const verifiedBotSet = this.verifiedBotPubkeys;
-        const blockedUsers = this.blockedUsers;
 
         const candidates = [];
         let activeCount = 0;
@@ -1644,8 +1683,7 @@ Object.assign(NYM.prototype, {
 
         this.users.forEach((user, pubkey) => {
             if (!user || !user.nym) return;
-            if (blockedUsers.has(pubkey)) return;
-            if (this.blockedKeywords.size && this.hasBlockedKeyword('', user.nym)) return;
+            if (this._userListHidden(pubkey, user.nym)) return;
             if (pmOnlyPubkeys && !pmOnlyPubkeys.has(pubkey)) return;
             if (pubkey !== this.pubkey && !this.isFriend?.(pubkey) &&
                 typeof this.isGibberishNym === 'function' &&
@@ -1896,7 +1934,7 @@ Object.assign(NYM.prototype, {
             label.appendChild(document.createTextNode(' '));
             const badge = document.createElement('span');
             badge.className = 'verified-badge';
-            badge.title = isDev ? this.verifiedDeveloper.title : 'Nymchat Bot';
+            badge.dataset.tip = isDev ? this.verifiedDeveloper.title : 'Nymchat Bot';
             badge.textContent = '✓';
             label.appendChild(badge);
         }
@@ -2011,7 +2049,7 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(`Unblocked ${this.getNymHtmlFromPubkey(pubkey)}`, 'system', { html: true });
         this.updateUserList();
         this.updateBlockedList();
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
     },
 
     toggleBlockUserByPubkey(pubkey) {
@@ -2226,7 +2264,7 @@ Object.assign(NYM.prototype, {
         this.updateFriendsList();
         this._refreshFriendBadgesFor(pubkey);
         if (typeof this.reapplyImageBlur === 'function') this.reapplyImageBlur();
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
     },
 
     _refreshFriendBadgesFor(pubkey) {

@@ -35,6 +35,104 @@ final RegExp _rxCodeSpans = RegExp(r'```[\s\S]*?```|```[\s\S]*$|`[^`\n]+?`');
 
 final RegExp _rxEmphasisSentinel = RegExp('[\uFDE0-\uFDEF]');
 
+final RegExp _rxMdLink = RegExp(
+    r'!?\[([^\[\]\n]*)\]\((?:<([^\s>]+)>|((?:[^\s()]|\([^\s()]*\))+))\)');
+
+final RegExp _rxHttpUrl = RegExp(r'^https?://.', caseSensitive: false);
+
+final RegExp _rxBracketedUrl = RegExp('\\[(https?://[^\\s\\[\\]<>"\x01]+)\\](?!\\()');
+
+final RegExp _rxBlockSlot = RegExp('\x01[FM]\\d+\x01');
+
+final RegExp _rxAngledUrl = RegExp('<(https?://[^\\s<>"\x01]+)>');
+
+final RegExp _rxBareUrl = RegExp(
+    'https?://[^\\s<>"\x01\u3001\u3002\u3008-\u3011\uFF01\uFF08\uFF09\uFF0C\uFF0E\uFF1A\uFF1B\uFF1F\u2018\u2019\u201C\u201D\u00AB\u00BB\u2026]+');
+
+final RegExp _rxLinkHost = RegExp(
+    r'(?<![a-z0-9-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,24}|xn--[a-z0-9-]{1,59}))(?![a-z0-9])');
+
+final RegExp _rxLinkIgnorable = RegExp(
+    '[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0]');
+
+final RegExp _rxLinkFullwidth = RegExp('[\uFF01-\uFF5E]');
+
+final RegExp _rxLinkDots = RegExp('[\u2024\u3002\uFE12\uFE52\uFF61]');
+
+final RegExp _rxLinkMarkers = RegExp('[*_~|`\\\\\u201C\u201D\u00AB\u00BB]');
+
+final RegExp _rxLinkRun = RegExp(r'[\p{L}\p{N}\p{M}.-]+', unicode: true);
+
+final RegExp _rxLetterDotLetter = RegExp(r'\p{L}\.\p{L}', unicode: true);
+
+final RegExp _rxNonAscii = RegExp(r'[^\x00-\x7F]');
+
+const Set<String> _linkFileExts = {
+  'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'py', 'ipynb',
+  'rb', 'php', 'kt', 'kts', 'swift', 'dart', 'go', 'cpp', 'hpp', 'cs', 'css',
+  'scss', 'sass', 'less', 'html', 'htm', 'xml', 'yml', 'yaml', 'toml', 'ini',
+  'cfg', 'conf', 'env', 'txt', 'csv', 'tsv', 'log', 'lock', 'sql', 'bash',
+  'zsh', 'bat', 'cmd', 'vue', 'svelte', 'lua', 'scala', 'exs', 'erl', 'hs',
+  'clj', 'gradle', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'tar',
+  'gz', 'tgz', 'exe', 'dll', 'dmg', 'apk', 'ipa', 'wasm', 'wav',
+};
+
+String _linkHost(String url) {
+  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
+  return host.startsWith('www.') ? host.substring(4) : host;
+}
+
+String _linkLabelText(String label) => label
+    .replaceAll(_rxLinkIgnorable, '')
+    .replaceAllMapped(_rxLinkFullwidth,
+        (m) => String.fromCharCode(m[0]!.codeUnitAt(0) - 0xFEE0))
+    .replaceAll(_rxLinkDots, '.')
+    .replaceAll(_rxLinkMarkers, '')
+    .trim()
+    .toLowerCase();
+
+bool _linkLabelDisguises(String label, String target) {
+  final host = _linkHost(target);
+  final text = _linkLabelText(label);
+  if (host.isEmpty ||
+      text.isEmpty ||
+      text.startsWith('http://') ||
+      text.startsWith('https://')) {
+    return true;
+  }
+  final tld = host.substring(host.lastIndexOf('.') + 1);
+  for (final m in _rxLinkHost.allMatches(text)) {
+    var named = m[1]!;
+    if (named.startsWith('www.')) named = named.substring(4);
+    final ext = named.substring(named.lastIndexOf('.') + 1);
+    if (_linkFileExts.contains(ext) && ext != tld) continue;
+    if (host != named && !host.endsWith('.$named')) return true;
+  }
+  final rest = text.replaceAll(_rxLinkHost, ' ');
+  return _rxLinkRun.allMatches(rest).any((m) =>
+      _rxLetterDotLetter.hasMatch(m[0]!) && _rxNonAscii.hasMatch(m[0]!));
+}
+
+String _trimLinkEnd(String url) {
+  var u = url;
+  int count(String ch) => ch.allMatches(u).length;
+  while (u.isNotEmpty) {
+    final last = u[u.length - 1];
+    if ('.,;:!?\''.contains(last)) {
+      u = u.substring(0, u.length - 1);
+    } else if (last == ')' && count('(') < count(')')) {
+      u = u.substring(0, u.length - 1);
+    } else if (last == ']' && count('[') < count(']')) {
+      u = u.substring(0, u.length - 1);
+    } else if (last == '}' && count('{') < count('}')) {
+      u = u.substring(0, u.length - 1);
+    } else {
+      break;
+    }
+  }
+  return u;
+}
+
 int? parseTimestampSeconds(String raw) {
   if (!RegExp(r'^-?\d{1,17}$').hasMatch(raw)) return null;
   final n = int.tryParse(raw);
@@ -259,8 +357,14 @@ class InlineCodeNode extends InlineNode {
 
 /// A bare `https?://` link that isn't media, a channel link or an invite.
 class LinkNode extends InlineNode {
-  const LinkNode(this.url);
+  const LinkNode(this.url, {this.label, this.children});
   final String url;
+
+  final String? label;
+
+  final List<InlineNode>? children;
+
+  String get shown => label ?? url;
 }
 
 /// `@name` or `@name#xxxx`; [suffix] is the 4-hex tag without `#`, or null.
@@ -679,6 +783,25 @@ class NymFormat {
           TimestampNode(seconds: seconds, style: m[2] ?? 'f', raw: m[0]!));
       return 'T$idx';
     });
+    final links = <LinkNode>[];
+    if (ctx.commonMark) {
+      s = s.replaceAllMapped(_rxMdLink, (m) {
+        final label = m[1]!;
+        final target = m[2] ?? m[3]!;
+        if (target.contains('\x01')) return m[0]!;
+        if (!_rxHttpUrl.hasMatch(target)) return label;
+        if (_rxBlockSlot.hasMatch(label)) return m[0]!;
+        final kids = _labelNodes(label, ctx.commonMark, inlineCode, stamps);
+        final shown = _plainText(kids);
+        final idx = links.length;
+        links.add(_linkLabelDisguises(shown, target)
+            ? LinkNode(target)
+            : LinkNode(target, label: shown, children: kids));
+        return 'L$idx';
+      });
+      s = s.replaceAllMapped(_rxBracketedUrl, (m) => m[1]!);
+      s = s.replaceAllMapped(_rxAngledUrl, (m) => m[1]!);
+    }
 
     // Code placeholder lines become code blocks, `#` lines headings, the rest paragraphs.
     final blocks = <FormatBlock>[];
@@ -688,14 +811,16 @@ class NymFormat {
     final listBuf = <_ListLine>[];
 
     List<InlineNode> inline(String t) =>
-        _collapseMedia(_parseInline(t, ctx, codeBlocks, inlineCode, stamps, notes));
+        _collapseMedia(
+            _parseInline(t, ctx, codeBlocks, inlineCode, stamps, notes, links));
 
     void flushPara() {
       if (paraBuf.isEmpty) return;
       final joined = paraBuf.join('\n');
       paraBuf.clear();
       blocks.addAll(
-          _inlineToBlocks(joined, ctx, codeBlocks, inlineCode, stamps, notes));
+          _inlineToBlocks(
+              joined, ctx, codeBlocks, inlineCode, stamps, notes, links));
     }
 
     void flushList() {
@@ -777,9 +902,10 @@ class NymFormat {
     List<String> inlineCode,
     List<TimestampNode> stamps,
     List<MediaNote> notes,
+    List<LinkNode> links,
   ) {
     final inlines =
-        _parseInline(text, ctx, codeBlocks, inlineCode, stamps, notes);
+        _parseInline(text, ctx, codeBlocks, inlineCode, stamps, notes, links);
 
     // Adjacent media (whitespace between) collapse into one gallery.
     final blocks = <FormatBlock>[];
@@ -924,11 +1050,16 @@ class NymFormat {
   static String _markEmphasis(String text, bool commonMark) {
     var s = _wrapBalanced(text, _rxSpoiler, _openSpoiler);
     s = _wrapBalanced(s, RegExp(r'\*\*(.+?)\*\*'), _openBold);
-    s = _wrapBalanced(s, RegExp(r'(?<!\w)__(.+?)__(?!\w)'),
+    s = _wrapBalanced(
+        s,
+        RegExp(r'(?<![\p{L}\p{N}_])__(.+?)__(?![\p{L}\p{N}_])', unicode: true),
         commonMark ? _openBold : _openUnderline);
     s = _wrapBalanced(s, RegExp(r'(?<![:/])\*([^*\s][^*]*)\*'), _openItalic);
     s = _wrapBalanced(
-        s, RegExp(r'(?<![:/\w])_([^_\s][^_]*)_(?!\w)'), _openItalic);
+        s,
+        RegExp(r'(?<![:/\p{L}\p{N}_])_([^_\s][^_]*)_(?![\p{L}\p{N}_])',
+            unicode: true),
+        _openItalic);
     s = _wrapBalanced(s, RegExp(r'~~(.+?)~~'), _openStrike);
     return s;
   }
@@ -940,8 +1071,60 @@ class NymFormat {
     List<String> inlineCode,
     List<TimestampNode> stamps,
     List<MediaNote> notes,
-  ) {
-    final marked = _markEmphasis(text, ctx.commonMark);
+    List<LinkNode> links,
+  ) =>
+      _parseMarked(
+          _markEmphasis(text, ctx.commonMark),
+          (leaf, blockStart, blockEnd) => _parseLeaf(
+              leaf, ctx, codeBlocks, inlineCode, stamps, notes, links,
+              blockStart: blockStart, blockEnd: blockEnd));
+
+  static List<InlineNode> _labelNodes(String label, bool commonMark,
+          List<String> inlineCode, List<TimestampNode> stamps) =>
+      _parseMarked(_markEmphasis(label, commonMark), (leaf, _, _) {
+        var tokens = <_Tok>[_RawTok(leaf)];
+        tokens = _splitByRegex(tokens, RegExp('\x01C(\\d+)\x01'),
+            (m) => _NodeTok(InlineCodeNode(inlineCode[int.parse(m[1]!)])));
+        tokens = _splitByRegex(tokens, RegExp('\x01T(\\d+)\x01'),
+            (m) => _NodeTok(stamps[int.parse(m[1]!)]));
+        return [
+          for (final t in _mergeRaw(tokens))
+            if (t is _NodeTok)
+              t.node
+            else if (t is _RawTok && t.text.isNotEmpty)
+              TextSpanNode(t.text),
+        ];
+      });
+
+  static String _plainText(List<InlineNode> nodes) {
+    final buf = StringBuffer();
+    void walk(List<InlineNode> list) {
+      for (final n in list) {
+        switch (n) {
+          case TextSpanNode(:final text):
+            buf.write(text);
+          case InlineCodeNode(:final code):
+            buf.write(code);
+          case TimestampNode(:final seconds, :final style):
+            buf.write(formatDiscordTimestamp(seconds, style));
+          case BoldNode(:final children):
+          case ItalicNode(:final children):
+          case StrikeNode(:final children):
+          case UnderlineNode(:final children):
+          case SpoilerNode(:final children):
+            walk(children);
+          default:
+            break;
+        }
+      }
+    }
+
+    walk(nodes);
+    return buf.toString();
+  }
+
+  static List<InlineNode> _parseMarked(String marked,
+      List<InlineNode> Function(String leaf, bool blockStart, bool blockEnd) leafNodes) {
     var i = 0;
     List<InlineNode> parse(int? closeUnit) {
       final out = <InlineNode>[];
@@ -950,10 +1133,8 @@ class NymFormat {
       void flush() {
         if (buf.isEmpty) return;
         final top = closeUnit == null;
-        out.addAll(_parseLeaf(
-            buf.toString(), ctx, codeBlocks, inlineCode, stamps, notes,
-            blockStart: top && leafStart == 0,
-            blockEnd: top && i >= marked.length));
+        out.addAll(leafNodes(buf.toString(), top && leafStart == 0,
+            top && i >= marked.length));
         buf.clear();
       }
 
@@ -1081,11 +1262,15 @@ class NymFormat {
     List<CodeBlock> codeBlocks,
     List<String> inlineCode,
     List<TimestampNode> stamps,
-    List<MediaNote> notes, {
+    List<MediaNote> notes,
+    List<LinkNode> links, {
     bool blockStart = true,
     bool blockEnd = true,
   }) {
     var tokens = <_Tok>[_RawTok(text)];
+
+    tokens = _splitByRegex(tokens, RegExp('L(\\d+)'),
+        (m) => _NodeTok(links[int.parse(m[1]!)]));
 
     // Fenced placeholders are block-level, but handle inline ones.
     tokens = _splitByRegex(tokens, RegExp(r'C(\d+)'),
@@ -1154,8 +1339,15 @@ class NymFormat {
           GroupInviteChip(name: name.isEmpty ? 'group' : name, token: token));
     });
 
-    tokens = _splitByRegex(
-        tokens, RegExp(r'https?://[^\s]+'), (m) => _NodeTok(LinkNode(m[0]!)));
+    tokens = _splitByRegex(tokens, _rxBareUrl, (m) {
+      final url = m[0]!;
+      final link = _trimLinkEnd(url);
+      if (!_rxHttpUrl.hasMatch(link)) return _RawTok(url);
+      final rest = url.substring(link.length);
+      return rest.isEmpty
+          ? _NodeTok(LinkNode(link))
+          : _MultiTok([_NodeTok(LinkNode(link)), _RawTok(rest)]);
+    });
 
     // After bare links so an entity inside a URL stays part of it; the lookbehind blocks mid-token matches.
     tokens = _splitByRegex(

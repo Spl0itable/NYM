@@ -172,7 +172,16 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
             }),
           ),
           Consumer(builder: (context, ref, _) {
-            return _MeshDiagnostics(mesh: ref.watch(meshControllerProvider));
+            ref.watch(contentFilterRevisionProvider);
+            final mesh = ref.watch(meshControllerProvider);
+            final app = ref.read(appStateProvider);
+            return _MeshDiagnostics(
+              mesh: mesh,
+              peers: [
+                for (final p in mesh.peers)
+                  if (!meshPeerHidden(app, p)) p
+              ],
+            );
           }),
         ],
       ),
@@ -225,7 +234,7 @@ class _MeshBody extends ConsumerWidget {
     final app = ref.read(appStateProvider);
     final peers = [
       for (final p in mesh.peers)
-        if (!app.isPersonHidden(p.nostrPubkey ?? '', p.nickname ?? '')) p
+        if (!meshPeerHidden(app, p)) p
     ]..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
     final peersTitle = enabled && mesh.running && peers.isNotEmpty
         ? tr('Peers nearby ({count})', {'count': peers.length})
@@ -540,9 +549,13 @@ class _PeerRow extends ConsumerWidget {
   }
 }
 
+bool meshPeerHidden(AppState app, MeshPeer p) =>
+    app.isPersonHidden(p.nostrPubkey ?? '', p.nickname ?? '');
+
 class _MeshDiagnostics extends StatefulWidget {
-  const _MeshDiagnostics({required this.mesh});
+  const _MeshDiagnostics({required this.mesh, required this.peers});
   final MeshUiState mesh;
+  final List<MeshPeer> peers;
 
   @override
   State<_MeshDiagnostics> createState() => _MeshDiagnosticsState();
@@ -554,7 +567,7 @@ class _MeshDiagnosticsState extends State<_MeshDiagnostics> {
   List<String> _ids() => [
         if (widget.mesh.myPeerID != null)
           '${tr('Your mesh ID')}  ${widget.mesh.myPeerID}',
-        for (final p in widget.mesh.peers) '${p.displayName}  ${p.peerID}',
+        for (final p in widget.peers) '${p.displayName}  ${p.peerID}',
       ];
 
   @override

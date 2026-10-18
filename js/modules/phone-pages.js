@@ -436,6 +436,7 @@
         if (v.type === 'pm') {
             if (v.id === botKey(n)) return true;
             if (n.blockedUsers && n.blockedUsers.has(v.id)) return false;
+            if (typeof n._pmPeerHidden === 'function' && n._pmPeerHidden(v.id)) return false;
             return !!(n.pmConversations && n.pmConversations.has(v.id));
         }
         if (v.type === 'group') {

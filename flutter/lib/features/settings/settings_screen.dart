@@ -63,7 +63,6 @@ import '../identity/nick_edit_modal.dart';
 import '../identity/remote_panic.dart';
 import '../identity/remote_panic_logic.dart';
 import '../../widgets/wallpaper/wallpaper_cache.dart';
-import '../../services/filter/filter_packs.dart';
 import '../toasts/toast_center.dart';
 import '../../state/fallback_notice.dart';
 import 'settings_helpers.dart';
@@ -196,53 +195,46 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   // Live text-size preview; commits on change end.
   double? _textSizePreview;
 
-  /// Save-gated draft of settings; live-applied controls also mirror into it so Save doesn't revert them.
-  late Settings _draft;
+  late final NostrController _nostr;
 
-  // Save-gated drafts for the KV-only keypair, PoW and blur controls.
-  late String _draftKeypair; // 'persistent' | 'random' | 'hardcore'
-  late int _draftPow;
-  late String _draftVerified;
-  late Set<String> _draftFilterPacks;
-  late String _draftBlur; // 'true' | 'friends' | 'false'
-
-  @override
-  void initState() {
-    super.initState();
+  Settings _liveSettings(Settings raw) {
     final kv = ref.read(keyValueStoreProvider);
-    _draft = ref.read(settingsProvider);
-    // Coerce legacy indicator-scope values: 'true' -> everywhere, 'false' -> disabled, unknown -> legacy-derived fallback.
-    _draft = _draft.copyWith(
+    return raw.copyWith(
       readReceiptsScope: normalizeIndicatorScope(
-        _draft.readReceiptsScope,
+        raw.readReceiptsScope,
         fallback: kv.getString(StorageKeys.readReceiptsEnabled) == 'false'
             ? 'disabled'
             : 'everywhere',
       ),
       typingIndicatorsScope: normalizeIndicatorScope(
-        _draft.typingIndicatorsScope,
+        raw.typingIndicatorsScope,
         fallback: kv.getString(StorageKeys.typingIndicatorsEnabled) == 'false'
             ? 'disabled'
             : 'everywhere',
       ),
     );
-    final ctrl0 = ref.read(settingsProvider.notifier);
-    _draftKeypair = ctrl0.keypairMode;
-    // Map retired 8/12 values onto the offered set so the dropdown isn't empty.
-    _draftPow = normalizePowDifficulty(ctrl0.powDifficulty);
-    _draftVerified = ctrl0.appVerifiedFilter;
-    _draftFilterPacks = ctrl0.filterPacks.toSet();
-    // Blur seeds from the per-pubkey key, then the global key; anything but 'friends'/'true' reads as 'false'.
+  }
+
+  String _blurValue() {
+    final kv = ref.read(keyValueStoreProvider);
     final selfPk = ref.read(appStateProvider).selfPubkey;
     final rawBlur = (selfPk.isNotEmpty
             ? kv.getString(StorageKeys.imageBlurFor(selfPk))
             : null) ??
         kv.getString(StorageKeys.imageBlur);
-    _draftBlur = rawBlur == null
-        ? 'true' // default to blur
+    return rawBlur == null
+        ? 'true'
         : rawBlur == 'friends'
             ? 'friends'
             : (rawBlur == 'true' ? 'true' : 'false');
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final kv = ref.read(keyValueStoreProvider);
+    _nostr = ref.read(nostrControllerProvider);
+    _nostr.settingsScreenOpened();
     _landing = readLandingChannel(kv);
     _landingController.text = _landing.label;
     // Restore the persisted section collapse layout (`{key: 1}` per collapsed section).
@@ -290,8 +282,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       });
     }
     _landingFocus.addListener(() {
-      if (!_landingFocus.hasFocus && _landingOpen) {
-        setState(() => _landingOpen = false);
+      if (!_landingFocus.hasFocus && mounted) {
+        setState(() {
+          _landingOpen = false;
+          _landingController.text = _landing.label;
+        });
       }
     });
     _loadCacheSize();
@@ -339,6 +334,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   void dispose() {
+    _nostr.settingsScreenClosed();
+    _nostr.flushPendingSettingsSync();
     _searchController.dispose();
     _keywordController.dispose();
     _transferPubkeyController.dispose();
@@ -363,44 +360,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   static String _optText<T>(List<({T value, String label})> items) =>
       items.map((it) => it.label).join(' ');
 
-  /// Mutates the Save-gated [_draft] instead of committing.
-  void _mutate(Settings Function(Settings draft) fn) {
-    setState(() {
-      _draft = fn(_draft);
-      _touched = true;
-    });
-  }
-
-  bool _touched = false;
-
-  void _mirror(Settings Function(Settings draft) fn) {
-    if (!mounted) return;
-    setState(() => _draft = fn(_draft));
-  }
-
-  int _proximityAsk = 0;
+  static int _proximityAsk = 0;
 
   bool _cachePMsPending = false;
 
   Future<void> _onProximityFlip(bool on) async {
     final ctrl = ref.read(settingsProvider.notifier);
     final ask = ++_proximityAsk;
-    _mirror((d) => d.copyWith(sortByProximity: on));
-    final granted = await _resolveProximity(on);
+    setState(() => _proximityPending = on);
+    final granted = await _resolveProximity(on, ask);
     if (ask != _proximityAsk) return;
+    if (mounted) setState(() => _proximityPending = null);
     ctrl.setSortByProximity(granted);
-    _mirror((d) => d.copyWith(sortByProximity: granted));
   }
+
+  bool? _proximityPending;
 
   Future<void> _onCachePMsFlip(bool on) async {
     final ctrl = ref.read(settingsProvider.notifier);
     final nostr = ref.read(nostrControllerProvider);
     final wasOn = ref.read(settingsProvider).cachePMs;
     if (wasOn && !on) {
-      setState(() {
-        _cachePMsPending = true;
-        _draft = _draft.copyWith(cachePMs: false);
-      });
+      setState(() => _cachePMsPending = true);
       final ok = await showAppConfirm(
         context,
         tr(kCachePMsOffBody),
@@ -408,15 +389,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         okLabel: tr(kCachePMsOffOk),
         danger: true,
       );
-      if (mounted) {
-        setState(() {
-          _cachePMsPending = false;
-          _draft = _draft.copyWith(cachePMs: !ok);
-        });
-      }
+      if (mounted) setState(() => _cachePMsPending = false);
       if (!ok) return;
-    } else {
-      _mirror((d) => d.copyWith(cachePMs: on));
     }
     ctrl.setCachePMs(on);
     if (wasOn && !on) unawaited(nostr.clearPmGroupCache());
@@ -424,16 +398,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   void _onFilterPackFlip(String id, bool on) {
     final ctrl = ref.read(settingsProvider.notifier);
-    setState(() {
-      if (on) {
-        _draftFilterPacks.add(id);
-      } else {
-        _draftFilterPacks.remove(id);
-      }
-    });
-    ctrl.setFilterPacks(_draftFilterPacks.toList());
-    unawaited(FilterPacks.setActive(Set.of(_draftFilterPacks)));
-    ctrl.notifySyncedChange();
+    final packs = ctrl.filterPacks.toSet();
+    if (on) {
+      packs.add(id);
+    } else {
+      packs.remove(id);
+    }
+    ctrl.setFilterPacks(packs.toList());
+    unawaited(ref
+        .read(appStateProvider.notifier)
+        .setActiveFilterPacks(Set.of(packs)));
+    setState(() {});
   }
 
   bool _remotePanicPending = false;
@@ -445,14 +420,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // Watch live settings so live-applied controls restyle at once; sections render from [_draft].
-    ref.watch(settingsProvider);
-    final settings = _draft;
+    final settings = _liveSettings(ref.watch(settingsProvider));
     final ctrl = ref.read(settingsProvider.notifier);
     // Re-render moderation lists on add/remove.
     ref.watch(appStateProvider);
     // Re-render the pending user-to-user transfers list.
-    ref.watch(pendingUserSettingsTransfersProvider);
+    ref.watch(visibleSettingsTransfersProvider);
 
     // Mobile Gestures only at ≤768px width.
     final isMobileWidth = MediaQuery.of(context).size.width <= 768;
@@ -580,52 +553,43 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
 
     if (inSheet) {
-      return NymDiscardGuard(
-        isDirty: () => _touched,
-        child: KeyedSubtree(
-          key: const ValueKey('settingsPage'),
-          child: body,
-        ),
+      return KeyedSubtree(
+        key: const ValueKey('settingsPage'),
+        child: body,
       );
     }
 
     if (twoPane) {
-      return NymDiscardGuard(
-        isDirty: () => _touched,
-        child: ModalChrome.shell(
-          context,
-          maxWidth: 960,
-          child: ModalChrome.box(
-            c,
-            child: SizedBox(
-              height: size.height * 0.85,
-              child: Row(
-                key: const ValueKey('settingsTwoPane'),
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _nav(c, sections, q.isNotEmpty),
-                  Expanded(child: body),
-                ],
-              ),
+      return ModalChrome.shell(
+        context,
+        maxWidth: 960,
+        child: ModalChrome.box(
+          c,
+          child: SizedBox(
+            height: size.height * 0.85,
+            child: Row(
+              key: const ValueKey('settingsTwoPane'),
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _nav(c, sections, q.isNotEmpty),
+                Expanded(child: body),
+              ],
             ),
           ),
         ),
       );
     }
 
-    return NymDiscardGuard(
-      isDirty: () => _touched,
-      child: ModalChrome.shell(
-        context,
-        maxWidth: 500,
-        child: ModalChrome.box(
-          c,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: size.height * 0.9,
-            ),
-            child: body,
+    return ModalChrome.shell(
+      context,
+      maxWidth: 500,
+      child: ModalChrome.box(
+        c,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: size.height * 0.9,
           ),
+          child: body,
         ),
       ),
     );
@@ -748,9 +712,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
       child: DialogActions(
         children: [
-          DialogButton.secondary(
-              label: tr('Cancel'), onTap: () => Navigator.of(context).pop()),
-          DialogButton(label: tr('SAVE'), onTap: _onSave),
+          DialogButton(
+            key: const ValueKey('settingsDone'),
+            label: tr('Done'),
+            onTap: () => Navigator.of(context).pop(),
+          ),
         ],
       ),
     );
@@ -762,93 +728,109 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     });
   }
 
-  Future<void> _onSave() async {
-    final ctrl = ref.read(settingsProvider.notifier);
-    final d = _draft;
-
-    // Snapshot status visibility to re-broadcast immediately if it changes.
-    final prevShowStatus = ref.read(settingsProvider).showStatus;
-
-    // Fan out every draft value through its synced setter; live-applied ones are idempotent.
-    ctrl.setTheme(d.theme);
-    ctrl.setColorMode(d.colorMode);
-    ctrl.setChatViewMode(d.chatViewMode);
-    ctrl.setColumnsWallpaper(d.columnsWallpaper);
-    ctrl.setWallpaperType(d.wallpaperType);
-    ctrl.setChatLayout(d.chatLayout);
-    ctrl.setTransparencyEnabled(d.transparencyEnabled);
-    ctrl.setTextSize(d.textSize);
-    ctrl.setAcceptPMs(d.acceptPMs);
-    ctrl.setAcceptCalls(d.acceptCalls);
-    ctrl.setDmTtlSeconds(d.dmTtlSeconds);
-    ctrl.setReadReceiptsScope(d.readReceiptsScope);
-    ctrl.setTypingIndicatorsScope(d.typingIndicatorsScope);
-    ctrl.setShowStatus(d.showStatus);
-    // Re-assert presence under the new visibility now rather than at the next throttled broadcast.
-    if (prevShowStatus != d.showStatus) {
-      final appState = ref.read(appStateProvider);
-      final awayMsg = appState.users[appState.selfPubkey]?.awayMessage ?? '';
-      unawaited(ref.read(nostrControllerProvider).publishPresence(
-            awayMsg.isNotEmpty ? 'away' : 'online',
-            awayMessage: awayMsg,
-          ));
-    }
-    ctrl.setTranslateLanguage(d.translateLanguage);
-    ctrl.setSound(d.sound);
-    ctrl.setTimeFormat(d.timeFormat);
-    ctrl.setDateFormat(d.dateFormat);
-    ctrl.setNickStyle(d.nickStyle);
-    ctrl.setSwipeLeftAction(d.swipeLeftAction);
-    ctrl.setSwipeRightAction(d.swipeRightAction);
-    ctrl.setSwipeThreshold(d.swipeThreshold);
-    ctrl.setSwipeReactEmoji(d.swipeReactEmoji);
-
-    // Keypair is locked to 'persistent' while logged in with a Nostr identity.
-    final nostrLoggedIn =
-        ref.read(nostrControllerProvider).identity?.loginMethod != null;
-    if (!nostrLoggedIn) {
-      ctrl.setKeypairMode(_draftKeypair);
-      // Random/hardcore removes the saved nsec; persistent saves the current one if none is stored.
-      final secure = SecureStore();
-      if (_draftKeypair == 'random' || _draftKeypair == 'hardcore') {
-        unawaited(secure.remove(SecretKeys.sessionNsec));
-      } else {
-        final privkey = ref.read(nostrControllerProvider).identity?.privkey;
-        if (privkey != null) {
-          unawaited(() async {
-            try {
-              final existing = await secure.get(SecretKeys.sessionNsec);
-              if (existing == null || existing.isEmpty) {
-                await secure.set(
-                    SecretKeys.sessionNsec, bech32.encodeNsecBytes(privkey));
-              }
-            } catch (_) {
-              // Best-effort.
-            }
-          }());
-        }
+  Future<void> _onKeypairChanged(SettingsController ctrl, String next) async {
+    final prev = ctrl.keypairMode;
+    if (next == prev || _keypairAsking) return;
+    final copy = keypairModeConfirm(prev, next);
+    setState(() => _keypairAsking = true);
+    final ok = await showAppConfirm(
+      context,
+      tr(copy.body),
+      title: tr(copy.title),
+      okLabel: tr(copy.ok),
+      danger: copy.danger,
+    );
+    if (!mounted) return;
+    setState(() => _keypairAsking = false);
+    if (!ok) return;
+    if (ref.read(nostrControllerProvider).identity?.loginMethod != null) return;
+    ctrl.setKeypairMode(next);
+    final secure = SecureStore();
+    if (next == 'random' || next == 'hardcore') {
+      unawaited(secure.remove(SecretKeys.sessionNsec));
+    } else {
+      final identity = ref.read(nostrControllerProvider).identity;
+      final privkey = identity?.privkey;
+      if (privkey != null) {
+        unawaited(secure.get(SecretKeys.sessionNsec).then((existing) async {
+          if (existing == null || existing.isEmpty) {
+            await secure.set(
+                SecretKeys.sessionNsec, bech32.encodeNsecBytes(privkey));
+          }
+        }).catchError((Object _) {}));
+      }
+      final nym = identity?.nym ?? '';
+      if (nym.isNotEmpty) {
+        unawaited(ref
+            .read(keyValueStoreProvider)
+            .setString(StorageKeys.autoEphemeralNick, nym));
       }
     }
-    ctrl.setPowDifficulty(_draftPow);
-    ctrl.setBlurImages(_draftBlur,
-        pubkey: ref.read(appStateProvider).selfPubkey);
+    setState(() {});
+  }
 
-    // Commit via the synced setter so Save publishes it like other settings.
-    ctrl.setPinnedLandingChannel(_landing.toJsonString());
+  bool _keypairAsking = false;
 
-    // The hidden auto-ephemeral select: anything but 'true' removes the auto-ephemeral keys.
-    final kvStore = ref.read(keyValueStoreProvider);
-    if (kvStore.getString(StorageKeys.autoEphemeral) == 'true') {
-      kvStore.setString(StorageKeys.autoEphemeral, 'true');
-    } else {
-      kvStore.remove(StorageKeys.autoEphemeral);
-      kvStore.remove(StorageKeys.autoEphemeralNick);
-      kvStore.remove(StorageKeys.autoEphemeralChannel);
+  void _onShowStatusChanged(String v) {
+    final ctrl = ref.read(settingsProvider.notifier);
+    final prev = ref.read(settingsProvider).showStatus;
+    ctrl.setShowStatus(v);
+    if (prev == v) return;
+    final appState = ref.read(appStateProvider);
+    final awayMsg = appState.users[appState.selfPubkey]?.awayMessage ?? '';
+    unawaited(ref.read(nostrControllerProvider).publishPresence(
+          awayMsg.isNotEmpty ? 'away' : 'online',
+          awayMessage: awayMsg,
+        ));
+  }
+
+  Future<void> _onWallpaperPicked(SettingsController ctrl, String next) async {
+    final current = ref.read(settingsProvider).wallpaperType;
+    final kv = ref.read(keyValueStoreProvider);
+    final hasUpload =
+        (kv.getString(StorageKeys.wallpaperCustomUrl) ?? '').isNotEmpty;
+    if (current == 'custom' && next != 'custom' && hasUpload) {
+      final ok = await showAppConfirm(
+        context,
+        tr(kWallpaperReplaceBody),
+        title: tr(kWallpaperReplaceTitle),
+        okLabel: tr(kWallpaperReplaceOk),
+        danger: true,
+      );
+      if (!ok || !mounted) return;
     }
+    ctrl.setWallpaperType(next);
+  }
 
-    if (!mounted) return;
-    _systemMessage(tr('Settings saved'));
-    Navigator.of(context).pop();
+  Future<void> _onResetColumns(SettingsController ctrl) async {
+    final ok = await showAppConfirm(
+      context,
+      tr(kResetColumnsBody),
+      title: tr(kResetColumnsTitle),
+      okLabel: tr(kResetColumnsOk),
+      danger: true,
+    );
+    if (ok && mounted) ctrl.resetColumns();
+  }
+
+  bool _keepCallHistoryAsking = false;
+
+  Future<void> _onKeepCallHistoryFlip(bool on) async {
+    final calls = ref.read(callHistoryProvider.notifier);
+    if (on || !calls.keep) {
+      calls.setKeep(on);
+      return;
+    }
+    setState(() => _keepCallHistoryAsking = true);
+    final ok = await showAppConfirm(
+      context,
+      tr(kKeepCallHistoryOffBody),
+      title: tr(kKeepCallHistoryOffTitle),
+      okLabel: tr(kCachePMsOffOk),
+      danger: true,
+    );
+    if (mounted) setState(() => _keepCallHistoryAsking = false);
+    if (ok) calls.setKeep(false);
   }
 
   /// Picks an image, uploads it to Blossom and selects it; failures leave the selection unchanged.
@@ -903,10 +885,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             StorageKeys.wallpaperCustomUrl,
             url,
           );
-      // Live-applied; mirror into the draft so Save keeps 'custom'.
       ctrl.setWallpaperType('custom');
       if (!mounted) return;
-      _mutate((d) => d.copyWith(wallpaperType: 'custom'));
       _systemMessage(tr('Wallpaper uploaded and applied.'));
     } finally {
       if (mounted) setState(() => _wallpaperUploading = false);
@@ -973,11 +953,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             recents: recents,
             onSelect: (emoji) {
               Navigator.of(dialogCtx).maybePop();
-              // Immediate synced commit; keep the draft in step.
               ctrl.setSwipeReactEmoji(emoji);
-              // Publish now rather than on the 5s debounce, or leaving the app loses the pick.
-              ref.read(nostrControllerProvider).flushSettingsSyncNow();
-              _mutate((d) => d.copyWith(swipeReactEmoji: emoji));
+              setState(() {});
               ref.read(recentEmojisProvider.notifier).record(emoji);
             },
           ),
@@ -991,9 +968,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     SettingsController ctrl, {
     required String prev,
     required String next,
-    required Settings Function(Settings draft) apply,
+    required void Function() apply,
   }) {
-    _mutate(apply);
+    apply();
     final hasPersistedEmoji = (ref
                 .read(keyValueStoreProvider)
                 .getString(StorageKeys.swipeReactEmoji) ??
@@ -1004,9 +981,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  /// Stages the sound and plays a preview, resetting the 2s replay guard so back-to-back previews sound.
   void _onSoundChanged(SettingsController ctrl, String value) {
-    _mutate((d) => d.copyWith(sound: value));
+    ctrl.setSound(value);
     final svc = ref.read(notificationsServiceProvider);
     svc.resetSoundDedupe();
     svc.playSound(value);
@@ -1128,7 +1104,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   /// Enabling proximity without a cached location asks permission; a denial flips it off and clears the location.
-  Future<bool> _resolveProximity(bool desired) async {
+  Future<bool> _resolveProximity(bool desired, int ask) async {
     final location = ref.read(userLocationProvider.notifier);
     if (!desired) {
       location.state = null;
@@ -1141,9 +1117,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (!status.isGranted) {
         status = await Permission.locationWhenInUse.request();
       }
+      if (ask != _proximityAsk) return false;
       if (status.isGranted) {
         // Granted: fetch a fix; failure disables proximity.
         final loc = await fetchCurrentUserLocation();
+        if (ask != _proximityAsk) return false;
         if (loc != null) {
           location.state = loc;
           _systemMessage(tr(
@@ -1197,10 +1175,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               (value: ColorMode.auto, label: tr('Auto')),
               (value: ColorMode.dark, label: tr('Dark')),
             ],
-            onChanged: (v) {
-              ctrl.setColorMode(v);
-              _mutate((d) => d.copyWith(colorMode: v));
-            },
+            onChanged: ctrl.setColorMode,
           ),
         ),
       ),
@@ -1214,16 +1189,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: _LanguageSelectRow(
             key: const ValueKey('setting-uiLanguage'),
             currentName: uiLanguageName(s.uiLanguage),
-            onTap: () async {
-              await showLanguagePickerDialog(context, ref);
-              if (!mounted) return;
-              // Choosing the app language also sets the translation language; mirror both into the draft.
-              final live = ref.read(settingsProvider);
-              _mutate((d) => d.copyWith(
-                    uiLanguage: live.uiLanguage,
-                    translateLanguage: live.translateLanguage,
-                  ));
-            },
+            onTap: () => showLanguagePickerDialog(context, ref),
           ),
         ),
       ),
@@ -1235,10 +1201,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             key: const ValueKey('setting-theme'),
             value: s.theme,
             items: _themeOptions(),
-            onChanged: (v) {
-              ctrl.setTheme(v);
-              _mutate((d) => d.copyWith(theme: v));
-            },
+            onChanged: ctrl.setTheme,
           ),
         ),
       ),
@@ -1260,10 +1223,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           hint: tr('Choose between classic IRC-style or modern chat bubbles'),
           child: _LayoutPicker(
             value: s.chatLayout,
-            onChanged: (v) {
-              ctrl.setChatLayout(v);
-              _mutate((d) => d.copyWith(chatLayout: v));
-            },
+            onChanged: ctrl.setChatLayout,
           ),
         ),
       ),
@@ -1276,7 +1236,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         value: s.threadsEnabled,
         onChanged: (v) {
           ctrl.setThreadsEnabled(v);
-          _mirror((d) => d.copyWith(threadsEnabled: v));
         },
       ),
       // The reset-columns button shows in single view too.
@@ -1296,15 +1255,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: NymOutlineButton(
               label: tr('Reset columns to defaults'),
               uppercase: false,
-              onPressed: ctrl.resetColumns,
+              onPressed: () => _onResetColumns(ctrl),
             ),
           ),
           child: _ViewPicker(
             value: s.useColumns ? 'columns' : 'single',
-            onChanged: (v) {
-              ctrl.setChatViewMode(v);
-              _mutate((d) => d.copyWith(chatViewMode: v));
-            },
+            onChanged: ctrl.setChatViewMode,
           ),
         ),
       ),
@@ -1317,7 +1273,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           value: s.columnsWallpaper,
           onChanged: (v) {
             ctrl.setColumnsWallpaper(v);
-            _mirror((d) => d.copyWith(columnsWallpaper: v));
           },
         ),
       _GroupSpec(
@@ -1332,10 +1287,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             value: s.wallpaperType,
             customThumbPath: customWallpaperPath,
             uploading: _wallpaperUploading,
-            onChanged: (v) {
-              ctrl.setWallpaperType(v);
-              _mutate((d) => d.copyWith(wallpaperType: v));
-            },
+            onChanged: (v) => _onWallpaperPicked(ctrl, v),
             onUploadCustom: () => _uploadCustomWallpaper(ctrl),
           ),
         ),
@@ -1356,10 +1308,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             key: const ValueKey('setting-transparencyEnabled'),
             value: s.transparencyEnabled,
             items: transparencyItems,
-            onChanged: (v) {
-              ctrl.setTransparencyEnabled(v);
-              _mutate((d) => d.copyWith(transparencyEnabled: v));
-            },
+            onChanged: ctrl.setTransparencyEnabled,
           ),
         ),
       ),
@@ -1376,13 +1325,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onChanged: (v) => setState(() => _textSizePreview = v),
             onChangeEnd: (v) {
               ctrl.setTextSize(v.round());
-              _mutate((d) => d.copyWith(textSize: v.round()));
               setState(() => _textSizePreview = null);
             },
             onReset: () {
               ctrl.setTextSize(NymTextSize.defaultSize.round());
-              _mutate(
-                  (d) => d.copyWith(textSize: NymTextSize.defaultSize.round()));
               setState(() => _textSizePreview = null);
             },
           ),
@@ -1420,7 +1366,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         value: s.showTimestamps,
         onChanged: (v) {
           ctrl.setShowTimestamps(v);
-          _mirror((d) => d.copyWith(showTimestamps: v));
         },
       ),
       // Time/date format hide when timestamps are hidden.
@@ -1434,7 +1379,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               key: const ValueKey('setting-timeFormat'),
               value: s.timeFormat,
               items: timeFormatItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(timeFormat: v)),
+              onChanged: ctrl.setTimeFormat,
             ),
           ),
         ),
@@ -1451,7 +1396,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               key: const ValueKey('setting-dateFormat'),
               value: s.dateFormat,
               items: dateFormatItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(dateFormat: v)),
+              onChanged: ctrl.setDateFormat,
             ),
           ),
         ),
@@ -1467,7 +1412,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // A durable Nostr login locks keypair rotation to 'persistent'.
     final nostrLoggedIn =
         ref.read(nostrControllerProvider).identity?.loginMethod != null;
-    final keypairValue = nostrLoggedIn ? 'persistent' : _draftKeypair;
+    final keypairValue = nostrLoggedIn ? 'persistent' : ctrl.keypairMode;
     final keypairItems = <({String value, String label})>[
       (value: 'persistent', label: tr('Disabled (reuse same keypair)')),
       (value: 'random', label: tr('Enabled (new identity each session)')),
@@ -1621,7 +1566,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               disabled: nostrLoggedIn,
               tooltip: tr('Not available while logged in with a Nostr identity'),
               items: keypairItems,
-              onChanged: (v) => setState(() => _draftKeypair = v),
+              onChanged: (v) => _onKeypairChanged(ctrl, v),
             ),
           ),
         ),
@@ -1642,9 +1587,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 'from other Nymchat users.'),
             child: FormSelect<int>(
               key: const ValueKey('setting-powDifficulty'),
-              value: _draftPow,
+              value: normalizePowDifficulty(ctrl.powDifficulty),
               items: powItems,
-              onChanged: (v) => setState(() => _draftPow = v),
+              onChanged: (v) => setState(() => ctrl.setPowDifficulty(v)),
             ),
           ),
         ),
@@ -1660,7 +1605,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               key: const ValueKey('setting-nickStyle'),
               value: s.nickStyle,
               items: nickStyleItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(nickStyle: v)),
+              onChanged: ctrl.setNickStyle,
             ),
           ),
         ),
@@ -1680,7 +1625,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               key: const ValueKey('setting-acceptPMs'),
               value: s.acceptPMs,
               items: acceptItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(acceptPMs: v)),
+              onChanged: ctrl.setAcceptPMs,
             ),
           ),
         ),
@@ -1699,7 +1644,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               key: const ValueKey('setting-acceptCalls'),
               value: s.acceptCalls,
               items: acceptItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(acceptCalls: v)),
+              onChanged: ctrl.setAcceptCalls,
             ),
           ),
         ),
@@ -1753,7 +1698,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           value: s.dmForwardSecrecyEnabled,
           onChanged: (v) {
             ctrl.setDmForwardSecrecy(v);
-            _mirror((d) => d.copyWith(dmForwardSecrecyEnabled: v));
           },
         ),
         if (s.dmForwardSecrecyEnabled)
@@ -1779,7 +1723,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   key: const ValueKey('setting-dmTTLSeconds'),
                   value: s.dmTtlSeconds,
                   items: dmTtlItems,
-                  onChanged: (v) => _mutate((d) => d.copyWith(dmTtlSeconds: v)),
+                  onChanged: ctrl.setDmTtlSeconds,
                 ),
               ),
             ),
@@ -1799,7 +1743,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               key: const ValueKey('setting-readReceiptsScope'),
               value: s.readReceiptsScope,
               items: scopeItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(readReceiptsScope: v)),
+              onChanged: ctrl.setReadReceiptsScope,
             ),
           ),
         ),
@@ -1818,8 +1762,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               key: const ValueKey('setting-typingIndicatorsScope'),
               value: s.typingIndicatorsScope,
               items: scopeItems,
-              onChanged: (v) =>
-                  _mutate((d) => d.copyWith(typingIndicatorsScope: v)),
+              onChanged: ctrl.setTypingIndicatorsScope,
             ),
           ),
         ),
@@ -1845,7 +1788,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               key: const ValueKey('setting-showStatus'),
               value: s.showStatus,
               items: showStatusItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(showStatus: v)),
+              onChanged: _onShowStatusChanged,
             ),
           ),
         ),
@@ -1875,12 +1818,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'are running Nymchat, on the web app or the phone apps. '
               'Scripted senders cannot prove it and are dropped. Your own '
               'messages, friends and Nymbot are always shown.'),
-          value: _draftVerified == 'on',
-          onChanged: (v) {
-            setState(() => _draftVerified = v ? 'on' : 'off');
-            ctrl.setAppVerifiedFilter(_draftVerified);
-            ctrl.notifySyncedChange();
-          },
+          value: ctrl.appVerifiedFilter == 'on',
+          onChanged: (v) =>
+              setState(() => ctrl.setAppVerifiedFilter(v ? 'on' : 'off')),
         ),
         _GroupSpec(
           text: tr('This Device {status} What this install proved to the '
@@ -1911,9 +1851,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 'friends unblurred.'),
             child: FormSelect<String>(
               key: const ValueKey('setting-blurOthersImages'),
-              value: _draftBlur,
+              value: _blurValue(),
               items: blurItems,
-              onChanged: (v) => setState(() => _draftBlur = v),
+              onChanged: (v) => setState(() => ctrl.setBlurImages(v,
+                  pubkey: ref.read(appStateProvider).selfPubkey)),
             ),
           ),
         ),
@@ -2124,7 +2065,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
         label: tr(pack.label),
         hint: tr(pack.desc),
-        value: _draftFilterPacks.contains(pack.id),
+        value: ref.read(settingsProvider.notifier).filterPacks.contains(pack.id),
         onChanged: (v) => _onFilterPackFlip(pack.id, v),
       ),
     );
@@ -2159,8 +2100,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               context,
               selectedCode: s.translateLanguage,
               title: tr('Translation Language'),
-              onSelected: (code) =>
-                  _mutate((d) => d.copyWith(translateLanguage: code)),
+              onSelected: ctrl.setTranslateLanguage,
             ),
           ),
         ),
@@ -2185,10 +2125,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         value: s.autoscroll,
         onChanged: (v) {
           ctrl.setAutoscroll(v);
-          _mirror((d) => d.copyWith(autoscroll: v));
         },
       ),
-      // Auto-ephemeral has no visible control; its Save cleanup is in `_onSave`.
     ];
   }
 
@@ -2204,7 +2142,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         value: s.groupChatPMOnlyMode,
         onChanged: (v) {
           ctrl.setGroupChatPMOnlyMode(v);
-          _mirror((d) => d.copyWith(groupChatPMOnlyMode: v));
         },
       ),
       // Geohash settings are hidden in group-chat/PM-only mode.
@@ -2213,7 +2150,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           key: 'sortByProximity',
           label: tr('Sort Geohash Channels by Proximity'),
           hint: tr('Sort geohash channels by distance from your location'),
-          value: s.sortByProximity,
+          value: _proximityPending ?? s.sortByProximity,
           onChanged: (v) => unawaited(_onProximityFlip(v)),
         ),
         _GroupSpec(
@@ -2232,11 +2169,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           hint: tr('When enabled, only your favorited channels will appear '
               'in the sidebar'),
           value: s.hideNonPinned,
-          onChanged: (v) {
-            ctrl.setHideNonPinned(v);
-            ctrl.notifySyncedChange();
-            _mirror((d) => d.copyWith(hideNonPinned: v));
-          },
+          onChanged: ctrl.setHideNonPinned,
         ),
         _GroupSpec(
           text: tr('Hidden Channels Unhide {list}', {
@@ -2304,7 +2237,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _blockedChannelLabel(String key) =>
       isValidGeohash(key) ? '#$key [GEO]' : '#$key [EPH]';
 
-  /// Searchable landing-channel field with grouped suggestions; Save persists it.
+  void _commitLanding(LandingChannelOption o) {
+    setState(() {
+      _landing = o.value;
+      _landingController.text = o.label;
+      _landingOpen = false;
+    });
+    _landingFocus.unfocus();
+    final ctrl = ref.read(settingsProvider.notifier);
+    if (ctrl.pinnedLandingChannelJson != o.value.toJsonString()) {
+      ctrl.setPinnedLandingChannel(o.value.toJsonString());
+    }
+  }
+
   Widget _landingChannelField(List<ChannelEntry> channels) {
     final c = context.nym;
     final options = buildLandingChannelOptions(channels);
@@ -2324,6 +2269,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           hint: tr('Type to search or select a channel...'),
           onChanged: (_) => setState(() => _landingOpen = true),
           onTap: () => setState(() => _landingOpen = true),
+          onSubmitted: (_) {
+            if (filtered.isNotEmpty) {
+              _commitLanding(filtered.first);
+            } else {
+              setState(() {
+                _landingController.text = _landing.label;
+                _landingOpen = false;
+              });
+            }
+          },
         ),
         if (_landingOpen)
           Container(
@@ -2373,14 +2328,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       }
       // Plain rows without a selected or hover tint.
       rows.add(InkWell(
-        onTap: () {
-          setState(() {
-            _landing = o.value;
-            _landingController.text = o.label;
-            _landingOpen = false;
-          });
-          _landingFocus.unfocus();
-        },
+        onTap: () => _commitLanding(o),
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -2431,7 +2379,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         value: s.gesturesEnabled,
         onChanged: (v) {
           ctrl.setGesturesEnabled(v);
-          _mirror((d) => d.copyWith(gesturesEnabled: v));
         },
       ),
       // Swipe sub-settings hide when gestures are disabled.
@@ -2452,7 +2399,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ctrl,
                 prev: s.swipeLeftAction,
                 next: v,
-                apply: (d) => d.copyWith(swipeLeftAction: v),
+                apply: () => ctrl.setSwipeLeftAction(v),
               ),
             ),
           ),
@@ -2473,7 +2420,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ctrl,
                 prev: s.swipeRightAction,
                 next: v,
-                apply: (d) => d.copyWith(swipeRightAction: v),
+                apply: () => ctrl.setSwipeRightAction(v),
               ),
             ),
           ),
@@ -2527,7 +2474,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               key: const ValueKey('setting-swipeThreshold'),
               value: s.swipeThreshold,
               items: thresholdItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(swipeThreshold: v)),
+              onChanged: ctrl.setSwipeThreshold,
             ),
           ),
         ),
@@ -2536,7 +2483,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   List<_GroupSpec> _data(Settings s, SettingsController ctrl) {
-    final transfers = ref.watch(pendingUserSettingsTransfersProvider);
+    final transfers = ref.watch(visibleSettingsTransfersProvider);
     return [
       // Keep-alive first, offered only where the platform can honor it.
       if (BackgroundConnectivityService.isSupported)
@@ -2555,7 +2502,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           value: s.backgroundConnectivity,
           onChanged: (v) {
             ctrl.setBackgroundConnectivity(v);
-            _mirror((d) => d.copyWith(backgroundConnectivity: v));
           },
         ),
       _toggleSpec(
@@ -2566,7 +2512,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         value: s.lowDataMode,
         onChanged: (v) {
           ctrl.setLowDataMode(v);
-          _mirror((d) => d.copyWith(lowDataMode: v));
         },
       ),
       _toggleSpec(
@@ -2814,7 +2759,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   /// Inbound user-to-user transfers with sender, verified key, date and contents, plus Accept/Reject.
   Widget _pendingTransfers() {
-    final transfers = ref.watch(pendingUserSettingsTransfersProvider);
+    final transfers = ref.watch(visibleSettingsTransfersProvider);
     if (transfers.isEmpty) return _emptyListBox(tr('No pending transfers'));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2945,11 +2890,9 @@ extension _ChatLockSettings on _SettingsScreenState {
       }
     }
     await kv.setBool(StorageKeys.remotePanic, on);
+    ref.read(settingsProvider.notifier).notePrefChanged('remotePanic');
     if (!mounted) return;
     ref.read(remotePanicRevisionProvider.notifier).state++;
-    try {
-      ref.read(nostrControllerProvider).syncSettings();
-    } catch (_) {}
   }
 
   List<_GroupSpec> _chatLockGroups() {
@@ -2990,7 +2933,7 @@ extension _ChatLockSettings on _SettingsScreenState {
           ref.watch(callHistoryProvider);
           return ref.read(callHistoryProvider.notifier).keep;
         }(),
-        onChanged: (v) => ref.read(callHistoryProvider.notifier).setKeep(v),
+        onChanged: _keepCallHistoryAsking ? null : _onKeepCallHistoryFlip,
       ),
       _toggleSpec(
         key: 'screenSecurity',
@@ -3024,6 +2967,82 @@ const String kCachePMsOffBody =
     'This clears the PMs and group chats cached on this device. They load '
     'from the network again instead of appearing instantly at launch.';
 const String kCachePMsOffOk = 'Turn off';
+
+const String kKeepCallHistoryOffTitle = 'Turn off call history?';
+const String kKeepCallHistoryOffBody =
+    'This deletes your list of recent calls on this device and on your other '
+    "devices signed in with this identity, and new calls aren't kept. This "
+    "can't be undone.";
+
+const String kWallpaperReplaceTitle = 'Replace your uploaded wallpaper?';
+const String kWallpaperReplaceBody =
+    'Your uploaded image is removed from Nymchat on this device and on your '
+    'other devices. To use it again, upload it again.';
+const String kWallpaperReplaceOk = 'Replace';
+
+const String kResetColumnsTitle = 'Reset columns to defaults?';
+const String kResetColumnsBody =
+    'The columns you added and their order are removed on this device and on '
+    'your other devices.';
+const String kResetColumnsOk = 'Reset';
+
+({String title, String body, String ok, bool danger}) keypairModeConfirm(
+    String prev, String next) {
+  bool rotating(String m) => m == 'random' || m == 'hardcore';
+  if (rotating(prev) && next == 'random') {
+    return (
+      title: 'New identity every session?',
+      body: 'Nymchat keeps this identity until you reload or reopen it, then '
+          "starts a new random identity each session. Settings still don't "
+          'sync across devices.',
+      ok: 'Change mode',
+      danger: false,
+    );
+  }
+  if (rotating(prev) && next == 'hardcore') {
+    return (
+      title: 'New keypair for every message?',
+      body: 'Nymchat switches to a new identity after every message you send '
+          "instead of once per session. PMs and group chats won't work "
+          "reliably, and settings still don't sync across devices.",
+      ok: 'Change mode',
+      danger: false,
+    );
+  }
+  switch (next) {
+    case 'random':
+      return (
+        title: 'New identity every session?',
+        body: "Nymchat deletes this identity's private key (nsec) from this "
+            'device. The next time you reload or reopen Nymchat you get a new '
+            'random identity, and this one, with its PMs and group chats, '
+            "can't be recovered unless you back up its nsec first. Settings "
+            'also stop syncing across devices.',
+        ok: 'Delete key',
+        danger: true,
+      );
+    case 'hardcore':
+      return (
+        title: 'New keypair for every message?',
+        body: "Nymchat deletes this identity's private key (nsec) from this "
+            'device and switches to a new identity after every message you '
+            "send. PMs and group chats won't work reliably, settings stop "
+            "syncing across devices, and this identity can't be recovered "
+            'unless you back up its nsec first.',
+        ok: 'Delete key',
+        danger: true,
+      );
+    default:
+      return (
+        title: 'Keep this identity?',
+        body: "Nymchat will save this identity's private key (nsec) on this "
+            'device, so the same nym comes back every time you open Nymchat '
+            'here.',
+        ok: 'Keep identity',
+        danger: false,
+      );
+  }
+}
 
 const String kSpamFilterHint =
     'Hides incoming messages that look like spam, starting with posts from known spam clients. Your own messages are never filtered.';

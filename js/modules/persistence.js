@@ -170,7 +170,9 @@
                 && c.pqEncrypted === m.pqEncrypted
                 && c.pqRoot === m.pqRoot
                 && c.isHistorical === m.isHistorical
-                && c.slowHeld === m.slowHeld) {
+                && c.slowHeld === m.slowHeld
+                && c.heldTags === m.heldTags
+                && c.pqPending === m.pqPending) {
                 return c.ser;
             }
             const ser = {
@@ -214,7 +216,11 @@
                 // NIP-13 target from the sender's nonce tag; dropping it makes reloads report "no proof of work".
                 powTarget: m.powTarget,
                 ...(m.expiresAt ? { expiresAt: m.expiresAt } : {}),
-                ...(m.slowHeld ? { slowHeld: true } : {})
+                ...(m.slowHeld ? { slowHeld: true } : {}),
+                ...(m.pqPending ? { pqPending: true } : {}),
+                ...(Array.isArray(m.people) && m.people.length ? { people: m.people.slice() } : {}),
+                ...(Array.isArray(m.quoted) && m.quoted.length ? { quoted: m.quoted.slice() } : {}),
+                ...(Array.isArray(m.heldTags) && m.heldTags.length ? { heldTags: m.heldTags.map((t) => t.slice()) } : {})
             };
             // Non-enumerable so it never leaks into JSON/structured-clone of the live message.
             Object.defineProperty(m, '__serCache', {
@@ -228,7 +234,9 @@
                     pqEncrypted: m.pqEncrypted,
                     pqRoot: m.pqRoot,
                     isHistorical: m.isHistorical,
-                    slowHeld: m.slowHeld
+                    slowHeld: m.slowHeld,
+                    heldTags: m.heldTags,
+                    pqPending: m.pqPending
                 },
                 writable: true,
                 configurable: true,
@@ -363,12 +371,16 @@
         async _trimStore(storeName) {
             const limit = STORE_LIMITS[storeName];
             if (!limit) return;
-            const all = await this._cacheGetAll(storeName);
+            let all = await this._cacheGetAll(storeName);
+            if (storeName === 'pms') all = all.filter((r) => !(r && typeof r.key === 'string' && r.key.startsWith('group-')));
             if (all.length <= limit) return;
 
             const target = Math.floor(limit * 0.9);
             const evictCount = all.length - target;
-            all.sort((a, b) => (a.lastTouched || 0) - (b.lastTouched || 0));
+            const rank = storeName === 'pms'
+                ? (r) => (r && (r.lastActivity || r.lastTouched)) || 0
+                : (r) => (r && r.lastTouched) || 0;
+            all.sort((a, b) => rank(a) - rank(b));
             const toEvict = all.slice(0, evictCount);
 
             const keyForRecord = (r) => {
@@ -379,7 +391,11 @@
                 return r.key; // channels, pms, meta
             };
 
-            if (storeName === 'pms' && toEvict.length) this._pmCursorInvalidate();
+            if (storeName === 'pms' && toEvict.length && typeof this._pmNoteEvicted === 'function') {
+                let newest = 0;
+                for (const r of toEvict) newest = Math.max(newest, rank(r));
+                this._pmNoteEvicted(Math.floor(newest / 1000));
+            }
             for (const r of toEvict) {
                 const k = keyForRecord(r);
                 if (k != null) await this._cacheDelete(storeName, k);
@@ -790,6 +806,7 @@
                             }
                         }
                     }
+                    if (typeof this._resumeOwedPqVerdicts === 'function') this._resumeOwedPqVerdicts();
                 } else {
                     this.clearPMCache().catch(() => { });
                 }
@@ -866,8 +883,12 @@
             this._bulkChannelAdd = true;
             try {
                 if (typeof this.addChannel === 'function') {
+                    const F = window.NymContentFilter;
+                    const onlyHidden = (key, list) => !!F && !(this.channels && this.channels.has(key))
+                        && Array.isArray(list) && F.lastVisible(this._cfCtx(), list, (m) => this._cfView(m)) < 0;
                     for (const storageKey of [...this.messages.keys()]) {
                         if (!storageKey) continue;
+                        if (storageKey !== 'unknown' && onlyHidden(storageKey.replace(/^#/, ''), this.messages.get(storageKey))) continue;
                         if (storageKey.startsWith('#')) {
                             const geohash = storageKey.slice(1);
                             this.addChannel(geohash, geohash);
@@ -887,8 +908,12 @@
                         const sample = msgs.find(m => m && m.conversationPubkey);
                         if (!sample || !sample.conversationPubkey) continue;
                         const peer = sample.conversationPubkey;
-                        const last = msgs[msgs.length - 1];
-                        const ts = ((last && last.created_at) || (sample.created_at || 0)) * 1000;
+                        const last = typeof this._previewMessage === 'function' ? this._previewMessage(msgs) : msgs[msgs.length - 1];
+                        if (!last) continue;
+                        const lastSec = Math.floor(last.created_at || 0);
+                        if (this.closedPMs && this.closedPMs.has(peer)
+                            && lastSec <= ((this.closedPMTimes && this.closedPMTimes.get(peer)) || 0)) continue;
+                        const ts = (lastSec || (sample.created_at || 0)) * 1000;
                         const nym = this.users.has(peer)
                             ? this.users.get(peer).nym
                             : `nym#${(peer || '').slice(0, 4)}`;
@@ -1050,9 +1075,13 @@
                 const limit = this.channelMessageLimit || 100;
                 // Age first, then the count cap.
                 const inWindow = this._pruneChannelWindow(messages);
-                let trimmed = inWindow.length > limit ? inWindow.slice(-limit) : inWindow;
-                // Channel thread keys are event ids (threadKeyForMessage).
-                trimmed = this._withPinnedThreadRoots(inWindow, trimmed, m => m.id);
+                let trimmed;
+                if (typeof this._storeTrim === 'function') {
+                    trimmed = this._storeTrim(inWindow, limit, m => m.id);
+                } else {
+                    trimmed = inWindow.length > limit ? inWindow.slice(-limit) : inWindow;
+                    trimmed = this._withPinnedThreadRoots(inWindow, trimmed, m => m.id);
+                }
                 if (!trimmed.length) {
                     this._cacheDelete('channels', key);
                     return;
@@ -1075,18 +1104,27 @@
                     return;
                 }
                 const limit = this.pmStorageLimit || 500;
-                let trimmed = messages.length > limit ? messages.slice(-limit) : messages;
-                // PM/group thread keys are the shared nymMessageId when present, else the event id.
-                trimmed = this._withPinnedThreadRoots(
-                    messages, trimmed, m => m.nymMessageId || m.id);
+                let trimmed;
+                if (typeof this._storeTrim === 'function') {
+                    trimmed = this._storeTrim(messages, limit, m => m.nymMessageId || m.id);
+                } else {
+                    trimmed = messages.length > limit ? messages.slice(-limit) : messages;
+                    trimmed = this._withPinnedThreadRoots(
+                        messages, trimmed, m => m.nymMessageId || m.id);
+                }
                 const serialised = trimmed.map(m => this._serialiseMessage(m));
+                let lastActivity = 0;
+                for (const m of trimmed) {
+                    const t = m && m.created_at;
+                    if (Number.isFinite(t) && t * 1000 > lastActivity) lastActivity = t * 1000;
+                }
                 // With Identity Encryption on, PM/group cache is vault-encrypted and never written while locked.
                 if (typeof this.vaultEnabled === 'function' && this.vaultEnabled()) {
                     if (!this._vaultKey) return;
                     this._trackPmPersistWrite(this._vaultEncrypt(JSON.stringify(serialised))
-                        .then(payload => this._cachePut('pms', { key, enc: 'v1', payload })));
+                        .then(payload => this._cachePut('pms', { key, enc: 'v1', payload, lastActivity })));
                 } else {
-                    this._trackPmPersistWrite(this._cachePut('pms', { key, messages: serialised }));
+                    this._trackPmPersistWrite(this._cachePut('pms', { key, messages: serialised, lastActivity }));
                 }
                 this._scheduleTrim();
             });

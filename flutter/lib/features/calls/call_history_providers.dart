@@ -164,7 +164,7 @@ final callHistoryHiddenProvider =
   ref.watch(contentFilterRevisionProvider);
   final app = ref.read(appStateProvider);
   return (r) {
-    if (r.group.isEmpty && r.peer.isNotEmpty && app.isPersonHidden(r.peer)) {
+    if (r.peer.isNotEmpty && app.isPersonHidden(r.peer)) {
       return true;
     }
     try {

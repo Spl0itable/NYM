@@ -48,6 +48,7 @@ import '../features/dm_polls/dm_polls_providers.dart';
 import '../features/accounts/account_host.dart';
 import '../features/accounts/switch_outbox_stash.dart';
 import '../features/composer/composer_drafts.dart';
+import '../features/groups/control_answers.dart';
 import '../features/groups/group_logic.dart';
 import '../features/group_tools/group_tools.dart';
 import '../features/group_tools/group_tools_providers.dart';
@@ -73,7 +74,10 @@ import '../features/layout/layout_model.dart' show notifGroupKey;
 import '../features/notifications/notify_view.dart';
 import '../services/attest/attest_service.dart';
 import '../features/composer/send_as_model.dart';
+import '../features/send_as/anon_lane.dart';
 import '../features/send_as/send_as_service.dart';
+import '../features/send_as/send_as_transport.dart';
+import '../features/settings/settings_helpers.dart' show LandingChannel;
 import '../services/filter/content_filter.dart';
 import '../services/filter/filter_packs.dart';
 import '../services/notification_service.dart' show NotificationService;
@@ -115,10 +119,16 @@ import '../features/chat_nav/chat_nav.dart';
 import '../features/chat_nav/chat_nav_service.dart';
 import '../features/chat_nav/chat_nav_providers.dart';
 import '../features/sync/pref_stamps.dart';
+import '../features/sync/sync_rows.dart' show SyncRowMode;
+import '../features/sync/sync_merge.dart'
+    show kStampedPrefs, prefApply, prefGate, prefRowStamp;
 import '../features/chat_lock/chat_lock_providers.dart';
 import '../features/identity/deleted_notice.dart';
 import '../features/identity/nip46_service.dart';
+import '../features/relays/added_relays.dart';
 import '../features/relays/blocked_relays.dart';
+import '../features/relays/relay_add.dart';
+import '../features/relays/relay_add_check.dart';
 import '../features/relays/relay_block.dart';
 import '../features/identity/panic_wipe.dart';
 import '../features/identity/remote_panic.dart';
@@ -126,6 +136,7 @@ import '../features/identity/remote_panic_logic.dart';
 import '../features/identity/vault_settings_modal.dart'
     show identityVaultProvider;
 import '../services/nostr/event_mapper.dart';
+import '../features/messages/server_quiet.dart';
 import '../services/nostr/event_signer.dart';
 import '../services/nostr/event_time_ceilings.dart';
 import '../services/nostr/identity_service.dart';
@@ -140,6 +151,7 @@ import '../services/storage/secure_store.dart';
 import 'app_state.dart';
 import 'fallback_notice.dart';
 import 'last_view.dart';
+import 'pm_only_mode.dart';
 import 'settings_provider.dart';
 
 /// Common channels seeded into the sidebar on connect; `nymchat` is named, the rest are geohashes.
@@ -181,11 +193,22 @@ class NostrController {
       ApiConfig.directMedia = false;
     }
     _rememberSyncedBaseline();
+    _ref.read(settingsProvider.notifier).onGroupChatPMOnlyModeChanged =
+        _onGroupChatPMOnlyModeChanged;
     _ref.read(appStateProvider.notifier).onGroupMembersEvicted =
         _onGroupMembersEvicted;
+    _ref.read(appStateProvider.notifier).onNymIdAdopted = (id, nymId) {
+      _ref.read(notificationHistoryProvider.notifier).rekey(id, nymId);
+      scheduleMicrotask(() => _releasePmPiece(id));
+    };
+    _ref.read(appStateProvider.notifier).pmPieceHeld =
+        (id) => _pmPieceHolds.containsKey(id);
+    _ref.read(appStateProvider.notifier).onPmPiecesAbsorbed =
+        _onPmPiecesAbsorbed;
     _ref.read(notificationHistoryProvider.notifier).currentView = _notifyView;
     NotificationHistoryNotifier.hiddenEntry = _notificationEntryHidden;
     _ref.onDispose(() {
+      _ownerGone = true;
       if (NotificationHistoryNotifier.hiddenEntry == _notificationEntryHidden) {
         NotificationHistoryNotifier.hiddenEntry = null;
       }
@@ -194,6 +217,30 @@ class NostrController {
       try {
         _ref.read(notificationHistoryProvider.notifier).recountUnread();
       } catch (_) {}
+      try {
+        _ref.read(chatNavProvider).pruneHiddenMentions();
+      } catch (_) {}
+      try {
+        EventToastCenter.instance.pruneHidden();
+      } catch (_) {}
+      try {
+        _ref.read(callServiceProvider).onFiltersChanged();
+      } catch (_) {}
+      try {
+        _releaseHeldTags();
+      } catch (_) {}
+      try {
+        if (_ref.exists(p2pServiceProvider)) {
+          _ref.read(p2pServiceProvider).refreshForFilters();
+        }
+      } catch (_) {}
+      try {
+        _botThinkingRefreshForFilters();
+      } catch (_) {}
+      try {
+        _dropHiddenDiscoveredChannels();
+      } catch (_) {}
+      _scheduleHiddenTrayClear();
     };
     _ref.listen<ActiveThread?>(activeThreadProvider, (prev, next) {
       if (next != null) _markOpenThreadSeen();
@@ -202,6 +249,87 @@ class NostrController {
     _ref.listen<List<String>>(blockedRelaysProvider, (prev, next) {
       _service?.setBlockedRelays(next);
     });
+    _ref.read(addedRelaysProvider.notifier).onLocalChange = syncSettings;
+    _ref.listen<List<String>>(addedRelaysProvider, (prev, next) {
+      final now = DateTime.now();
+      final inUse = _ref.read(addedRelaysProvider.notifier).inUse;
+      for (final u in inUse) {
+        if (!_addedRelaysUsed.contains(u)) _addedRelayAt[u] = now;
+      }
+      _addedRelaysUsed = inUse.toSet();
+      _service?.setAddedRelays(inUse);
+    });
+    _addedRelaysUsed = _ref.read(addedRelaysProvider.notifier).inUse.toSet();
+  }
+
+  final Map<String, DateTime> _addedRelayAt = {};
+
+  Set<String> _addedRelaysUsed = const {};
+
+  List<String> get addedRelays => _ref.read(addedRelaysProvider);
+
+  int get addedRelayCap => _ref.read(addedRelaysProvider.notifier).cap;
+
+  RelayAddCheck addedRelayCheck(String input) =>
+      _ref.read(addedRelaysProvider.notifier).check(input);
+
+  String addRelay(String input) =>
+      _ref.read(addedRelaysProvider.notifier).add(input);
+
+  bool removeAddedRelay(String url) =>
+      _ref.read(addedRelaysProvider.notifier).remove(url);
+
+  bool get relayChecksViaPool =>
+      _service?.relayChecksViaPool ?? !isUserDirectMode;
+
+  bool get addedRelaysWaitForPool => _service?.addedRelaysWaitForPool ?? false;
+
+  bool get addedRelaysOff => _ref.read(addedRelaysProvider.notifier).off;
+
+  Future<RelayCheckResult> checkAddedRelay(String url) =>
+      checkRelayReachable(url, viaPool: relayChecksViaPool);
+
+  String addedRelayStatus(String url) {
+    final status = relayConnectionStatus;
+    final connected = status[url] == true ||
+        status.entries.any((e) => e.value && RelayBlock.canon(e.key) == url);
+    final svc = _service;
+    final pool = svc?.pool;
+    final paused =
+        (addedRelaysWaitForPool && pool is! RelayPoolProxy) || addedRelaysOff;
+    final overCap = _ref.read(addedRelaysProvider.notifier).overCap(url);
+    if (svc == null) {
+      return paused
+          ? 'offline'
+          : overCap
+              ? 'unused'
+              : (connected ? 'connected' : 'connecting');
+    }
+    final now = DateTime.now();
+    final at = _addedRelayAt[url];
+    ({bool open, int? openedAgoMs})? shard;
+    var connecting = false;
+    if (pool is RelayPoolProxy) {
+      final s = pool.addedShardState(url);
+      if (s != null) {
+        final opened = s.openedAt;
+        shard = (
+          open: s.open,
+          openedAgoMs: opened == null ? null : now.difference(opened).inMilliseconds,
+        );
+      }
+    } else if (pool is RelayPool) {
+      connecting = pool.isConnecting(url);
+    }
+    return RelayAdd.status(
+      paused: paused,
+      overCap: overCap,
+      connected: connected,
+      addedAgoMs: at == null ? null : now.difference(at).inMilliseconds,
+      proxy: pool is RelayPoolProxy,
+      shard: shard,
+      connecting: connecting,
+    );
   }
 
   final Ref _ref;
@@ -309,7 +437,14 @@ class NostrController {
     try {
       final decoded = jsonDecode(event.content);
       if (decoded is Map) {
-        _cachedKind0Profile = Map<String, dynamic>.from(decoded);
+        final profile = Map<String, dynamic>.from(decoded);
+        for (final key in const ['name', 'display_name', 'username']) {
+          final value = profile[key];
+          if (value is String) {
+            profile[key] = withOwnNymSuffix(value, event.pubkey);
+          }
+        }
+        _cachedKind0Profile = profile;
         _cachedKind0Ts = event.createdAt;
       }
     } catch (_) {
@@ -669,6 +804,7 @@ class NostrController {
   Future<void> init({Map<String, String>? unlockedSecrets}) async {
     if (_started) return;
     _started = true;
+    _botChannelRunsRecover();
     // Re-arm the hydration gate synchronously, before any await, so the shell can defer the tutorial on it.
     if (_settingsHydratedC.isCompleted) {
       _settingsHydratedC = Completer<void>();
@@ -720,6 +856,9 @@ class NostrController {
       if (identity.loginMethod != null) {
         identity.nym = getNymFromPubkey(
             _cachedLoginProfileName(kv) ?? 'nym', identity.pubkey);
+        await _dropReplacedSessionNym(kv,
+            keep: identity.pubkey, unlockedSecrets: unlockedSecrets);
+        await _repairCachedLoginName(kv, identity.pubkey);
       }
 
       await _loadLeftGroupStore();
@@ -747,8 +886,9 @@ class NostrController {
 
       // Seed the spam-filter module globals once; nothing changes them at runtime.
       final settings = _ref.read(settingsProvider.notifier);
-      appSpamFilterEnabled = settings.spamFilterEnabled;
-      appSpamFilterAggressive = settings.spamFilterAggressive;
+      setAppSpamFilter(
+          enabled: settings.spamFilterEnabled,
+          aggressive: settings.spamFilterAggressive);
       // The settings toggle updates this live; seed it at boot.
       appThreadsEnabled = _ref.read(settingsProvider).threadsEnabled;
       // Unlike the spam flags this has settings UI, so it's also refreshed on save.
@@ -767,8 +907,7 @@ class NostrController {
           (enabled) => unawaited(_service?.setLowDataMode(enabled));
 
       // Flip the critical REQ's channel-mode gate; the resubscribe is debounced.
-      settings.onGroupChatPMOnlyModeChanged =
-          (enabled) => _service?.updateCriticalInputs(channelMode: !enabled);
+      settings.onGroupChatPMOnlyModeChanged = _onGroupChatPMOnlyModeChanged;
 
       // Hydrate the persisted NIP-30 cache at boot.
       _ref.read(liveCustomEmojiProvider);
@@ -793,6 +932,9 @@ class NostrController {
       );
       _service = service;
       service.setBlockedRelays(_ref.read(blockedRelaysProvider));
+      service.anonKeys = () => _anonBotPubkeys().toSet();
+      service.anonLane = _anonBotLane;
+      service.setAddedRelays(_ref.read(addedRelaysProvider.notifier).inUse);
       service.onAutoFallback =
           () => _ref.read(fallbackNoticeProvider.notifier).show();
       service.pqPeerKey = _pqLayeredPeerKey;
@@ -907,6 +1049,52 @@ class NostrController {
     }
   }
 
+  void _onGroupChatPMOnlyModeChanged(bool enabled) {
+    _service?.updateCriticalInputs(channelMode: !enabled);
+    if (enabled) {
+      final next = _latestPmOrGroupView();
+      if (next != null) {
+        _ref.read(appStateProvider.notifier).switchView(next);
+      } else {
+        _ref.read(pmOnlyEmptyProvider.notifier).show();
+      }
+      return;
+    }
+    _ref.read(pmOnlyEmptyProvider.notifier).hide();
+    final landing = LandingChannel.tryParse(
+        _ref.read(settingsProvider.notifier).pinnedLandingChannelJson);
+    final gh = landing != null &&
+            landing.type == 'geohash' &&
+            landing.geohash.isNotEmpty
+        ? landing.geohash
+        : kDefaultChannel;
+    switchChannel(gh, geohash: isChannelGeohash(gh) ? gh : '');
+    discoverChannels();
+    unawaited(_restoreAllChannelArchives());
+  }
+
+  ChatView? _latestPmOrGroupView() {
+    final s = _ref.read(appStateProvider);
+    final entries = <({String key, ChatView view, int at})>[
+      for (final pm in s.pmConversations)
+        if (pm.pubkey == s.selfPubkey || !s.isPersonHidden(pm.pubkey))
+          (
+            key: 'pm-${pm.pubkey.toLowerCase()}',
+            view: ChatView.pm(pm.pubkey),
+            at: pm.lastMessageTime
+          ),
+      for (final g in s.groups)
+        (key: 'group-${g.id}', view: ChatView.group(g.id), at: g.lastMessageTime),
+    ]..sort((a, b) => b.at.compareTo(a.at));
+    final byKey = <String, ChatView>{for (final e in entries) e.key: e.view};
+    final lock = _ref.read(chatLockProvider);
+    for (final k in pinSort(
+        byKey.keys.toList(), _ref.read(chatNavProvider).pinState())) {
+      if (!lock.isConversationLocked(k)) return byKey[k];
+    }
+    return null;
+  }
+
   /// Seeds the common geohash channels; skipped in group/PM-only mode; idempotent.
   void discoverChannels() {
     if (_ref.read(settingsProvider).groupChatPMOnlyMode) return;
@@ -1007,18 +1195,98 @@ class NostrController {
   int _liveGapSinceSec = 0;
 
   Future<void> _catchUpLiveGap() => _liveGap.run((sinceSec) async {
-        _catchUpGiftWraps(sinceSec);
+        final d1Only = _service?.d1Backed ?? false;
+        if (!d1Only) _catchUpGiftWraps(sinceSec);
         if (_storageSync == null) return false;
         _lastD1BackfillAt = 0;
         _liveGapSinceSec = sinceSec;
+        if (d1Only) _gapD1FloorSec = sinceSec;
         try {
           await _backfillFromD1OnReconnect();
           await _restoreAllChannelArchives(force: true, sinceSec: sinceSec);
         } finally {
           _liveGapSinceSec = 0;
+          if (_gapD1FloorSec == sinceSec) _gapD1FloorSec = 0;
         }
+        if (d1Only) _scheduleLiveGapFollowUps(sinceSec);
         return true;
       });
+
+  Timer? _gapFollowTimer;
+  Timer? _gapSettleTimer;
+  int _gapFollowFloorSec = 0;
+
+  void _scheduleLiveGapFollowUps(int floorSec) {
+    if (floorSec <= 0) return;
+    _gapFollowFloorSec = _gapFollowFloorSec == 0
+        ? floorSec
+        : (floorSec < _gapFollowFloorSec ? floorSec : _gapFollowFloorSec);
+    _gapFollowTimer?.cancel();
+    _gapFollowTimer = Timer(LiveGap.followUpDelay, () {
+      _gapFollowTimer = null;
+      unawaited(_liveGapD1Pass(_gapFollowFloorSec, channels: false));
+    });
+    _gapSettleTimer?.cancel();
+    _gapSettleTimer = Timer(LiveGap.settleDelay, () {
+      final from = _gapFollowFloorSec;
+      _gapSettleTimer = null;
+      _gapFollowFloorSec = 0;
+      unawaited(_liveGapD1Pass(from, channels: true));
+    });
+  }
+
+  void _cancelLiveGapFollowUps() {
+    _gapFollowTimer?.cancel();
+    _gapFollowTimer = null;
+    _gapSettleTimer?.cancel();
+    _gapSettleTimer = null;
+    _gapFollowFloorSec = 0;
+  }
+
+  Future<void> _liveGapD1Pass(int floorSec, {required bool channels}) async {
+    final sync = _storageSync;
+    if (sync == null || floorSec <= 0 || !(_service?.d1Backed ?? false)) {
+      return;
+    }
+    final prev = _gapD1FloorSec;
+    final held = prev == 0 || floorSec < prev;
+    if (held) _gapD1FloorSec = floorSec;
+    try {
+      await _pmGapRestore(sync, floorSec);
+      if (!identical(_storageSync, sync)) return;
+      await _backfillGroupArchive(force: true);
+      if (channels && identical(_storageSync, sync)) {
+        await _restoreAllChannelArchives(force: true, sinceSec: floorSec);
+      }
+    } catch (_) {
+    } finally {
+      if (held && _gapD1FloorSec == floorSec) {
+        _gapD1FloorSec = prev != 0 && _liveGap.inFlight ? prev : 0;
+      }
+    }
+  }
+
+  int _gapD1FloorSec = 0;
+
+  void _noteGapWrapFloor(String wrapId, int floorSec) {
+    if (wrapId.isEmpty) return;
+    _gapWrapFloors.remove(wrapId);
+    _gapWrapFloors[wrapId] = floorSec;
+    while (_gapWrapFloors.length > 2000) {
+      _gapWrapFloors.remove(_gapWrapFloors.keys.first);
+    }
+  }
+
+  Future<void> _pmGapRestore(StorageSync sync, int floorSec) async {
+    if (sync.durableIdentity) return _restorePmArchive(sync, force: true);
+    if (floorSec <= 0) return;
+    try {
+      final wraps = await sync.pmGapWindow(
+          floorSec: floorSec,
+          sinceSec: floorSec - NostrService.giftWrapBackdateSec);
+      await _replayArchiveAwait(wraps);
+    } catch (_) {}
+  }
 
   final Map<String, int> _gapWrapFloors = <String, int>{};
 
@@ -1029,14 +1297,7 @@ class NostrController {
     service.catchUpGiftWraps(
       [...?groups?.allEphemeralPubkeys()],
       floorSec: floorSec,
-      onWrap: (wrap) {
-        if (wrap.id.isEmpty) return;
-        _gapWrapFloors.remove(wrap.id);
-        _gapWrapFloors[wrap.id] = floorSec;
-        while (_gapWrapFloors.length > 2000) {
-          _gapWrapFloors.remove(_gapWrapFloors.keys.first);
-        }
-      },
+      onWrap: (wrap) => _noteGapWrapFloor(wrap.id, floorSec),
     );
   }
 
@@ -1063,8 +1324,14 @@ class NostrController {
     }
     // Reconnects drop server-side REQs, so re-arm the ephemeral gift-wrap subscription.
     _refreshEphemeralSubscriptions();
-    await _restorePmArchive(sync);
-    await _backfillGroupArchive();
+    final gapFloor = _gapD1FloorSec;
+    if (gapFloor > 0) {
+      await _pmGapRestore(sync, gapFloor);
+      await _backfillGroupArchive(force: true);
+    } else {
+      await _restorePmArchive(sync);
+      await _backfillGroupArchive();
+    }
     // Discovery plus archive restore over every current, joined and discovered channel.
     if (_liveGapSinceSec == 0) await _restoreAllChannelArchives();
     // Re-hydrate archived emoji packs that aged off relays on every reconnect.
@@ -1296,6 +1563,54 @@ class NostrController {
         'identity\'s key or pick another identity.'));
   }
 
+  Future<void> _dropReplacedSessionNym(KeyValueStore kv,
+      {String? keep,
+      String? live,
+      Map<String, String>? unlockedSecrets}) async {
+    await kv.remove(StorageKeys.autoEphemeralNick);
+    await kv.remove(StorageKeys.customNick);
+    String? replaced = live;
+    try {
+      final nsec = unlockedSecrets?[SecretKeys.sessionNsec] ??
+          await SecureStore().get(SecretKeys.sessionNsec);
+      if (nsec != null && nsec.startsWith('nsec1')) {
+        replaced = keys.getPublicKeyHex(bech32.decodeNsec(nsec));
+      }
+    } catch (_) {}
+    try {
+      await SecureStore().remove(SecretKeys.sessionNsec);
+    } catch (_) {}
+    if (replaced == null || replaced == keep) return;
+    await kv.remove('${ChatNavKeys.pinned}:$replaced');
+    await kv.remove('${ChatNavKeys.pinnedPending}:$replaced');
+    if (_pqRootStoreUnreadable ||
+        !_pqRootStore.byPubkey.containsKey(replaced)) {
+      return;
+    }
+    await _writePqRootStore(_pqRootStore.without(replaced));
+  }
+
+  String? get _liveSessionPubkey {
+    final identity = _identity;
+    if (identity == null || identity.loginMethod != null) return null;
+    return identity.pubkey;
+  }
+
+  Future<void> _repairCachedLoginName(KeyValueStore kv, String pubkey) async {
+    final raw = kv.getString(StorageKeys.nostrLoginProfile);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return;
+      final name = decoded['name'];
+      if (name is! String) return;
+      final own = withOwnNymSuffix(name, pubkey);
+      if (own == name) return;
+      await kv.setString(StorageKeys.nostrLoginProfile,
+          jsonEncode(Map<String, dynamic>.of(decoded)..['name'] = own));
+    } catch (_) {}
+  }
+
   /// The cached login profile name for instant restore, or null.
   String? _cachedLoginProfileName(KeyValueStore kv) {
     final raw = kv.getString(StorageKeys.nostrLoginProfile);
@@ -1319,7 +1634,7 @@ class NostrController {
     var name = profile?.name;
     if (name == null || name.isEmpty) name = profile?.displayName;
     if (name == null || name.isEmpty) return;
-    if (name.length > 20) name = name.substring(0, 20);
+    name = withOwnNymSuffix(clipNymBase(name, 20), identity.pubkey);
     final nym = getNymFromPubkey(name, identity.pubkey);
     if (identity.nym != nym) identity.nym = nym;
     if (_ref.read(appStateProvider).selfNym != nym) {
@@ -1339,7 +1654,13 @@ class NostrController {
 
   /// Tears down the live session without touching persisted state, [AppState] or `_started`; panic passes `flush: false`.
   Future<void> _teardownLiveSession({bool flush = true}) async {
+    if (flush) {
+      try {
+        flushPendingGroupReactions();
+      } catch (_) {}
+    }
     unawaited(_closeSendAs());
+    _cancelLiveGapFollowUps();
     _flushTimer?.cancel();
     _chatToolsTimer?.cancel();
     _chatToolsTimer = null;
@@ -1349,6 +1670,8 @@ class NostrController {
     _liveInboundBuffer.clear();
     _cancelGiftWrapInbound();
     _settingsSyncTimer?.cancel();
+    _replayReadStateTimer?.cancel();
+    _replayReadStateTimer = null;
     _vouchPublishTimer?.cancel();
     _vouchPublishTimer = null;
     _vouchExpansionTimer?.cancel();
@@ -1434,6 +1757,25 @@ class NostrController {
     _lastPresenceBroadcast = 0;
     _presenceTimestamps.clear();
     _typingThrottle.clear();
+    for (final t in _typingStartTimers.values) {
+      t.cancel();
+    }
+    _typingStartTimers.clear();
+    for (final t in _typingStopTimers.values) {
+      t.cancel();
+    }
+    _typingStopTimers.clear();
+    _typingStartedFor.clear();
+    for (final t in _groupReactionTimers.values) {
+      t.cancel();
+    }
+    _groupReactionTimers.clear();
+    for (final h in _pmPieceHolds.values) {
+      h.timer.cancel();
+    }
+    _pmPieceHolds.clear();
+    _groupReactionQueue.clear();
+    _closeAnonLanes();
     _clearChatActivities();
     _sentChannelReadReceipts.clear();
     _sentPmReadReceipts.clear();
@@ -1442,6 +1784,7 @@ class NostrController {
     // The sync binding captured the old signer.
     final settings = _ref.read(settingsProvider.notifier);
     settings.onSyncedChange = null;
+    settings.onPrefChanged = null;
     // These hooks captured the old identity.
     settings.activePubkey = null;
     settings.onKeypairModeChanged = null;
@@ -1452,6 +1795,7 @@ class NostrController {
     _ref.read(appStateProvider.notifier).onPmMessageIngested = null;
     _ref.read(appStateProvider.notifier).onPMConversationAdded = null;
     _ref.read(appStateProvider.notifier).onGroupStoreChanged = null;
+    _ref.read(appStateProvider.notifier).onGroupStorePersist = null;
     _ref.read(appStateProvider.notifier).onChannelReadMarked = null;
     _ref.read(appStateProvider.notifier).onViewEntering = null;
     _ref.read(appStateProvider.notifier).onNavReadMarked = null;
@@ -1489,6 +1833,8 @@ class NostrController {
     // Throws on an invalid key so the modal shows its error.
     final loggedIn = await identityService.loginWithNsec(nsec);
     await RemotePanicPrefs.noteLogin(kv);
+    await _dropReplacedSessionNym(kv,
+        keep: loggedIn.pubkey, live: _liveSessionPubkey);
 
     await _teardownLiveSession();
     _started = false;
@@ -1531,7 +1877,11 @@ class NostrController {
 
   /// Adopts a NIP-46 session the login modal just established by re-booting the controller onto it.
   Future<void> loginWithNip46() async {
-    await RemotePanicPrefs.noteLogin(_ref.read(keyValueStoreProvider));
+    final kv = _ref.read(keyValueStoreProvider);
+    await RemotePanicPrefs.noteLogin(kv);
+    await _dropReplacedSessionNym(kv,
+        keep: kv.getString(StorageKeys.nostrLoginPubkey),
+        live: _liveSessionPubkey);
     // Teardown leaves `nip46ServiceProvider` alone, so the live socket survives into the re-boot.
     await _teardownLiveSession();
     _started = false;
@@ -1615,7 +1965,7 @@ class NostrController {
         _persistMeshOutbox();
       } catch (_) {}
       final sync = _storageSync;
-      if (sync != null && sync.durableIdentity) {
+      if (sync != null) {
         try {
           await sync.flushDeposits().timeout(drainBudget);
         } catch (_) {}
@@ -1631,6 +1981,11 @@ class NostrController {
         _settingsSyncTimer = null;
         try {
           await _flushSettingsSync(sync).timeout(drainBudget);
+        } catch (_) {}
+      }
+      if (_replayReadStateTimer != null) {
+        try {
+          await _flushReplayReadState().timeout(drainBudget);
         } catch (_) {}
       }
       final deadline = DateTime.now().add(drainBudget);
@@ -1832,10 +2187,15 @@ class NostrController {
       // Re-mirror our own kind-0 to D1 so edits made in other clients reach D1 readers.
       _mirrorOwnProfileToD1(event);
     }
+    final senderBlocked = event.pubkey != (_identity?.pubkey ?? '') &&
+        _ref.read(appStateProvider).blockedUsers.contains(event.pubkey);
     // Kind-7 reactions to our messages notify and record; removals are skipped.
-    if (event.kind == EventKind.reaction) {
+    if (event.kind == EventKind.reaction && !senderBlocked) {
       // Register NIP-30 emoji before routing so custom reactions resolve to images.
-      if (event.tags.isNotEmpty) {
+      if (event.tags.isNotEmpty &&
+          !_ref
+              .read(appStateProvider)
+              .emojiSourceHidden(event.pubkey, '', '')) {
         _ref.read(liveCustomEmojiProvider.notifier).ingestEmojiTags(event.tags);
       }
       final removed = event
@@ -1864,7 +2224,9 @@ class NostrController {
             emoji: event.content,
             tsSec: event.createdAt,
             eventId: event.id,
+            stableId: true,
             route: event.pubkey,
+            channelHint: _eventChannelTag(event),
           );
         }
       }
@@ -1873,12 +2235,36 @@ class NostrController {
     if (event.kind == EventKind.geoChannel ||
         event.kind == EventKind.namedChannel) {
       // Register NIP-30 emoji so `:shortcode:` tokens render.
-      if (event.tags.isNotEmpty) {
+      final editOf = event.tagValue('edit') ?? '';
+      final stored = _ref
+          .read(appStateProvider.notifier)
+          .messageById(editOf.isNotEmpty ? editOf : event.id);
+      final emojiHidden = senderBlocked ||
+          (editOf.isNotEmpty
+              ? (ServerQuiet.hides(event.pubkey, event.id) ||
+                  _ref.read(appStateProvider).emojiSourceHidden(
+                      event.pubkey,
+                      stripPubkeySuffix(event.tagValue('n') ?? ''),
+                      event.content,
+                      id: editOf,
+                      quoted: Message.quotedFromTags(event.tags),
+                      people: botAskerOf(event),
+                      msg: stored != null && stored.pubkey == event.pubkey
+                          ? stored
+                          : null))
+              : (stored == null ||
+                  _ref.read(appStateProvider).isMessageFiltered(stored)));
+      if (event.tags.isNotEmpty && !emojiHidden) {
         _ref.read(liveCustomEmojiProvider.notifier).ingestEmojiTags(event.tags);
         _ref.read(mediaFallbacksProvider).ingestImetaTags(event.tags);
+      } else if (event.tags.isNotEmpty &&
+          stored != null &&
+          stored.pubkey == event.pubkey &&
+          !stored.isOwn) {
+        _holdTags(stored, event.tags, EventMapper.channelKeyOf(event));
       }
       // Register inbound P2P file offers so the card's download works; our own are registered at share time.
-      if (event.pubkey != (_identity?.pubkey ?? '')) {
+      if (event.pubkey != (_identity?.pubkey ?? '') && !senderBlocked) {
         final offer = parseFileOfferTag(event.tags, event.pubkey);
         if (offer != null) {
           _ref.read(p2pServiceProvider).registerOffer(offer);
@@ -1889,19 +2275,22 @@ class NostrController {
         _maybeAwayReply(event);
       }
 
-      // Clear the bot's thinking strip as soon as its reply lands.
       if (isVerifiedBot(event.pubkey)) {
         final botChannelKey = EventMapper.channelKeyOf(event);
         if (botChannelKey != null) {
-          _setBotChannelThinking(botChannelKey, false);
+          final botRun = _botRunIdOf(event.tagValue('run'));
+          _botRemoteRunEnd(botChannelKey, botRun);
+          _botLocalRunLanded(botChannelKey, botRun);
+          _paintBotThinking(botChannelKey);
         }
       }
 
+      final channelSenderBlocked = senderBlocked;
       // Earned trust (two messages) and PoW-floor trust-graph observation.
-      _observeMessageTrust(event);
+      if (!channelSenderBlocked) _observeMessageTrust(event);
 
       // Hydrate the author's kind-0 from D1 if missing; batched.
-      _maybeBackfillProfiles(event.pubkey);
+      if (!channelSenderBlocked) _maybeBackfillProfiles(event.pubkey);
 
       // Send a read receipt for fresh, visible, non-own messages in the open channel.
       final self = _identity?.pubkey ?? '';
@@ -1917,7 +2306,8 @@ class NostrController {
           wireKey.isNotEmpty &&
           _isChannelMessageId(event.id) &&
           !_isHistorical(event.createdAt) &&
-          appState.isConversationSeen(key)) {
+          appState.isConversationSeen(key) &&
+          _channelReceiptVisible(key, event.id)) {
         unawaited(sendChannelReadReceipt(event.id, event.pubkey, wireKey,
             isGeohash: isGeo));
       }
@@ -2103,10 +2493,12 @@ class NostrController {
       threadMentionsOnly: _threadNotifyMentionsOnly,
     );
     if (!record) return;
+    var quoted = Message.quotedFromTags(e.tags);
     if (key != null) {
       if (ContentFilter.channelHidden(appState.contentFilter(), key)) return;
       final stored = _storedMessage(appState, key, e.id);
       if (stored == null || appState.isMessageFiltered(stored)) return;
+      quoted = stored.quoted;
     }
     // A channel mention routes to the channel, labeled `in #<key>`.
     final channelRoute =
@@ -2122,6 +2514,7 @@ class NostrController {
       historyType: channelRoute.isNotEmpty ? 'channel' : 'mention',
       route: channelRoute.isNotEmpty ? channelRoute : e.pubkey,
       eventId: e.id,
+      stableId: true,
       // Use the mapper's clamped time so future-dated events don't pin to the top or alert as live.
       tsMs: notifTsMs,
       // Thread replies name the thread as well as the channel.
@@ -2133,6 +2526,7 @@ class NostrController {
       threadRoot: inThread ? threadRoot : null,
       // `_silentForAlert` is the whole live-arrival rule; don't OR in `_isHistorical`, which silenced catch-up mentions.
       silent: _silentForAlert(notifTsMs),
+      quoted: quoted,
     );
   }
 
@@ -2163,8 +2557,11 @@ class NostrController {
         sender: sender,
         nym: sender.isEmpty ? '' : _nymDisplayFor(sender),
         body: e.body,
-        channel: _entryChannel(e.type, e.route),
-        subject: ContentFilter.baseNym(e.title),
+        channel: (e.channel != null && e.channel!.isNotEmpty)
+            ? e.channel!
+            : _entryChannel(e.type, e.route),
+        subject: e.subject ?? '',
+        quoted: e.quoted,
       ),
     );
   }
@@ -2223,6 +2620,7 @@ class NostrController {
             historical: m.isHistorical,
             liveWindowMs: 30000,
           );
+    final alert = NotifyView.alertId(x: m.nymMessageId, id: m.id);
     _dispatchNotification(
       // Title is the bare author; the group name goes in the context label.
       title: m.author,
@@ -2233,12 +2631,14 @@ class NostrController {
       isGroup: isGroup,
       historyType: isGroup ? 'group' : 'pm',
       route: isGroup ? (m.groupId ?? '') : m.pubkey,
-      eventId: m.nymMessageId ?? m.id,
+      eventId: alert.eventId,
+      stableId: alert.stable,
       tsMs: m.timestamp,
       contextLabel: _messageContextLabel(
           isGroup: isGroup, inThread: inThread, groupId: m.groupId),
       threadRoot: inThread ? m.threadRoot : null,
       silent: treatAsHistorical,
+      quoted: m.quoted,
     );
   }
 
@@ -2261,7 +2661,151 @@ class NostrController {
   String _groupNameFor(String? groupId) {
     if (groupId == null) return tr('Group');
     final g = _ref.read(appStateProvider.notifier).groupById(groupId);
-    return (g != null && g.name.isNotEmpty) ? g.name : tr('Group');
+    return g == null ? tr('Group') : _ref.read(appStateProvider).groupLabel(g);
+  }
+
+  final Map<String, CfEntry> _trayInfo = <String, CfEntry>{};
+  final Set<String> _trayCleared = <String>{};
+  bool _trayClearQueued = false;
+  bool _ownerGone = false;
+
+  @visibleForTesting
+  Future<void> Function(String conversationKey) cancelTrayNotification =
+      (key) => NotificationService().cancelConversation(key);
+
+  @visibleForTesting
+  Iterable<String> get trayKeys => _trayInfo.keys;
+
+  void _scheduleHiddenTrayClear() {
+    if (_trayClearQueued) return;
+    _trayClearQueued = true;
+    scheduleMicrotask(() {
+      _trayClearQueued = false;
+      if (_ownerGone) return;
+      clearHiddenTray();
+    });
+  }
+
+  @visibleForTesting
+  void clearHiddenTray() {
+    final ctx = _ref
+        .read(appStateProvider)
+        .contentFilter(friendsOnly: _notifyFriendsOnly);
+    final gone = <String>{
+      for (final e in _trayInfo.entries)
+        if (ContentFilter.entryHidden(ctx, e.value)) e.key,
+    };
+    final posted = _trayPostedRefs();
+    final hidden = NotificationHistoryNotifier.hiddenEntry;
+    final entries = _ref.read(notificationHistoryProvider).entries;
+    if (hidden != null) {
+      final newest = <String, NotificationEntry>{};
+      for (final e in entries) {
+        final key = notificationConversationKey(
+            historyType: e.type, route: e.route ?? e.senderPubkey ?? '');
+        if (key.isEmpty ||
+            posted.containsKey(key) ||
+            _trayInfo.containsKey(key) ||
+            _trayCleared.contains(key)) {
+          continue;
+        }
+        final cur = newest[key];
+        if (cur == null || e.ts >= cur.ts) newest[key] = e;
+      }
+      newest.forEach((key, e) {
+        if (hidden(e)) gone.add(key);
+      });
+    }
+    if (posted.isNotEmpty) {
+      posted.forEach((key, ref) {
+        if (_trayInfo.containsKey(key) || _trayCleared.contains(key)) return;
+        final entry = _trayPostedEntry(entries, ref);
+        if (entry != null) {
+          if (hidden != null && hidden(entry)) gone.add(key);
+          return;
+        }
+        final sender = ref.sender;
+        if (ContentFilter.entryHidden(
+            ctx,
+            CfEntry(
+              sender: sender,
+              nym: sender.isEmpty ? '' : _nymDisplayFor(sender),
+              body: '',
+              channel: _entryChannel(ref.type, ref.route),
+            ))) {
+          gone.add(key);
+        }
+      });
+    }
+    for (final key in gone) {
+      _trayInfo.remove(key);
+      _trayCleared.add(key);
+      unawaited(cancelTrayNotification(key));
+    }
+    if (gone.any(posted.containsKey)) {
+      posted.removeWhere((k, _) => gone.contains(k));
+      _saveTrayPosted();
+    }
+  }
+
+  static const String _trayPostedKey = 'nym_tray_posted';
+
+  Map<String, _TrayPost>? _trayPosted;
+
+  Map<String, _TrayPost> _trayPostedRefs() {
+    final cached = _trayPosted;
+    if (cached != null) return cached;
+    final out = <String, _TrayPost>{};
+    try {
+      final raw = _ref.read(keyValueStoreProvider).getString(_trayPostedKey);
+      final decoded = raw == null || raw.isEmpty ? null : jsonDecode(raw);
+      if (decoded is Map) {
+        decoded.forEach((k, v) {
+          final p = _TrayPost.fromJson(v);
+          if (k is String && p != null) out[k] = p;
+        });
+      }
+    } catch (_) {}
+    return _trayPosted = out;
+  }
+
+  void _saveTrayPosted() {
+    final m = _trayPosted;
+    if (m == null) return;
+    try {
+      unawaited(_ref.read(keyValueStoreProvider).setString(_trayPostedKey,
+          jsonEncode({for (final e in m.entries) e.key: e.value.toJson()})));
+    } catch (_) {}
+  }
+
+  void _rememberTrayPost(String key, _TrayPost post) {
+    final m = _trayPostedRefs();
+    m.remove(key);
+    m[key] = post;
+    while (m.length > 200) {
+      m.remove(m.keys.first);
+    }
+    _saveTrayPosted();
+  }
+
+  NotificationEntry? _trayPostedEntry(
+      List<NotificationEntry> entries, _TrayPost ref) {
+    NotificationEntry? best;
+    var bestGap = 2001;
+    for (final e in entries) {
+      if (e.type != ref.type ||
+          (e.senderPubkey ?? '') != ref.sender ||
+          (e.route ?? e.senderPubkey ?? '') != ref.route) {
+        continue;
+      }
+      if (ref.eventId.isNotEmpty && e.eventId == ref.eventId) return e;
+      final gap = (e.ts - ref.ts).abs();
+      if (gap < bestGap) {
+        best = e;
+        bestGap = gap;
+      }
+    }
+    return best;
   }
 
   /// Records into the bell history and, unless [silent], fires sound and popup.
@@ -2281,6 +2825,10 @@ class NostrController {
     bool silent = false,
     String? toastKind,
     String? source,
+    bool stableId = false,
+    String? subject,
+    bool banner = true,
+    List<String> quoted = const <String>[],
   }) {
     final tapRoute = route ?? senderPubkey;
     // A thread-reply notification opens the thread.
@@ -2303,14 +2851,23 @@ class NostrController {
     final isBlocked = senderPubkey.isNotEmpty &&
         blockState.blockedUsers.contains(senderPubkey);
     if (isBlocked) return;
+    final cleanBody = blockState.stripBlockedQuotes(body, quoted);
+    final sourceRef = _notifySource(source);
+    final directChannel = _entryChannel(historyType, route);
+    final entryChannel = directChannel.isNotEmpty
+        ? directChannel
+        : (sourceRef != null && sourceRef.type == 'channel'
+            ? sourceRef.route
+            : '');
     if (ContentFilter.entryHidden(
       blockState.contentFilter(),
       CfEntry(
         sender: senderPubkey,
         nym: senderPubkey.isEmpty ? '' : _nymDisplayFor(senderPubkey),
-        body: blockState.stripBlockedQuotes(body),
-        channel: _entryChannel(historyType, route),
-        subject: ContentFilter.baseNym(title),
+        body: body,
+        channel: entryChannel,
+        subject: subject ?? '',
+        quoted: quoted,
       ),
     )) {
       return;
@@ -2324,7 +2881,7 @@ class NostrController {
       if (tsMs < cutoff24hMs) return;
     }
     var shownTitle = title;
-    var shownBody = NymFormat.stripForPreview(body);
+    var shownBody = NymFormat.stripForPreview(cleanBody);
     var shownLabel = contextLabel;
     var lockedChat = false;
     try {
@@ -2341,6 +2898,8 @@ class NostrController {
         shownLabel = null;
       }
     } catch (_) {}
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final recordTs = tsMs == null || tsMs > nowMs ? nowMs : tsMs;
     var landsRead = false;
     try {
       landsRead = _ref.read(notificationHistoryProvider.notifier).landsViewed(
@@ -2398,6 +2957,11 @@ class NostrController {
         timestampMs: tsMs,
         presentWhileOpen: presentWhileOpen,
         preview: preview,
+        stableId: stableId,
+        alertScope: NotifyView.alertScope(
+            historyType == 'message' ? '' : historyType,
+            tapRoute,
+            senderPubkey),
       );
       final notifyContext = contextFor();
       final svc = _ref.read(notificationsServiceProvider);
@@ -2412,6 +2976,26 @@ class NostrController {
         toast = EventToastCenter.instance.consider(toastEvent(false));
       }
       if (toast?.system ?? true) {
+        _trayInfo.remove(conversationKey);
+        _trayCleared.remove(conversationKey);
+        _trayInfo[conversationKey] = CfEntry(
+          sender: senderPubkey,
+          nym: senderPubkey.isEmpty ? '' : _nymDisplayFor(senderPubkey),
+          body: body,
+          channel: entryChannel,
+          subject: subject ?? '',
+          quoted: quoted,
+        );
+        if (_trayInfo.length > 200) _trayInfo.remove(_trayInfo.keys.first);
+        _rememberTrayPost(
+            conversationKey,
+            _TrayPost(
+              type: historyType,
+              route: route ?? senderPubkey,
+              sender: senderPubkey,
+              eventId: eventId ?? '',
+              ts: recordTs,
+            ));
         unawaited(svc.notify(
           title: shownTitle,
           body: shownBody,
@@ -2435,18 +3019,23 @@ class NostrController {
             title: shownTitle,
             body: shownBody,
             route: route ?? senderPubkey,
-            ts: tsMs,
+            ts: recordTs,
             eventId: eventId,
             senderPubkey: senderPubkey,
             contextLabel: shownLabel,
             threadRoot: threadRoot,
             exactOnly: lockedChat,
             live: !silent,
+            stableId: stableId,
+            subject: subject,
+            channel: entryChannel.isEmpty ? null : entryChannel,
+            quoted: quoted,
           );
     } catch (_) {
       // History store may be unavailable in teardown; alerting still happened.
     }
     if (backlogNew &&
+        banner &&
         _ref.read(settingsProvider).notificationsEnabled &&
         history.entriesForAlertDedup
             .any((e) => e.eventId == backlogId && !e.viewed)) {
@@ -2490,8 +3079,13 @@ class NostrController {
     String? threadRoot,
     bool silent = false,
     String? toastKind,
+    bool stableId = true,
+    String? source,
+    String? subject,
   }) =>
       _dispatchNotification(
+        source: source,
+        subject: subject,
         title: title,
         body: body,
         senderPubkey: senderPubkey,
@@ -2505,6 +3099,7 @@ class NostrController {
         threadRoot: threadRoot,
         silent: silent,
         toastKind: toastKind,
+        stableId: stableId && eventId != null,
       );
 
   @visibleForTesting
@@ -2514,6 +3109,7 @@ class NostrController {
     required String emoji,
     String? eventId,
     String? route,
+    String? channelHint,
   }) =>
       _maybeNotifyReaction(
         messageId: messageId,
@@ -2522,7 +3118,9 @@ class NostrController {
         emoji: emoji,
         tsSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
         eventId: eventId,
+        stableId: eventId != null,
         route: route,
+        channelHint: channelHint,
       );
 
   @visibleForTesting
@@ -2531,6 +3129,7 @@ class NostrController {
     required String zapperPubkey,
     required int amountSats,
     String? eventId,
+    String? channelHint,
   }) =>
       _maybeNotifyZapToMessage(
         messageId: messageId,
@@ -2538,6 +3137,8 @@ class NostrController {
         zapperPubkey: zapperPubkey,
         tsSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
         eventId: eventId,
+        stableId: eventId != null,
+        channelHint: channelHint,
       );
 
   @visibleForTesting
@@ -2729,9 +3330,62 @@ class NostrController {
       historyType: historyType,
       route: route,
       eventId: eventId,
+      stableId: historyType == 'pm' && (eventId ?? '').isNotEmpty,
       tsMs: tsMs,
       contextLabel: contextLabel,
     );
+  }
+
+  @visibleForTesting
+  Duration pmPieceHold = const Duration(milliseconds: NotifyView.pieceHoldMs);
+
+  final Map<String, ({Message m, int? cutoff, Timer timer})> _pmPieceHolds =
+      {};
+
+  bool _holdsPmPiece(Message m) {
+    if (m.isOwn || (m.nymMessageId ?? '').isNotEmpty) return false;
+    if (NotifyView.pmOpenPiece(m.content)) return true;
+    for (final h in _pmPieceHolds.values) {
+      if (h.m.pubkey == m.pubkey &&
+          h.m.conversationPubkey == m.conversationPubkey &&
+          (h.m.createdAt - m.createdAt).abs() < 5) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _holdPmPiece(Message m, int? cutoffMs) {
+    _pmPieceHolds.remove(m.id)?.timer.cancel();
+    _pmPieceHolds[m.id] = (
+      m: m,
+      cutoff: cutoffMs,
+      timer: Timer(pmPieceHold, () => _releasePmPiece(m.id)),
+    );
+  }
+
+  void _releasePmPiece(String id, {bool drop = false}) {
+    final h = _pmPieceHolds.remove(id);
+    if (h == null) return;
+    h.timer.cancel();
+    if (drop) return;
+    if (!_ref.read(appStateProvider.notifier).releaseHeldPmUnread(h.m)) return;
+    _maybeNotifyMessage(h.m, isGroup: false, alertCutoffMs: h.cutoff);
+  }
+
+  void _onPmPiecesAbsorbed(Message host, List<String> ids) {
+    for (final id in ids) {
+      if (id != host.id) _releasePmPiece(id, drop: true);
+    }
+    final nymId = host.nymMessageId ?? '';
+    if (nymId.isNotEmpty) {
+      _ref.read(notificationHistoryProvider.notifier).rekeyAll(ids, nymId,
+          body: NymFormat.stripForPreview(_ref
+              .read(appStateProvider)
+              .stripBlockedQuotes(notificationBodyFor(host.content), host.quoted)),
+          quoted: host.quoted);
+    }
+    scheduleMicrotask(() => _releasePmPiece(host.id));
   }
 
   /// Notifies and records history when someone else reacts to our message.
@@ -2742,7 +3396,9 @@ class NostrController {
     required String emoji,
     required int tsSec,
     String? eventId,
+    bool stableId = false,
     String? route,
+    String? channelHint,
   }) {
     if (emoji.isEmpty || messageId.isEmpty) return;
     final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
@@ -2778,6 +3434,7 @@ class NostrController {
         ? tr('reacted {emoji} to: "{preview}"',
             {'emoji': emoji, 'preview': preview})
         : tr('reacted {emoji} to your message', {'emoji': emoji});
+    source ??= _channelSourceHint(channelHint);
 
     // Replayed reactions record silently.
     _dispatchNotification(
@@ -2789,6 +3446,7 @@ class NostrController {
       historyType: 'reaction',
       route: route ?? reactorPubkey,
       eventId: eventId,
+      stableId: stableId,
       tsMs: tsSec * 1000,
       silent: _silentForAlert(tsSec * 1000),
       source: source,
@@ -2812,6 +3470,8 @@ class NostrController {
     required String zapperPubkey,
     required int tsSec,
     String? eventId,
+    bool stableId = false,
+    String? channelHint,
   }) {
     if (messageId.isEmpty || amountSats <= 0) return;
     final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
@@ -2847,6 +3507,7 @@ class NostrController {
         ? tr('⚡ zapped {sats} sats to: "{preview}"',
             {'sats': sats, 'preview': preview})
         : tr('⚡ zapped {sats} sats to your message', {'sats': sats});
+    source ??= _channelSourceHint(channelHint);
 
     // Zap notifications route to the zapper's PM and are silent when historical.
     _dispatchNotification(
@@ -2858,11 +3519,34 @@ class NostrController {
       historyType: 'reaction',
       route: zapperPubkey,
       eventId: eventId,
+      stableId: stableId,
       tsMs: tsSec * 1000,
       silent: _silentForAlert(tsSec * 1000),
       toastKind: 'zap',
       source: source,
     );
+  }
+
+  String? _channelSourceHint(String? hint) {
+    final h = (hint ?? '').trim().toLowerCase().replaceFirst(RegExp(r'^#'), '');
+    return h.isEmpty ? null : '#$h';
+  }
+
+  String? _eventChannelTag(NostrEvent e) {
+    final direct = e.tagValue('g') ?? e.tagValue('d');
+    if (direct != null && direct.isNotEmpty) return direct;
+    final desc = e.tagValue('description');
+    if (desc == null || desc.isEmpty) return null;
+    try {
+      final req = jsonDecode(desc);
+      if (req is! Map || req['tags'] is! List) return null;
+      for (final t in req['tags'] as List) {
+        if (t is List && t.length > 1 && (t[0] == 'g' || t[0] == 'd') && t[1] is String && (t[1] as String).isNotEmpty) {
+          return t[1] as String;
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// Profile-zap receipt ids already handled, to prevent double notifications.
@@ -2897,20 +3581,25 @@ class NostrController {
       }
       final verified = providerPubkey != null &&
           event.pubkey.toLowerCase() == providerPubkey;
+      final from = ContentFilter.zapper(zapper, event.pubkey, verified);
+      if (from == self || _ref.read(appStateProvider).isPersonHidden(from)) {
+        return;
+      }
       final sats = _abbreviateSats(amount);
       final body = verified
           ? tr('⚡ zapped {sats} sats to your profile', {'sats': sats})
           : tr('⚡ zapped {sats} sats to your profile (unverified)',
               {'sats': sats});
       _dispatchNotification(
-        title: _nymDisplayFor(zapper),
+        title: _nymDisplayFor(from),
         body: body,
-        senderPubkey: zapper,
-        isFriend: appState.isFriend(zapper),
+        senderPubkey: from,
+        isFriend: appState.isFriend(from),
         isMention: false,
         historyType: 'reaction',
-        route: zapper,
+        route: from,
         eventId: event.id,
+        stableId: true,
         tsMs: event.createdAt * 1000,
         silent: _silentForAlert(event.createdAt * 1000),
         toastKind: 'zap',
@@ -2927,6 +3616,7 @@ class NostrController {
     if (e.tagValue('status') == null) return;
     final self = _service?.selfPubkey ?? _identity?.pubkey;
     if (self != null && e.pubkey == self) return;
+    if (_ref.read(appStateProvider).blockedUsers.contains(e.pubkey)) return;
 
     final lastTs = _presenceTimestamps[e.pubkey] ?? 0;
     if (e.createdAt < lastTs) return;
@@ -2967,6 +3657,7 @@ class NostrController {
   void _ingestVouch(NostrEvent e) {
     final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
     if (e.pubkey.isEmpty || e.pubkey == self) return;
+    if (_ref.read(appStateProvider).blockedUsers.contains(e.pubkey)) return;
     dynamic decoded;
     try {
       decoded = jsonDecode(e.content.isEmpty ? '[]' : e.content);
@@ -2993,11 +3684,32 @@ class NostrController {
     if (_ref.read(ghostModeProvider).pubkeys.contains(pubkey.toLowerCase())) {
       return;
     }
+    if (_isOwnOtherKey(pubkey)) return;
     final notifier = _ref.read(appStateProvider.notifier);
     notifier.markNymchatPubkey(pubkey);
     final added = notifier.observeNymchatPubkey(pubkey);
     if (added) _scheduleVouchPublish();
     _scheduleTrustPersist();
+  }
+
+  final Set<String> _anonOwnKeys = <String>{};
+
+  void _noteOwnAnonKey(String pubkey) {
+    if (pubkey.isEmpty) return;
+    _anonOwnKeys.add(pubkey);
+    if (_anonOwnKeys.length > 2000) {
+      final keep = _anonOwnKeys.toList().sublist(_anonOwnKeys.length - 1000);
+      _anonOwnKeys
+        ..clear()
+        ..addAll(keep);
+    }
+  }
+
+  bool _isOwnOtherKey(String pubkey) {
+    if (_anonOwnKeys.contains(pubkey)) return true;
+    final index = _ref.read(accountsProvider)?.changes.value;
+    if (index == null) return false;
+    return index.accounts.any((a) => a.pubkey == pubkey);
   }
 
   /// Earned trust and PoW-floor observation; must also run on the D1 backfill path or restored history is filtered out.
@@ -3099,6 +3811,10 @@ class NostrController {
   @visibleForTesting
   int giftWrapSliceMicros = _kGiftWrapSliceMicros;
 
+  static final Object _replayZoneKey = Object();
+
+  static bool get _replayed => Zone.current[_replayZoneKey] == true;
+
   bool _giftWrapDraining = false;
   int _giftWrapEpoch = 0;
   Future<void>? _giftWrapDrain;
@@ -3146,8 +3862,10 @@ class NostrController {
     var i = start;
     _ref.read(appStateProvider.notifier).runBatched(() {
       while (i < batch.length) {
+        final u = batch[i];
         try {
-          _processGiftWrap(batch[i]);
+          runZoned(() => _processGiftWrap(u),
+              zoneValues: {_replayZoneKey: u.fromArchive});
         } catch (_) {}
         i++;
         if (watch.elapsedMicroseconds >= giftWrapSliceMicros) break;
@@ -3196,8 +3914,11 @@ class NostrController {
     switch (kind) {
       case EventKind.dmRumor: // 14 — PM or group message
         // Archive durable DM wraps to D1; receipts, typing, signaling, presence and settings wraps are not archived.
-        if (senderBlocked) return;
-        _archiveGiftWrap(u);
+        if (senderBlocked && !_keepsBlockedGroupRumor(rumor)) {
+          _recordBlockedMemberKey(u, appState, self);
+          if (!_keepsBlockedChatRumor(rumor)) return;
+        }
+        if (!senderBlocked) _archiveGiftWrap(u);
         _onRumorMessage(u, appState, self, gap: gap);
       case EventKind.nymReceiptRumor: // 69420 — receipt or typing
         if (u.senderVerified) _onReceiptOrTyping(rumor, appState);
@@ -3205,7 +3926,7 @@ class NostrController {
         // Reactions are durable content and archived too, or they vanish on relaunch.
         if (!u.senderVerified || senderBlocked) return;
         _archiveGiftWrap(u);
-        _onPrivateReaction(rumor, appState);
+        _onPrivateReaction(rumor, appState, u.wrapId);
       case EventKind.zapReceipt: // 9735 — gift-wrapped private zap announcement
         if (!u.senderVerified || senderBlocked) return;
         _archiveGiftWrap(u);
@@ -3215,7 +3936,9 @@ class NostrController {
           _callSignalHandler?.call(rumor);
         }
       case EventKind.friendPresence: // 25054 — friends-only private presence
-        if (u.senderVerified) _onFriendPresence(rumor, appState);
+        if (u.senderVerified && !senderBlocked) {
+          _onFriendPresence(rumor, appState);
+        }
       case EventKind.appData: // 30078 — settings transfer / own settings sync
         if (u.senderVerified) _onSettingsRumor(rumor, u);
       default:
@@ -3223,19 +3946,35 @@ class NostrController {
     }
   }
 
-  int _lastSyncPingTs = 0;
+  final Map<String, int> _syncPingSeen = {};
   Timer? _syncPingTimer;
 
   /// Treats a sync ping as a doorbell: ignore our own and non-newer pings, and pull from D1 debounced.
   void _onSettingsChangedPing(Map<String, dynamic> ping, int rumorTs) {
+    final sync = _storageSync;
     final src = ping['src'];
-    final own = _storageSync?.syncInstanceId;
+    final own = sync?.syncInstanceId;
     if (src is String && own != null && src == own) return;
 
     final rawTs = ping['ts'];
     final ts = rawTs is num ? rawTs.toInt() : rumorTs;
-    if (ts != 0 && ts <= _lastSyncPingTs) return;
-    _lastSyncPingTs = ts;
+    final source = src is String ? src : '?';
+    final sameDevice = sync != null &&
+        src is String &&
+        src.split('.').first == sync.syncDeviceId;
+    if (sameDevice &&
+        ts != 0 &&
+        sync.settingsFullOk &&
+        sync.settingsFullAt > 0 &&
+        ts * 1000 < sync.settingsFullAt - StorageSync.settingsDeltaOverlapMs) {
+      return;
+    }
+    if (ts != 0 && ts <= (_syncPingSeen[source] ?? 0)) return;
+    _syncPingSeen.remove(source);
+    _syncPingSeen[source] = ts;
+    while (_syncPingSeen.length > 200) {
+      _syncPingSeen.remove(_syncPingSeen.keys.first);
+    }
 
     _syncPingTimer?.cancel();
     _syncPingTimer = Timer(const Duration(milliseconds: 1200), () {
@@ -3256,6 +3995,25 @@ class NostrController {
 
   void onSettingsChangedPingForTest(Map<String, dynamic> ping, int ts) =>
       _onSettingsChangedPing(ping, ts);
+
+  @visibleForTesting
+  Future<void> mergeRemoteSettingsForTest(
+      {SettingsReadMode mode = SettingsReadMode.full}) async {
+    final sync = _storageSync;
+    if (sync != null) await _mergeRemoteSettings(sync, mode: mode);
+  }
+
+  String _syncDeviceId() {
+    final kv = _ref.read(keyValueStoreProvider);
+    final saved = kv.getString('nym_sync_device');
+    if (saved != null && RegExp(r'^[a-z0-9]{8,40}$').hasMatch(saved)) {
+      return saved;
+    }
+    final id = '${Random().nextInt(1 << 32).toRadixString(36)}'
+        '${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+    unawaited(kv.setString('nym_sync_device', id));
+    return id;
+  }
 
   void _onSettingsRumor(Map<String, dynamic> rumor, GiftWrapUnwrapped u) {
     final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
@@ -3321,7 +4079,7 @@ class NostrController {
         if (rumorTs > lastTs) {
           kv.setString(StorageKeys.lastSettingsSyncTs, '$rumorTs');
         }
-        _applySyncedSettings(decoded);
+        _applySyncedSettings(prefRowStamp(decoded, rumorTs * 1000));
       }
     }
   }
@@ -3351,6 +4109,11 @@ class NostrController {
     final settings = data['settings'];
     if (fromPubkey.isEmpty || settings is! Map) return;
     if ((rumor['pubkey'] as String? ?? '') != fromPubkey) return;
+    final st = _ref.read(appStateProvider);
+    if (st.isPersonHidden(fromPubkey) ||
+        st.isPersonHidden(fromPubkey, data['fromNym'] as String? ?? '')) {
+      return;
+    }
 
     final eventId = u.wrapId;
     if (_dismissedTransferEvents().contains(eventId)) return;
@@ -3461,6 +4224,7 @@ class NostrController {
     if (pubkey.isEmpty || pubkey == self) return;
 
     final state = _ref.read(appStateProvider);
+    if (state.blockedUsers.contains(pubkey)) return;
     if (!state.isFriend(pubkey) && !state.users.containsKey(pubkey)) return;
 
     final tags = _tags(rumor);
@@ -3480,17 +4244,84 @@ class NostrController {
     _maybeBackfillProfiles(pubkey);
   }
 
+  bool _keepsBlockedChatRumor(Map<String, dynamic> rumor) {
+    final kind = (rumor['kind'] as num?)?.toInt() ?? 0;
+    return ContentFilter.keepsBlockedChat(
+        kind, _tagValue(_tags(rumor), 'type') ?? '');
+  }
+
+  bool _keepsBlockedGroupRumor(Map<String, dynamic> rumor) {
+    final tags = _tags(rumor);
+    if (_tagValue(tags, 'g') == null) return false;
+    return ContentFilter.keepsBlockedGroupControl(_tagValue(tags, 'type') ?? '');
+  }
+
+  void _recordBlockedMemberKey(
+      GiftWrapUnwrapped u, AppStateNotifier appState, String self) {
+    if (!u.senderVerified) return;
+    final tags = _tags(u.rumor);
+    final groupId = _tagValue(tags, 'g');
+    final ephPk = _tagValue(tags, 'ephemeral_pk');
+    final sender = u.rumor['pubkey'] as String? ?? '';
+    if (groupId == null || ephPk == null || sender.isEmpty || sender == self) {
+      return;
+    }
+    final group = appState.groupById(groupId);
+    if (group == null || !GroupLogic.isMember(group, sender)) return;
+    final ts = (u.rumor['created_at'] as num?)?.toInt() ?? 0;
+    _groups?.recordMemberKey(groupId, sender, ephPk, ts);
+  }
+
+  Future<void> _onStrangerGroupMessage(
+      GiftWrapUnwrapped u,
+      AppStateNotifier appState,
+      String self,
+      String senderPubkey,
+      ({bool stale, int? cutoffMs}) gap) async {
+    try {
+      await resolveProfiles([senderPubkey])
+          .timeout(const Duration(milliseconds: 2500), onTimeout: () {});
+    } catch (_) {}
+    _onRumorMessage(u, appState, self, gap: gap, profileChecked: true);
+  }
+
   void _onRumorMessage(
       GiftWrapUnwrapped u, AppStateNotifier appState, String self,
-      {({bool stale, int? cutoffMs}) gap = (stale: false, cutoffMs: null)}) {
+      {({bool stale, int? cutoffMs}) gap = (stale: false, cutoffMs: null),
+      bool profileChecked = false}) {
     final rumor = u.rumor;
     final tags = _tags(rumor);
     final groupId = _tagValue(tags, 'g');
     final type = _tagValue(tags, 'type');
     final senderPubkey = rumor['pubkey'] as String? ?? '';
 
-    // Register NIP-30 emoji so `:shortcode:` tokens render.
-    if (tags.isNotEmpty) {
+    if (!profileChecked &&
+        groupId != null &&
+        (type == null || type == GroupControlType.message) &&
+        senderPubkey != self &&
+        appState.groupById(groupId) == null &&
+        !_ref.read(appStateProvider).blockedUsers.contains(senderPubkey) &&
+        !_ref.read(groupToolsProvider).isPendingJoin(groupId)) {
+      final st = _ref.read(appStateProvider);
+      if (st.nymFiltersActive &&
+          isPlaceholderNym(st.users[senderPubkey]?.nym)) {
+        unawaited(
+            _onStrangerGroupMessage(u, appState, self, senderPubkey, gap));
+        return;
+      }
+    }
+
+    final rumorFromBlocked = senderPubkey != self &&
+        _ref.read(appStateProvider).blockedUsers.contains(senderPubkey);
+    final rumorContent = rumor['content'];
+    final rumorHidden = rumorFromBlocked ||
+        (senderPubkey != self &&
+            _ref.read(appStateProvider).emojiSourceHidden(senderPubkey, '',
+                rumorContent is String ? rumorContent : '',
+                pm: true,
+                id: rumor['id'] is String ? rumor['id'] as String : '',
+                quoted: Message.quotedFromTags(tags)));
+    if (tags.isNotEmpty && !rumorHidden) {
       _ref.read(liveCustomEmojiProvider.notifier).ingestEmojiTags(tags);
       _ref.read(mediaFallbacksProvider).ingestImetaTags(tags);
     }
@@ -3500,9 +4331,22 @@ class NostrController {
         senderPubkey != self &&
         !GroupLogic.isMember(knownGroup, senderPubkey);
 
+    final blockedSender = senderPubkey != self &&
+        _ref.read(appStateProvider).blockedUsers.contains(senderPubkey);
+    if (blockedSender &&
+        groupId != null &&
+        knownGroup == null &&
+        !_ref.read(groupToolsProvider).isPendingJoin(groupId)) {
+      return;
+    }
     if (senderPubkey != self) {
       final st = _ref.read(appStateProvider);
-      if (st.blockedUsers.contains(senderPubkey)) return;
+      if (blockedSender &&
+          (groupId == null ||
+              !ContentFilter.keepsBlockedGroupControl(type ?? '')) &&
+          !_keepsBlockedChatRumor(rumor)) {
+        return;
+      }
       if (groupId != null &&
           knownGroup == null &&
           !_ref.read(groupToolsProvider).isPendingJoin(groupId)) {
@@ -3552,11 +4396,23 @@ class NostrController {
 
     if (groupId != null) {
       if (!u.senderVerified || nonMember) return;
-      final m = _mapGroupMessage(rumor, u, self, groupId);
+      final m = _mapGroupMessage(rumor, u, self, groupId,
+          resolvePq: !blockedSender);
       if (m == null) return;
+      if (rumorHidden) _holdTags(m, tags);
+      if (blockedSender &&
+          m.pqEncrypted &&
+          !m.isOwn &&
+          pqSealRootVerdict(senderPubkey) == null) {
+        m.pqPending = true;
+      }
       if (gapStale) m.isHistorical = true;
       final landed = appState.ingestGroupMessage(m, countUnread: !gapStale);
-      if (landed) {
+      final groupHidden =
+          !m.isOwn && _ref.read(appStateProvider).isMessageFiltered(m);
+      if (landed &&
+          !blockedSender &&
+          !(groupHidden && appState.groupById(groupId) == null)) {
         // Every group message re-asserts name and roster so renames reach members who missed the control event.
         appState.mergeGroupFromMessage(
           groupId: groupId,
@@ -3567,6 +4423,7 @@ class NostrController {
           ],
           timestampMs: m.createdAt * 1000,
           senderPubkey: senderPubkey,
+          hidden: groupHidden,
         );
         final advertised = _tagValue(tags, 'rh');
         if (advertised != null && advertised.isNotEmpty) {
@@ -3582,15 +4439,17 @@ class NostrController {
             senderPubkey: senderPubkey,
             ts: metaTs,
             eventId: u.wrapId,
+            piggyback: true,
           );
         }
       }
       if (!gapStale) {
         _maybeNotifyMessage(m, isGroup: true, alertCutoffMs: gapCutoffMs);
       }
+      if (blockedSender) return;
       _maybeBackfillProfiles(m.pubkey);
       // Best-effort delivery receipt to the sender.
-      if (!m.isOwn && m.nymMessageId != null) {
+      if (!m.isOwn && !groupHidden && m.nymMessageId != null) {
         final ek = _groups?.keysFor(groupId);
         _service?.publishReceipt(
           messageId: m.nymMessageId!,
@@ -3623,6 +4482,11 @@ class NostrController {
       pqRootFor: (peer) => pqSealRootVerdict(peer) == true,
     );
     if (m == null) return;
+    if (rumorHidden) _holdTags(m, tags);
+    if (u.isBitchat) {
+      m.bitchatMessageId = m.nymMessageId;
+      m.nymMessageId = null;
+    }
     m.expiresAt = u.expiration;
     if (anonAuthor) m.pubkey = self;
     // Our own archived copy says nothing about the recipient's encryption, so ask the recipient's verdict instead.
@@ -3636,8 +4500,17 @@ class NostrController {
       m.pqRoot = layered && pqSealRootVerdict(peer) == true;
     }
     // The announcement may still be in flight; fill the verdict in later.
-    if (m.pqEncrypted) {
+    if (m.pqEncrypted && !blockedSender) {
       _resolvePqRootVerdict(m.conversationPubkey ?? m.pubkey, m.nymMessageId);
+    } else if (m.pqEncrypted &&
+        !m.isOwn &&
+        pqSealRootVerdict(m.conversationPubkey ?? m.pubkey) == null) {
+      m.pqPending = true;
+    }
+    final invited = ContentFilter.inviteChannel(m.content);
+    if (invited.isNotEmpty &&
+        _ref.read(appStateProvider).isChannelBlockedKey(invited)) {
+      return;
     }
     // A known nym wins over the pure mapper's `nym#xxxx` fallback.
     if (m.isOwn) {
@@ -3665,16 +4538,30 @@ class NostrController {
         m.content = m.content.substring(tm.end);
       }
       m.isBot = true;
+      final gifter = _tagValue(tags, 'gifter')?.toLowerCase() ?? '';
+      if (RegExp(r'^[0-9a-f]{64}$').hasMatch(gifter)) m.people = [gifter];
     }
     if (appState.holdForeignBotThread(m)) return;
     if (gapStale) m.isHistorical = true;
-    final landed = appState.ingestPMMessage(m, countUnread: !gapStale);
+    final hold = !gapStale && _holdsPmPiece(m);
+    final landed =
+        appState.ingestPMMessage(m, countUnread: !gapStale && !hold);
     if (landed && !gapStale) {
-      _maybeNotifyMessage(m, isGroup: false, alertCutoffMs: gapCutoffMs);
+      if (hold) {
+        _holdPmPiece(m, gapCutoffMs);
+      } else {
+        _maybeNotifyMessage(m, isGroup: false, alertCutoffMs: gapCutoffMs);
+      }
     }
+    if (blockedSender) return;
     _maybeBackfillProfiles(m.pubkey);
+    final pmHidden =
+        !m.isOwn && _ref.read(appStateProvider).isMessageFiltered(m);
     // Delivery receipt back to the sender (not for our own self-copy).
-    if (!m.isOwn && m.nymMessageId != null && !anonSuppressSendTo(m.pubkey)) {
+    if (!m.isOwn &&
+        !pmHidden &&
+        m.nymMessageId != null &&
+        !anonSuppressSendTo(m.pubkey)) {
       _service?.publishReceipt(
         messageId: m.nymMessageId!,
         receiptType: 'delivered',
@@ -3692,8 +4579,9 @@ class NostrController {
     Map<String, dynamic> rumor,
     GiftWrapUnwrapped u,
     String self,
-    String groupId,
-  ) {
+    String groupId, {
+    bool resolvePq = true,
+  }) {
     final content = rumor['content'];
     final senderPubkey = rumor['pubkey'] as String?;
     if (content is! String || senderPubkey == null) return null;
@@ -3709,7 +4597,7 @@ class NostrController {
       ms: ms,
     );
     final isOwn = senderPubkey == self;
-    if (u.isPq) _resolvePqRootVerdict(senderPubkey, nymMessageId);
+    if (u.isPq && resolvePq) _resolvePqRootVerdict(senderPubkey, nymMessageId);
     return Message(
       id: u.wrapId.isNotEmpty ? u.wrapId : (nymMessageId ?? ''),
       author: _nymFor(senderPubkey),
@@ -3731,7 +4619,25 @@ class NostrController {
       pqRoot: u.isPq && pqSealRootVerdict(senderPubkey) == true,
       deliveryStatus: isOwn ? DeliveryStatus.sent : DeliveryStatus.delivered,
       expiresAt: u.expiration,
+      quoted: Message.quotedFromTags(tags),
     );
+  }
+
+  Future<void> _onStrangerGroupControl(
+    String groupId,
+    String type,
+    List<List<String>> tags,
+    String senderPubkey,
+    Map<String, dynamic> rumor,
+    GiftWrapUnwrapped u,
+    AppStateNotifier appState,
+  ) async {
+    try {
+      await resolveProfiles([senderPubkey])
+          .timeout(const Duration(milliseconds: 2500), onTimeout: () {});
+    } catch (_) {}
+    _onGroupControl(groupId, type, tags, senderPubkey, rumor, u, appState,
+        profileChecked: true);
   }
 
   void _onGroupControl(
@@ -3741,12 +4647,18 @@ class NostrController {
     String senderPubkey,
     Map<String, dynamic> rumor,
     GiftWrapUnwrapped u,
-    AppStateNotifier appState,
-  ) {
+    AppStateNotifier appState, {
+    bool profileChecked = false,
+  }) {
+    final blockedControl =
+        senderPubkey != (_service?.selfPubkey ?? _identity?.pubkey ?? '') &&
+            _ref.read(appStateProvider).blockedUsers.contains(senderPubkey);
     // Backfill profiles for everyone the control event names so non-posting members get avatars.
-    _maybeBackfillProfiles(senderPubkey);
-    for (final t in tags) {
-      if (t.length > 1 && t[0] == 'p') _maybeBackfillProfiles(t[1]);
+    if (!blockedControl) {
+      _maybeBackfillProfiles(senderPubkey);
+      for (final t in tags) {
+        if (t.length > 1 && t[0] == 'p') _maybeBackfillProfiles(t[1]);
+      }
     }
     if (type == GroupToolsTypes.joinDeclined &&
         _tagValue(tags, 'reason') == 'full' &&
@@ -3762,8 +4674,12 @@ class NostrController {
     // The sender's key was already recorded; a resync request gets a rate-limited reply, never a bubble.
     if (type == GroupControlType.keyResync) {
       final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
-      if (senderPubkey != self && _tagValue(tags, 'resync_req') == '1') {
-        unawaited(_maybeReplyKeyResync(groupId, senderPubkey));
+      if (senderPubkey != self &&
+          _tagValue(tags, 'resync_req') == '1' &&
+          !_ref.read(appStateProvider).blockedUsers.contains(senderPubkey)) {
+        unawaited(_maybeReplyKeyResync(groupId, senderPubkey,
+            ts: (rumor['created_at'] as num?)?.toInt() ?? 0,
+            x: _tagValue(tags, 'x')));
       }
       return;
     }
@@ -3783,6 +4699,20 @@ class NostrController {
     if (type == GroupControlType.invite ||
         type == GroupControlType.addMember) {
       _ref.read(groupToolsProvider).clearPendingJoin(groupId);
+      final controlSelf = _service?.selfPubkey ?? _identity?.pubkey ?? '';
+      if (appState.groupById(groupId) == null &&
+          senderPubkey != controlSelf &&
+          !joiningViaInvite) {
+        final st = _ref.read(appStateProvider);
+        if (st.isPersonHidden(senderPubkey)) return;
+        if (!profileChecked &&
+            st.nymFiltersActive &&
+            isPlaceholderNym(st.users[senderPubkey]?.nym)) {
+          unawaited(_onStrangerGroupControl(
+              groupId, type, tags, senderPubkey, rumor, u, appState));
+          return;
+        }
+      }
     }
     if (type == GroupControlType.invite) {
       // Clear the left mark first, only if this invite is newer than our leave.
@@ -3829,7 +4759,8 @@ class NostrController {
               description: description,
               members: members,
               mods: mods,
-              membersAt: _joinAt(inviteTs));
+              membersAt: _joinAt(inviteTs),
+              by: senderPubkey);
         } else if (senderPubkey == self ||
             GroupLogic.canAddMembers(existingGroup, senderPubkey)) {
           appState.enrichGroupIdentity(groupId,
@@ -3840,7 +4771,8 @@ class NostrController {
             (_groups?.isOwnEphemeralPk(
                     groupId, _tagValue(tags, 'ephemeral_pk')) ??
                 false))) {
-          unawaited(announceGroupEphemeralKey(groupId));
+          unawaited(announceGroupEphemeralKey(groupId,
+              ts: inviteTs, x: _tagValue(tags, 'x')));
         }
         return;
       }
@@ -3868,6 +4800,8 @@ class NostrController {
           invited, {for (final pk in members) pk: _joinAt(inviteTs)})) {
         return;
       }
+      GroupLogic.noteMetaSetters(
+          invited, GroupLogic.metaSnapshot(null), senderPubkey);
       appState.upsertGroup(invited);
       final createdGroup = appState.groupById(groupId);
       if (createdGroup != null &&
@@ -3875,21 +4809,26 @@ class NostrController {
         appState.upsertGroup(createdGroup);
       }
       _processPendingGroupHistory(groupId);
-      unawaited(announceGroupEphemeralKey(groupId));
+      unawaited(announceGroupEphemeralKey(groupId,
+          ts: inviteTs, x: _tagValue(tags, 'x')));
       if (_notificationsEnabled &&
           !_ref.read(appStateProvider).blockedUsers.contains(senderPubkey)) {
         // Invite content, else the PWA's fallback line.
         final content = rumor['content'];
+        final shownGroup = appState.groupById(groupId);
+        final shownName = shownGroup == null
+            ? name
+            : _ref.read(appStateProvider).groupLabel(shownGroup, '');
         final body = (content is String && content.isNotEmpty)
             ? content
             : tr('You\'ve been added to group "{name}"',
-                {'name': name.isNotEmpty ? name : tr('group')});
+                {'name': shownName.isNotEmpty ? shownName : tr('group')});
         // Fresh invites alert loudly; replays record silently, same rule as other notifications.
         final isHistorical = inviteTs <= 0 ||
             _silentForAlert(inviteTs * 1000, liveWindowMs: 30000);
         _dispatchNotification(
           title: tr('Group invite: {name}',
-              {'name': name.isNotEmpty ? name : tr('group')}),
+              {'name': shownName.isNotEmpty ? shownName : tr('group')}),
           body: body,
           senderPubkey: senderPubkey,
           isFriend: _ref.read(appStateProvider).isFriend(senderPubkey),
@@ -3898,9 +4837,10 @@ class NostrController {
           historyType: 'group',
           route: groupId,
           eventId: u.wrapId,
+          subject: name,
           tsMs: inviteTs > 0 ? inviteTs * 1000 : null,
-          contextLabel:
-              tr('in {name}', {'name': name.isNotEmpty ? name : tr('a group')}),
+          contextLabel: tr('in {name}',
+              {'name': shownName.isNotEmpty ? shownName : tr('a group')}),
           silent: isHistorical,
           toastKind: 'invite',
         );
@@ -3923,6 +4863,9 @@ class NostrController {
       if (senderPubkey == identity.pubkey) return;
       if (!GroupLogic.canModerate(group, identity.pubkey)) return;
       if (!group.members.contains(senderPubkey)) return;
+      if (_ref.read(appStateProvider).blockedUsers.contains(senderPubkey)) {
+        return;
+      }
       final key = '$groupId:$senderPubkey';
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       if ((_rosterReplyTs[key] ?? 0) > nowMs - kGroupRosterRepairCooldownMs) {
@@ -3976,22 +4919,18 @@ class NostrController {
       if (reqEpoch != group.inviteEpoch) return;
       if (group.members.contains(senderPubkey)) return;
       if (group.banned.contains(senderPubkey)) return;
-      final rank =
-          GroupLogic.joinAdmitRank(group, identity.pubkey, senderPubkey);
-      if (rank <= 0) {
-        unawaited(addGroupMembers(groupId, [senderPubkey], viaJoin: true));
+      if (_ref.read(appStateProvider).blockedUsers.contains(senderPubkey)) {
         return;
       }
-      unawaited(Future<void>.delayed(
-          Duration(milliseconds: (rank > 6 ? 6 : rank) * kGroupAdmitBackoffMs),
-          () {
-        final now = appState.groupById(groupId);
-        if (now == null) return;
-        if (now.members.contains(senderPubkey)) return;
-        if (now.banned.contains(senderPubkey)) return;
-        if (!GroupLogic.canAddMembers(now, identity.pubkey)) return;
-        unawaited(addGroupMembers(groupId, [senderPubkey], viaJoin: true));
-      }));
+      final reqTs = (rumor['created_at'] as num?)?.toInt() ?? 0;
+      if (!ControlAnswers.fresh(
+          'join', DateTime.now().millisecondsSinceEpoch ~/ 1000, reqTs)) {
+        return;
+      }
+      final rank =
+          GroupLogic.joinAdmitRank(group, identity.pubkey, senderPubkey);
+      unawaited(_answerJoinRequest(
+          groupId, senderPubkey, rank, reqTs, _tagValue(tags, 'x')));
       return;
     }
 
@@ -4061,6 +5000,8 @@ class NostrController {
                   : DateTime.now().millisecondsSinceEpoch,
             );
             joined.joinedVia = senderPubkey;
+            GroupLogic.noteMetaSetters(
+                joined, GroupLogic.metaSnapshot(null), senderPubkey);
             if (!_admitBootstrapRoster(joined, {
               for (final pk in members) pk: pk == self ? _joinAt(inviteTs) : 0,
             })) {
@@ -4083,14 +5024,18 @@ class NostrController {
               description: description,
               members: members,
               mods: mods,
-              membersAt: _joinAt(inviteTs));
+              membersAt: _joinAt(inviteTs),
+              by: senderPubkey);
         }
       }
     }
 
     final ts = (rumor['created_at'] as num?)?.toInt() ?? 0;
     // Resolve the name first: a self-kick drops the group, but the notification still needs it.
-    final groupNameForNotif = appState.groupById(groupId)?.name;
+    final groupBefore = appState.groupById(groupId);
+    final groupNameForNotif = groupBefore == null
+        ? null
+        : _ref.read(appStateProvider).groupLabel(groupBefore);
     final result = appState.applyGroupControl(
       groupId: groupId,
       type: type,
@@ -4115,11 +5060,13 @@ class NostrController {
     if (type == GroupControlType.addMember) {
       _processPendingGroupHistory(groupId);
       final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
-      if (!(senderPubkey == self &&
+      if (!blockedControl &&
+          !(senderPubkey == self &&
           (_groups?.isOwnEphemeralPk(
                   groupId, _tagValue(tags, 'ephemeral_pk')) ??
               false))) {
-        unawaited(announceGroupEphemeralKey(groupId));
+        unawaited(announceGroupEphemeralKey(groupId,
+            ts: ts, x: _tagValue(tags, 'x')));
       }
     }
   }
@@ -4139,13 +5086,16 @@ class NostrController {
     if (senderPubkey == self) return;
     if (!_notificationsEnabled) return;
     final appState = _ref.read(appStateProvider);
-    if (appState.blockedUsers.contains(senderPubkey)) return;
+    final mask = appState.personMaskLabel(senderPubkey);
 
     // Fallback chain `grp.name || groupName`, where groupName defaults to 'Group'.
-    final name = (groupName != null && groupName.isNotEmpty)
+    final rawName = (groupName != null && groupName.isNotEmpty)
         ? groupName
-        : (_tagValue(tags, 'subject') ?? tr('Group'));
-    final actor = _nymDisplayFor(senderPubkey);
+        : (mask.isNotEmpty
+            ? tr('Group')
+            : (_tagValue(tags, 'subject') ?? tr('Group')));
+    final name = appState.hasBlockedKeyword(rawName) ? tr('Group') : rawName;
+    final actor = mask.isNotEmpty ? mask : _nymDisplayFor(senderPubkey);
 
     String? title;
     String? body;
@@ -4185,13 +5135,15 @@ class NostrController {
         return;
     }
 
+    final quiet = mask.isNotEmpty ||
+        (_notifyFriendsOnly && !appState.isFriend(senderPubkey));
     // Historical (>10s) or catch-up events record to history only.
-    final silent = _silentForAlert(ts * 1000);
+    final silent = quiet || _silentForAlert(ts * 1000);
 
     _dispatchNotification(
       title: title,
       body: body,
-      senderPubkey: senderPubkey,
+      senderPubkey: quiet ? '' : senderPubkey,
       isFriend: appState.isFriend(senderPubkey),
       isMention: false,
       isGroup: true,
@@ -4200,6 +5152,7 @@ class NostrController {
       eventId: eventId,
       tsMs: ts > 0 ? ts * 1000 : null,
       silent: silent,
+      banner: !quiet,
     );
   }
 
@@ -4214,6 +5167,15 @@ class NostrController {
     // We may have just been kicked; don't recreate an orphan message list.
     if (appState.groupById(groupId) == null) return;
     final actor = _nymDisplayFor(senderPubkey);
+    final people = <String>[senderPubkey];
+    final names = <String>[actor];
+    String named(String pk) {
+      final name = _nymDisplayFor(pk);
+      people.add(pk);
+      names.add(name);
+      return name;
+    }
+
     String? line;
     switch (type) {
       case GroupControlType.leave:
@@ -4223,16 +5185,17 @@ class NostrController {
         if (target == null) break;
         final banned =
             tags.any((t) => t.length > 1 && t[0] == 'ban' && t[1] == '1');
+        final who = named(target);
         line = banned
             ? tr('{target} was banned by {actor}.',
-                {'target': _nymDisplayFor(target), 'actor': actor})
+                {'target': who, 'actor': actor})
             : tr('{target} was removed by {actor}.',
-                {'target': _nymDisplayFor(target), 'actor': actor});
+                {'target': who, 'actor': actor});
       case GroupControlType.addMember:
-        final added = tags
-            .where((t) => t.length > 1 && t[0] == 'p')
-            .map((t) => _nymDisplayFor(t[1]))
-            .toList();
+        final added = [
+          for (final t in tags)
+            if (t.length > 1 && t[0] == 'p') named(t[1]),
+        ];
         if (added.isEmpty) break;
         line = tr('{names} was added by {actor}.',
             {'names': added.join(', '), 'actor': actor});
@@ -4240,36 +5203,38 @@ class NostrController {
         final target = _tagValue(tags, 'mod');
         if (target != null) {
           line = tr('{actor} made {target} a moderator.',
-              {'actor': actor, 'target': _nymDisplayFor(target)});
+              {'actor': actor, 'target': named(target)});
         }
       case GroupControlType.revokeMod:
         final target = _tagValue(tags, 'mod');
         if (target != null) {
           line = tr('{actor} removed {target} as a moderator.',
-              {'actor': actor, 'target': _nymDisplayFor(target)});
+              {'actor': actor, 'target': named(target)});
         }
       case GroupControlType.transferOwner:
         final target = _tagValue(tags, 'owner');
         if (target != null) {
           line = tr('{actor} transferred ownership to {target}.',
-              {'actor': actor, 'target': _nymDisplayFor(target)});
+              {'actor': actor, 'target': named(target)});
         }
       case GroupControlType.unban:
         final target = _tagValue(tags, 'unban');
         if (target != null) {
           line = tr('{target} was unbanned by {actor}.',
-              {'target': _nymDisplayFor(target), 'actor': actor});
+              {'target': named(target), 'actor': actor});
         }
       case GroupControlType.deleteMessage:
         final author = _tagValue(tags, 'target_pubkey');
         line = author != null
             ? tr('{actor} deleted a message from {target}.',
-                {'actor': actor, 'target': _nymDisplayFor(author)})
+                {'actor': actor, 'target': named(author)})
             : tr('{actor} deleted a message.', {'actor': actor});
     }
     if (line == null || line.isEmpty) return;
     appState.addSystemMessage(line,
-        storageKey: GroupLogic.groupStorageKey(groupId));
+        storageKey: GroupLogic.groupStorageKey(groupId),
+        people: people,
+        names: names);
   }
 
   void _onReceiptOrTyping(
@@ -4320,10 +5285,15 @@ class NostrController {
   }
 
   void _onPrivateReaction(
-      Map<String, dynamic> rumor, AppStateNotifier appState) {
+      Map<String, dynamic> rumor, AppStateNotifier appState,
+      [String wrapId = '']) {
     final tags = _tags(rumor);
+    final reactor = rumor['pubkey'] as String? ?? '';
     // Register NIP-30 emoji before routing so private custom reactions resolve.
-    if (tags.isNotEmpty) {
+    if (tags.isNotEmpty &&
+        !_ref.read(appStateProvider).emojiSourceHidden(reactor, '',
+            rumor['content'] is String ? rumor['content'] as String : '',
+            pm: true)) {
       _ref.read(liveCustomEmojiProvider.notifier).ingestEmojiTags(tags);
     }
     final target = _tagValue(tags, 'e');
@@ -4360,7 +5330,7 @@ class NostrController {
             ['e', e],
             if (raw['a'] == 'remove') ['action', 'remove'],
           ];
-          _onPrivateReaction(rest, appState);
+          _onPrivateReaction(rest, appState, wrapId);
         }
       }
     }
@@ -4389,12 +5359,15 @@ class NostrController {
 
     // Notify when someone reacts to our PM/group message; skip removals.
     if (!action) {
+      final alert = NotifyView.reactionId(wrapId, target);
       _maybeNotifyReaction(
         messageId: target,
         reactorPubkey: pubkey,
         targetAuthorPubkey: targetAuthor,
         emoji: content,
         tsSec: ts,
+        eventId: alert.eventId.isEmpty ? null : alert.eventId,
+        stableId: alert.stable,
         route: groupId ?? pubkey,
       );
     }
@@ -4430,12 +5403,14 @@ class NostrController {
       final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
       final pTag = _tagValue(tags, 'p');
       if (self.isNotEmpty && pTag == self && zapper != self) {
+        final alert = NotifyView.reactionId(wrapId, messageId);
         _maybeNotifyZapToMessage(
           messageId: messageId,
           amountSats: amount,
           zapperPubkey: zapper,
           tsSec: (rumor['created_at'] as num?)?.toInt() ?? 0,
-          eventId: wrapId, // wrap id = the PWA's `event.id` dedup key
+          eventId: alert.eventId.isEmpty ? null : alert.eventId,
+          stableId: alert.stable,
         );
       }
     }
@@ -4451,7 +5426,13 @@ class NostrController {
     if (_ref.read(appStateProvider).blockedUsers.contains(event.pubkey)) return;
 
     // Archive to D1 for `zap-get` backfill; scope gating lives in [ZapArchive.archive].
-    if (event.tagValue('bolt11') != null) _zapArchive?.archive(event);
+    final claimedZapper = ZapArchive.claimedZapper(event);
+    final zapperBlocked = claimedZapper.isNotEmpty &&
+        claimedZapper != (_service?.selfPubkey ?? _identity?.pubkey ?? '') &&
+        _ref.read(appStateProvider).blockedUsers.contains(claimedZapper);
+    if (event.tagValue('bolt11') != null && !zapperBlocked) {
+      _zapArchive?.archive(event);
+    }
 
     final info = ZapLogic.parseReceipt(event);
     if (info == null) {
@@ -4473,8 +5454,8 @@ class NostrController {
     _getZapProviderPubkey(recipientPubkey).then((providerPubkey) {
       final verified = providerPubkey != null &&
           event.pubkey.toLowerCase() == providerPubkey;
-      // Falls back to the receipt author, which is correct for both provider and peer-published receipts.
-      final zapper = info.zapperPubkey;
+      final zapper =
+          ContentFilter.zapper(info.zapperPubkey, event.pubkey, verified);
       if (_ref.read(appStateProvider).blockedUsers.contains(zapper)) return;
       final counted = appState.recordMessageZap(
         messageId: messageId,
@@ -4496,6 +5477,8 @@ class NostrController {
           zapperPubkey: zapper,
           tsSec: event.createdAt,
           eventId: event.id,
+          stableId: true,
+          channelHint: _eventChannelTag(event),
         );
       }
     }).catchError((_) {});
@@ -4558,6 +5541,10 @@ class NostrController {
     final service = _service;
     final identity = _identity;
     if (service == null || identity == null) return false;
+    if (to != identity.pubkey &&
+        _ref.read(appStateProvider).blockedUsers.contains(to)) {
+      return false;
+    }
     final content = <String, dynamic>{...payload, 'nym': identity.nym};
     // Group signals ride the group ephemeral key, falling back to the durable key.
     String Function(String)? encryptTo;
@@ -4631,7 +5618,14 @@ class NostrController {
       quoteAuthor: _quotedAuthor(trimmed) ?? '',
       threadBot: threadTarget != null,
     );
-    if (!ask) return (await _sendChannelPseudonymous(trimmed)) != null;
+    if (!ask) {
+      final lane = _openAnonLane();
+      try {
+        return (await _sendChannelPseudonymous(trimmed, lane)) != null;
+      } finally {
+        _closeAnonLane(lane);
+      }
+    }
     final blocked = anonNymbotBlocker(
       apiHost: true,
       mesh: _ref
@@ -4647,34 +5641,87 @@ class NostrController {
     final request = blocked == null
         ? await _botChannelRequest(trimmed, threadTarget, anon: true)
         : null;
-    final sender = await _sendChannelPseudonymous(trimmed);
+    final lane = _openAnonLane();
+    final sender = await _sendChannelPseudonymous(trimmed, lane);
+    if (sender == null || request == null) _closeAnonLane(lane);
     if (sender == null) return false;
     if (blocked != null) {
       unawaited(Future<void>(() => _anonBotNotice(blocked)));
     } else if (request != null) {
-      unawaited(_askNymbotAnonymously(request, sender, view.storageKey));
+      unawaited(_askNymbotAnonymously(request, sender, view.storageKey, lane));
     }
     return true;
   }
 
-  Future<void> _askNymbotAnonymously(Map<String, dynamic> request,
-      ({String nym, String pubkey}) sender, String storageKey) async {
-    _setBotChannelThinking(storageKey, true);
-    String? reason;
-    var answered = false;
-    try {
-      answered = await _postBotChannelRequest({
-        ...request,
-        'senderNym': anonNymbotSenderNym(sender.nym, sender.pubkey),
-      }, storageKey);
-      if (!answered) reason = 'failed';
-    } on ApiException catch (e) {
-      reason = anonNymbotOutcome(e.statusCode, false);
-    } catch (_) {
-      reason = 'failed';
+  Future<void> _askNymbotAnonymously(
+      Map<String, dynamic> request,
+      ({String nym, String pubkey}) sender,
+      String storageKey,
+      AnonLane lane) async {
+    final sends = <Future<void>>[];
+    Future<void> publish(NostrEvent e) {
+      final hook = botReplyPublishForTest;
+      final f = hook != null
+          ? hook(e)
+          : lane.publish(e, geoRelays: _sendAsGeoRelays(e)).then((_) {});
+      sends.add(f);
+      return f;
     }
-    if (!answered) _setBotChannelThinking(storageKey, false);
+
+    final run = _botChannelRunBegin(storageKey, anon: true);
+    final outcome = await _botChannelExchange({
+      ...request,
+      'senderNym': anonNymbotSenderNym(sender.nym, sender.pubkey),
+    }, storageKey, run, open: _anonBotChannelLines, publish: publish);
+    _botChannelRunEnd(run);
+    try {
+      for (var i = 0; i < 4 && sends.isNotEmpty; i++) {
+        final batch = List<Future<void>>.of(sends);
+        sends.clear();
+        await Future.wait(batch);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    } catch (_) {
+    } finally {
+      _closeAnonLane(lane);
+    }
+    String? reason;
+    if (!outcome.answered) {
+      reason = outcome.reason == 'timeout' || outcome.reason == 'lost'
+          ? 'failed'
+          : anonNymbotOutcome(outcome.status, false) ??
+              (outcome.status == 200 ? 'failed' : null);
+    }
     _anonBotNotice(reason);
+  }
+
+  final Set<AnonLane> _anonLanes = <AnonLane>{};
+
+  AnonLane _openAnonLane() {
+    final direct =
+        _ref.read(keyValueStoreProvider).getBool(StorageKeys.relayDirectMode);
+    final blocked = List<String>.of(_ref.read(blockedRelaysProvider));
+    final poolFactory = debugPoolFactory;
+    final lane = AnonLane(() => PoolSendAsTransport(
+          direct: direct,
+          blocked: blocked,
+          pool: poolFactory == null ? null : (_, _, _) => poolFactory(),
+        ));
+    _anonLanes.add(lane);
+    return lane;
+  }
+
+  void _closeAnonLane(AnonLane lane) {
+    _anonLanes.remove(lane);
+    unawaited(lane.close());
+  }
+
+  void _closeAnonLanes() {
+    final lanes = _anonLanes.toList();
+    _anonLanes.clear();
+    for (final lane in lanes) {
+      unawaited(lane.close());
+    }
   }
 
   void _anonBotNotice(String? reason) {
@@ -4684,7 +5731,7 @@ class NostrController {
 
   /// Publishes one pseudonymous channel message; never records presence, which would link it to the user.
   Future<({String nym, String pubkey})?> _sendChannelPseudonymous(
-      String content) async {
+      String content, AnonLane lane) async {
     final appState = _ref.read(appStateProvider.notifier);
     final state = _ref.read(appStateProvider);
     final service = _service;
@@ -4698,6 +5745,7 @@ class NostrController {
     }
 
     final ephemeralSigner = LocalSigner(keys.generatePrivateKey());
+    _noteOwnAnonKey(ephemeralSigner.pubkey);
     final anonNym = _generateAnonNym();
 
     final echo = appState.sendLocal(
@@ -4722,8 +5770,13 @@ class NostrController {
               powDifficulty: _ref.read(settingsProvider.notifier).powDifficulty,
               signerOverride: ephemeralSigner,
               threadRoot: threadRoot,
+              buildOnly: true,
             );
-      if (signed != null && echo != null) {
+      if (signed == null) {
+        if (echo != null) appState.markOptimisticFailed(echo.id);
+        return null;
+      }
+      if (echo != null) {
         appState.replaceOptimistic(
           echo.id,
           signed.id,
@@ -4732,9 +5785,15 @@ class NostrController {
           powTarget: EventMapper.powTargetOf(signed),
         );
       }
-      return signed != null
-          ? (nym: anonNym, pubkey: ephemeralSigner.pubkey)
-          : null;
+      if (publishHook == null) {
+        final ok =
+            await lane.publish(signed, geoRelays: _sendAsGeoRelays(signed));
+        if (!ok.accepted) {
+          appState.markOptimisticFailed(signed.id);
+          return null;
+        }
+      }
+      return (nym: anonNym, pubkey: ephemeralSigner.pubkey);
     } catch (_) {
       if (echo != null) appState.markOptimisticFailed(echo.id);
       return null;
@@ -4948,6 +6007,7 @@ class NostrController {
         ...sender.stash.emojiTagsFor(content),
         ...media_notes.imetaTagsForContent(
             content, _ref.read(mediaFallbacksProvider).fallbacksFor),
+        ...quoteTagsForContent(content),
       ],
       powDifficulty: sender.powDifficulty,
       threadRoot: threadRoot,
@@ -5002,25 +6062,16 @@ class NostrController {
     final request = job.request;
     if (request == null) return;
     final storageKey = job.view.storageKey;
-    _setBotChannelThinking(storageKey, true);
-    try {
-      final data =
-          await svc.botAction({...request, 'senderNym': sender.label});
-      final raw = data['event'];
-      if (raw is! Map) {
-        _setBotChannelThinking(storageKey, false);
-        return;
-      }
-      final botEvent = NostrEvent.fromJson(Map<String, dynamic>.from(raw));
-      if (EventMapper.channelKeyOf(botEvent) == null) {
-        _setBotChannelThinking(storageKey, false);
-        return;
-      }
-      await svc.publishPlain(sender, botEvent);
-    } catch (_) {
-      _setBotChannelThinking(storageKey, false);
-      _emitSystemMessage(tr('Nymbot is unavailable right now.'));
-    }
+    final run = _botChannelRunBegin(storageKey);
+    final outcome = await _botChannelExchange(
+      {...request, 'senderNym': sender.label, 'askerPubkey': sender.pubkey},
+      storageKey,
+      run,
+      open: svc.botChannelLines,
+      publish: (e) => svc.publishPlain(sender, e),
+    );
+    _botChannelRunEnd(run);
+    if (!outcome.answered) _botChannelFailureNotice(outcome);
   }
 
   Future<SendAsResult> retrySendAs(String placeholder) async {
@@ -5164,6 +6215,7 @@ class NostrController {
 
   static const int _kSwitchOutboxCap = 2000;
   static const int _kForeignOutboxCap = 8;
+  static const int _kForeignOutboxTtlMs = 7 * 24 * 60 * 60 * 1000;
 
   final List<UnsentEvent> _carried = <UnsentEvent>[];
   Map<String, dynamic>? _foreignOutbox;
@@ -5327,6 +6379,8 @@ class NostrController {
             a.pubkey: a.id,
     };
     final orphans = <String, dynamic>{};
+    final unsendable = <String>[];
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
     final away = <String, Map<String, List<Object?>>>{};
     void handAway(String pubkey, Object? e, Object? r) {
       final slot = away[pubkey] ??= {'e': <Object?>[], 'r': <Object?>[]};
@@ -5335,6 +6389,7 @@ class NostrController {
     }
 
     var replayed = false;
+    final strays = <String, List<NostrEvent>>{};
     for (final entry in all.entries) {
       final v = entry.value;
       if (v is! Map) continue;
@@ -5342,7 +6397,17 @@ class NostrController {
         if (homes.containsKey(entry.key)) {
           handAway(entry.key, v['e'], v['r']);
         } else {
-          orphans[entry.key] = v;
+          for (final u in _decodeOutboxEvents(v['e'])) {
+            unsendable.add(u.event.id);
+          }
+          final at = v['at'];
+          final stamp = at is int && at <= nowMs ? at : nowMs;
+          if (nowMs - stamp < _kForeignOutboxTtlMs) {
+            orphans[entry.key] = <String, dynamic>{
+              ...Map<String, dynamic>.from(v),
+              'at': stamp,
+            };
+          }
         }
         continue;
       }
@@ -5351,6 +6416,13 @@ class NostrController {
           handAway(u.event.pubkey, [
             {'ev': u.event.toJson(), 't': u.tier, 'dm': false},
           ], null);
+          continue;
+        }
+        if (!u.dm &&
+            u.event.pubkey != owner &&
+            (u.event.kind == EventKind.geoChannel ||
+                u.event.kind == EventKind.namedChannel)) {
+          (strays[u.event.pubkey] ??= <NostrEvent>[]).add(u.event);
           continue;
         }
         replayed = true;
@@ -5378,6 +6450,15 @@ class NostrController {
       for (final e in away.entries) e.key: e.value,
     };
     if (moves.isNotEmpty) unawaited(_handForeignOutbox(service, moves));
+    if (unsendable.isNotEmpty) {
+      final appState = _ref.read(appStateProvider.notifier);
+      for (final id in unsendable) {
+        appState.markOptimisticFailed(id);
+      }
+    }
+    for (final events in strays.values) {
+      unawaited(_replayOnAnonLane(events));
+    }
     if (!replayed) {
       if (all.isNotEmpty) unawaited(_syncSwitchOutbox());
       return;
@@ -5401,6 +6482,21 @@ class NostrController {
         _switchOutboxTimer = null;
       }
     });
+  }
+
+  Future<void> _replayOnAnonLane(List<NostrEvent> events) async {
+    for (final e in events) {
+      _noteOwnAnonKey(e.pubkey);
+    }
+    final lane = _openAnonLane();
+    try {
+      for (final e in events) {
+        if (lane.closed) return;
+        await lane.publish(e, geoRelays: _sendAsGeoRelays(e));
+      }
+    } finally {
+      _closeAnonLane(lane);
+    }
   }
 
   Future<void> _publishCarried(NostrService service) async {
@@ -5469,8 +6565,16 @@ class NostrController {
     final identity = _identity;
     if (service == null || identity == null) return;
     if (_ref.read(appStateProvider).connectedRelays == 0) return;
+    final held = _meshOutbox.due(DateTime.now().millisecondsSinceEpoch);
+    for (final e in held) {
+      if (!e.ownerless) continue;
+      _meshOutbox.remove(e.localId);
+      try {
+        _ref.read(appStateProvider.notifier).markOptimisticFailed(e.localId);
+      } catch (_) {}
+    }
     final due = [
-      for (final e in _meshOutbox.due(DateTime.now().millisecondsSinceEpoch))
+      for (final e in held)
         if (e.belongsTo(identity.pubkey)) e,
     ];
     if (due.isEmpty) {
@@ -5515,9 +6619,12 @@ class NostrController {
       content: content,
       nym: identity.nym,
       geohash: isGeo ? channelKey : null,
-      emojiTags: _ref
-          .read(liveCustomEmojiProvider.notifier)
-          .emojiTagsForContent(content),
+      emojiTags: [
+        ..._ref
+            .read(liveCustomEmojiProvider.notifier)
+            .emojiTagsForContent(content),
+        ...quoteTagsForContent(content),
+      ],
       powDifficulty: _ref.read(settingsProvider.notifier).powDifficulty,
       threadRoot: threadRoot,
       createdAtSec: createdAtSec,
@@ -6033,6 +7140,40 @@ class NostrController {
     }));
   }
 
+  void _restorePqVerdicts(String pubkey) {
+    final notifier = _ref.read(appStateProvider.notifier);
+    final owed = notifier.pqPendingIds(pubkey);
+    if (owed.isEmpty) return;
+    final verdict = pqSealRootVerdict(pubkey);
+    for (final id in owed) {
+      if (verdict != null) {
+        notifier.settlePqPending(id, verdict);
+      } else {
+        _resolveOwedPqVerdict(pubkey, id);
+      }
+    }
+  }
+
+  void _resolveOwedPqVerdict(String peerPubkey, String nymMessageId) {
+    unawaited(ensurePqAnnouncement(peerPubkey).then((_) {
+      final verdict = pqSealRootVerdict(peerPubkey);
+      if (verdict != null) {
+        _ref
+            .read(appStateProvider.notifier)
+            .settlePqPending(nymMessageId, verdict);
+        return;
+      }
+      _pqWhenRootSettles(peerPubkey, nymMessageId);
+    }).catchError((_) {}));
+  }
+
+  void _resumeOwedPqVerdicts() {
+    for (final pk
+        in _ref.read(appStateProvider.notifier).owedPqSenders()) {
+      _restorePqVerdicts(pk);
+    }
+  }
+
   /// Polls until §6 settles, since settling has no event.
   void _pqWhenRootSettles(String peerPubkey, String nymMessageId) {
     if (_pqRootWaiters.length >= 500) return;
@@ -6053,7 +7194,9 @@ class NostrController {
       _pqRootWaiters.clear();
       final notifier = _ref.read(appStateProvider.notifier);
       for (final (peer, id) in waiting) {
-        if (pqSealRootVerdict(peer) == true) notifier.markMessagePqRoot(id);
+        final verdict = pqSealRootVerdict(peer);
+        if (verdict == true) notifier.markMessagePqRoot(id);
+        if (verdict != null) notifier.settlePqPending(id, verdict);
       }
     }
 
@@ -7078,7 +8221,38 @@ class NostrController {
         ..._ref.read(liveCustomEmojiProvider.notifier).emojiTagsForContent(content),
         ...media_notes.imetaTagsForContent(
             content, _ref.read(mediaFallbacksProvider).fallbacksFor),
+        ...quoteTagsForContent(content),
       ];
+
+  final Map<String, String> _quoteSources = <String, String>{};
+
+  void noteQuoteSource(String author, String? messageId) {
+    final a = author.trim().toLowerCase();
+    if (a.isEmpty || messageId == null || messageId.isEmpty) return;
+    final st = _ref.read(appStateProvider);
+    final src = _ref.read(appStateProvider.notifier).messageById(messageId);
+    final pk = (src?.pubkey ?? '').toLowerCase();
+    if (src == null || src.isOwn || pk == st.selfPubkey.toLowerCase()) return;
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(pk)) return;
+    final sfx = ContentFilter.nymSuffix(a);
+    if (sfx.isEmpty || !pk.endsWith(sfx)) return;
+    _quoteSources.remove(a);
+    _quoteSources[a] = pk;
+    while (_quoteSources.length > 50) {
+      _quoteSources.remove(_quoteSources.keys.first);
+    }
+  }
+
+  List<List<String>> quoteTagsForContent(String content) {
+    if (_quoteSources.isEmpty || !content.contains('>')) return const [];
+    final out = <List<String>>[];
+    for (final author in ContentFilter.quoteAuthors(content)) {
+      final pk = _quoteSources[author.trim().toLowerCase()];
+      if (pk != null && !out.any((t) => t[1] == pk)) out.add(['quote_pk', pk]);
+      if (out.length >= 4) break;
+    }
+    return out;
+  }
 
   Future<void> sendViewOnceOpened({
     required String onceId,
@@ -7325,6 +8499,7 @@ class NostrController {
 
   /// Random/hardcore removes the saved session nsec; persistent saves the current one if none is stored.
   Future<void> _onKeypairModeChanged(String mode) async {
+    _service?.setAddedRelays(_ref.read(addedRelaysProvider.notifier).inUse);
     final identity = _identity;
     // Durable logins never touch the ephemeral session key.
     if (identity == null || identity.loginMethod != null) return;
@@ -7988,10 +9163,11 @@ class NostrController {
 
   final Map<String, int> _ephAnnounceMs = {};
 
-  Future<void> announceGroupEphemeralKey(String groupId) async {
+  Future<void> announceGroupEphemeralKey(String groupId,
+      {int ts = 0, String? x}) async {
     final identity = _identity;
     final groups = _groups;
-    final group = _ref.read(appStateProvider.notifier).groupById(groupId);
+    var group = _ref.read(appStateProvider.notifier).groupById(groupId);
     if (identity == null || groups == null || group == null) return;
     if (group.members.where((pk) => pk != identity.pubkey).isEmpty) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -7999,13 +9175,99 @@ class NostrController {
         nowMs - kGroupResyncCooldownSec * 1000) {
       return;
     }
+    bool wanted() => ControlAnswers.wanted(
+        'invite', DateTime.now().millisecondsSinceEpoch ~/ 1000, ts,
+        held: _holdsGroupKey(groupId));
+    if (x != null && (groups.wasAnswered(groupId, x) || !wanted())) return;
     _ephAnnounceMs[groupId] = nowMs;
+    if (x != null) {
+      await _settleBeforeAnswer(groupId);
+      if (_answersClosed || _identity != identity || _groups != groups) return;
+      if (groups.wasAnswered(groupId, x) || !wanted()) return;
+      group = _ref.read(appStateProvider.notifier).groupById(groupId);
+      if (group == null ||
+          _ref.read(appStateProvider.notifier).isLeftGroup(groupId)) {
+        return;
+      }
+    }
+    final held = _holdsGroupKey(groupId);
     await groups.sendKeyResyncRequest(
       group: group,
       selfPubkey: identity.pubkey,
       settings: _msgSettings,
     );
     _afterSelfKeyRotation();
+    if (x != null) {
+      _noteControlAnswered(groups, groupId, x, ts, minted: !held);
+    } else if (!held) {
+      _syncMintedGroupKey(groupId);
+    }
+  }
+
+  bool _holdsGroupKey(String groupId) =>
+      _groups?.ephemeralKeysForSync()[groupId]?['self'] != null;
+
+  bool _rowUploadAllowed() {
+    if (!_settingsHydrated) {
+      _settingsSavePending = true;
+      return false;
+    }
+    if (_identity?.loginMethod == null) {
+      final mode = _ref.read(settingsProvider.notifier).keypairMode;
+      if (mode == 'random' || mode == 'hardcore') return false;
+    }
+    return true;
+  }
+
+  Timer? _replayReadStateTimer;
+
+  void _syncReadState() {
+    syncSettings();
+    if (!_replayed || _replayReadStateTimer != null) return;
+    if (_storageSync == null) return;
+    _replayReadStateTimer =
+        Timer(const Duration(seconds: 5), () => _flushReplayReadState());
+  }
+
+  Future<void> _flushReplayReadState() async {
+    _replayReadStateTimer?.cancel();
+    _replayReadStateTimer = null;
+    final sync = _storageSync;
+    if (sync == null) return;
+    if (!_rowUploadAllowed()) {
+      if (!_settingsHydrated) sync.markReadStateUnsent();
+      return;
+    }
+    try {
+      await _publishReadState(sync);
+    } catch (_) {}
+  }
+
+  Future<bool> _publishReadState(StorageSync sync) => sync.readStateSet(
+        _ref.read(appStateProvider.notifier).channelLastRead,
+        threadLastRead:
+            _ref.read(notificationHistoryProvider.notifier).threadReadsForSync(),
+        seenMarks: _ref.read(chatNavProvider).marksForSync(),
+      );
+
+  void _syncMintedGroupKey(String groupId) {
+    final sync = _storageSync;
+    final entry = _groups?.ephemeralKeysForSync()[groupId];
+    if (sync == null || entry == null || entry['self'] == null) return;
+    if (_ref.read(appStateProvider.notifier).isLeftGroup(groupId)) return;
+    if (!_rowUploadAllowed()) {
+      if (!_settingsHydrated) sync.markKeysRowUnsent(groupId);
+      return;
+    }
+    final groups = _groups;
+    unawaited(sync
+        .groupSyncSet(
+          groupConversations: const {},
+          ephemeralKeysByGroup: {groupId: entry},
+          historyByConvKey: const {},
+        )
+        .then((_) => groups?.noteD1Self(groupId, entry))
+        .catchError((Object _) {}));
   }
 
   Future<bool> unbanFromGroup(String groupId, String pubkey) async {
@@ -8142,11 +9404,14 @@ class NostrController {
   }) async {
     final identity = _identity;
     final groups = _groups;
+    final testSend = metadataSenderForTest;
     final appState = _ref.read(appStateProvider.notifier);
     final group = appState.groupById(groupId);
-    if (identity == null || groups == null || group == null) return false;
+    if (identity == null || group == null) return false;
+    if (groups == null && testSend == null) return false;
     if (!GroupLogic.isOwner(group, identity.pubkey)) return false;
 
+    final metaBefore = GroupLogic.metaSnapshot(group);
     var changed = false;
     if (name != null) {
       final trimmed = _sanitizeGroupName(name);
@@ -8179,13 +9444,18 @@ class NostrController {
     }
     if (!changed) return false;
 
-    group.metaUpdatedAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    GroupLogic.stampMeta(group, identity.pubkey,
+        DateTime.now().millisecondsSinceEpoch ~/ 1000, metaBefore);
     appState.upsertGroup(group);
-    await groups.sendMetadata(
-      group: group,
-      selfPubkey: identity.pubkey,
-      settings: _msgSettings,
-    );
+    if (testSend != null) {
+      await testSend(group);
+    } else {
+      await groups!.sendMetadata(
+        group: group,
+        selfPubkey: identity.pubkey,
+        settings: _msgSettings,
+      );
+    }
     return true;
   }
 
@@ -8200,7 +9470,8 @@ class NostrController {
     if (allow == group.allowMemberInvites) return false;
 
     group.allowMemberInvites = allow;
-    group.metaUpdatedAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    GroupLogic.stampMeta(group, identity.pubkey,
+        DateTime.now().millisecondsSinceEpoch ~/ 1000);
     appState.upsertGroup(group);
     await groups.sendMetadata(
       group: group,
@@ -8227,7 +9498,8 @@ class NostrController {
     if (enabled == group.shareHistory) return false;
 
     group.shareHistory = enabled;
-    group.metaUpdatedAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    GroupLogic.stampMeta(group, identity.pubkey,
+        DateTime.now().millisecondsSinceEpoch ~/ 1000);
     appState.upsertGroup(group);
     await groups.sendMetadata(
       group: group,
@@ -8254,6 +9526,7 @@ class NostrController {
       final m = list[i];
       if (m.kind != MessageKind.normal) continue;
       if (m.content.isEmpty || m.isFileOffer) continue;
+      if (_ref.read(appStateProvider).isMessageFiltered(m)) continue;
       final x = m.nymMessageId;
       if (m.pubkey.isEmpty || x == null || x.isEmpty) continue;
       picked.add({
@@ -8324,6 +9597,7 @@ class NostrController {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final self = _identity?.pubkey ?? '';
     var added = 0;
+    var shown = 0;
     for (final e in entries) {
       if (e is! Map) continue;
       final p = e['p'];
@@ -8336,7 +9610,7 @@ class NostrController {
       if (t <= 0) continue;
       if (t > nowSec) t = nowSec;
       final pk = p.toLowerCase();
-      final landed = appState.ingestGroupMessage(Message(
+      final entry = Message(
         id: x,
         author: _nymDisplayFor(pk),
         pubkey: pk,
@@ -8352,19 +9626,28 @@ class NostrController {
         senderVerified: false,
         nymMessageId: x,
         deliveryStatus: DeliveryStatus.delivered,
-      ));
+      );
+      final landed = appState.ingestGroupMessage(entry);
       if (landed) {
         added++;
+        if (entry.isOwn ||
+            !_ref.read(appStateProvider).isMessageFiltered(entry)) {
+          shown++;
+        }
         _maybeBackfillProfiles(pk);
       }
     }
     if (added == 0) return;
     group.historyReceived = true;
     appState.upsertGroup(group);
+    if (shown == 0) return;
+    final sharer = _nymDisplayFor(senderPubkey);
     appState.addSystemMessage(
       tr('{count} earlier messages shared by {name}.',
-          {'count': '$added', 'name': _nymDisplayFor(senderPubkey)}),
+          {'count': '$shown', 'name': sharer}),
       storageKey: key,
+      people: [senderPubkey],
+      names: [sharer],
     );
   }
 
@@ -8425,6 +9708,7 @@ class NostrController {
       } catch (_) {}
       final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       var sentAny = false;
+      final minted = <String>[];
       for (final group in List<Group>.from(st.groups)) {
         final others =
             group.members.where((pk) => pk != identity.pubkey).toList();
@@ -8432,11 +9716,13 @@ class NostrController {
         final last = (cooldowns[group.id] as num?)?.toInt() ?? 0;
         if (last > nowSec - kGroupResyncCooldownSec) continue;
         cooldowns[group.id] = nowSec;
+        final held = _holdsGroupKey(group.id);
         await groups.sendKeyResyncRequest(
           group: group,
           selfPubkey: identity.pubkey,
           settings: _msgSettings,
         );
+        if (!held) minted.add(group.id);
         sentAny = true;
       }
       try {
@@ -8444,33 +9730,183 @@ class NostrController {
       } catch (_) {}
       // ensureSelf may have minted keys — persist and re-arm the ephemeral REQ.
       if (sentAny) _afterSelfKeyRotation();
+      minted.forEach(_syncMintedGroupKey);
     } catch (_) {}
   }
 
   /// Replies to a key-resync request with our current key, rate-limited to 1h per group and requester.
-  Future<void> _maybeReplyKeyResync(String groupId, String requester) async {
+  Future<void> _maybeReplyKeyResync(String groupId, String requester,
+      {int ts = 0, String? x}) async {
     try {
       final identity = _identity;
       final groups = _groups;
       if (identity == null || groups == null) return;
-      final group = _ref.read(appStateProvider.notifier).groupById(groupId);
-      if (group == null) return;
-      final isMemberSender =
-          group.createdBy == requester || group.members.contains(requester);
-      if (!isMemberSender) return;
-      if (!group.members.contains(identity.pubkey)) return;
-      final rlKey = '$groupId:$requester';
       final nowMs = DateTime.now().millisecondsSinceEpoch;
+      if (!ControlAnswers.fresh('resync', nowMs ~/ 1000, ts)) return;
+      if (x != null && groups.wasAnswered(groupId, x)) return;
+      bool answerable() {
+        final group = _ref.read(appStateProvider.notifier).groupById(groupId);
+        if (group == null) return false;
+        if (_ref.read(appStateProvider.notifier).isLeftGroup(groupId)) {
+          return false;
+        }
+        final isMemberSender =
+            group.createdBy == requester || group.members.contains(requester);
+        return isMemberSender && group.members.contains(identity.pubkey);
+      }
+
+      if (!answerable()) return;
+      final rlKey = '$groupId:$requester';
       if ((_keyResyncReplyMs[rlKey] ?? 0) > nowMs - 3600000) return;
       _keyResyncReplyMs[rlKey] = nowMs;
+      await _settleBeforeAnswer(groupId);
+      if (_answersClosed || _identity != identity || _groups != groups) return;
+      if (x != null && groups.wasAnswered(groupId, x)) return;
+      if (!answerable()) return;
+      final group = _ref.read(appStateProvider.notifier).groupById(groupId)!;
+      final held = _holdsGroupKey(groupId);
       await groups.sendKeyResyncReply(
         group: group,
         selfPubkey: identity.pubkey,
         requesterPubkey: requester,
         settings: _msgSettings,
       );
-      _persistGroupStore();
+      _noteControlAnswered(groups, groupId, x, ts, minted: !held);
     } catch (_) {}
+  }
+
+  Future<void> _answerJoinRequest(
+      String groupId, String joiner, int rank, int ts, String? x) async {
+    try {
+      final identity = _identity;
+      final groups = _groups;
+      if (identity == null) return;
+      if (x != null && (groups?.wasAnswered(groupId, x) ?? false)) return;
+      if (rank > 0) {
+        await Future<void>.delayed(Duration(
+            milliseconds: (rank > 6 ? 6 : rank) * kGroupAdmitBackoffMs));
+      }
+      await _settleBeforeAnswer(groupId);
+      if (_answersClosed || _identity != identity || _groups != groups) return;
+      if (x != null && (groups?.wasAnswered(groupId, x) ?? false)) return;
+      final appState = _ref.read(appStateProvider.notifier);
+      final now = appState.groupById(groupId);
+      if (now == null || appState.isLeftGroup(groupId)) return;
+      if (now.members.contains(joiner)) return;
+      if (now.banned.contains(joiner)) return;
+      if (!GroupLogic.canAddMembers(now, identity.pubkey)) return;
+      final nowSec = _nowSecForAnswers();
+      if (x != null) {
+        groups?.noteAnswered(groupId, x, ts > 0 ? ts : nowSec, nowSec);
+      }
+      final held = _holdsGroupKey(groupId);
+      final ok = await addGroupMembers(groupId, [joiner],
+          viaJoin: true,
+          nymMessageId:
+              x == null ? null : ControlAnswers.admitId(groupId, joiner, x));
+      if (!ok || _answersClosed || groups == null || _groups != groups) return;
+      final pk = groups.keysFor(groupId).selfCurrent?.pk;
+      if (!held && pk != null) {
+        groups.answerMinted[groupId] = pk;
+        unawaited(_settleMintedKey(groups, groupId));
+      } else if (x != null) {
+        _persistGroupStore();
+        _syncMintedGroupKey(groupId);
+      }
+    } catch (_) {}
+  }
+
+  @visibleForTesting
+  int answerDelayMs() => _answerRng.nextInt(kAnswerJitterMs);
+
+  final Random _answerRng = Random();
+  bool _answersClosed = false;
+  Future<void>? _answerRead;
+  int _answerReadAt = 0;
+
+  bool _answerSyncAllowed() {
+    if (_storageSync == null) return false;
+    if (_identity?.loginMethod == null) {
+      final mode = _ref.read(settingsProvider.notifier).keypairMode;
+      if (mode == 'random' || mode == 'hardcore') return false;
+    }
+    return true;
+  }
+
+  Future<void> _settleBeforeAnswer(String groupId) async {
+    if (!_answerSyncAllowed() || !_settingsHydrated) return;
+    final sync = _storageSync;
+    final wait = answerDelayMs();
+    if (wait > 0) await Future<void>.delayed(Duration(milliseconds: wait));
+    if (_storageSync != sync) return;
+    await _readBeforeAnswer();
+  }
+
+  Future<void> _readBeforeAnswer() async {
+    final sync = _storageSync;
+    if (_answersClosed || sync == null || !_answerSyncAllowed()) return;
+    if (!_settingsHydrated) return;
+    final running = _answerRead;
+    if (running != null) {
+      await running;
+      return;
+    }
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (nowMs - _answerReadAt < 1000) return;
+    _answerReadAt = nowMs;
+    final run = _mergeRemoteSettings(sync, mode: SettingsReadMode.delta)
+        .catchError((Object _) {});
+    _answerRead = run;
+    try {
+      await run;
+    } finally {
+      if (identical(_answerRead, run)) _answerRead = null;
+    }
+  }
+
+  void _noteControlAnswered(
+      GroupManager groups, String groupId, String? x, int ts,
+      {required bool minted}) {
+    if (_groups != groups || _answersClosed) return;
+    final pk = groups.keysFor(groupId).selfCurrent?.pk;
+    if (minted && pk != null) groups.answerMinted[groupId] = pk;
+    if (x != null) {
+      groups.noteAnswered(groupId, x, ts > 0 ? ts : _nowSecForAnswers(),
+          _nowSecForAnswers());
+    }
+    _persistGroupStore();
+    if (minted || x != null) _syncMintedGroupKey(groupId);
+    if (minted) unawaited(_settleMintedKey(groups, groupId));
+  }
+
+  int _nowSecForAnswers() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+  int settleDelayMs() =>
+      kAnswerSettleMs + _answerRng.nextInt(kAnswerSettleJitterMs);
+
+  Future<void> _settleMintedKey(GroupManager groups, String groupId) async {
+    final sync = _storageSync;
+    var wrote = true;
+    for (var i = 0; i < kAnswerSettleRounds; i++) {
+      await Future<void>.delayed(Duration(milliseconds: settleDelayMs()));
+      if (_answersClosed || sync == null || !_settingsHydrated) return;
+      if (_storageSync != sync || _groups != groups) return;
+      if (!_answerSyncAllowed()) return;
+      final before = groups.heldSelfKeys(groupId);
+      try {
+        await _mergeRemoteSettings(sync, mode: SettingsReadMode.delta);
+      } catch (_) {}
+      if (_answersClosed || _groups != groups) return;
+      final held = groups.heldSelfKeys(groupId);
+      final d1 = groups.d1Self[groupId];
+      final settled = before.containsAll(held) &&
+          d1 != null &&
+          d1.current == groups.keysFor(groupId).selfCurrent?.pk &&
+          d1.pks.containsAll(held);
+      if (settled && !wrote) return;
+      wrote = !settled;
+      if (!settled) _syncMintedGroupKey(groupId);
+    }
   }
 
   /// Owner-only toggle for invite-link joins; broadcasts `group-metadata`; true if changed.
@@ -8487,7 +9923,8 @@ class NostrController {
     if (enabled == group.inviteEnabled) return false;
 
     group.inviteEnabled = enabled;
-    group.metaUpdatedAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    GroupLogic.stampMeta(group, identity.pubkey,
+        DateTime.now().millisecondsSinceEpoch ~/ 1000);
     appState.upsertGroup(group);
     await groups.sendMetadata(
       group: group,
@@ -8513,7 +9950,8 @@ class NostrController {
     }
 
     group.inviteEpoch = group.inviteEpoch + 1;
-    group.metaUpdatedAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    GroupLogic.stampMeta(group, identity.pubkey,
+        DateTime.now().millisecondsSinceEpoch ~/ 1000);
     appState.upsertGroup(group);
     await groups.sendMetadata(
       group: group,
@@ -8527,7 +9965,7 @@ class NostrController {
 
   /// Adds members and broadcasts one `group-add-member`; banned users need a moderator; true if any added.
   Future<bool> addGroupMembers(String groupId, List<String> pubkeys,
-      {bool viaJoin = false}) async {
+      {bool viaJoin = false, String? nymMessageId}) async {
     final identity = _identity;
     final groups = _groups;
     final testSend = addMembersSenderForTest;
@@ -8561,18 +9999,25 @@ class NostrController {
     final fit = wanted.take(room > 0 ? room : 0).toList();
     final skipped = wanted.skip(fit.length).toList();
     if (skipped.isNotEmpty) {
-      final groupName = group.name.isEmpty ? tr('Group') : group.name;
+      final st = _ref.read(appStateProvider);
+      final groupName = st.groupLabel(group);
+      String shown(String pk) {
+        final mask = st.personMaskLabel(pk);
+        return mask.isNotEmpty ? mask : _nymDisplayFor(pk);
+      }
       if (viaJoin) {
         for (final pk in skipped) {
-          _emitSystemMessage(tr('{group} is full, so {nym} couldn\'t join.',
-              {'group': groupName, 'nym': _nymDisplayFor(pk)}));
+          if (!st.isPersonHidden(pk)) {
+            _emitSystemMessage(tr('{group} is full, so {nym} couldn\'t join.',
+                {'group': groupName, 'nym': _nymDisplayFor(pk)}));
+          }
           unawaited(_sendJoinDeclinedFull(group, pk));
         }
       } else {
         _emitSystemMessage(tr(
             '{group} is full, so these weren\'t added: {names}.', {
           'group': groupName,
-          'names': skipped.map(_nymDisplayFor).join(', '),
+          'names': skipped.map(shown).join(', '),
         }));
       }
     }
@@ -8590,10 +10035,12 @@ class NostrController {
 
     final inviter = '${stripPubkeySuffix(identity.nym)}#'
         '${getPubkeySuffix(identity.pubkey)}';
-    final names = added.map((pk) => _nymDisplayFor(pk)).join(', ');
+    final addedNames = [for (final pk in added) _nymDisplayFor(pk)];
+    final names = addedNames.join(', ');
     final content = added.length == 1
         ? '$names was added by $inviter.'
         : '$names were added by $inviter.';
+    final held = _holdsGroupKey(groupId);
     if (testSend != null) {
       await testSend(group, content, nowSec);
     } else {
@@ -8604,14 +10051,17 @@ class NostrController {
         settings: _msgSettings,
         nowSec: nowSec,
         newMembers: added,
+        nymMessageId: nymMessageId,
       );
     }
+    if (!held) _syncMintedGroupKey(groupId);
     if (group.shareHistory && groups != null) {
       for (final pk in added) {
         unawaited(_sendGroupHistoryTo(group, pk));
       }
     }
-    _emitFeedMessage(content);
+    appState.addSystemMessage(localizeCommandTokensIn(content),
+        people: added, names: addedNames);
     return true;
   }
 
@@ -8626,7 +10076,7 @@ class NostrController {
     final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
     GroupLogic.admitMembers(group, members, respectRemovals: false);
     if (self.isEmpty || group.members.contains(self)) return true;
-    final name = group.name.isEmpty ? tr('Group') : group.name;
+    final name = _ref.read(appStateProvider).groupLabel(group);
     _emitSystemMessage(
         tr('{group} is full, so you couldn\'t join.', {'group': name}));
     return false;
@@ -8648,7 +10098,7 @@ class NostrController {
     final group = _ref.read(appStateProvider.notifier).groupById(groupId);
     final own = _ownGroupAdds[groupId];
     if (group != null && own != null) {
-      final name = group.name.isEmpty ? tr('Group') : group.name;
+      final name = _ref.read(appStateProvider).groupLabel(group);
       for (final pk in evicted) {
         if (pk == self || !own.remove(pk)) continue;
         _emitSystemMessage(tr('{group} is full, so {nym} wasn\'t added.',
@@ -8678,7 +10128,7 @@ class NostrController {
     final group = _ref.read(appStateProvider.notifier).groupById(groupId);
     if (group == null || _leavingFull.contains(groupId)) return;
     _leavingFull.add(groupId);
-    final name = group.name.isEmpty ? tr('Group') : group.name;
+    final name = _ref.read(appStateProvider).groupLabel(group);
     _emitSystemMessage(
         tr('{group} is full, so you couldn\'t join.', {'group': name}));
     unawaited(leaveGroup(groupId, quiet: true)
@@ -8740,11 +10190,9 @@ class NostrController {
 
   bool unblockUser(String pubkey) {
     final appState = _ref.read(appStateProvider.notifier);
-    if (appState.clearAutoMute(pubkey)) {
-      _persistAutoMuted();
-    }
     final removed = appState.unblockUser(pubkey);
     if (removed) {
+      _restorePqVerdicts(pubkey);
       _persistSet(
           StorageKeys.blocked, _ref.read(appStateProvider).blockedUsers);
       // Unblocked senders' notifications count again.
@@ -9276,11 +10724,11 @@ class NostrController {
   /// Read-receipts every loaded non-own message in the open PM.
   void markVisiblePmMessagesRead(String peerPubkey) {
     if (peerPubkey.isEmpty) return;
-    final messages =
-        _ref.read(appStateProvider).messages[PmLogic.pmStorageKey(peerPubkey)];
+    final st = _ref.read(appStateProvider);
+    final messages = st.messages[PmLogic.pmStorageKey(peerPubkey)];
     if (messages == null || messages.isEmpty) return;
     for (final m in messages) {
-      if (m.isOwn) continue;
+      if (m.isOwn || m.spamGated || st.isMessageFiltered(m)) continue;
       final id = m.nymMessageId;
       if (id == null || id.isEmpty) continue;
       unawaited(sendReadReceipt(id, peerPubkey));
@@ -9305,6 +10753,7 @@ class NostrController {
     final service = _service;
     if (identity == null || service == null) return;
     if (authorPubkey == identity.pubkey) return;
+    if (_isOwnOtherKey(authorPubkey)) return;
     if (_sentChannelReadReceipts.contains(messageId)) return;
     _sentChannelReadReceipts.add(messageId);
     if (_sentChannelReadReceipts.length > 2000) {
@@ -9322,6 +10771,12 @@ class NostrController {
       isGeohash: isGeohash,
       nym: identity.nym,
     );
+  }
+
+  bool _channelReceiptVisible(String key, String id) {
+    final st = _ref.read(appStateProvider);
+    final stored = _storedMessage(st, key, id);
+    return stored != null && !stored.spamGated && !st.isMessageFiltered(stored);
   }
 
   /// Catch-up read receipts for visible, fresh, non-own messages in the open channel.
@@ -9345,6 +10800,7 @@ class NostrController {
     for (final m in tail) {
       if (m.isOwn || m.isHistorical) continue;
       if (!_isChannelMessageId(m.id)) continue;
+      if (m.spamGated || state.isMessageFiltered(m)) continue;
       // Named channels always use the channel key as the `d` value.
       final key = isGeohash
           ? ((m.geohash ?? '').isNotEmpty ? m.geohash! : channelKey)
@@ -9410,13 +10866,13 @@ class NostrController {
         _ref.read(settingsProvider).readReceiptsScope, 'group')) {
       return;
     }
-    final messages = _ref
-        .read(appStateProvider)
-        .messages[GroupLogic.groupStorageKey(groupId)];
+    final st = _ref.read(appStateProvider);
+    final messages = st.messages[GroupLogic.groupStorageKey(groupId)];
     if (messages == null || messages.isEmpty) return;
     final byAuthor = <String, List<String>>{};
     for (final m in messages) {
       if (m.isOwn || m.isHistorical) continue;
+      if (m.spamGated || m.slowHeld || st.isMessageFiltered(m)) continue;
       final id = m.nymMessageId;
       if (id == null || id.isEmpty) continue;
       (byAuthor[m.pubkey] ??= <String>[]).add(id);
@@ -9443,16 +10899,28 @@ class NostrController {
     if (status == null || geohash == null || !isValidChannelTag(geohash)) {
       return;
     }
+    final storageKey = '#${geohash.toLowerCase()}';
+    final signal = UploadActivity.decode(event.tags);
+    if (isVerifiedBot(event.pubkey)) {
+      final askers = botAskerOf(event);
+      if (status != 'stop') {
+        final st = _ref.read(appStateProvider);
+        if (askers.any(st.isPersonHidden)) return;
+      }
+      _botTypingSignal(storageKey, status, _botRunIdOf(event.tagValue('run')),
+          UploadActivity.expiryMs(signal?.ttl ?? 0), askers);
+      return;
+    }
 
     // `typing: false` clears the entry; the `n` tag names senders we've never seen.
     appState.setTyping(
-      storageKey: '#${geohash.toLowerCase()}',
+      storageKey: storageKey,
       pubkey: event.pubkey,
       typing: status == 'start',
       nym: event.tagValue('n'),
-      expiresAtMs:
-          DateTime.now().millisecondsSinceEpoch + UploadActivity.expiryMs(0),
-      activity: UploadActivity.decode(event.tags)?.activity,
+      expiresAtMs: DateTime.now().millisecondsSinceEpoch +
+          UploadActivity.expiryMs(signal?.ttl ?? 0),
+      activity: signal?.activity,
     );
   }
 
@@ -9906,11 +11374,17 @@ class NostrController {
   }
 
   ChannelEntry addChannel(String channel, {String geohash = ''}) {
-    final entry = _ref
-        .read(appStateProvider.notifier)
-        .addChannel(channel, geohash: geohash);
+    final app = _ref.read(appStateProvider.notifier);
+    final entry = app.addChannel(channel, geohash: geohash);
+    app.noteChannelJoined(entry.key);
     _persistJoinedChannels();
     return entry;
+  }
+
+  void _dropHiddenDiscoveredChannels() {
+    final dropped =
+        _ref.read(appStateProvider.notifier).dropHiddenDiscoveredChannels();
+    if (dropped.isNotEmpty) _persistJoinedChannels();
   }
 
   /// Opens a column without switching views: register, restore history, connect geo relays; typing only if focused.
@@ -10077,8 +11551,15 @@ class NostrController {
 
   void _wireAutoMute(AppStateNotifier appState) {
     appState.hydrateAutoMuted(_readAutoMuted());
-    appState.onAutoMuted = (_, _) => _persistAutoMuted();
+    appState.onAutoMuted = (_, _) {
+      _persistAutoMuted();
+      _botThinkingRefreshForFilters();
+    };
   }
+
+  @visibleForTesting
+  void wireAutoMuteForTest() =>
+      _wireAutoMute(_ref.read(appStateProvider.notifier));
 
   Map<String, int> _readAutoMuted() {
     final raw =
@@ -10298,6 +11779,7 @@ class NostrController {
     if (identity == null) return;
     final kv = _ref.read(keyValueStoreProvider);
     final appState = _ref.read(appStateProvider.notifier);
+    var held = false;
     try {
       final raw = await _groupStoreFor(kv)
           .read(StorageKeys.groupStoreFor(identity.pubkey));
@@ -10306,6 +11788,7 @@ class NostrController {
         if (decoded is Map) {
           decoded.forEach((gid, data) {
             if (data is Map) {
+              if (data.containsKey('syncHold')) held = true;
               try {
                 appState.applyGroupConversationSync(
                     '$gid', data.cast<String, dynamic>());
@@ -10317,6 +11800,14 @@ class NostrController {
         }
       }
     } catch (_) {}
+    if (held) {
+      _persistGroupStore();
+      if (_settingsHydrated && _storageSync != null) {
+        syncSettings();
+      } else {
+        unawaited(kv.setString(_groupUploadOwedKey(identity.pubkey), '1'));
+      }
+    }
     try {
       final groups = _groups;
       if (groups == null) return;
@@ -10592,6 +12083,7 @@ class NostrController {
       if (channelMsgs.isNotEmpty || pmMsgs.isNotEmpty) {
         appState.hydrateAllMessages({...channelMsgs, ...pmMsgs});
       }
+      if (pmMsgs.isNotEmpty) _resumeOwedPqVerdicts();
       // Seed the unwrap and verify skip-caches from restored plaintext so replays don't redo the crypto.
       if (pmMsgs.isNotEmpty) {
         NostrService.seedProcessedWraps([
@@ -10673,6 +12165,35 @@ class NostrController {
               _ref.read(appStateProvider.notifier).deletedEventIds)
           .catchError((_) {}));
     });
+  }
+
+  void _holdTags(Message m, List<List<String>> tags, [String? storageKey]) {
+    final held = Message.heldTagsOf([...m.heldTags, ...tags]);
+    if (held.isEmpty || held.length == m.heldTags.length) return;
+    m.heldTags = held;
+    if (storageKey != null && storageKey.isNotEmpty) _markDirty(storageKey);
+  }
+
+  void _releaseHeldTags() {
+    final st = _ref.read(appStateProvider);
+    final emoji = _ref.read(liveCustomEmojiProvider.notifier);
+    final media = _ref.read(mediaFallbacksProvider);
+    for (final entry in st.messages.entries) {
+      var released = false;
+      for (final m in entry.value) {
+        if (m.heldTags.isEmpty) continue;
+        final pm = m.isPM || m.isGroup;
+        if (st.emojiSourceHidden(m.pubkey, pm ? '' : m.author, m.content,
+            pm: pm, msg: m)) {
+          continue;
+        }
+        emoji.ingestEmojiTags(m.heldTags);
+        media.ingestImetaTags(m.heldTags);
+        m.heldTags = const [];
+        released = true;
+      }
+      if (released) _markDirty(entry.key);
+    }
   }
 
   /// Marks [storageKey] dirty and schedules a debounced flush.
@@ -10778,7 +12299,8 @@ class NostrController {
           await cache.saveChannelMessagesJson(e.key, e.value, txn);
         }
         for (final e in encoded.pms.entries) {
-          await cache.savePmMessagesJson(e.key, e.value, txn);
+          await cache.savePmMessagesJson(e.key, e.value, txn,
+              CacheStore.pmLastActivityMs(pmPayload[e.key] ?? const []));
         }
         for (final e in encoded.profiles.entries) {
           await cache.saveProfileJson(
@@ -10794,7 +12316,8 @@ class NostrController {
       });
       profilePayload.forEach((pk, p) => _lastPersistedProfile[pk] = p);
       changedReactions.forEach((id, j) => _lastPersistedReactionJson[id] = j);
-      await cache.enforceLruLimits();
+      final evictedPm = await cache.enforceLruLimits();
+      if (evictedPm > 0) _storageSync?.notePmEvicted(evictedPm);
     } catch (e) {
       _dirtyChannelKeys.addAll(channelKeys);
       _dirtyPmKeys.addAll(pmKeys);
@@ -10857,10 +12380,7 @@ class NostrController {
 
   /// Builds [StorageSync] and wires NIP-98 auth; only durable identities use the PM archive.
   void _initStorageSync(Identity identity, EventSigner? signer) {
-    // Defer outbound saves until this identity's boot restore settles, so defaults can't clobber D1.
-    _settingsHydrated = false;
-    _settingsSavePending = false;
-    _settingsGetFailed = true;
+    _closeSettingsGate();
     if (signer == null) return;
     final api = _api ??= ApiClient();
     final durable = identity.loginMethod != null;
@@ -10869,7 +12389,8 @@ class NostrController {
       signer: signer,
       pubkey: identity.pubkey,
       durableIdentity: durable,
-    );
+      kv: _ref.read(keyValueStoreProvider),
+    )..setSyncDeviceId(_syncDeviceId());
     // NIP-98 auth via the active signer (local or NIP-46); non-sensitive auth is cached 90s.
     sync.setAuthBuilder((action) => Nip98Auth.buildSigned(
           action: action,
@@ -10930,17 +12451,20 @@ class NostrController {
     _storageSync = sync;
     _startRemotePanic();
     // Every synced category is written to D1 and also pushed live to our other devices as a gift wrap.
+    final wrapService = _service;
     sync.setSyncWrapPublisher((payload, dTag) async {
-      await _service?.publishNymSyncWrap(payload: payload, dTag: dTag);
+      if (wrapService == null || !identical(_service, wrapService)) return;
+      await wrapService.publishNymSyncWrap(payload: payload, dTag: dTag);
     });
     _zapArchive?.dispose();
-    _zapArchive = ZapArchive(sync, verify: _verifyArchived);
-
-    // Republish the read-state wrap when the seen map grows; uses the debounced sync.
-    _ref.read(notificationHistoryProvider.notifier).onSeenChanged =
-        syncSettings;
-    _ref.read(notificationHistoryProvider.notifier).onThreadReadChanged =
-        syncSettings;
+    final zapKv = _ref.read(keyValueStoreProvider);
+    _zapArchive = ZapArchive(
+      sync,
+      verify: _verifyArchived,
+      owner: identity.pubkey,
+      readKnown: () => zapKv.getString(ZapArchive.knownKey),
+      writeKnown: (v) => unawaited(zapKv.setString(ZapArchive.knownKey, v)),
+    );
 
     // The other-users shop fetcher must never query our own pubkey.
     _ref.read(otherUsersShopProvider.notifier).selfPubkey =
@@ -10953,10 +12477,12 @@ class NostrController {
             awayMessage: _away.message, shopUpdate: true));
 
     // Publish the server's pre-signed gift DM so the recipient learns immediately.
+    final giftService = _service;
     shop.giftEventPublisher = (giftEvent) {
+      if (giftService == null || !identical(_service, giftService)) return;
       try {
         final ev = NostrEvent.fromJson(giftEvent);
-        _service?.publishDmQueued(ev);
+        giftService.publishDmQueued(ev);
       } catch (_) {
         // Malformed gift event — dropped.
       }
@@ -10968,6 +12494,8 @@ class NostrController {
     // Debounced encrypted-settings publish on every synced change.
     _rememberSyncedBaseline();
     _ref.read(settingsProvider.notifier).onSyncedChange = syncSettings;
+    _ref.read(settingsProvider.notifier).onPrefChanged =
+        () => syncSettings(delay: prefSyncDebounce);
 
     // Backfill D1 history on open; best-effort, idempotent.
     _ref.read(appStateProvider.notifier).onViewOpened = _onViewOpened;
@@ -10978,14 +12506,24 @@ class NostrController {
     _startChatTools();
     _startGroupTools();
     _startChatNav();
+    _wireSyncHooks();
+  }
 
+  @visibleForTesting
+  void wireSyncHooksForTest() => _wireSyncHooks();
+
+  void _wireSyncHooks() {
     // Persist closed PMs so deletions survive relaunch.
     _ref.read(appStateProvider.notifier).onClosedPmsChanged = _persistClosedPMs;
     // Persist the watermark and schedule the read-state sync so reads clear badges on other devices.
     _ref.read(appStateProvider.notifier).onChannelReadChanged = () {
       _scheduleChannelLastReadPersist();
-      syncSettings();
+      _syncReadState();
     };
+    final bell = _ref.read(notificationHistoryProvider.notifier);
+    bell.onSeenChanged = syncSettings;
+    bell.onHistoryRepaired = syncSettings;
+    bell.onThreadReadChanged = _syncReadState;
     // Reading a conversation marks its bell entries viewed; routes use the bare id, so strip the prefix.
     _ref.read(appStateProvider.notifier).onChannelReadMarked = (key, tsSec) {
       var route = key;
@@ -11010,6 +12548,8 @@ class NostrController {
       _scheduleGroupStorePersist();
       syncSettings();
     };
+    _ref.read(appStateProvider.notifier).onGroupStorePersist =
+        _scheduleGroupStorePersist;
   }
 
   /// NIP-98 `u` URL for the `/api` socket's `api-ws` auth: `https://<host>/api/WS`.
@@ -11135,6 +12675,7 @@ class NostrController {
     }
     // Only when queued, since this also runs on transient `inactive` states.
     if (_settingsSyncTimer != null) flushSettingsSyncNow();
+    if (_replayReadStateTimer != null) unawaited(_flushReplayReadState());
   }
 
   /// During a background catch-up, the timestamp a message must beat to notify; null otherwise.
@@ -11284,6 +12825,8 @@ class NostrController {
     if (_storageSync == null) return;
     final self = _service?.selfPubkey ?? _identity?.pubkey;
     if (pubkey == self) return;
+    if (_ref.read(appStateProvider).blockedUsers.contains(pubkey)) return;
+    if (_isOwnOtherKey(pubkey)) return;
     // Key on the avatar, not profile existence, so picture-less stubs don't block backfill.
     final known = _ref.read(appStateProvider).users[pubkey];
     final pic = known?.profile?.picture;
@@ -11377,11 +12920,12 @@ class NostrController {
             eventProvenance.recordLocal(ev, 'NYMCHAT ARCHIVE');
             // Historical by provenance.
             appState.ingestEvent(ev, historical: true);
-            // Observe trust like the live path, or the spam gate hides restored history.
-            if (ev.kind == EventKind.geoChannel ||
-                ev.kind == EventKind.namedChannel) {
+            final blockedAuthor = ev.pubkey != selfPk &&
+                _ref.read(appStateProvider).blockedUsers.contains(ev.pubkey);
+            if (!blockedAuthor &&
+                (ev.kind == EventKind.geoChannel ||
+                    ev.kind == EventKind.namedChannel)) {
               _observeMessageTrust(ev);
-              // Backfill restored authors' profiles, or historical avatars stay identicons; batched.
               _maybeBackfillProfiles(ev.pubkey);
             }
             if (onRestored != null) {
@@ -11433,8 +12977,14 @@ class NostrController {
               !state.isRefHidden(
                   pubkey: ev.pubkey,
                   author: ev.tagValue('n') ?? '',
-                  body: ev.content))
-            ev.toJson()
+                  body: ev.content,
+                  quoted: Message.quotedFromTags(ev.tags),
+                  people: botAskerOf(ev)))
+            {
+              ...ev.toJson(),
+              'content': state.stripBlockedQuotes(
+                  ev.content, Message.quotedFromTags(ev.tags)),
+            }
       ],
       geohash: gh,
       nowSec: nowMs ~/ 1000,
@@ -11451,7 +13001,7 @@ class NostrController {
   }
 
   /// Restores other members' group messages from the ephemeral-key D1 inbox; one pass at a time, idempotent.
-  Future<void> _backfillGroupArchive() async {
+  Future<void> _backfillGroupArchive({bool force = false}) async {
     final sync = _storageSync;
     final groups = _groups;
     final service = _service;
@@ -11464,10 +13014,12 @@ class NostrController {
     await Future.wait([
       if (groupKeys.isNotEmpty)
         sync
-            .pmInboxRestore(groupKeys, replay: _replayArchiveAwait)
+            .pmInboxRestore(groupKeys,
+                replay: _replayArchiveAwait, force: force)
             .catchError((Object _) {}),
       sync
-          .pmAnonInboxRestore(_anonBotIdentities(), replay: _replayArchiveAwait)
+          .pmAnonInboxRestore(_anonBotIdentities(),
+              replay: _replayArchiveAwait, force: force)
           .catchError((Object _) {}),
     ]);
   }
@@ -11701,49 +13253,12 @@ class NostrController {
       _settingsGetFailed = false;
       // Every completed read re-asks §6; cheap once settled.
       unawaited(_ensurePqRoot());
-      // Merge notification read-state before the settings ts gate.
-      final notif = result.notificationsPayload;
-      if (notif != null) {
-        _applyNotificationsSync(notif);
-      }
-      // Merge read watermarks (monotonic max) before the gate so badges sync without a core change.
-      final readState = result.readStatePayload;
-      if (readState != null) {
-        _applyChannelLastRead(readState['channelLastRead']);
-        _applySyncExtras(readState);
-      }
-      _applySyncExtras({
-        if (result.callHistory != null) 'callHistory': result.callHistory,
-        if (result.groupTools != null) 'groupTools': result.groupTools,
-      });
-      // Apply per-group categories before the gate so a fresh device restores groups, keys and backlog.
-      _applyGroupSync(result);
-      final saved = result.savedMessages;
-      if (saved != null) {
-        try {
-          _ref.read(chatToolsProvider).applyRemoteSaved(saved);
-        } catch (_) {}
-      }
-      final pinnedChats = result.pinnedChats;
-      if (pinnedChats != null) {
-        try {
-          _ref.read(chatNavProvider).applyRemotePinned(pinnedChats);
-        } catch (_) {}
-      }
-      final lockedChats = result.lockedChats;
-      if (lockedChats != null) {
-        try {
-          _ref.read(chatLockProvider).applyRemote(lockedChats);
-        } catch (_) {}
-      }
-      _applyAwaySync(result.awayStatus);
-      // Core sections apply unconditionally to heal local drift.
-      if (result.payload.isNotEmpty) {
-        _applySyncedSettingsAdditive(result.payload);
-        _applySyncedSettings(result.payload);
-      }
-      if (!result.delta || result.callHistory != null) {
-        _reconcileCallsRow(sync, result.callHistory);
+      _remoteApplyDepth++;
+      try {
+        _applyRemoteSettingsResult(sync, result);
+      } finally {
+        _remoteApplyDepth--;
+        _rememberSyncedBaseline();
       }
       final kv = _ref.read(keyValueStoreProvider);
       final lastTs =
@@ -11756,10 +13271,63 @@ class NostrController {
       }
       // Load succeeded: only now open the outbound-save gate.
       _markSettingsHydrated();
+      await _snapshotSettingsRows(sync);
+      if (sync.needsReconcile) _reconcileSettingsSync();
     } catch (_) {
       // Best-effort; retried on reconnect with the save gate still closed.
       _settingsGetFailed = true;
       _releaseOnboardingGate();
+    } finally {
+      if (_backfillAfterApply) {
+        _backfillAfterApply = false;
+        unawaited(_backfillGroupArchive());
+      }
+    }
+  }
+
+  bool _backfillAfterApply = false;
+
+  void _applyRemoteSettingsResult(
+      StorageSync sync, SettingsLoadResult result) {
+    final notif = result.notificationsPayload;
+    if (notif != null) {
+      _applyNotificationsSync(notif);
+    }
+    final readState = result.readStatePayload;
+    if (readState != null) {
+      _applyChannelLastRead(readState['channelLastRead']);
+      _applySyncExtras(readState);
+    }
+    _applySyncExtras({
+      if (result.callHistory != null) 'callHistory': result.callHistory,
+      if (result.groupTools != null) 'groupTools': result.groupTools,
+    });
+    _applyGroupSync(result);
+    final saved = result.savedMessages;
+    if (saved != null) {
+      try {
+        _ref.read(chatToolsProvider).applyRemoteSaved(saved);
+      } catch (_) {}
+    }
+    final pinnedChats = result.pinnedChats;
+    if (pinnedChats != null) {
+      try {
+        _ref.read(chatNavProvider).applyRemotePinned(pinnedChats);
+      } catch (_) {}
+    }
+    final lockedChats = result.lockedChats;
+    if (lockedChats != null) {
+      try {
+        _ref.read(chatLockProvider).applyRemote(lockedChats);
+      } catch (_) {}
+    }
+    _applyAwaySync(result.awayStatus);
+    if (result.payload.isNotEmpty) {
+      _applySyncedSettingsAdditive(result.payload);
+      _applySyncedSettings(result.payload);
+    }
+    if (!result.delta || result.callHistory != null) {
+      _reconcileCallsRow(sync, result.callHistory);
     }
   }
 
@@ -11822,6 +13390,7 @@ class NostrController {
         if (appState.isLeftGroup(gid)) return;
         if (entry is Map) {
           try {
+            groups.noteD1Self(gid, entry.cast<String, dynamic>());
             if (groups.mergeEphemeralKeys(gid, entry.cast<String, dynamic>())) {
               keysAdded = true;
             }
@@ -11850,7 +13419,11 @@ class NostrController {
     // New self keys: re-REQ the ephemeral sub and recover the backlog they unlock.
     if (keysAdded) {
       _refreshEphemeralSubscriptions();
-      unawaited(_backfillGroupArchive());
+      if (_remoteApplyDepth > 0) {
+        _backfillAfterApply = true;
+      } else {
+        unawaited(_backfillGroupArchive());
+      }
     }
   }
 
@@ -11876,6 +13449,14 @@ class NostrController {
       pubkey is String &&
       pubkey.isNotEmpty &&
       _anonBotPubkeys().contains(pubkey);
+
+  Set<String> _anonBotLane() {
+    try {
+      return _ref.read(botChatControllerProvider.notifier).anon.laneIds;
+    } catch (_) {
+      return const <String>{};
+    }
+  }
 
   List<String> _anonBotPubkeys() {
     try {
@@ -11961,13 +13542,11 @@ class NostrController {
 
   Subscription _openOwnEphemeralSub(List<String> pks) {
     final service = _service!;
-    final d1Mode = service.isProxyMode;
+    final shape = service.ephemeralFilter(pks);
     final sub = service.subscribeEphemeral(
       pks,
-      limit: d1Mode ? 1 : 200 * pks.length,
-      since: d1Mode
-          ? null
-          : DateTime.now().millisecondsSinceEpoch ~/ 1000 - 604800,
+      limit: shape.limit,
+      since: shape.since,
     );
     sub.events.listen(service.unwrapLiveWrap, onError: (_) {});
     return sub;
@@ -12188,8 +13767,24 @@ class NostrController {
   void setIdentityForTest(Identity identity) => _identity = identity;
 
   @visibleForTesting
+  set groupManagerForTest(GroupManager groups) => _groups = groups;
+
+  Future<void> hydrateGroupStoreForTest() => _hydrateGroupStore();
+
+  @visibleForTesting
   Future<bool> Function(Group group, String content, int nowSec)?
       addMembersSenderForTest;
+
+  @visibleForTesting
+  Future<void> Function(Group group)? metadataSenderForTest;
+
+  @visibleForTesting
+  Map<String, dynamic> groupLocalBlobForTest(Group g) =>
+      _serializeGroupForLocal(g, _ref.read(appStateProvider));
+
+  @visibleForTesting
+  List<Message> trimForStoreForTest(List<Message> msgs, int limit) =>
+      _trimForStore(msgs, limit);
 
   @visibleForTesting
   Future<NostrEvent?> Function(
@@ -12200,10 +13795,40 @@ class NostrController {
   Future<void> Function(NostrEvent event)? botReplyPublishForTest;
 
   @visibleForTesting
+  Future<void> Function(NostrEvent event)? botTypingPublishForTest;
+
+  final Map<String, Set<_BotChannelRun>> _botChannelRuns = {};
+  final Map<String, Map<String, ({int expires, List<String> askers})>>
+      _botTypingRuns = {};
+  final Set<String> _botRunsEnded = <String>{};
+  bool _botChannelRunsRecovered = false;
+
+  @visibleForTesting
+  void botChannelRunsRecoverForTest() => _botChannelRunsRecover();
+
+  @visibleForTesting
   set apiForTest(ApiClient api) => _api = api;
 
   @visibleForTesting
+  ApiClient Function()? anonApiFactory;
+
+  @visibleForTesting
   set storageSyncForTest(StorageSync sync) => _storageSync = sync;
+
+  @visibleForTesting
+  set zapArchiveForTest(ZapArchive archive) => _zapArchive = archive;
+
+  @visibleForTesting
+  set serviceForTest(NostrService service) => _service = service;
+
+  @visibleForTesting
+  Future<void> restorePmArchiveForTest() async {
+    final sync = _storageSync;
+    if (sync != null) await _restorePmArchive(sync);
+  }
+
+  @visibleForTesting
+  Future<void> backfillGroupArchiveForTest() => _backfillGroupArchive();
 
   @visibleForTesting
   void applySyncedForTest(Map<String, dynamic> p) =>
@@ -12223,20 +13848,20 @@ class NostrController {
   @visibleForTesting
   void onEventForTest(NostrEvent event) => _onEvent(event);
 
+  @visibleForTesting
+  void onShardLostForTest(int lastLiveAtMs) => _onShardLost(lastLiveAtMs);
+
+  @visibleForTesting
+  void onShardReconnectedForTest() => _onShardReconnected();
+
+  @visibleForTesting
+  void onConnectionChangedForTest(int count) => _onConnectionChanged(count);
+
   /// Test seam: applies an inbound payload like a real settings-get.
   @visibleForTesting
   void applySyncedSettingsForTest(Map<String, dynamic> p) {
     _applySyncedSettingsAdditive(p);
     _applySyncedSettings(p);
-  }
-
-  Map<String, dynamic> _withoutLocallyDirtyKeys(Map<String, dynamic> p) {
-    final drop = _dirtySyncedKeys;
-    if (drop.isEmpty) return p;
-    return {
-      for (final e in p.entries)
-        if (!drop.contains(e.key)) e.key: e.value,
-    };
   }
 
   void _quietSyncedApply(void Function() body) {
@@ -12261,7 +13886,7 @@ class NostrController {
     }
     if (_stampedPrefsSkipped) {
       _stampedPrefsSkipped = false;
-      syncSettings();
+      if (_settingsSyncTimer == null) syncSettings();
     }
   }
 
@@ -12269,8 +13894,29 @@ class NostrController {
     Map<String, dynamic> pRaw, {
     bool userAcceptedTransfer = false,
   }) {
-    // An accepted transfer is a deliberate overwrite, so it outranks pending local edits.
-    final p = userAcceptedTransfer ? pRaw : _withoutLocallyDirtyKeys(pRaw);
+    final c = _ref.read(settingsProvider.notifier);
+    if (userAcceptedTransfer) {
+      _applySyncedSettingsBody(pRaw, userAcceptedTransfer: true);
+      return;
+    }
+    final kv = _ref.read(keyValueStoreProvider);
+    final gate = prefGate(pRaw, PrefStamps.read(kv));
+    final p = prefApply(gate, _dirtySyncedKeys);
+    c.applyingRemote(() => _applySyncedSettingsBody(p));
+    gate.take.forEach((name, ts) => PrefStamps.set(kv, name, ts));
+    if (gate.skipped) {
+      final kept = kStampedPrefs.keys.where((name) =>
+          !gate.take.containsKey(name) &&
+          kStampedPrefs[name]!.any(pRaw.containsKey));
+      _storageSync?.forgetPublishedPrefs(kept);
+      _stampedPrefsSkipped = true;
+    }
+  }
+
+  void _applySyncedSettingsBody(
+    Map<String, dynamic> p, {
+    bool userAcceptedTransfer = false,
+  }) {
     final c = _ref.read(settingsProvider.notifier);
     void str(String key, void Function(String) set) {
       final v = p[key];
@@ -12590,6 +14236,7 @@ class NostrController {
     }
 
     // Friends / blocked users / keywords are replaced via add/remove diffs so removals propagate; KV is persisted.
+    appState.beginFilterBatch();
     final friends = p['friends'];
     if (friends is List) {
       try {
@@ -12615,7 +14262,7 @@ class NostrController {
           appState.blockUser(pk);
         }
         for (final pk in current.difference(incoming)) {
-          appState.unblockUser(pk);
+          if (appState.unblockUser(pk)) _restorePqVerdicts(pk);
         }
         final blocked = _ref.read(appStateProvider).blockedUsers;
         _persistSet(StorageKeys.blocked, blocked);
@@ -12652,6 +14299,7 @@ class NostrController {
             _ref.read(appStateProvider).blockedKeywords);
       } catch (_) {}
     }
+    appState.endFilterBatch();
 
     // Pinned/blocked/hidden are replaced so removals propagate; joined stays additive; 'nym' migrates to 'nymchat'.
     final pinnedChannels = p['pinnedChannels'];
@@ -12810,7 +14458,9 @@ class NostrController {
     if (packs is List) {
       try {
         c.setFilterPacks(packs.whereType<String>().toList());
-        unawaited(FilterPacks.setActive(c.filterPacks));
+        unawaited(_ref
+            .read(appStateProvider.notifier)
+            .setActiveFilterPacks(c.filterPacks));
       } catch (_) {}
     }
     final anon = p['botAnonEnabled'];
@@ -12880,8 +14530,8 @@ class NostrController {
       final ag = p['spamFilterAggressive'];
       if (en is bool) kv.setBool(StorageKeys.spamFilterEnabled, en);
       if (ag is bool) kv.setBool(StorageKeys.spamFilterAggressive, ag);
-      appSpamFilterEnabled = c.spamFilterEnabled;
-      appSpamFilterAggressive = c.spamFilterAggressive;
+      setAppSpamFilter(
+          enabled: c.spamFilterEnabled, aggressive: c.spamFilterAggressive);
       PrefStamps.set(kv, 'spamFilter', ts);
     });
     stamped('hidePreviews', const ['hidePreviews'],
@@ -12917,6 +14567,11 @@ class NostrController {
           .read(callHistoryProvider.notifier)
           .setKeep(p['keepCallHistory'] as bool, syncedTs: ts);
     });
+    stamped(RelayAdd.syncKey, const [RelayAdd.syncKey],
+        () => p[RelayAdd.syncKey] is List,
+        (ts) => _ref
+            .read(addedRelaysProvider.notifier)
+            .applySynced(p[RelayAdd.syncKey], ts));
     if (skipped) _stampedPrefsSkipped = true;
   }
 
@@ -12937,7 +14592,7 @@ class NostrController {
       for (final s in ordered) {
         // Additive merge, then replace-style apply per section.
         _applySyncedSettingsAdditive(s.payload);
-        _applySyncedSettings(s.payload);
+        _applySyncedSettings(prefRowStamp(s.payload, s.updatedAt));
         final sec = s.updatedAt ~/ 1000;
         if (sec > newestSec) newestSec = sec;
       }
@@ -12962,7 +14617,7 @@ class NostrController {
     if (offer == null) return false;
     // Additive merge, then replace-style apply.
     _applySyncedSettingsAdditive(offer.payload);
-    _applySyncedSettings(offer.payload);
+    _applySyncedSettings(prefRowStamp(offer.payload, offer.updatedAt));
     // Advance the sync ts (seconds) so the section isn't re-surfaced.
     final kv = _ref.read(keyValueStoreProvider);
     final lastSec =
@@ -13110,9 +14765,12 @@ class NostrController {
       required String body,
       required String route,
       required String type,
-      String? eventId}) {
+      String? eventId,
+      String? subject,
+      bool quiet = false}) {
     final id = eventId ?? 'gt-${DateTime.now().microsecondsSinceEpoch}';
     _dispatchNotification(
+      subject: subject,
       title: title,
       body: body,
       senderPubkey: type == 'call' ? route : '',
@@ -13122,8 +14780,11 @@ class NostrController {
       historyType: type,
       route: route,
       eventId: id,
+      stableId: true,
       tsMs: DateTime.now().millisecondsSinceEpoch,
       toastKind: EventToasts.topicOf(id) == 'reminder' ? 'group' : 'invite',
+      silent: quiet,
+      banner: !quiet,
     );
   }
 
@@ -13513,6 +15174,19 @@ class NostrController {
   bool _settingsHydrated = false;
   bool _settingsSavePending = false;
 
+  String _groupUploadOwedKey(String pubkey) =>
+      'nym_group_upload_owed_$pubkey';
+
+  void _payOwedGroupUpload() {
+    final identity = _identity;
+    if (identity == null || _storageSync == null || !_settingsHydrated) return;
+    final kv = _ref.read(keyValueStoreProvider);
+    final key = _groupUploadOwedKey(identity.pubkey);
+    if (kv.getString(key) == null) return;
+    unawaited(kv.remove(key));
+    syncSettings();
+  }
+
   /// Opens the save gate (flushing one suppressed save) and releases the onboarding gate.
   void _markSettingsHydrated() {
     _releaseOnboardingGate();
@@ -13520,8 +15194,9 @@ class NostrController {
     _settingsHydrated = true;
     if (_settingsSavePending) {
       _settingsSavePending = false;
-      syncSettings();
+      _reconcileSettingsSync();
     }
+    _payOwedGroupUpload();
     unawaited(_away.flushPending().catchError((_) {}));
   }
 
@@ -13532,12 +15207,34 @@ class NostrController {
     if (!_settingsHydratedC.isCompleted) _settingsHydratedC.complete();
   }
 
+  static const Duration prefSyncDebounce = Duration(milliseconds: 1500);
+
+  static const Duration settingsOpenHoldMax = Duration(seconds: 30);
+
+  int _settingsScreens = 0;
+  int _settingsSyncSince = 0;
+
+  void settingsScreenOpened() => _settingsScreens++;
+
+  void settingsScreenClosed() {
+    if (_settingsScreens > 0) _settingsScreens--;
+  }
+
+  @visibleForTesting
+  bool get settingsHoldForTest => _settingsScreens > 0;
+
+  int _settingsSyncDue = 0;
+  int _settingsSyncDelay = 0;
+
   /// Debounced (5s) settings publish; skipped without sync or for random/hardcore ephemeral keys; deferred until hydrated.
-  void syncSettings() {
+  void syncSettings({Duration delay = const Duration(seconds: 5)}) {
+    if (_inRemoteApply) return;
     // Mark dirty before any early return; the edit is already in KV.
     _markSettingsDirty();
+    if (_replayed) return;
     final sync = _storageSync;
     if (sync == null) return;
+    sync.markUnsent();
     if (!_settingsHydrated) {
       _settingsSavePending = true;
       return;
@@ -13546,10 +15243,75 @@ class NostrController {
       final mode = _ref.read(settingsProvider.notifier).keypairMode;
       if (mode == 'random' || mode == 'hardcore') return;
     }
+    _queueSettingsFlush(sync, delay);
+  }
+
+  int _remoteApplyDepth = 0;
+
+  bool get _inRemoteApply =>
+      _remoteApplyDepth > 0 ||
+      _applyingSynced ||
+      _ref.read(settingsProvider.notifier).isApplyingRemote;
+
+  void _reconcileSettingsSync() {
+    final sync = _storageSync;
+    if (sync == null || !_settingsHydrated) return;
+    if (_identity?.loginMethod == null) {
+      final mode = _ref.read(settingsProvider.notifier).keypairMode;
+      if (mode == 'random' || mode == 'hardcore') return;
+    }
+    _queueSettingsFlush(sync, const Duration(seconds: 5));
+  }
+
+  void _queueSettingsFlush(StorageSync sync, Duration delay) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final since = _settingsSyncTimer != null && _settingsSyncSince > 0
+        ? _settingsSyncSince
+        : now;
+    final hold = _settingsScreens > 0;
+    final ms = hold ? settingsOpenHoldMax.inMilliseconds : delay.inMilliseconds;
+    final due = (hold ? since : now) + ms;
+    if (_settingsSyncTimer != null) {
+      if (hold && _settingsSyncDue == due) return;
+      if (!hold && _settingsSyncDue < due && _settingsSyncDelay < ms) return;
+    }
     _settingsSyncTimer?.cancel();
-    _settingsSyncTimer = Timer(const Duration(seconds: 5), () {
+    _settingsSyncSince = since;
+    _settingsSyncDue = due;
+    _settingsSyncDelay = ms;
+    _settingsSyncTimer = Timer(Duration(milliseconds: max(0, due - now)), () {
+      _settingsSyncTimer = null;
+      _settingsSyncSince = 0;
       unawaited(_flushSettingsSync(sync));
     });
+  }
+
+  void flushPendingSettingsSync() {
+    if (_settingsSyncTimer != null) flushSettingsSyncNow();
+  }
+
+  @visibleForTesting
+  bool get settingsSyncQueuedForTest => _settingsSyncTimer != null;
+
+  @visibleForTesting
+  void markSettingsHydratedForTest() => _settingsHydrated = true;
+
+  void _closeSettingsGate() {
+    _settingsHydrated = false;
+    _settingsSavePending = false;
+    _settingsGetFailed = true;
+  }
+
+  @visibleForTesting
+  void closeSettingsGateForTest() => _closeSettingsGate();
+
+  @visibleForTesting
+  void openSettingsGateForTest() => _markSettingsHydrated();
+
+  @visibleForTesting
+  Future<void> flushSettingsSyncForTest() async {
+    final sync = _storageSync;
+    if (sync != null) await _publishSettingsRows(sync, snapshot: false);
   }
 
   /// Publishes pending settings now, under [syncSettings]'s gates, for changes made just before closing.
@@ -13569,7 +15331,16 @@ class NostrController {
     unawaited(_flushSettingsSync(sync));
   }
 
-  Future<void> _flushSettingsSync(StorageSync sync) async {
+  Future<void> _flushSettingsSync(StorageSync sync) => sync.runRows(
+      SyncRowMode.gated, () => _publishSettingsRows(sync, snapshot: false));
+
+  Future<void> _snapshotSettingsRows(StorageSync sync) => sync.runRows(
+      SyncRowMode.snapshot, () => _publishSettingsRows(sync, snapshot: true));
+
+  Future<void> _publishSettingsRows(StorageSync sync,
+      {required bool snapshot}) async {
+    final gen = sync.unsentGen;
+    var done = false;
     try {
       // Keep the inbound PoW filter in step with the saved setting.
       appPowFilterBits = pow.normalizePowDifficulty(
@@ -13581,9 +15352,12 @@ class NostrController {
       // The landing channel is KV-only, so thread it into the `channels` section explicitly.
       final appState = _ref.read(appStateProvider.notifier);
       // Cleared before the write so an edit made in flight re-marks and survives.
-      _dirtySyncedKeys.clear();
-      _saveDirtySyncedKeys();
-      _rememberSyncedBaseline();
+      final taken = snapshot ? const <String>{} : Set.of(_dirtySyncedKeys);
+      if (!snapshot) {
+        _dirtySyncedKeys.clear();
+        _saveDirtySyncedKeys();
+        _rememberSyncedBaseline();
+      }
       await sync.settingsSet(
         _ref.read(settingsProvider),
         pinnedLandingChannelJson:
@@ -13599,6 +15373,15 @@ class NostrController {
         channelActivity: Map<String, int>.from(
             _ref.read(appStateProvider).channelLastActivity),
       );
+      final failed = sync.settingsFailed;
+      if (!snapshot && failed.isNotEmpty) {
+        final back = taken.where(
+            (k) => failed.contains(StorageSync.sectionLookup[k] ?? 'misc'));
+        if (back.isNotEmpty) {
+          _dirtySyncedKeys.addAll(back);
+          _saveDirtySyncedKeys();
+        }
+      }
       // Publish notification read state with the live history and watermark; no-op when unchanged.
       final notifHistory = _ref.read(notificationHistoryProvider.notifier);
       await sync.notificationsWrapSet(
@@ -13607,12 +15390,7 @@ class NostrController {
         notificationLastReadTime: notifHistory.notificationLastReadTime,
       );
       // Publish read watermarks so other devices restore them; no-op when unchanged.
-      await sync.readStateSet(
-        _ref.read(appStateProvider.notifier).channelLastRead,
-        threadLastRead:
-            _ref.read(notificationHistoryProvider.notifier).threadReadsForSync(),
-        seenMarks: _ref.read(chatNavProvider).marksForSync(),
-      );
+      await _publishReadState(sync);
       await sync.callsSyncSet(
           _ref.read(callHistoryProvider.notifier).syncPayload());
       final tools = _ref.read(groupToolsProvider);
@@ -13620,9 +15398,11 @@ class NostrController {
           hasData: tools.hasSyncData);
       // Per-group sync (conversations, keys, history); no-op per category when unchanged.
       await _flushGroupSync(sync);
+      done = true;
     } catch (_) {
       // Best-effort.
     }
+    if (done && !snapshot) sync.flushDone(gen);
   }
 
   /// Builds and publishes the per-group sync payloads; optimistic echoes and system pills are excluded.
@@ -13641,26 +15421,7 @@ class NostrController {
     // Serialized per-group ephemeral keys.
     final ephemeralKeys = groups.ephemeralKeysForSync();
 
-    // Group message backlog per conversation key.
-    final history = <String, List<Map<String, dynamic>>>{};
-    st.messages.forEach((key, msgs) {
-      if (!key.startsWith('group-') || msgs.isEmpty) return;
-      final out = <Map<String, dynamic>>[];
-      for (final m in msgs) {
-        if (m.isSystemRow || m.optimistic || m.id.isEmpty) continue;
-        if (m.id.startsWith('_optim_') || m.id.startsWith('sys-')) continue;
-        out.add({
-          'id': m.id,
-          'pubkey': m.pubkey,
-          'content': m.content,
-          'created_at': m.createdAt,
-          'isOwn': m.isOwn,
-          'groupId': m.groupId,
-          'nymMessageId': m.nymMessageId,
-        });
-      }
-      if (out.isNotEmpty) history[key] = out;
-    });
+    final history = _groupHistoryForSync();
 
     await sync.groupSyncSet(
       groupConversations: conversations,
@@ -13675,6 +15436,35 @@ class NostrController {
     } catch (_) {}
   }
 
+  @visibleForTesting
+  Map<String, List<Map<String, dynamic>>> groupHistoryForSyncForTest() =>
+      _groupHistoryForSync();
+
+  Map<String, List<Map<String, dynamic>>> _groupHistoryForSync() {
+    final st = _ref.read(appStateProvider);
+    final history = <String, List<Map<String, dynamic>>>{};
+    st.messages.forEach((key, msgs) {
+      if (!key.startsWith('group-') || msgs.isEmpty) return;
+      final out = <Map<String, dynamic>>[];
+      for (final m in msgs) {
+        if (m.isSystemRow || m.optimistic || m.id.isEmpty) continue;
+        if (m.id.startsWith('_optim_') || m.id.startsWith('sys-')) continue;
+        if (!m.isOwn && st.blockedUsers.contains(m.pubkey)) continue;
+        out.add({
+          'id': m.id,
+          'pubkey': m.pubkey,
+          'content': m.content,
+          'created_at': m.createdAt,
+          'isOwn': m.isOwn,
+          'groupId': m.groupId,
+          'nymMessageId': m.nymMessageId,
+        });
+      }
+      if (out.isNotEmpty) history[key] = out;
+    });
+    return history;
+  }
+
   /// Serializes a [Group] for `nymchat-groups` without the local-only fields; modLog capped to 50.
   static Map<String, dynamic> _serializeGroupForSync(Group g) {
     final modLog = g.modLog.length > 50
@@ -13685,6 +15475,7 @@ class NostrController {
       'members': g.members,
       'lastMessageTime': g.lastMessageTime,
       'createdBy': g.createdBy,
+      'admins': g.admins,
       'mods': g.mods,
       'banned': g.banned,
       'banner': g.banner,
@@ -13696,6 +15487,9 @@ class NostrController {
       'inviteEpoch': g.inviteEpoch,
       'shareHistory': g.shareHistory == true,
       'metaUpdatedAt': g.metaUpdatedAt,
+      if (g.metaUpdatedBy != null) 'metaUpdatedBy': g.metaUpdatedBy,
+      if (g.metaBy != null) 'metaBy': g.metaBy,
+      if (g.metaAdmins.isNotEmpty) 'metaAdmins': GroupLogic.metaAdminList(g),
       'modLog': [for (final e in modLog) e.toJson()],
       if (g.memberAt.isNotEmpty) 'memberAt': g.memberAt,
       if (g.memberRemovedAt.isNotEmpty) 'memberRemovedAt': g.memberRemovedAt,
@@ -13821,6 +15615,12 @@ class NostrController {
         events.add(NostrEvent.fromJson(w));
       } catch (_) {}
     }
+    final gapFloor = _gapD1FloorSec;
+    if (gapFloor > 0) {
+      for (final ev in events) {
+        _noteGapWrapFloor(ev.id, gapFloor);
+      }
+    }
     final opened = await Future.wait([
       for (final ev in events)
         service.replayArchivedWrap(ev).catchError((Object _) => false),
@@ -13902,12 +15702,11 @@ class NostrController {
     }
   }
 
-  /// Archives a sent wrap: self copy via `pm-put`, recipient copies via `pm-deposit` (the only path to offline peers).
   void _archiveSentWrap(NostrEvent wrap) {
     final sync = _storageSync;
-    if (sync == null || !sync.durableIdentity) return;
+    if (sync == null) return;
     final raw = wrap.toJson();
-    unawaited(sync.pmPut([raw]));
+    if (sync.durableIdentity) unawaited(sync.pmPut([raw]));
     sync.enqueueDeposit(raw,
         tier: _service?.sentWrapTier(wrap.id) ?? WrapTier.critical);
   }
@@ -13945,13 +15744,32 @@ class NostrController {
 
   /// Caps a channel list to the runtime limit before saving.
   List<Message> _capChannel(List<Message> msgs) =>
-      msgs.length > _channelMessageLimit
-          ? msgs.sublist(msgs.length - _channelMessageLimit)
-          : msgs;
+      _trimForStore(msgs, _channelMessageLimit);
 
-  List<Message> _capPm(List<Message> msgs) => msgs.length > _pmStorageLimit
-      ? msgs.sublist(msgs.length - _pmStorageLimit)
-      : msgs;
+  List<Message> _capPm(List<Message> msgs) =>
+      _trimForStore(msgs, _pmStorageLimit);
+
+  List<Message> _trimForStore(List<Message> msgs, int limit) {
+    if (msgs.length <= limit) return msgs;
+    final gone =
+        _ref.read(appStateProvider).storeOverflow(msgs, limit).toSet();
+    if (gone.isEmpty) return msgs;
+    final wanted = <String>{};
+    for (var i = 0; i < msgs.length; i++) {
+      if (gone.contains(i)) continue;
+      final root = msgs[i].threadRoot;
+      if (root != null && root.isNotEmpty) wanted.add(root);
+    }
+    for (var i = 0; i < msgs.length && wanted.isNotEmpty; i++) {
+      if (!gone.contains(i)) wanted.remove(threadKeyForMessage(msgs[i]));
+    }
+    return [
+      for (var i = 0; i < msgs.length; i++)
+        if (!gone.contains(i) ||
+            (wanted.isNotEmpty && wanted.remove(threadKeyForMessage(msgs[i]))))
+          msgs[i],
+    ];
+  }
 
   String _nymFor(String pubkey) {
     final u = _ref.read(appStateProvider).users[pubkey];
@@ -14430,15 +16248,14 @@ class NostrController {
         ? '${stripPubkeySuffix(identity.nym)}#${getPubkeySuffix(identity.pubkey)}'
         : null;
     final storageKey = view.storageKey;
-    _setBotChannelThinking(storageKey, true);
-    try {
-      await _postBotChannelRequest(
-          {...request, 'senderNym': ?senderNym}, storageKey);
-    } catch (e) {
-      _setBotChannelThinking(storageKey, false);
-      debugPrint('Nymbot command failed: $e');
-      _emitSystemMessage(tr('Nymbot is unavailable right now.'));
-    }
+    final run = _botChannelRunBegin(storageKey);
+    final outcome = await _botChannelExchange({
+      ...request,
+      'senderNym': ?senderNym,
+      'askerPubkey': ?identity?.pubkey,
+    }, storageKey, run);
+    _botChannelRunEnd(run);
+    if (!outcome.answered) _botChannelFailureNotice(outcome);
   }
 
   static String? _quotedAuthor(String text) {
@@ -14502,7 +16319,7 @@ class NostrController {
       final asOther = sendAsSelf != null;
       if (cmd == 'ask' && parsed.args.isNotEmpty) {
         final referenced = await _resolveReferencedChannels(parsed.args,
-            fetch: !asOther, exactOnly: asOther);
+            fetch: !asOther && !anon, exactOnly: asOther);
         if (referenced.isNotEmpty) contextKeys = referenced;
       }
       final ctxState = _ref.read(appStateProvider);
@@ -14550,40 +16367,401 @@ class NostrController {
     };
   }
 
-  Future<bool> _postBotChannelRequest(
-      Map<String, dynamic> body, String storageKey) async {
-    await AiConsent.instance.guard();
-    final api = _api ??= ApiClient();
-    final data = await api.botAction(body);
-    final event = data['event'];
-    if (event is! Map) return false;
-    final botEvent = NostrEvent.fromJson(Map<String, dynamic>.from(event));
-    if (EventMapper.channelKeyOf(botEvent) == null) {
-      _setBotChannelThinking(storageKey, false);
-      return false;
+  Future<_BotChannelOutcome> _botChannelExchange(
+    Map<String, dynamic> body,
+    String storageKey,
+    _BotChannelRun run, {
+    Stream<Map<String, dynamic>> Function(Map<String, dynamic> body)? open,
+    Future<void> Function(NostrEvent event)? publish,
+  }) async {
+    final service = _service;
+    final reply = publish ?? (NostrEvent e) => _publishBotReply(e, service);
+    final relay = publish ??
+        (NostrEvent e) async {
+          if (service != null && identical(_service, service)) {
+            await service.pool.publish(e);
+          }
+        };
+    final done = Completer<_BotChannelOutcome>();
+    StreamSubscription<Map<String, dynamic>>? sub;
+    void finish(_BotChannelOutcome o) {
+      if (done.isCompleted) return;
+      done.complete(o);
+      unawaited(sub?.cancel());
     }
+
+    run.onTimeout = () =>
+        finish(const _BotChannelOutcome(status: 0, reason: 'timeout'));
+    try {
+      await AiConsent.instance.guard();
+      final source = open ?? (_api ??= ApiClient()).botChannelLines;
+      sub = source({...body, 'stream': true}).listen(
+        (line) {
+          final state = line['state'];
+          final typing = line['typing'];
+          if (typing is Map) {
+            final tags = typing['tags'];
+            if (tags is List) {
+              for (final t in tags) {
+                if (t is List && t.length > 1 && t[0] == 'run') {
+                  final id = _botRunIdOf(t[1]?.toString());
+                  if (id.isNotEmpty && run.remoteId != id) {
+                    run.remoteId = id;
+                    if (!run.ended) _botChannelRunsSave();
+                  }
+                }
+              }
+            }
+          }
+          if (state == 'done') {
+            finish(_BotChannelOutcome(
+                status: 200, event: line['event'], typing: line['typing']));
+            return;
+          }
+          if (typing is Map) {
+            unawaited(_relayBotTyping(
+                Map<String, dynamic>.from(typing), storageKey, relay));
+          }
+          if (state == 'thinking') {
+            final limit = line['limitMs'];
+            if (limit is num && limit > 0 && limit <= 600000) {
+              _botChannelRunExtend(run, limit.toInt());
+            }
+            _paintBotThinking(storageKey);
+          } else if (state == 'failed') {
+            final status = line['status'];
+            final reason = line['reason'];
+            finish(_BotChannelOutcome(
+              status: status is num ? status.toInt() : 0,
+              reason: reason == 'rate' || reason == 'timeout'
+                  ? reason as String
+                  : 'error',
+            ));
+          }
+        },
+        onError: (Object e) => finish(_BotChannelOutcome(
+          status: e is ApiException ? e.statusCode : 0,
+          reason: e is ApiException
+              ? (e.statusCode == 429 ? 'rate' : 'error')
+              : (run.timedOut ? 'timeout' : 'lost'),
+        )),
+        onDone: () => finish(_BotChannelOutcome(
+            status: 0, reason: run.timedOut ? 'timeout' : 'lost')),
+        cancelOnError: true,
+      );
+    } catch (e) {
+      debugPrint('Nymbot command failed: $e');
+      finish(const _BotChannelOutcome(status: 0, reason: 'lost'));
+    }
+    final outcome = await done.future;
+    if (run.landed && outcome.event is! Map) {
+      return const _BotChannelOutcome(status: 200, answered: true);
+    }
+    if (publish == null && !identical(_service, service)) {
+      return const _BotChannelOutcome(status: 0, reason: 'lost');
+    }
+    final raw = outcome.event;
+    if (raw is! Map) return outcome;
+    final botEvent = NostrEvent.fromJson(Map<String, dynamic>.from(raw));
+    if (EventMapper.channelKeyOf(botEvent) == null) {
+      return const _BotChannelOutcome(status: 200, reason: 'error');
+    }
+    if (!run.landed && schnorr.verifyEvent(botEvent)) {
+      try {
+        _onEvent(botEvent);
+      } catch (_) {}
+    }
+    unawaited(reply(botEvent).catchError((Object _) {}).then((_) {
+      final typing = outcome.typing;
+      if (typing is Map) {
+        return _relayBotTyping(
+            Map<String, dynamic>.from(typing), storageKey, relay);
+      }
+    }));
+    return const _BotChannelOutcome(status: 200, answered: true);
+  }
+
+  Future<void> _publishBotReply(
+      NostrEvent botEvent, NostrService? service) async {
     final hook = botReplyPublishForTest;
     if (hook != null) {
       await hook(botEvent);
-    } else {
-      await _service?.pool.publish(botEvent);
+    } else if (service != null && identical(_service, service)) {
+      await service.pool.publish(botEvent);
     }
-    return true;
   }
 
-  /// Shows or clears the bot in a channel's typing strip (45s auto-expiry).
-  void _setBotChannelThinking(String storageKey, bool on) {
+  Stream<Map<String, dynamic>> _anonBotChannelLines(
+      Map<String, dynamic> body) async* {
+    final api = anonApiFactory?.call() ?? ApiClient();
+    try {
+      yield* api.botChannelLines(body);
+    } finally {
+      try {
+        api.dispose();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _relayBotTyping(Map<String, dynamic> raw, String storageKey,
+      Future<void> Function(NostrEvent event)? publish) async {
+    final NostrEvent ev;
+    try {
+      ev = NostrEvent.fromJson(raw);
+    } catch (_) {
+      return;
+    }
+    if (ev.kind != EventKind.channelTyping || !isVerifiedBot(ev.pubkey)) return;
+    final status = ev.tagValue('typing');
+    final chan = ev.tagValue('g') ?? ev.tagValue('d');
+    if ((status != 'start' && status != 'stop') ||
+        chan == null ||
+        '#${chan.toLowerCase()}' != storageKey.toLowerCase()) {
+      return;
+    }
+    try {
+      final hook = botTypingPublishForTest;
+      if (hook != null) {
+        await hook(ev);
+      } else if (publish != null) {
+        await publish(ev);
+      } else {
+        await _service?.pool.publish(ev);
+      }
+    } catch (_) {}
+  }
+
+  _BotChannelRun _botChannelRunBegin(String storageKey, {bool anon = false}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final run =
+        _BotChannelRun(storageKey, anon, now, now + _kBotChannelRunMaxMs);
+    _botChannelRuns.putIfAbsent(storageKey, () => <_BotChannelRun>{}).add(run);
+    _botChannelRunArm(run);
+    _botChannelRunsSave();
+    _paintBotThinking(storageKey);
+    return run;
+  }
+
+  void _botChannelRunArm(_BotChannelRun run) {
+    if (run.ended) return;
+    run.timer?.cancel();
+    final wait = run.deadline +
+        _kBotChannelRunGraceMs -
+        DateTime.now().millisecondsSinceEpoch;
+    run.timer = Timer(Duration(milliseconds: wait < 0 ? 0 : wait), () {
+      run.timedOut = true;
+      run.onTimeout?.call();
+    });
+  }
+
+  void _botChannelRunExtend(_BotChannelRun run, int limitMs) {
+    final next = DateTime.now().millisecondsSinceEpoch + limitMs;
+    if (next < run.deadline) {
+      run.deadline = next;
+      _botChannelRunArm(run);
+    }
+  }
+
+  void _botChannelRunEnd(_BotChannelRun run) {
+    if (run.ended) return;
+    run.ended = true;
+    run.timer?.cancel();
+    final remote = run.remoteId;
+    if (remote != null) _botRemoteRunEnd(run.key, remote);
+    final set = _botChannelRuns[run.key];
+    if (set != null) {
+      set.remove(run);
+      if (set.isEmpty) _botChannelRuns.remove(run.key);
+    }
+    _botChannelRunsSave();
+    _paintBotThinking(run.key);
+  }
+
+  static final RegExp _rxBotRunId = RegExp(r'^[0-9a-f]{8,64}$');
+
+  String _botRunIdOf(String? raw) {
+    final id = (raw ?? '').toLowerCase();
+    return _rxBotRunId.hasMatch(id) ? id : '';
+  }
+
+  void _botLocalRunLanded(String storageKey, String runId) {
+    if (runId.isEmpty) return;
+    final mine = _botChannelRuns[storageKey];
+    if (mine == null) return;
+    for (final r in List<_BotChannelRun>.of(mine)) {
+      if (r.remoteId != runId) continue;
+      r.landed = true;
+      _botChannelRunEnd(r);
+    }
+  }
+
+  void _botRemoteRunEnd(String storageKey, String runId) {
+    if (runId.isNotEmpty) {
+      _botRunsEnded.add(runId);
+      while (_botRunsEnded.length > 200) {
+        _botRunsEnded.remove(_botRunsEnded.first);
+      }
+    }
+    final runs = _botTypingRuns[storageKey];
+    if (runs == null) return;
+    runs.remove(runId);
+    if (runs.isEmpty) _botTypingRuns.remove(storageKey);
+  }
+
+  void _botTypingSignal(
+      String storageKey, String status, String runId, int ttlMs,
+      [List<String> askers = const <String>[]]) {
+    if (status == 'stop') {
+      _botRemoteRunEnd(storageKey, runId);
+    } else if (runId.isEmpty || !_botRunsEnded.contains(runId)) {
+      _botTypingRuns.putIfAbsent(storageKey,
+          () => <String, ({int expires, List<String> askers})>{})[runId] = (
+        expires: DateTime.now().millisecondsSinceEpoch + ttlMs,
+        askers: askers.take(4).toList(),
+      );
+    }
+    _paintBotThinking(storageKey);
+  }
+
+  bool _botRunAskerHidden(List<String> askers) {
+    if (askers.isEmpty) return false;
+    final st = _ref.read(appStateProvider);
+    return askers.any(st.isPersonHidden);
+  }
+
+  void _botThinkingRefreshForFilters() {
+    for (final key in _botTypingRuns.keys.toList()) {
+      _paintBotThinking(key);
+    }
+  }
+
+  void _paintBotThinking(String storageKey) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var until = 0;
+    for (final r in _botChannelRuns[storageKey] ?? const <_BotChannelRun>{}) {
+      final end = r.deadline + _kBotChannelRunGraceMs;
+      if (end > until) until = end;
+    }
+    final remote = _botTypingRuns[storageKey];
+    if (remote != null) {
+      remote.removeWhere((_, run) => run.expires <= now);
+      for (final run in remote.values) {
+        if (_botRunAskerHidden(run.askers)) continue;
+        if (run.expires > until) until = run.expires;
+      }
+      if (remote.isEmpty) _botTypingRuns.remove(storageKey);
+    }
+    try {
+      if (until > now) {
+        _ref.read(appStateProvider.notifier).setTyping(
+              storageKey: storageKey,
+              pubkey: nymbotPubkey,
+              typing: true,
+              expiresAtMs: until,
+            );
+      } else {
+        _clearBotThinking(storageKey);
+      }
+    } catch (_) {}
+  }
+
+  void _clearBotThinking(String storageKey) {
     try {
       _ref.read(appStateProvider.notifier).setTyping(
-            storageKey: storageKey,
-            pubkey: nymbotPubkey,
-            typing: on,
-            expiresAtMs:
-                on ? DateTime.now().millisecondsSinceEpoch + 45000 : null,
-          );
-    } catch (_) {
-      // Typing strip is cosmetic; never block the command.
+          storageKey: storageKey, pubkey: nymbotPubkey, typing: false);
+    } catch (_) {}
+  }
+
+  void _botChannelRunsSave() {
+    final out = <Map<String, Object>>[];
+    for (final set in _botChannelRuns.values) {
+      for (final r in set) {
+        if (!r.anon) {
+          out.add({
+            'key': r.key,
+            'startedAt': r.startedAt,
+            'deadline': r.deadline,
+            'runId': ?r.remoteId,
+          });
+        }
+      }
     }
+    try {
+      final kv = _ref.read(keyValueStoreProvider);
+      if (out.isEmpty) {
+        unawaited(kv.remove(_kBotChannelRunsKey));
+      } else {
+        unawaited(kv.setString(_kBotChannelRunsKey, jsonEncode(out)));
+      }
+    } catch (_) {}
+  }
+
+  void _botChannelRunsRecover() {
+    if (_botChannelRunsRecovered || _botChannelRuns.isNotEmpty) return;
+    _botChannelRunsRecovered = true;
+    Object? saved;
+    try {
+      final kv = _ref.read(keyValueStoreProvider);
+      final raw = kv.getString(_kBotChannelRunsKey);
+      unawaited(kv.remove(_kBotChannelRunsKey));
+      saved = raw == null ? null : jsonDecode(raw);
+    } catch (_) {
+      saved = null;
+    }
+    if (saved is! List || saved.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final since = now - 30 * 60 * 1000;
+    var lost = false;
+    for (final r in saved) {
+      if (r is! Map) continue;
+      final key = r['key'];
+      final startedAt = r['startedAt'];
+      final deadline = r['deadline'];
+      final runId = _botRunIdOf(r['runId']?.toString());
+      if (key is String &&
+          key.isNotEmpty &&
+          runId.isNotEmpty &&
+          deadline is num &&
+          deadline + _kBotChannelRunGraceMs > now &&
+          deadline <= now + _kBotChannelRunMaxMs) {
+        _botChannelRunRestore(key,
+            startedAt is num ? startedAt.toInt() : now, deadline.toInt(), runId);
+      } else if (startedAt is num && startedAt > since) {
+        lost = true;
+      }
+    }
+    _botChannelRunsSave();
+    if (lost) {
+      _botChannelFailureNotice(const _BotChannelOutcome(status: 0, reason: 'lost'));
+    }
+  }
+
+  void _botChannelRunRestore(
+      String key, int startedAt, int deadline, String runId) {
+    final run = _BotChannelRun(key, false, startedAt, deadline)
+      ..remoteId = runId;
+    run.onTimeout = () {
+      _botChannelRunEnd(run);
+      _botChannelFailureNotice(
+          const _BotChannelOutcome(status: 0, reason: 'timeout'));
+    };
+    _botChannelRuns.putIfAbsent(key, () => <_BotChannelRun>{}).add(run);
+    _botChannelRunArm(run);
+    _paintBotThinking(key);
+  }
+
+  void _botChannelFailureNotice(_BotChannelOutcome outcome) {
+    String? text;
+    if (outcome.reason == 'rate' || outcome.status == 429) {
+      text = 'Too many requests to Nymbot right now. Try again in a minute.';
+    } else if (outcome.reason == 'timeout' ||
+        outcome.reason == 'lost' ||
+        outcome.status == 0 ||
+        outcome.status >= 500 ||
+        outcome.status == 200) {
+      text = "Nymbot couldn't answer that one. Try again.";
+    }
+    if (text != null) showToast(tr(text));
   }
 
   /// Resolves `#channel` references in `?ask` args to storage keys, fetching unknown ones from D1 with a bounded wait.
@@ -14679,7 +16857,7 @@ class NostrController {
       final start =
           (limit != null && kept.length > limit) ? kept.length - limit : 0;
       for (final m in kept.sublist(start)) {
-        final text = state.stripBlockedQuotes(m.content);
+        final text = state.stripBlockedQuotes(m.content, m.quoted);
         out.add({
           'nym': m.author,
           'pubkey': m.pubkey,
@@ -14809,6 +16987,7 @@ class NostrController {
   }
 
   Future<void> dispose() async {
+    _answersClosed = true;
     _flushTimer?.cancel();
     _clearChatActivities();
     _liveInboundTimer?.cancel();
@@ -14817,6 +16996,7 @@ class NostrController {
     // Drop buffered unwrapped gift-wraps; the session is tearing down.
     _cancelGiftWrapInbound();
     _settingsSyncTimer?.cancel();
+    _replayReadStateTimer?.cancel();
     _profileBackfillTimer?.cancel();
     _pqRootWaitTimer?.cancel();
     _pqRootWaitTimer = null;
@@ -14843,6 +17023,10 @@ const List<String> kBlossomServers = [
 final p2pServiceProvider = Provider<P2PService>((ref) {
   final controller = ref.read(nostrControllerProvider);
   final service = P2PService(_ControllerP2PTransport(controller));
+  service.peerHidden = (pk) {
+    final st = ref.read(appStateProvider);
+    return st.blockedUsers.contains(pk) || st.isPersonHidden(pk);
+  };
   // Route transfer status into the conversation and subscribe now so a pure receiver is listening.
   service.onSystemMessage = (m) {
     try {
@@ -15031,6 +17215,17 @@ final pendingUserSettingsTransfersProvider = StateNotifierProvider<
   return PendingUserSettingsTransfersNotifier();
 });
 
+final visibleSettingsTransfersProvider =
+    Provider<List<UserSettingsTransfer>>((ref) {
+  final s = ref.watch(appStateProvider);
+  return [
+    for (final t in ref.watch(pendingUserSettingsTransfersProvider))
+      if (!s.isPersonHidden(t.fromPubkey) &&
+          !s.isPersonHidden(t.fromPubkey, t.fromNym))
+        t,
+  ];
+});
+
 class PendingUserSettingsTransfersNotifier
     extends StateNotifier<List<UserSettingsTransfer>> {
   PendingUserSettingsTransfersNotifier() : super(const []);
@@ -15139,4 +17334,83 @@ class _SendAsRetry {
         builtAtMs: DateTime.now().millisecondsSinceEpoch,
         draft: draft,
       );
+}
+
+const int _kBotChannelRunMaxMs = 150000;
+const int _kBotChannelRunGraceMs = 15000;
+const String _kBotChannelRunsKey = 'nym_bot_channel_runs';
+
+class _BotChannelRun {
+  _BotChannelRun(this.key, this.anon, this.startedAt, this.deadline);
+  final String key;
+  final bool anon;
+  final int startedAt;
+  int deadline;
+  Timer? timer;
+  bool ended = false;
+  bool timedOut = false;
+  bool landed = false;
+  String? remoteId;
+  void Function()? onTimeout;
+}
+
+class _BotChannelOutcome {
+  const _BotChannelOutcome({
+    required this.status,
+    this.reason,
+    this.event,
+    this.typing,
+    this.answered = false,
+  });
+  final int status;
+  final String? reason;
+  final Object? event;
+  final Object? typing;
+  final bool answered;
+}
+
+class _TrayPost {
+  const _TrayPost({
+    required this.type,
+    required this.route,
+    required this.sender,
+    required this.eventId,
+    required this.ts,
+  });
+
+  final String type;
+  final String route;
+  final String sender;
+  final String eventId;
+  final int ts;
+
+  Map<String, Object> toJson() => {
+        't': type,
+        'r': route,
+        's': sender,
+        'e': eventId,
+        'ts': ts,
+      };
+
+  static _TrayPost? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final type = raw['t'];
+    final route = raw['r'];
+    final sender = raw['s'];
+    final eventId = raw['e'];
+    final ts = raw['ts'];
+    if (type is! String ||
+        route is! String ||
+        sender is! String ||
+        eventId is! String ||
+        ts is! num) {
+      return null;
+    }
+    return _TrayPost(
+        type: type,
+        route: route,
+        sender: sender,
+        eventId: eventId,
+        ts: ts.toInt());
+  }
 }

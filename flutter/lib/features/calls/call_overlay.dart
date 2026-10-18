@@ -34,6 +34,7 @@ import '../chat_lock/chat_lock_providers.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../settings/settings_widgets.dart' show SettingsToggleRow;
+import '../../models/user.dart';
 
 void showCallEmojiPicker(
   BuildContext context, {
@@ -85,6 +86,23 @@ void showCallUserMenu(BuildContext context, String pubkey, {String? nym}) {
     ),
   );
 }
+
+String callPersonLabel(AppState app, Map<String, User> users, String pubkey) {
+  final mask = pubkey == app.selfPubkey ? '' : app.personMaskLabel(pubkey);
+  if (mask.isNotEmpty) return mask;
+  return stripPubkeySuffix(users[pubkey]?.nym ?? pubkey);
+}
+
+String? callPersonPicture(
+        AppState app, Map<String, User> users, String pubkey) =>
+    pubkey != app.selfPubkey && app.isPersonHidden(pubkey)
+        ? null
+        : users[pubkey]?.profile?.picture;
+
+List<String> callMentionCandidates(AppState app, Iterable<String> pubkeys) => [
+      for (final pk in pubkeys)
+        if (pk != app.selfPubkey && !app.isPersonHidden(pk)) pk,
+    ];
 
 class CallOverlay extends ConsumerStatefulWidget {
   const CallOverlay({super.key});
@@ -263,7 +281,7 @@ class _Top extends ConsumerWidget {
       List<String> others = const [];
       for (final g in app.groups) {
         if (g.id == call.groupId) {
-          if (g.name.isNotEmpty) name = g.name;
+          if (g.name.isNotEmpty) name = app.groupLabel(g);
           // The group's other members, not live participants, never self.
           others = [
             for (final pk in g.members)
@@ -287,7 +305,7 @@ class _Top extends ConsumerWidget {
                 child: NymAvatar(
                   seed: pk,
                   size: 20,
-                  imageUrl: users[pk]?.profile?.picture, // Rule 4
+                  imageUrl: callPersonPicture(app, users, pk),
                 ),
               ),
           ],
@@ -1435,14 +1453,11 @@ class _InputRowState extends ConsumerState<_InputRow> {
 
   void _updateMentions(String search) {
     final s = search.toLowerCase();
-    final blocked = ref.read(appStateProvider).blockedUsers;
-    final selfPk = ref.read(appStateProvider).selfPubkey;
+    final app = ref.read(appStateProvider);
     final users = ref.read(usersProvider);
-    // Filter and sort on lowercased `base#suffix`, then take the first 8.
     final searchable = <String, String>{};
-    final matches = widget.call.participants
-        .map((p) => p.pubkey)
-        .where((pk) => pk != selfPk && !blocked.contains(pk))
+    final matches = callMentionCandidates(
+            app, widget.call.participants.map((p) => p.pubkey))
         .where((pk) {
       final base = stripPubkeySuffix(users[pk]?.nym ?? pk);
       final sfx = getPubkeySuffix(pk);
@@ -1700,7 +1715,7 @@ class _PresenterMenu extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final users = ref.watch(usersProvider);
-    // Self plus remote members.
+    final app = ref.watch(appStateProvider);
     final members = <String>[
       selfPubkey,
       ...call.participants.map((p) => p.pubkey),
@@ -1708,7 +1723,7 @@ class _PresenterMenu extends ConsumerWidget {
     final requests = call.presentRequests.where(members.contains).toList();
 
     String nameOf(String pk) =>
-        pk == selfPubkey ? tr('You') : stripPubkeySuffix(users[pk]?.nym ?? pk);
+        pk == selfPubkey ? tr('You') : callPersonLabel(app, users, pk);
 
     return Material(
       color: Colors.transparent,

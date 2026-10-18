@@ -314,7 +314,9 @@ class CallHistoryRow extends ConsumerWidget {
               child: NymSvgIcon(groupChatGlyphSvg, size: 18, color: c.primary),
             );
       name = Text(
-        group != null && group.name.isNotEmpty ? group.name : tr('Group call'),
+        group != null
+            ? ref.read(appStateProvider).groupLabel(group, tr('Group call'))
+            : tr('Group call'),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(

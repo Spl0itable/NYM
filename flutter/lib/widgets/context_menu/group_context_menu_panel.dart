@@ -19,6 +19,7 @@ import '../../features/group_tools/group_tools_providers.dart';
 import '../../features/group_tools/group_tools_ui.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/pms/new_pm_modal.dart' show resolveRecipientPubkey;
+import '../../features/settings/settings_widgets.dart' show SettingsToggleRow;
 import '../../features/toasts/toast_center.dart';
 import '../../models/group.dart';
 import '../../state/app_state.dart';
@@ -163,10 +164,12 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final iCanAdminister = GroupLogic.canAdminister(group, self);
     final iCanModerate = GroupLogic.canModerate(group, self);
 
-    final sorted = [...group.members]
+    final sorted = (iCanModerate
+        ? List<String>.of(group.members)
+        : s.groupVisibleMembers(group))
       ..sort((a, b) => _roleRank(group, a).compareTo(_roleRank(group, b)));
 
-    final description = (group.description ?? '').trim();
+    final description = s.groupDescription(group).trim();
 
     return SingleChildScrollView(
       child: Column(
@@ -247,9 +250,10 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   }
 
   Widget _header(NymColors c, Group group) {
-    final bannerUrl = proxiedAvatarUrl(group.banner);
+    final app = ref.read(appStateProvider);
+    final bannerUrl = proxiedAvatarUrl(app.groupBanner(group));
     final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
-    final avatarUrl = proxiedAvatarUrl(group.avatar);
+    final avatarUrl = proxiedAvatarUrl(app.groupAvatar(group));
 
     // The PWA group menu always has a banner: the custom image, else a default gradient.
     final icon = SizedBox(
@@ -293,7 +297,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       child: Column(
         children: [
           Text(
-            group.name.isEmpty ? tr('Group') : group.name,
+            ref.read(appStateProvider).groupLabel(group),
             textAlign: TextAlign.center,
             style: TextStyle(
               color: c.secondary,
@@ -493,13 +497,11 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     }
 
     if (iCanAdminister) {
-      rows.add(_ActionRow(
-        svg: group.inviteEnabled
-            ? NymIcons.checkboxChecked
-            : NymIcons.checkboxUnchecked,
-        label: tr('Allow joining via invite link'),
-        color: c.text,
-        onTap: () => _toggleInviteJoin(group),
+      rows.add(_switchRow(
+        'inviteEnabled',
+        tr('Allow joining via invite link'),
+        group.inviteEnabled,
+        (_) => _toggleInviteJoin(group),
       ));
       // Reset Invite Link shows only when invite joining is on.
       if (group.inviteEnabled) {
@@ -513,21 +515,17 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     }
 
     if (iCanAdminister) {
-      rows.add(_ActionRow(
-        svg: group.allowMemberInvites
-            ? NymIcons.checkboxChecked
-            : NymIcons.checkboxUnchecked,
-        label: tr('Allow members to add others'),
-        color: c.text,
-        onTap: () => _toggleAllowInvites(group),
+      rows.add(_switchRow(
+        'allowMemberInvites',
+        tr('Allow members to add others'),
+        group.allowMemberInvites,
+        (_) => _toggleAllowInvites(group),
       ));
-      rows.add(_ActionRow(
-        svg: group.shareHistory
-            ? NymIcons.checkboxChecked
-            : NymIcons.checkboxUnchecked,
-        label: tr('Share history with new members'),
-        color: c.text,
-        onTap: () => _toggleShareHistory(group),
+      rows.add(_switchRow(
+        'shareHistory',
+        tr('Share history with new members'),
+        group.shareHistory,
+        (_) => _toggleShareHistory(group),
       ));
     }
 
@@ -542,6 +540,24 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     }
 
     for (final item in gtGroupMenuItems(ref, group)) {
+      final toggled = item.toggled;
+      final toggleKey = item.toggleKey;
+      if (toggled != null && toggleKey != null) {
+        rows.add(KeyedSubtree(
+          key: ValueKey(item.key),
+          child: _switchRow(
+            toggleKey,
+            item.label,
+            toggled,
+            item.disabled
+                ? null
+                : (_) => item.onTap(
+                    Navigator.of(context, rootNavigator: true).context),
+            tooltip: item.disabledReason,
+          ),
+        ));
+        continue;
+      }
       rows.add(_ActionRow(
         key: ValueKey(item.key),
         svg: item.svg,
@@ -591,7 +607,9 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       tr('Enter a new group name:'),
       title: tr('Rename Group'),
       okLabel: tr('Save'),
-      defaultValue: group.name,
+      defaultValue: ref.read(appStateProvider).groupLabel(group, '') == group.name
+          ? group.name
+          : '',
       maxLength: 40,
     );
     if (name == null) return;
@@ -606,7 +624,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       tr('Enter a group description:'),
       title: tr('Group Description'),
       okLabel: tr('Save'),
-      defaultValue: group.description ?? '',
+      defaultValue: ref.read(appStateProvider).groupDescription(group),
       maxLength: 150,
       multiline: true,
     );
@@ -647,6 +665,23 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     }
   }
 
+  Widget _switchRow(
+    String key,
+    String label,
+    bool value,
+    ValueChanged<bool>? onChanged, {
+    String? tooltip,
+  }) =>
+      SettingsToggleRow(
+        key: ValueKey('panel-group.$key'),
+        label: label,
+        value: value,
+        spacing: 0,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        tooltip: tooltip,
+        onChanged: onChanged,
+      );
+
   Future<void> _toggleAllowInvites(Group group) async {
     final controller = ref.read(nostrControllerProvider);
     await controller.setGroupAllowInvites(group.id, !group.allowMemberInvites);
@@ -657,12 +692,9 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     await controller.setGroupShareHistory(group.id, !group.shareHistory);
   }
 
-  /// Closes the menu first, then toggles, as the PWA does.
   Future<void> _toggleInviteJoin(Group group) async {
     final controller = ref.read(nostrControllerProvider);
-    final next = !group.inviteEnabled;
-    widget.onClose();
-    await controller.setGroupInviteEnabled(group.id, next);
+    await controller.setGroupInviteEnabled(group.id, !group.inviteEnabled);
   }
 
   /// Rotates the invite epoch so previously shared links stop working.
@@ -702,7 +734,8 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   /// Closes the panel first so it isn't left over the departed group.
   Future<void> _leaveGroup(Group group) async {
     final controller = ref.read(nostrControllerProvider);
-    final name = group.name.isEmpty ? tr('this group') : '"${group.name}"';
+    final shown = ref.read(appStateProvider).groupLabel(group, '');
+    final name = shown.isEmpty ? tr('this group') : '"$shown"';
     final ok = await showAppConfirm(
       context,
       tr("Leave {name}? You'll stop receiving messages from this group.",
@@ -728,15 +761,16 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       GroupLogic.roleRank(group, pubkey);
 
   Widget _bannedRow(NymColors c, Group group, String pubkey) {
-    final user = ref.watch(usersProvider)[pubkey];
-    final base = stripPubkeySuffix(user?.nym ?? '');
+    final mask = ref.watch(appStateProvider).personMaskLabel(pubkey);
+    final user = mask.isNotEmpty ? null : ref.watch(usersProvider)[pubkey];
+    final base = mask.isNotEmpty ? mask : stripPubkeySuffix(user?.nym ?? '');
     return _MemberTile(
       colors: c,
       avatar: NymAvatar(
         seed: pubkey,
         size: 30,
         imageUrl: user?.profile?.picture,
-        label: base.isNotEmpty ? base[0] : null,
+        label: mask.isEmpty && base.isNotEmpty ? base[0] : null,
       ),
       base: base.isEmpty ? tr('(unknown)') : base,
       suffix: '#${getPubkeySuffix(pubkey)}',
@@ -798,15 +832,20 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
 
   Widget _memberRow(NymColors c, Group group, String pubkey, String self,
       [bool canModerate = false]) {
-    final user = ref.watch(usersProvider)[pubkey];
-    final base = stripPubkeySuffix(user?.nym ?? '');
+    final mask = pubkey == self
+        ? ''
+        : ref.watch(appStateProvider).personMaskLabel(pubkey);
+    final user = mask.isNotEmpty ? null : ref.watch(usersProvider)[pubkey];
+    final base = mask.isNotEmpty ? mask : stripPubkeySuffix(user?.nym ?? '');
     final suffix = getPubkeySuffix(pubkey);
     final isSelf = pubkey == self;
     final isOwner = group.createdBy == pubkey;
     final isAdmin = !isOwner && group.admins.contains(pubkey);
     final isMod = !isOwner && !isAdmin && group.mods.contains(pubkey);
 
-    final presence = user == null
+    final presence = mask.isNotEmpty
+        ? ''
+        : user == null
         ? 'offline'
         : presenceClass(user
             .effectiveStatus(
@@ -817,7 +856,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       seed: pubkey,
       size: 30,
       imageUrl: user?.profile?.picture,
-      label: base.isNotEmpty ? base[0] : null,
+      label: mask.isEmpty && base.isNotEmpty ? base[0] : null,
     );
     return _MemberTile(
       colors: c,
@@ -1447,7 +1486,8 @@ class GroupSheetHeader extends ConsumerWidget {
       if (g.id == groupId) group = g;
     }
     if (group == null) return const SizedBox.shrink();
-    final avatarUrl = proxiedAvatarUrl(group.avatar);
+    final avatarUrl =
+        proxiedAvatarUrl(ref.watch(appStateProvider).groupAvatar(group));
     final glyph = Container(
       alignment: Alignment.center,
       decoration: BoxDecoration(
@@ -1470,7 +1510,8 @@ class GroupSheetHeader extends ConsumerWidget {
           : glyph,
     );
     final count = group.members.length;
-    final description = (group.description ?? '').trim();
+    final labels = ref.read(appStateProvider);
+    final description = labels.groupDescription(group).trim();
     return Column(
       key: const ValueKey('groupSheetHeader'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1485,7 +1526,7 @@ class GroupSheetHeader extends ConsumerWidget {
               icon,
               const SizedBox(height: 6),
               Text(
-                group.name.isEmpty ? tr('Group') : group.name,
+                labels.groupLabel(group),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: c.secondary,

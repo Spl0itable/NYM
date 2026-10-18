@@ -308,8 +308,12 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
             const SizedBox(width: 10),
             Expanded(
               child: nym
-                  ? SelectableText.rich(nymTextSpan(context, value,
-                      style: TextStyle(color: c.text, fontSize: 12)))
+                  ? SelectableText.rich(TextSpan(
+                      children: nymLabelSpans(
+                          context,
+                          splitNymLabel(value).base,
+                          splitNymLabel(value).suffix,
+                          TextStyle(color: c.text, fontSize: 12))))
                   : SelectableText(
                       value,
                       style: TextStyle(

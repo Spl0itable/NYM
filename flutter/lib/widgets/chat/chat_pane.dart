@@ -45,6 +45,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../state/view_history.dart';
+import '../../state/pm_only_mode.dart';
 import '../common/hit_slop.dart';
 import '../common/nym_action_sheet.dart';
 import '../context_menu/group_context_menu_panel.dart' show showGroupMenuSheet;
@@ -56,6 +57,7 @@ import '../../features/threads/thread_view.dart' show ThreadView;
 import '../columns/columns_deck.dart';
 import 'message_row.dart' show formatRelativeTime;
 import 'composer.dart';
+import 'pm_only_empty_state.dart';
 import '../sidebar/sidebar_chrome.dart';
 import '../../features/composer/composer_model.dart';
 import 'messages_list.dart';
@@ -131,6 +133,7 @@ class ChatPane extends ConsumerWidget {
       );
     }
 
+    final pmOnlyEmpty = !useColumns && ref.watch(pmOnlyEmptyShownProvider);
     return Container(
       // Transparent so the wallpaper layer behind the pane shows through.
       color: Colors.transparent,
@@ -158,7 +161,9 @@ class ChatPane extends ConsumerWidget {
               onTap: () => FocusScope.of(context).unfocus(),
               child: KeyedSubtree(
                 key: TutorialTargets.keyFor(TutorialTarget.messagesContainer),
-                child: Consumer(builder: (context, paneRef, _) {
+                child: pmOnlyEmpty
+                    ? const PmOnlyEmptyState()
+                    : Consumer(builder: (context, paneRef, _) {
                   final at = paneRef.watch(activeThreadProvider);
                   final threadOpen =
                       at != null && at.view == view && appThreadsEnabled;
@@ -174,14 +179,16 @@ class ChatPane extends ConsumerWidget {
             ),
           ),
           // The composer stays mounted in columns mode and sends to the focused column's conversation.
-          const _AwaitingMeshRangeNotice(),
-          EventToastAreaReporter(
-            target: eventToastComposer,
-            child: KeyedSubtree(
-              key: TutorialTargets.keyFor(TutorialTarget.composer),
-              child: Composer(compact: compact),
+          if (!pmOnlyEmpty) ...[
+            const _AwaitingMeshRangeNotice(),
+            EventToastAreaReporter(
+              target: eventToastComposer,
+              child: KeyedSubtree(
+                key: TutorialTargets.keyFor(TutorialTarget.composer),
+                child: Composer(compact: compact),
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -308,14 +315,18 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         : chatHeaderHeight(width);
 
     final rejoinId = ref.watch(currentCallStateProvider).rejoinGroupId;
-    final actions = _chatActions(
-      view: view,
-      isChannel: isChannel,
-      channelKey: channelKey,
-      isPinned: isPinned,
-      isDefault: isDefault,
-      rejoin: view.kind == ViewKind.group && rejoinId == view.id,
-    );
+    final empty = !widget.columnsMode && ref.watch(pmOnlyEmptyShownProvider);
+    final actions = [
+      if (!empty)
+        ..._chatActions(
+          view: view,
+          isChannel: isChannel,
+          channelKey: channelKey,
+          isPinned: isPinned,
+          isDefault: isDefault,
+          rejoin: view.kind == ViewKind.group && rejoinId == view.id,
+        ),
+    ];
     final maxShown = phone ? actions.length : 3;
     final capped = {for (final a in actions.skip(maxShown)) a.id};
     final metrics =
@@ -323,8 +334,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     final loc = isChannel
         ? _locationFor(app, view)
         : (text: '', dist: '', geohash: null);
-    final badges = _titleBadges(app, view);
-    final info = !isChannel || loc.geohash != null;
+    final badges = empty ? const <Widget>[] : _titleBadges(app, view);
+    final info = !empty && (!isChannel || loc.geohash != null);
     final insets = MediaQuery.paddingOf(context);
     final side = phone ? 2.0 : NymSpace.s1;
     final plan = _room.plan(
@@ -398,8 +409,10 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                 ],
                 SizedBox(width: side),
                 Expanded(
-                    child: _headerMiddle(
-                        c, app, view, title, meta, loc, badges, info)),
+                    child: empty
+                        ? _emptyMiddle(c)
+                        : _headerMiddle(
+                            c, app, view, title, meta, loc, badges, info)),
                 SizedBox(width: side),
                 if (phone)
                   _HeaderActionRow(lead: side, children: [
@@ -606,9 +619,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             key: const ValueKey('rejoinCallBtn'),
             active: context.nym.primary);
       }
-      add('audio', NymIcons.phone, tr('Start audio call'),
+      add('audio', NymIcons.phone,
+          rejoin ? tr('Rejoin with camera off') : tr('Start audio call'),
           () => _startCall(view, video: false));
-      add('video', NymIcons.video, tr('Start video call'),
+      add('video', NymIcons.video,
+          rejoin ? tr('Rejoin with camera on') : tr('Start video call'),
           () => _startCall(view, video: true));
     }
     return out;
@@ -634,6 +649,22 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       if (app.friends.contains(view.id)) const _FriendBadge(size: _kBadge),
     ];
   }
+
+  Widget _emptyMiddle(NymColors c) => Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: Text(
+          tr(kPmOnlyNoSelection),
+          key: const ValueKey('chatHeaderTitle'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: c.textDim,
+            fontSize: NymType.lg,
+            height: 20 / NymType.lg,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
 
   Widget _headerMiddle(
       NymColors c,
@@ -697,7 +728,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             break;
           }
         }
-        final custom = g?.avatar;
+        final custom = g == null ? null : app.groupAvatar(g);
         avatar = custom != null && custom.isNotEmpty
             ? SizedBox(
                 width: 36,
@@ -708,7 +739,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                     size: 18, color: c.primary));
         titleText = Text(title,
             maxLines: 1, overflow: TextOverflow.ellipsis, style: titleStyle);
-        final desc = GroupTools.descriptionLine(g?.description);
+        final desc =
+            GroupTools.descriptionLine(g == null ? null : app.groupDescription(g));
         sub = [
           if (g != null)
             tr('{count} members',
@@ -875,7 +907,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         return app.users[view.id]?.nym ?? tr('PM');
       case ViewKind.group:
         for (final g in app.groups) {
-          if (g.id == view.id) return g.name;
+          if (g.id == view.id) return app.groupLabel(g);
         }
         return tr('Group');
     }

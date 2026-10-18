@@ -216,6 +216,14 @@ class AccountRuntime {
   String? storedPref(String? id, String key) => _get(
       id == null || id == index.active ? key : AccountLogic.nsKey(id, key));
 
+  Future<String?> storedNsec(String id) async {
+    for (final key in const ['nym_nostr_login_nsec', 'nym_session_nsec']) {
+      final v = await storedSecret(id, key);
+      if (v != null && v.startsWith('nsec1')) return v;
+    }
+    return null;
+  }
+
   Future<String?> storedSecret(String id, String key) async {
     final name = id == index.active ? key : AccountLogic.nsKey(id, key);
     try {

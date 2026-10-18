@@ -101,6 +101,7 @@ class RelayConnection {
   Stream<RelayMessage> get messages => _messages.stream;
   Stream<RelayStatus> get statusStream => _statusCtl.stream;
   RelayStatus get status => _status;
+  bool get reconnectPending => _reconnectTimer?.isActive ?? false;
   bool get isConnected => _status == RelayStatus.connected;
 
   void _setStatus(RelayStatus s) {

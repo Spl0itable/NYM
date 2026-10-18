@@ -1634,11 +1634,13 @@ body.light-mode .relay-stat-card {
 
 body.light-mode .relay-stats-graph-wrap,
 body.light-mode .relay-stats-relay-list,
-body.light-mode .relay-stats-blocked-list {
+body.light-mode .relay-stats-blocked-list,
+body.light-mode .relay-stats-added-list {
     background: rgba(0, 0, 0, 0.02);
 }
 
-body.light-mode .relay-stats-blocked-row {
+body.light-mode .relay-stats-blocked-row,
+body.light-mode .relay-stats-added-row {
     border-bottom-color: rgba(0, 0, 0, 0.06);
 }
 

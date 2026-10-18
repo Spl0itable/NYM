@@ -49,7 +49,7 @@ Object.assign(NYM.prototype, {
             if (clean) localStorage.setItem('nym_botpm_max_runs', String(clean));
             else localStorage.removeItem('nym_botpm_max_runs');
         } catch (_) { }
-        if (!(opts && opts.fromSync) && typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500);
+        if (!(opts && opts.fromSync) && typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500, { wanted: true });
         this._botRunsSyncLimitSelect();
     },
 
@@ -247,6 +247,10 @@ Object.assign(NYM.prototype, {
 
     async _botRunDeliver(run, data) {
         const replyTo = (typeof data.replyTo === 'string' && BOT_RUN_HEX64.test(data.replyTo)) ? data.replyTo.toLowerCase() : run.id;
+        const anonLane = !!(run && run.anon) || (typeof this._anonLaneEvent === 'function' && this._anonLaneEvent(data.event));
+        if (anonLane && typeof this._markAnonLane === 'function') {
+            this._markAnonLane([data.event && data.event.id, data.selfEvent && data.selfEvent.id]);
+        }
         if (data.event) {
             this.sendDMToRelays(['EVENT', data.event]);
             await this.handleGiftWrapDM(data.event, { botReplyTo: replyTo });

@@ -49,6 +49,12 @@ class PqRootStore {
   PqRootStore withoutLegacy() =>
       PqRootStore(byPubkey: byPubkey, legacy: null, unreadable: unreadable);
 
+  PqRootStore without(String pubkey) => PqRootStore(
+        byPubkey: {...byPubkey}..remove(pubkey),
+        legacy: legacy,
+        unreadable: unreadable,
+      );
+
   String? encode() {
     if (isEmpty) return null;
     final out = <String, String>{...byPubkey};

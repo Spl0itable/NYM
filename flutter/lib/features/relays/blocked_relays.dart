@@ -40,17 +40,30 @@ class BlockedRelaysController extends StateNotifier<List<String>> {
   String guard(String url, {String? signer}) =>
       RelayBlock.guard(url, blocked: blockedSet, signer: signer);
 
+  bool _local = false;
+
+  bool get changingLocally => _local;
+
+  void _setLocally(Map<String, Map<String, int>> next) {
+    _local = true;
+    try {
+      _set(next);
+    } finally {
+      _local = false;
+    }
+  }
+
   String block(String url, {String? signer, bool confirmed = false}) {
     final why = guard(url, signer: signer);
     if (why != 'ok' && !(why == 'signer' && confirmed)) return why;
-    _set(RelayBlock.block(_state, url, _now()));
+    _setLocally(RelayBlock.block(_state, url, _now()));
     onLocalChange?.call();
     return 'blocked';
   }
 
   bool unblock(String url) {
     if (!isBlocked(url)) return false;
-    _set(RelayBlock.unblock(_state, url, _now()));
+    _setLocally(RelayBlock.unblock(_state, url, _now()));
     onLocalChange?.call();
     return true;
   }

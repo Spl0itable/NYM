@@ -194,7 +194,12 @@ class _AppDialogState extends State<_AppDialog> {
   late final TextEditingController _input =
       TextEditingController(text: widget.defaultValue);
   final FocusNode _inputFocus = FocusNode();
+  final FocusNode _cancelFocus = FocusNode(debugLabel: 'appDialogCancel');
+  final FocusNode _okFocus = FocusNode(debugLabel: 'appDialogOk');
   bool _checked = false;
+
+  bool get _cancelFirst =>
+      widget.danger && !widget.isPrompt && !widget.alertOnly;
 
   @override
   void initState() {
@@ -211,7 +216,14 @@ class _AppDialogState extends State<_AppDialog> {
   void dispose() {
     _input.dispose();
     _inputFocus.dispose();
+    _cancelFocus.dispose();
+    _okFocus.dispose();
     super.dispose();
+  }
+
+  void _enter() {
+    if (_cancelFirst) return;
+    _ok();
   }
 
   void _ok() {
@@ -245,12 +257,12 @@ class _AppDialogState extends State<_AppDialog> {
               bindings: {
                 const SingleActivator(LogicalKeyboardKey.escape): _cancel,
                 if (!widget.multiline)
-                  const SingleActivator(LogicalKeyboardKey.enter): _ok,
+                  const SingleActivator(LogicalKeyboardKey.enter): _enter,
                 if (!widget.multiline)
-                  const SingleActivator(LogicalKeyboardKey.numpadEnter): _ok,
+                  const SingleActivator(LogicalKeyboardKey.numpadEnter): _enter,
               },
               child: Focus(
-                autofocus: true,
+                autofocus: !_cancelFirst,
                 child: Container(
                   decoration: BoxDecoration(
                     color: c.bgSecondary,
@@ -513,7 +525,12 @@ class _AppDialogState extends State<_AppDialog> {
   }
 
   Widget _cancelButton(NymColors c) {
-    return DialogButton.secondary(label: widget.cancelLabel, onTap: _cancel);
+    return DialogButton.secondary(
+      label: widget.cancelLabel,
+      onTap: _cancel,
+      focusNode: _cancelFocus,
+      autofocus: _cancelFirst,
+    );
   }
 
   Widget _okButton(NymColors c) {
@@ -521,6 +538,7 @@ class _AppDialogState extends State<_AppDialog> {
       label: widget.okLabel,
       onTap: _ok,
       role: widget.danger ? DialogButtonRole.danger : DialogButtonRole.primary,
+      focusNode: _okFocus,
     );
   }
 }

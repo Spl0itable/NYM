@@ -97,8 +97,12 @@ class _ReportModalState extends State<ReportModal> {
                   TextSpan(
                       text: tr('Reporting: '),
                       style: TextStyle(color: c.textDim, fontSize: 15)),
-                  nymTextSpan(context, widget.targetNym,
-                      style: TextStyle(color: c.primary, fontSize: 15)),
+                  TextSpan(
+                      children: nymLabelSpans(
+                          context,
+                          splitNymLabel(widget.targetNym).base,
+                          splitNymLabel(widget.targetNym).suffix,
+                          TextStyle(color: c.primary, fontSize: 15))),
                 ])),
                 const SizedBox(height: 15),
                 Text(tr('Report Type:'),

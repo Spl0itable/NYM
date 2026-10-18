@@ -53,9 +53,12 @@ CtxTarget enrichCtxTarget(AppState s, CtxTarget target) {
       if (g.id == s.view.id) group = g;
     }
   }
+  final mask = target.isSelf ? '' : s.personMaskLabel(target.pubkey);
   return CtxTarget(
     pubkey: target.pubkey,
-    nym: pickDisplayNym(s.users[target.pubkey]?.nym, target.nym),
+    nym: mask.isNotEmpty
+        ? mask
+        : pickDisplayNym(s.users[target.pubkey]?.nym, target.nym),
     isSelf: target.isSelf,
     content: target.content,
     messageId: target.messageId,
@@ -200,8 +203,12 @@ class ContextMenuPanel extends ConsumerWidget {
       }
     }
     final fullNym = '${target.nym}#${getPubkeySuffix(target.pubkey)}';
-    final cosmetics = ref.watch(userCosmeticsProvider(target.pubkey));
-    final user = ref.watch(usersProvider)[target.pubkey];
+    final masked = !target.isSelf &&
+        ref.watch(appStateProvider).personMaskLabel(target.pubkey).isNotEmpty;
+    final cosmetics = masked
+        ? const UserCosmetics()
+        : ref.watch(userCosmeticsProvider(target.pubkey));
+    final user = masked ? null : ref.watch(usersProvider)[target.pubkey];
     final about = user?.profile?.about ?? '';
     // A mesh peer's presence is "Mesh" (Bluetooth), not a Nostr status.
     final isMeshPeer = ref.watch(meshControllerProvider
@@ -630,7 +637,10 @@ class ContextMenuPanel extends ConsumerWidget {
       case CtxAction.copyMessage:
         onClose();
         if (t.content != null) {
-          await Clipboard.setData(ClipboardData(text: t.content!));
+          await Clipboard.setData(ClipboardData(
+              text: ref
+                  .read(appStateProvider.notifier)
+                  .shownTextFor(t.content!, t.messageId ?? '')));
         }
         break;
       case CtxAction.translate:

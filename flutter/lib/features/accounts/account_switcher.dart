@@ -45,6 +45,46 @@ String accountDisplayName(AccountEntry a) {
   return getNymFromPubkey(a.nym.isEmpty ? 'nym' : a.nym, a.pubkey);
 }
 
+String accountLandingText(AccountIndex index, String id) {
+  final plan = AccountLogic.plan(index, RemoveAccountOp(id));
+  final land = plan.ok ? plan.index.activeAccount : null;
+  if (id != index.active) {
+    return land == null
+        ? ''
+        : tr('You will stay on {nym}.', {'nym': accountDisplayName(land)});
+  }
+  return land == null
+      ? tr('You will return to the welcome screen.')
+      : tr('You will switch to {nym}.', {'nym': accountDisplayName(land)});
+}
+
+String accountKeyText(String method) => method == 'nip46' ||
+        method == 'extension'
+    ? tr('Its key stays in your signer; you can add it again later.')
+    : tr('Its key is stored only on this device: back up the nsec '
+        'first or you lose this identity.');
+
+String accountRemoveText(AccountEntry a, String landing) => [
+      tr('Remove {nym} from this device? Its messages, settings and caches '
+          'on this device are deleted.',
+          {'nym': accountDisplayName(a)}),
+      accountKeyText(a.method),
+      landing,
+    ].where((p) => p.isNotEmpty).join('\n\n');
+
+String accountLogoutAllText(AccountIndex index) {
+  final welcome = tr('You will return to the welcome screen.');
+  final all = index.accounts;
+  if (all.length == 1) return accountRemoveText(all.first, welcome);
+  return [
+    tr('Log out of all {n} identities? Every identity and its data on this '
+        'device is deleted. Back up any nsec you need first.',
+        {'n': all.length}),
+    all.map(accountDisplayName).join('\n'),
+    welcome,
+  ].where((p) => p.isNotEmpty).join('\n\n');
+}
+
 class AccountSwitchButton extends ConsumerStatefulWidget {
   const AccountSwitchButton({super.key});
 
@@ -240,16 +280,11 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
     final nsec = await _nsecFor(a);
     if (!mounted) return;
     final index = api.changes.value;
-    final next = a.id == index.active
-        ? AccountLogic.plan(index, RemoveAccountOp(a.id)).index.activeAccount
-        : null;
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => _RemoveAccountDialog(
-        name: accountDisplayName(a),
+        message: accountRemoveText(a, accountLandingText(index, a.id)),
         nsec: nsec,
-        signerHeld: a.method == 'nip46' || a.method == 'extension',
-        next: next == null ? null : accountDisplayName(next),
       ),
     );
     if (ok != true) return;
@@ -263,9 +298,7 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
     if (api == null) return;
     final ok = await showAppConfirm(
       context,
-      tr('Log out of all {n} identities? Every identity and its data on this '
-          'device is deleted. Back up any nsec you need first.',
-          {'n': api.changes.value.accounts.length}),
+      accountLogoutAllText(api.changes.value),
       title: tr('Log out of all identities'),
       okLabel: tr('Log out of all identities'),
       danger: true,
@@ -282,13 +315,6 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
       await api.setNotify(a.id, false);
       return;
     }
-    final ok = await showAppConfirm(
-      context,
-      tr('This can let the server see that these identities share a device.'),
-      title: tr('Notify me for this identity while it\'s not active'),
-      okLabel: tr('Turn on'),
-    );
-    if (!ok) return;
     final err = await api.setNotify(a.id, true);
     if (err == 'unsupported') {
       showToast(tr('Anonymous and unfinished identities can\'t get notifications '
@@ -583,16 +609,12 @@ class _FooterButton extends StatelessWidget {
 
 class _RemoveAccountDialog extends StatelessWidget {
   const _RemoveAccountDialog({
-    required this.name,
+    required this.message,
     required this.nsec,
-    required this.signerHeld,
-    this.next,
   });
 
-  final String name;
+  final String message;
   final String? nsec;
-  final bool signerHeld;
-  final String? next;
 
   @override
   Widget build(BuildContext context) {
@@ -621,17 +643,7 @@ class _RemoveAccountDialog extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 NymText(
-                  [
-                    tr('Remove {nym} from this device? Its messages, settings '
-                        'and caches on this device are deleted.',
-                        {'nym': name}),
-                    signerHeld
-                        ? tr('Its key stays in your signer; you can add it '
-                            'again later.')
-                        : tr('Its key is stored only on this device: back up '
-                            'the nsec first or you lose this identity.'),
-                    if (next != null) tr('You will switch to {nym}.', {'nym': next}),
-                  ].join(' '),
+                  message,
                   style: TextStyle(color: c.textDim, fontSize: 13, height: 1.4),
                 ),
                 const SizedBox(height: 18),

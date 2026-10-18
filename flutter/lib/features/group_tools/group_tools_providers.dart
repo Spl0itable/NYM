@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../core/crypto/schnorr.dart' as schnorr;
+import '../../core/utils/nym_utils.dart' show isPlaceholderNym;
 import '../../models/nostr_event.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -77,6 +78,8 @@ final groupToolsProvider = Provider<GroupToolsService>((ref) {
         ref.read(appStateProvider.notifier).upsertGroup(g);
         ref.read(appStateProvider.notifier).notifyGroupsChanged();
       },
+      saveGroupLocal: (g) =>
+          ref.read(appStateProvider.notifier).saveGroupLocally(g),
       messages: (key) => ref.read(appStateProvider).messages[key] ?? const [],
       sendGroupControl: (g, type, extra, recipients, {String content = ''}) =>
           ctl().gtSendGroupControl(
@@ -96,14 +99,34 @@ final groupToolsProvider = Provider<GroupToolsService>((ref) {
           ref.read(meshControllerProvider.notifier).bridge?.peerIdForPubkey(pk),
       sendMeshPm: (pk, content) => ctl().gtSendMeshPm(pk, content),
       notice: (text) => showToast(text),
-      notify: (title, body, route, type, [eventId]) => ctl().gtNotify(
+      notify: (title, body, route, type, [eventId, subject]) => ctl().gtNotify(
           title: title,
           body: body,
           route: route,
           type: type,
-          eventId: eventId),
+          eventId: eventId,
+          subject: subject),
+      quietNotify: (title, body, route, type, [eventId]) => ctl().gtNotify(
+          title: title,
+          body: body,
+          route: route,
+          type: type,
+          eventId: eventId,
+          quiet: true),
       nymOf: (pk) => ctl().gtNym(pk),
       personHidden: (pk) => ref.read(appStateProvider).isPersonHidden(pk),
+      userBlocked: (pk) => ref.read(appStateProvider).blockedUsers.contains(pk),
+      personMask: (pk) => ref.read(appStateProvider).personMaskLabel(pk),
+      groupLabel: (g) => ref.read(appStateProvider).groupLabel(g),
+      messageHidden: (m) => ref.read(appStateProvider).isMessageFiltered(m),
+      fetchProfile: (pk) async {
+        final st = ref.read(appStateProvider);
+        if (st.blockedUsers.contains(pk)) return;
+        if (!isPlaceholderNym(st.users[pk]?.nym)) return;
+        await ctl()
+            .resolveProfiles([pk]).timeout(const Duration(milliseconds: 2500),
+                onTimeout: () {});
+      },
       sign: (template) => ctl().gtSign(template),
       verify: verifyGtEvent,
       sendCallSignal: (to, payload) async {

@@ -68,6 +68,8 @@ final chatToolsProvider = Provider<ChatToolsService>((ref) {
       groupMembers: (gid) =>
           ref.read(appStateProvider.notifier).groupById(gid)?.members,
       findMessage: (id) => findMessageAnywhere(ref.read(appStateProvider), id),
+      shownContent: (m) =>
+          ref.read(appStateProvider).stripBlockedQuotes(m.content, m.quoted),
       fetchEditEvents: (surface, id, at) => ref
           .read(nostrControllerProvider)
           .editHistoryEvents(surface, id, at),

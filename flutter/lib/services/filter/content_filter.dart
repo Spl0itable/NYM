@@ -1,6 +1,7 @@
 final RegExp _suffixRe = RegExp(r'#[0-9a-f]{4}$', caseSensitive: false);
 final RegExp _suffixCaptureRe = RegExp(r'#([0-9a-f]{4})$', caseSensitive: false);
 final RegExp _quoteHeadRe = RegExp(r'^>\s*@([^:\n]+):');
+final RegExp _inviteJoinRe = RegExp(r'join\s+#([a-z0-9]+)', caseSensitive: false);
 
 class ContentFilterCtx {
   const ContentFilterCtx({
@@ -19,6 +20,7 @@ class ContentFilterCtx {
     this.quiet,
     this.spam,
     this.gated,
+    this.nymOf,
   });
 
   final String self;
@@ -36,6 +38,7 @@ class ContentFilterCtx {
   final bool Function(Object? ref)? quiet;
   final bool Function(Object? ref)? spam;
   final bool Function(Object? ref)? gated;
+  final String Function(String pubkey)? nymOf;
 }
 
 class CfItem {
@@ -46,6 +49,8 @@ class CfItem {
     this.own = false,
     this.system = false,
     this.mesh = false,
+    this.people = const <String>[],
+    this.quoted = const <String>[],
   });
 
   final String pubkey;
@@ -54,6 +59,8 @@ class CfItem {
   final bool own;
   final bool system;
   final bool mesh;
+  final List<String> people;
+  final List<String> quoted;
 }
 
 class CfEntry {
@@ -63,6 +70,8 @@ class CfEntry {
     this.body = '',
     this.channel = '',
     this.subject = '',
+    this.knownGroup = false,
+    this.quoted = const <String>[],
   });
 
   final String sender;
@@ -70,6 +79,8 @@ class CfEntry {
   final String body;
   final String channel;
   final String subject;
+  final bool knownGroup;
+  final List<String> quoted;
 }
 
 abstract final class ContentFilter {
@@ -129,9 +140,26 @@ abstract final class ContentFilter {
     return textBlocked(c, '', nym, pubkey);
   }
 
-  static bool quoteBlocked(ContentFilterCtx c, String author) {
+  static final RegExp _hex64Re = RegExp(r'^[0-9a-f]{64}$');
+
+  static List<String> _carriedKeys(Iterable<String> quoted, String sfx) => [
+        for (final raw in quoted)
+          if (_hex64Re.hasMatch(raw.toLowerCase()) &&
+              raw.toLowerCase().endsWith(sfx))
+            raw.toLowerCase(),
+      ];
+
+  static bool quoteBlocked(ContentFilterCtx c, String author,
+      [Iterable<String> quoted = const <String>[]]) {
     final sfx = nymSuffix(author);
     if (sfx.isEmpty) return false;
+    final carried = _carriedKeys(quoted, sfx);
+    if (carried.isNotEmpty) {
+      final self = c.self.toLowerCase();
+      return carried.any((p) =>
+          !(self.isNotEmpty && p == self) &&
+          (c.blockedUsers.contains(p) || c.muted?.call(p) == true));
+    }
     for (final p in c.blockedUsers) {
       if (p.length >= 4 && p.substring(p.length - 4).toLowerCase() == sfx) {
         return true;
@@ -140,7 +168,30 @@ abstract final class ContentFilter {
     return false;
   }
 
-  static String stripBlockedQuotes(ContentFilterCtx c, String text) {
+  static bool _peopleHidden(ContentFilterCtx c, List<String> people) {
+    for (final pk in people) {
+      if (pk.isEmpty || (c.self.isNotEmpty && pk == c.self)) continue;
+      if (personHidden(c, pk, c.nymOf?.call(pk) ?? '')) return true;
+    }
+    return false;
+  }
+
+  static bool metaHidden(
+          ContentFilterCtx c, String setter, Iterable<String> admins) =>
+      setter.isNotEmpty &&
+      setter != c.self &&
+      c.blockedUsers.contains(setter) &&
+      admins.contains(setter);
+
+  static bool labelHidden(ContentFilterCtx c, String label) {
+    final l = label.trim();
+    if (l.isEmpty) return false;
+    if (quoteBlocked(c, l)) return true;
+    return textBlocked(c, '', l, '');
+  }
+
+  static String stripBlockedQuotes(ContentFilterCtx c, String text,
+      [Iterable<String> quoted = const <String>[]]) {
     if (!text.contains('>')) return text;
     final out = <String>[];
     var skipping = false;
@@ -148,7 +199,7 @@ abstract final class ContentFilter {
     for (final line in text.split('\n')) {
       final m = _quoteHeadRe.firstMatch(line);
       if (m != null) {
-        skipping = quoteBlocked(c, m.group(1)!.trim());
+        skipping = quoteBlocked(c, m.group(1)!.trim(), quoted);
         if (skipping) {
           removed = true;
           continue;
@@ -165,6 +216,13 @@ abstract final class ContentFilter {
       out.removeAt(0);
     }
     return out.join('\n');
+  }
+
+  static bool onlyBlockedQuotes(ContentFilterCtx c, String text,
+      [Iterable<String> quoted = const <String>[]]) {
+    if (!text.contains('>')) return false;
+    final out = stripBlockedQuotes(c, text, quoted);
+    return out != text && out.trim().isEmpty;
   }
 
   static String channelKey(String key) {
@@ -199,7 +257,9 @@ abstract final class ContentFilter {
       return true;
     }
     if (!own && c.muted?.call(m.pubkey) == true) return true;
-    if (textBlocked(c, m.content ?? '', m.nym, m.pubkey)) return true;
+    if (!own && _peopleHidden(c, m.people)) return true;
+    if (textBlocked(c, m.content ?? '', own ? '' : m.nym, m.pubkey)) return true;
+    if (onlyBlockedQuotes(c, m.content ?? '', m.quoted)) return true;
     if (own || m.mesh) return false;
     if (c.quiet?.call(r) == true) return true;
     if (c.spam?.call(r) == true) return true;
@@ -241,11 +301,136 @@ abstract final class ContentFilter {
       return true;
     }
     if (e.channel.isNotEmpty && channelHidden(c, e.channel)) return true;
-    if (textBlocked(c, e.body, e.nym, sender)) return true;
+    if (textBlocked(c, e.body, self ? '' : e.nym, sender)) return true;
+    if (onlyBlockedQuotes(c, e.body, e.quoted)) return true;
     if (e.subject.isNotEmpty && textBlocked(c, e.subject, '', sender)) {
       return true;
     }
     return false;
+  }
+
+  static String inviteChannel(String text) {
+    if (!text.contains('Channel Invitation:')) return '';
+    final m = _inviteJoinRe.firstMatch(text);
+    return m == null ? '' : m.group(1)!.toLowerCase();
+  }
+
+  static bool inboxHidden(ContentFilterCtx c, CfEntry e, String accept,
+      [Object? ref]) {
+    final sender = e.sender;
+    final other = sender.isNotEmpty && sender != c.self;
+    if (other && !e.knownGroup) {
+      if (accept == 'disabled') return true;
+      if (accept == 'friends' && c.friend?.call(sender) != true) return true;
+    }
+    if (other && c.spam?.call(ref ?? e) == true) return true;
+    return entryHidden(c, e);
+  }
+
+  static String zapper(String claimed, String publisher, bool verified) {
+    final want = claimed.toLowerCase();
+    if (want.isEmpty) return publisher;
+    if (verified || want == publisher.toLowerCase()) return want;
+    return publisher;
+  }
+
+  static const Set<String> _blockedGroupControl = {
+    'group-join-request',
+    'group-add-member',
+    'group-remove-member',
+    'group-promote-mod',
+    'group-revoke-mod',
+    'group-promote-admin',
+    'group-revoke-admin',
+    'group-roster-req',
+    'group-roster',
+    'group-transfer-owner',
+    'group-metadata',
+    'group-delete-message',
+    'group-leave',
+    'group-unban',
+    'key-resync',
+    'group-join-pending',
+    'group-join-waiting',
+    'group-join-declined',
+    'group-join-resolved',
+  };
+
+  static bool keepsBlockedGroupControl(String type) =>
+      type.isNotEmpty && _blockedGroupControl.contains(type);
+
+  static bool keepsBlockedChat(int kind, String type) =>
+      kind == 14 && type.trim().isEmpty;
+
+  static const int blockedKeep = 200;
+
+  static const int blockedTotal = 400;
+
+  static String personMask(ContentFilterCtx c, String pubkey, String nym) {
+    if (pubkey.isNotEmpty && c.self.isNotEmpty && pubkey == c.self) return '';
+    if (pubkey.isNotEmpty && c.blockedUsers.contains(pubkey)) return 'blocked';
+    return personHidden(c, pubkey, nym) ? 'hidden' : '';
+  }
+
+  static List<int> blockedOverflow(
+      ContentFilterCtx c, List<CfItem> items, int cap,
+      [int total = blockedTotal]) {
+    final keep = cap < 0 ? 0 : cap;
+    final all = total < 0 ? 0 : total;
+    final seen = <String, int>{};
+    var kept = 0;
+    final drop = <int>[];
+    for (var i = items.length - 1; i >= 0; i--) {
+      final it = items[i];
+      final pk = it.pubkey;
+      if (pk.isEmpty ||
+          it.own ||
+          (c.self.isNotEmpty && pk == c.self) ||
+          !c.blockedUsers.contains(pk)) {
+        continue;
+      }
+      final n = (seen[pk] ?? 0) + 1;
+      seen[pk] = n;
+      if (n > keep || kept >= all) {
+        drop.add(i);
+      } else {
+        kept++;
+      }
+    }
+    return drop.reversed.toList();
+  }
+
+  static List<int> storeOverflow(
+      ContentFilterCtx c, List<CfItem> items, int limit, int cap,
+      [int total = blockedTotal]) {
+    final max = limit < 0 ? 0 : limit;
+    final keep = cap < 0 ? 0 : cap;
+    final all = total < 0 ? 0 : total;
+    final seen = <String, int>{};
+    var kept = 0;
+    var shown = 0;
+    final drop = <int>[];
+    for (var i = items.length - 1; i >= 0; i--) {
+      final it = items[i];
+      final pk = it.pubkey;
+      final blocked = pk.isNotEmpty &&
+          !it.own &&
+          !(c.self.isNotEmpty && pk == c.self) &&
+          c.blockedUsers.contains(pk);
+      if (blocked) {
+        final n = (seen[pk] ?? 0) + 1;
+        seen[pk] = n;
+        if (n > keep || kept >= all) {
+          drop.add(i);
+        } else {
+          kept++;
+        }
+        continue;
+      }
+      shown++;
+      if (shown > max) drop.add(i);
+    }
+    return drop.reversed.toList();
   }
 
   static bool activeFilters(ContentFilterCtx c) {

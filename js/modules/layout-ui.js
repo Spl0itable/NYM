@@ -238,7 +238,7 @@
         var bodyAt = 0;
         if (m) {
             var body = m.content;
-            try { body = typeof n._previewBody === 'function' ? n._previewBody(body) : n._notifPreviewText(body); } catch (_) { }
+            try { body = typeof n._previewBody === 'function' ? n._previewBody(body, Array.isArray(m.quoted) ? m.quoted : []) : n._notifPreviewText(body); } catch (_) { }
             var author = m.author || '';
             try {
                 if (typeof n.resolveDisplayNym === 'function') author = n.resolveDisplayNym(m.pubkey, m.author);
@@ -251,6 +251,12 @@
             dim = parts.dim;
             sender = parts.sender || null;
             bodyAt = parts.bodyAt || 0;
+            var from = bodyAt || (sender ? -1 : 0);
+            if (text && !hide && !locked && from >= 0 && window.NymSuffix && typeof n.isVerifiedBot === 'function' && n.isVerifiedBot(m.pubkey)) {
+                var bot = window.NymSuffix.ranges(text.slice(from), '*').map(function (r) { return [r[0] + from, r[1] + from]; })
+                    .filter(function (r) { return !dim.some(function (d) { return d[0] < r[1] && r[0] < d[1]; }); });
+                if (bot.length) dim = dim.concat(bot).sort(function (a, b) { return a[0] - b[0]; });
+            }
         }
         paintPreview(els.pv, text, dim, sender, bodyAt);
         item.classList.toggle('has-preview', !!text);
@@ -629,9 +635,18 @@
                 tile.appendChild(name);
                 tile.appendChild(badge);
                 grid.appendChild(tile);
-                try { av.src = n.getAvatarUrl(pk); } catch (_) { }
-                try { name.innerHTML = n._callNymHtml(pk); } catch (_) { name.textContent = ''; }
             }
+            var face = typeof n._ringTileFace === 'function' ? n._ringTileFace(pk) : null;
+            var avEl = tile.querySelector('.call-tile-avatar');
+            var nameEl = tile.querySelector('.call-tile-name');
+            try {
+                var src = face ? face.src : n.getAvatarUrl(pk);
+                if (avEl && avEl.getAttribute('src') !== src) avEl.src = src;
+            } catch (_) { }
+            try {
+                var html = face ? face.html : n._callNymHtml(pk);
+                if (nameEl && nameEl.innerHTML !== html) nameEl.innerHTML = html;
+            } catch (_) { if (nameEl) nameEl.textContent = ''; }
         });
         Array.prototype.slice.call(grid.querySelectorAll('.call-tile.ringing')).forEach(function (t) {
             if (!keep[t.dataset.tile]) t.remove();
@@ -722,12 +737,12 @@
             var label = notifGroupTitle(n, g.key, first && first._notif, ui);
             if (g.key.indexOf('pm:') === 0 && typeof n.nymLabelHtml === 'function') title.innerHTML = '<bdi>' + n.nymLabelHtml(label) + '</bdi>';
             else title.textContent = label;
-            var unread = g.items.filter(function (i) { return !items[i]._notif || !items[i]._notif.viewed; }).length;
-            if (unread) {
+            var fresh = g.items.filter(function (i) { return items[i].classList.contains('notification-item-unread'); }).length;
+            if (fresh) {
                 var dot = document.createElement('span');
                 dot.className = 'notif-group-unread';
-                dot.textContent = String(unread);
-                dot.setAttribute('aria-label', ui('{n} unread').replace('{n}', String(unread)));
+                dot.textContent = String(fresh);
+                dot.setAttribute('aria-label', ui('{n} new').replace('{n}', String(fresh)));
                 title.appendChild(dot);
             }
             wrap.appendChild(title);

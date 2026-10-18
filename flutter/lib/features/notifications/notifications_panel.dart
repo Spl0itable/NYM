@@ -36,28 +36,38 @@ import '../toasts/event_toast_prefs.dart';
 import '../toasts/event_toasts.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/common/hit_slop.dart';
-import '../identity/deleted_notice.dart' show dimNymSuffixes;
+import '../identity/deleted_notice.dart' show dimNymLabel;
 import '../search/unified_search_panel.dart' show nymSuffixStyle;
 import '../../widgets/common/nym_label.dart'
     show knownNymSuffix, mergeNymRanges, nymSuffixRanges;
 import '../../core/theme/nym_a11y.dart';
 
-/// Opening doesn't clear the badge; rows are marked viewed once ≥60% visible, with unread state snapshotted before opening.
-Future<void> showNotificationsPanel(BuildContext context) {
-  final container = ProviderScope.containerOf(context);
-  final all = container.read(notificationHistoryProvider).entries;
-  // Filter at render time: drop entries older than 24h or from blocked senders, then sort newest first.
-  final blocked = container.read(appStateProvider).blockedUsers;
+List<NotificationEntry> _listedEntries(
+    Set<String> blocked, List<NotificationEntry> all) {
   final cutoff24h = DateTime.now().millisecondsSinceEpoch - 24 * 60 * 60 * 1000;
-  final entries = [
+  return [
     for (final e in all)
       if (e.ts > cutoff24h &&
           !blocked.contains(e.senderPubkey ?? '') &&
           NotificationHistoryNotifier.hiddenEntry?.call(e) != true)
         e,
   ]..sort((a, b) => b.ts.compareTo(a.ts));
-  // Frozen unread state per entry, as a public type.
+}
+
+String _rowKey(NotificationEntry e) {
+  final id = e.eventId ?? '';
+  if (id.isNotEmpty) return 'e:$id';
+  return 'f:${e.type}:${e.route ?? ''}:${e.senderPubkey ?? ''}:${e.ts}';
+}
+
+Future<void> showNotificationsPanel(BuildContext context) {
+  final container = ProviderScope.containerOf(context);
+  final entries = _listedEntries(container.read(appStateProvider).blockedUsers,
+      container.read(notificationHistoryProvider).entries);
   final viewedAtOpen = [for (final e in entries) e.viewed];
+  container
+      .read(notificationHistoryProvider.notifier)
+      .markEntriesViewed([for (final e in entries) if (!e.viewed) e]);
   final isLight = context.nym.isLight;
   return showNymSheet<void>(
     context,
@@ -81,7 +91,6 @@ class NotificationsPanel extends ConsumerStatefulWidget {
   /// Entries snapshotted at open, newest first.
   final List<NotificationEntry> entries;
 
-  /// `viewed` frozen at open, parallel to [entries], flipped locally as rows are seen.
   final List<bool> viewedAtOpen;
 
   @override
@@ -89,23 +98,23 @@ class NotificationsPanel extends ConsumerStatefulWidget {
 }
 
 class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
-  late final List<_NotifRow> _rows = [
+  late final Set<String> _newKeys = {
+    for (var i = 0; i < widget.entries.length; i++)
+      if (!widget.viewedAtOpen[i]) _rowKey(widget.entries[i]),
+  };
+
+  late List<_NotifRow> _rows = [
     for (var i = 0; i < widget.entries.length; i++)
       _NotifRow(widget.entries[i], widget.viewedAtOpen[i]),
   ];
 
   bool _prefsOpen = false;
 
-  late bool _hasUnread = _rows.any((r) => !r.viewed);
-
-  /// Scroll viewport that ≥60% visibility is measured against.
-  final GlobalKey _bodyKey = GlobalKey();
-  final ScrollController _scroll = ScrollController();
+  bool get _hasUnread => _rows.any((r) => !r.entry.viewed);
 
   @override
   void initState() {
     super.initState();
-    // Fetch kind 0 for every sender shown; boot-restored history never went through ingest.
     final senders = <String>{
       for (final e in widget.entries)
         if ((e.senderPubkey ?? '').isNotEmpty) e.senderPubkey!,
@@ -113,50 +122,37 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
     if (senders.isNotEmpty) {
       ref.read(nostrControllerProvider).ensureProfiles(senders);
     }
-    // Mark rows ≥60% visible as viewed on scroll and after the first frame.
-    _scroll.addListener(_markVisibleSeen);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _markVisibleSeen());
+    ref.listenManual<NotificationHistoryState>(
+        notificationHistoryProvider, (_, next) => _sync(next.entries));
   }
 
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  /// Marks unread rows ≥60% visible as viewed; the notifier handles persistence, badge and sync.
-  void _markVisibleSeen() {
+  void _sync(List<NotificationEntry> all) {
     if (!mounted) return;
-    final bodyBox = _bodyKey.currentContext?.findRenderObject() as RenderBox?;
-    if (bodyBox == null || !bodyBox.attached || !bodyBox.hasSize) return;
-    final bodyRect = bodyBox.localToGlobal(Offset.zero) & bodyBox.size;
-    final seen = <NotificationEntry>[];
-    for (final r in _rows) {
-      if (r.viewed) continue;
-      final ctx = r.key.currentContext;
-      final box = ctx?.findRenderObject() as RenderBox?;
-      // Unbuilt or off-viewport rows stay unread.
-      if (box == null || !box.attached || !box.hasSize) continue;
-      final rect = box.localToGlobal(Offset.zero) & box.size;
-      if (rect.height <= 0) continue;
-      final overlap = rect.intersect(bodyRect);
-      if (overlap.height <= 0 || overlap.width <= 0) continue;
-      if (overlap.height / rect.height < 0.6) continue;
-      r.viewed = true;
-      seen.add(r.entry);
+    final listed =
+        _listedEntries(ref.read(appStateProvider).blockedUsers, all);
+    final arrived = [for (final e in listed) if (!e.viewed) e];
+    for (final e in arrived) {
+      _newKeys.add(_rowKey(e));
     }
-    if (seen.isEmpty) return;
-    ref.read(notificationHistoryProvider.notifier).markEntriesViewed(seen);
-    setState(() => _hasUnread = _rows.any((r) => !r.viewed));
+    setState(() {
+      _rows = [
+        for (final e in listed) _NotifRow(e, !_newKeys.contains(_rowKey(e))),
+      ];
+    });
+    if (arrived.isEmpty) return;
+    scheduleMicrotask(() {
+      if (!mounted) return;
+      ref.read(notificationHistoryProvider.notifier).markEntriesViewed(arrived);
+    });
   }
 
   void _markAllRead() {
     ref.read(notificationHistoryProvider.notifier).markAllViewed();
     setState(() {
+      _newKeys.clear();
       for (final r in _rows) {
         r.viewed = true;
       }
-      _hasUnread = false;
     });
   }
 
@@ -195,7 +191,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
         return '#$id';
       case 'group':
         for (final g in app.groups) {
-          if (g.id == id && g.name.isNotEmpty) return g.name;
+          if (g.id == id) return app.groupLabel(g);
         }
         return tr('Group');
       case 'pm':
@@ -229,7 +225,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
             Flexible(
               child: Text.rich(
                 g.key.startsWith('pm:')
-                    ? dimNymSuffixes(
+                    ? dimNymLabel(
                         _groupTitle(g.key, _rows[g.items.first].entry),
                         nymSuffixStyle(_groupTitleStyle(c),
                             contrast: context.highContrast))
@@ -260,7 +256,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
       ));
       for (final i in g.items) {
         out.add(_NotificationRow(
-          key: _rows[i].key,
+          key: ObjectKey(_rows[i].entry),
           entry: _rows[i].entry,
           viewed: _rows[i].viewed,
           isLast: i == g.items.last,
@@ -282,7 +278,8 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
           children: [
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(32, 32, 96, 10),
+              padding: EdgeInsets.fromLTRB(
+                  MediaQuery.sizeOf(context).width <= 400 ? 20 : 32, 32, 96, 10),
               child: Text(
                 tr('NOTIFICATIONS'),
                 style: TextStyle(
@@ -303,8 +300,6 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
               ),
             Flexible(
               child: CustomScrollView(
-                key: _bodyKey,
-                controller: _scroll,
                 shrinkWrap: true,
                 slivers: [
                   if (_prefsOpen)
@@ -465,9 +460,28 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
     // Watched so the box reflects it live.
     final enabled =
         ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
+    final narrow = MediaQuery.sizeOf(context).width <= 400;
+    final soundLabel = Text(tr('Notification Sound').toUpperCase(),
+        style: TextStyle(
+          color: c.textDim,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 1.2,
+        ));
+    final soundSelect = FormSelect<String>(
+      key: const Key('notifSoundSelect'),
+      value: ref.watch(settingsProvider.select((s) => s.sound)),
+      items: notificationSoundOptions(),
+      onChanged: (v) {
+        ref.read(settingsProvider.notifier).setSound(v);
+        final svc = ref.read(notificationsServiceProvider);
+        svc.resetSoundDedupe();
+        unawaited(svc.playSound(v).catchError((_) {}));
+      },
+    );
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(32, 0, 32, 16),
+      padding: EdgeInsets.fromLTRB(narrow ? 20 : 32, 0, narrow ? 20 : 32, 16),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: c.glassBorder)),
       ),
@@ -480,11 +494,10 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             value: enabled,
             spacing: 0,
             onChanged: (v) {
-              // Plain `update` so the bell and gate react live; doesn't fire cross-device sync.
-              ref
-                  .read(settingsProvider.notifier)
-                  .update((s) => s.copyWith(notificationsEnabled: v));
+              final settings = ref.read(settingsProvider.notifier);
+              settings.update((s) => s.copyWith(notificationsEnabled: v));
               kv.setString(StorageKeys.notificationsEnabled, '$v');
+              settings.notifySyncedChange();
               if (v) unawaited(_requestOsPermission());
             },
           ),
@@ -496,6 +509,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             onChanged: (v) {
               setState(() => _mentionsOnly = v);
               kv.setString(StorageKeys.groupNotifyMentionsOnly, '$v');
+              ref.read(settingsProvider.notifier).notifySyncedChange();
             },
           ),
           // Thread-scoped twin of the group setting; off, replies in threads the user started also notify.
@@ -507,6 +521,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             onChanged: (v) {
               setState(() => _threadMentionsOnly = v);
               kv.setString(StorageKeys.threadNotifyMentionsOnly, '$v');
+              ref.read(settingsProvider.notifier).notifySyncedChange();
             },
           ),
           // Notice when the OS refuses to post despite the in-app setting.
@@ -538,38 +553,32 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             onChanged: (v) {
               setState(() => _friendsOnly = v);
               kv.setString(StorageKeys.notifyFriendsOnly, '$v');
+              ref.read(settingsProvider.notifier).notifySyncedChange();
             },
           ),
           Padding(
             padding: const EdgeInsets.only(top: 12),
-            child: Row(
-              children: [
-                Text(tr('Notification Sound').toUpperCase(),
-                    style: TextStyle(
-                      color: c.textDim,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.2,
-                    )),
-                const SizedBox(width: 12),
-                Flexible(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 240),
-                    child: FormSelect<String>(
-                      key: const Key('notifSoundSelect'),
-                      value: ref.watch(settingsProvider.select((s) => s.sound)),
-                      items: notificationSoundOptions(),
-                      onChanged: (v) {
-                        ref.read(settingsProvider.notifier).setSound(v);
-                        final svc = ref.read(notificationsServiceProvider);
-                        svc.resetSoundDedupe();
-                        unawaited(svc.playSound(v).catchError((_) {}));
-                      },
-                    ),
+            child: narrow
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      soundLabel,
+                      const SizedBox(height: 6),
+                      soundSelect,
+                    ],
+                  )
+                : Row(
+                    children: [
+                      soundLabel,
+                      const SizedBox(width: 12),
+                      Flexible(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 240),
+                          child: soundSelect,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ],
-            ),
           ),
           const EventToastPrefsSection(),
         ],
@@ -578,11 +587,9 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
   }
 }
 
-/// Live [entry] plus [viewed] frozen at open; [key] anchors the row for visibility measurement.
 class _NotifRow {
   _NotifRow(this.entry, this.viewed);
   final NotificationEntry entry;
-  final GlobalKey key = GlobalKey();
   bool viewed;
 }
 
@@ -738,9 +745,11 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
     final system =
         route.isEmpty && sender.isEmpty && (entry.eventId ?? '').isEmpty;
     final groups = ref.watch(appStateProvider.select((a) => a.groups));
+    ref.watch(appStateProvider.select((a) => a.contentFilterSignature));
+    final labels = ref.read(appStateProvider);
     String groupName(String id) {
       for (final g in groups) {
-        if (g.id == id && g.name.isNotEmpty) return g.name;
+        if (g.id == id) return labels.groupLabel(g);
       }
       return tr('Group');
     }

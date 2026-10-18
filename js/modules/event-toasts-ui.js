@@ -256,13 +256,50 @@
             const now = Date.now();
             const fresh = held.filter((e) => {
                 const n = this._etEntries && this._etEntries.get(e.eventId);
-                if (!n || n.viewed) return false;
+                if (!n || n.viewed || this._etEntryHidden(n)) return false;
                 if (!e.backlog && e.heldFor !== 'sheet' && now - (e.heldAt || now) > E().CONFIG.durationMs) return false;
                 const d = E().decide(Object.assign({}, e, { backlog: false, seen: this._etSees(n) }), Object.assign({}, view, { call: false, sheet: false }), s);
                 return d.toast === 'show';
             });
             for (const e of held) if (!fresh.includes(e) && this._etEntries) this._etEntries.delete(e.eventId);
             if (fresh.length) this._etApply(E().addMany(this._etState || E().emptyState(), fresh, Date.now()));
+        },
+
+        _etEntryHidden(entry) {
+            return !!entry && typeof this._notifEntryHidden === 'function' && this._notifEntryHidden(entry);
+        },
+
+        _etPruneHidden() {
+            const gone = (tok) => {
+                const n = this._etEntries && this._etEntries.get(tok);
+                return !n || this._etEntryHidden(n);
+            };
+            if (Array.isArray(this._etHeld) && this._etHeld.length) {
+                this._etHeld = this._etHeld.filter((e) => {
+                    if (!gone(e.eventId)) return true;
+                    if (this._etEntries) this._etEntries.delete(e.eventId);
+                    return false;
+                });
+            }
+            const st = this._etState;
+            if (!st || !Array.isArray(st.toasts) || !st.toasts.length || !E()) return;
+            let changed = false;
+            const toasts = [];
+            for (const t of st.toasts) {
+                const events = (t.events || []).filter((tok) => !gone(tok));
+                if (events.length === (t.events || []).length) { toasts.push(t); continue; }
+                changed = true;
+                if (!events.length) continue;
+                const entries = events.map((tok) => this._etEntries.get(tok));
+                const last = Object.assign(this._etContent(entries[entries.length - 1]), { eventId: events[events.length - 1] });
+                const keys = [];
+                for (const n of entries) { const k = this._etKey(n.channelInfo || {}, n); if (!keys.includes(k)) keys.push(k); }
+                toasts.push(Object.assign({}, t, { events, count: events.length, keys, last: E().slim(last) }));
+            }
+            if (!changed) return;
+            this._etState = Object.assign({}, st, { toasts });
+            this._etRender();
+            this._etArm();
         },
 
         _etApply(r) {
@@ -547,7 +584,7 @@
             if (typeof this._saveSeenNotificationKeys === 'function') this._saveSeenNotificationKeys();
             if (typeof this._saveNotificationHistory === 'function') this._saveNotificationHistory();
             if (typeof this._updateNotificationBadge === 'function') this._updateNotificationBadge();
-            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000, { wanted: true });
         },
 
         _etPrune() {

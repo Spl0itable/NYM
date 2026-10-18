@@ -1234,6 +1234,57 @@ class ApiClient {
     );
   }
 
+  Stream<Map<String, dynamic>> botChannelLines(
+      Map<String, dynamic> body) async* {
+    final payload = jsonEncode(body);
+    final req = http.Request('POST', Uri.parse(botUrl))
+      ..headers.addAll(_headers({'Content-Type': 'application/json'}))
+      ..body = payload;
+    final res = await _client.send(req);
+    final type = (res.headers['content-type'] ?? '').toLowerCase();
+    final ok = res.statusCode >= 200 && res.statusCode < 300;
+    if (!ok || !type.contains('ndjson')) {
+      final bytes = await res.stream.toBytes();
+      _trackApiData('bot-channel', sent: _bodyLen(payload), recv: bytes.length);
+      Object? decoded;
+      try {
+        decoded = jsonDecode(utf8.decode(bytes, allowMalformed: true));
+      } catch (_) {
+        decoded = null;
+      }
+      final event = decoded is Map ? decoded['event'] : null;
+      if (ok && event is Map) {
+        yield {'state': 'done', 'event': event};
+      } else {
+        yield {
+          'state': 'failed',
+          'status': res.statusCode,
+          'reason': res.statusCode == 429 ? 'rate' : 'error',
+        };
+      }
+      return;
+    }
+    var recv = 0;
+    try {
+      await for (final line in res.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())) {
+        recv += line.length + 1;
+        final t = line.trim();
+        if (t.isEmpty) continue;
+        Object? decoded;
+        try {
+          decoded = jsonDecode(t);
+        } catch (_) {
+          continue;
+        }
+        if (decoded is Map<String, dynamic>) yield decoded;
+      }
+    } finally {
+      _trackApiData('bot-channel', sent: _bodyLen(payload), recv: recv);
+    }
+  }
+
   /// `POST /api/bot` for Nymbot credit actions; same auth contract as [storageAction], bound to [botUrl].
   Future<Map<String, dynamic>> botAction(Map<String, dynamic> body) async {
     final action = (body['action'] ?? 'other').toString();

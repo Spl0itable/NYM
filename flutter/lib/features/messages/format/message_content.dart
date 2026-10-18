@@ -79,9 +79,12 @@ class MessageContent extends ConsumerWidget {
     this.nostrRefCards = true,
     this.commonMark = false,
     this.spoilers,
+    this.quoted = const <String>[],
   });
 
   final String content;
+
+  final List<String> quoted;
 
   final bool commonMark;
 
@@ -128,7 +131,7 @@ class MessageContent extends ConsumerWidget {
     );
 
     final shown = ref.watch(
-        appStateProvider.select((s) => s.stripBlockedQuotes(content)));
+        appStateProvider.select((s) => s.stripBlockedQuotes(content, quoted)));
     final blocks = NymFormat.format(shown, ctx);
     final size = fontSize ?? settings.textSize.toDouble();
     final color = baseColor ?? c.text;
@@ -761,6 +764,71 @@ class _RichInlineState extends State<_RichInline> {
     return TextSpan(children: spans);
   }
 
+  InlineSpan _linkLabelSpan(BuildContext context, NymColors c,
+      InlineNode node, TextStyle style, String url) {
+    List<InlineSpan> kids(List<InlineNode> nodes, TextStyle next) => [
+          for (final ch in nodes) _linkLabelSpan(context, c, ch, next, url),
+        ];
+    switch (node) {
+      case TextSpanNode(:final text):
+        return TextSpan(text: text, style: style, recognizer: _LinkTap(url));
+      case BoldNode(:final children):
+        return TextSpan(
+            children: kids(children,
+                style.merge(const TextStyle(fontWeight: FontWeight.w700))));
+      case ItalicNode(:final children):
+        return TextSpan(
+            children: kids(children,
+                style.merge(const TextStyle(fontStyle: FontStyle.italic))));
+      case StrikeNode(:final children):
+        return TextSpan(
+            children: kids(
+                children,
+                style.merge(TextStyle(
+                    decoration: TextDecoration.combine([
+                  TextDecoration.underline,
+                  TextDecoration.lineThrough,
+                ])))));
+      case UnderlineNode(:final children):
+        return TextSpan(children: kids(children, style));
+      case SpoilerNode(:final children):
+        final key = _spoilerKey(_spoilerSeq++);
+        if (_reveals.isRevealed(key)) {
+          return TextSpan(
+              children: kids(
+                  children,
+                  style.merge(TextStyle(
+                      backgroundColor: c.isLight
+                          ? Colors.black.withValues(alpha: 0.06)
+                          : c.text.withValues(alpha: 0.08)))));
+        }
+        _hiddenKeys.add(key);
+        return _hiddenSpoiler(
+            c, children, style, key, () => _reveals.reveal(key));
+      case TimestampNode(:final seconds, style: final tsStyle):
+        return TextSpan(
+            text: formatDiscordTimestamp(seconds, tsStyle),
+            style: style,
+            recognizer: _LinkTap(url));
+      case InlineCodeNode():
+        final code = _span(context, c, node, style);
+        if (code is! WidgetSpan) return code;
+        return WidgetSpan(
+          alignment: code.alignment,
+          baseline: code.baseline,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => launchSafeUrl(url),
+              child: code.child,
+            ),
+          ),
+        );
+      default:
+        return _span(context, c, node, style);
+    }
+  }
+
   InlineSpan _span(
     BuildContext context,
     NymColors c,
@@ -864,15 +932,22 @@ class _RichInlineState extends State<_RichInline> {
             ),
           ),
         );
-      case LinkNode(:final url):
+      case LinkNode(:final url, :final shown, :final children):
+        final linkStyle = base.merge(TextStyle(
+          color: context.highContrast
+              ? legibleOnAll(c.secondary, [bubbleBgFor(c), c.bg])
+              : c.secondary,
+          decoration: TextDecoration.underline,
+        ));
+        if (children != null && children.isNotEmpty) {
+          return TextSpan(children: [
+            for (final ch in children)
+              _linkLabelSpan(context, c, ch, linkStyle, url),
+          ]);
+        }
         return TextSpan(
-          text: url,
-          style: base.merge(TextStyle(
-            color: context.highContrast
-                ? legibleOnAll(c.secondary, [bubbleBgFor(c), c.bg])
-                : c.secondary,
-            decoration: TextDecoration.underline,
-          )),
+          text: shown,
+          style: linkStyle,
           recognizer: _LinkTap(url),
         );
       case EmojiNode(:final unicode):
@@ -1208,8 +1283,11 @@ class _MentionChip extends ConsumerWidget {
     final users = ref.watch(usersProvider);
     final raw = node.suffix != null ? '${node.base}#${node.suffix}' : node.base;
     final t = resolveTarget(raw, users);
+    final chipHidden = t != null &&
+        ref.watch(appStateProvider
+            .select((s) => s.hasBlockedKeyword('', t.nym, t.pubkey)));
     Widget chip = text;
-    if (t != null) {
+    if (t != null && !chipHidden) {
       chip = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2621,8 +2699,8 @@ int _inlineTextLength(InlineNode node) {
       return formatDiscordTimestamp(seconds, style).length;
     case InlineCodeNode(:final code):
       return code.length;
-    case LinkNode(:final url):
-      return url.length;
+    case LinkNode(:final shown):
+      return shown.length;
     case EmojiNode(:final unicode):
       return unicode.length;
     case MentionNode(:final base, :final suffix):
@@ -2708,8 +2786,8 @@ void _appendInlineText(StringBuffer buf, InlineNode node) {
       buf.write(raw.isNotEmpty ? raw : '<t:$seconds:$style>');
     case InlineCodeNode(:final code):
       buf.write(code);
-    case LinkNode(:final url):
-      buf.write(url);
+    case LinkNode(:final shown):
+      buf.write(shown);
     case EmojiNode(:final unicode):
       buf.write(unicode);
     case MentionNode(:final base, :final suffix):

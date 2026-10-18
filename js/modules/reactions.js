@@ -189,7 +189,7 @@ Object.assign(NYM.prototype, {
         this.recentEmojis = this.sanitizeRecentEmojis(this.recentEmojis);
         try { localStorage.setItem('nym_recent_emojis', JSON.stringify(this.recentEmojis)); } catch (_) { }
         if (typeof this._debouncedNostrSettingsSave === 'function') {
-            this._debouncedNostrSettingsSave();
+            this._debouncedNostrSettingsSave(5000, { wanted: true });
         }
     },
 
@@ -253,7 +253,7 @@ Object.assign(NYM.prototype, {
 
     handleReaction(event) {
         if (event && this.blockedUsers && this.blockedUsers.has(event.pubkey)) return;
-        this.ingestEmojiTags(event.tags);
+        if (!(typeof this._emojiSourceHidden === 'function' && this._emojiSourceHidden(event.pubkey, '', ''))) this.ingestEmojiTags(event.tags);
         const reactionContent = event.content;
         if (!this.isValidReactionEmoji(reactionContent)) return;
         const eTag = event.tags.find(t => t[0] === 'e');
@@ -379,6 +379,7 @@ Object.assign(NYM.prototype, {
                 type: 'reaction',
                 id: event.id,
                 eventId: event.id,
+                stableId: true,
                 pubkey: event.pubkey,
                 messageId: messageId
             };
@@ -422,6 +423,7 @@ Object.assign(NYM.prototype, {
                     }
                 }
             }
+            if (!channelInfo.sourceType) Object.assign(channelInfo, this._notifSourceFromTags(event.tags) || {});
             let msgPreview = '';
             if (msgEl) {
                 const raw = msgEl.dataset.rawContent;
@@ -458,6 +460,14 @@ Object.assign(NYM.prototype, {
                 this.showNotification(reactorNym, body, channelInfo, event.created_at * 1000);
             }
         }
+    },
+
+    _notifSourceFromTags(tags, more) {
+        const pick = (list) => (Array.isArray(list) ? list.find((t) => Array.isArray(t) && (t[0] === 'g' || t[0] === 'd') && typeof t[1] === 'string' && t[1]) : null);
+        const tag = pick(tags) || pick(more);
+        if (!tag) return null;
+        const ch = typeof this.sanitizeChannelName === 'function' ? this.sanitizeChannelName(tag[1]) : String(tag[1]).toLowerCase();
+        return ch ? { sourceType: 'geohash', sourceChannel: ch, sourceGeohash: ch } : null;
     },
 
     _visibleReactions(messageId) {

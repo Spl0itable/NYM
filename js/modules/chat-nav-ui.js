@@ -425,14 +425,14 @@
                     jump.dataset.cnDir = dir;
                     jump.innerHTML = `${dir === 'down' ? ICONS.arrowDown : ICONS.arrowUp}<span>${this.escapeHtml(label)}</span>`;
                 }
-                jump.title = this._cn(N().STRINGS.jumpFirst);
+                jump.setAttribute('data-tip', N().STRINGS.jumpFirst);
                 jump.setAttribute('aria-label', label);
             } else {
                 delete jump.dataset.cnLabel;
                 delete jump.dataset.cnDir;
             }
             jump.classList.toggle('nm-hidden', !showJump);
-            const n = N().mentionCount(this._cnMentions(), key);
+            const n = N().mentionCount(this._cnShownMentions(key), key);
             at.classList.toggle('nm-hidden', n <= 0);
             at.querySelector('.cn-at-count').textContent = n > 0 ? String(n) : '';
             at.setAttribute('aria-label', this._cn(N().STRINGS.mentions) + (n ? ' (' + n + ')' : ''));
@@ -582,31 +582,36 @@
             }
         },
 
-        _cnPruneHiddenMentions() {
-            if (typeof this.isContentHidden !== 'function') return;
-            let state = this._cnMentions();
-            const changed = [];
-            for (const key of Object.keys((state && state.chats) || {})) {
-                const ids = ((state.chats[key] || {}).ids || []).map((e) => e.id);
-                if (!ids.length) continue;
-                const store = this._cnIsConv(key) ? this.pmMessages : this.messages;
-                const list = (store && store.get(key)) || [];
-                const byId = new Map();
-                for (const m of list) {
-                    if (!m) continue;
-                    if (m.id) byId.set(m.id, m);
-                    if (m.nymMessageId) byId.set(m.nymMessageId, m);
-                }
-                const gone = ids.filter((id) => byId.has(id) && this.isContentHidden(byId.get(id)));
-                if (!gone.length) continue;
-                state = N().mentionDrop(state, key, gone);
-                changed.push(key);
+        _cnHiddenMentionIds(state, key) {
+            const ids = (((state && state.chats) || {})[key] || {}).ids || [];
+            if (!ids.length || typeof this.isContentHidden !== 'function') return [];
+            const store = this._cnIsConv(key) ? this.pmMessages : this.messages;
+            const list = (store && store.get(key)) || [];
+            const byId = new Map();
+            for (const m of list) {
+                if (!m) continue;
+                if (m.id) byId.set(m.id, m);
+                if (m.nymMessageId) byId.set(m.nymMessageId, m);
             }
-            if (changed.length) this._cnSetMentions(state, changed);
+            return ids.map((e) => e.id).filter((id) => byId.has(id) && this.isContentHidden(byId.get(id)));
+        },
+
+        _cnShownMentions(key) {
+            const state = this._cnMentions();
+            const gone = this._cnHiddenMentionIds(state, key);
+            return gone.length ? N().mentionDrop(state, key, gone) : state;
+        },
+
+        _cnRefreshMentionsForFilters() {
+            const state = this._cnMentions();
+            for (const key of Object.keys((state && state.chats) || {})) {
+                this._cnRenderMentionBadge(key);
+                this._cnUpdateFabs(key);
+            }
         },
 
         unreadMentionCount(key) {
-            return N().mentionCount(this._cnMentions(), key);
+            return N().mentionCount(this._cnShownMentions(key), key);
         },
 
         _cnScanMentionsOnOpen(entry) {
@@ -689,7 +694,7 @@
             const ctx = this._cnContextFor(k);
             if (!ctx) return false;
             for (let guard = 0; guard < 200; guard++) {
-                const id = N().mentionNext(this._cnMentions(), k);
+                const id = N().mentionNext(this._cnShownMentions(k), k);
                 if (!id) { this._cnUpdateFabs(k); return false; }
                 let el = ctx.container.querySelector('.message' + this._cnSelector(id));
                 for (let i = 0; !el && i < 20; i++) {
@@ -736,7 +741,7 @@
         _cnRenderMentionBadge(key) {
             const item = this._cnSidebarItem(key);
             if (!item) return;
-            const n = N().mentionCount(this._cnMentions(), key);
+            const n = N().mentionCount(this._cnShownMentions(key), key);
             let badge = item.querySelector('.cn-mention-badge');
             if (n <= 0) { if (badge) badge.remove(); return; }
             if (!badge) {
@@ -1366,6 +1371,7 @@
                 if (o.threadRoot) tags.push(['nymthread', o.threadRoot]);
                 tags.push(...this.customEmojiTagsForContent(text));
                 if (typeof this.imetaTagsForContent === 'function') tags.push(...this.imetaTagsForContent(text));
+                if (typeof this.quoteTagsForContent === 'function') tags.push(...this.quoteTagsForContent(text));
                 const rumor = { kind: 14, created_at: at, tags, content: text, pubkey: this.pubkey };
                 const support = typeof this.pmSupportTokenFor === 'function' ? this.pmSupportTokenFor(peer) : null;
                 if (support) rumor.tags.push(['nymbot-support', support]);
@@ -1392,6 +1398,7 @@
                 const tags = [['g', gid], ...N().groupSubjectTags(group.name), ['x', nid], ['ms', String(atMs)]];
                 tags.push(...this.customEmojiTagsForContent(text));
                 if (typeof this.imetaTagsForContent === 'function') tags.push(...this.imetaTagsForContent(text));
+                if (typeof this.quoteTagsForContent === 'function') tags.push(...this.quoteTagsForContent(text));
                 if (o.threadRoot) tags.push(['nymthread', o.threadRoot]);
                 const rumor = { kind: 14, created_at: at, tags, content: text, pubkey: this.pubkey };
                 const ttl = this.settings && this.settings.dmForwardSecrecyEnabled && this.settings.dmTTLSeconds > 0 ? this.settings.dmTTLSeconds : 0;

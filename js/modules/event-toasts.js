@@ -501,6 +501,6 @@
     G.NymEventToasts = Object.freeze({
         CONFIG, PLACEMENT, TYPES, FOREGROUND_MODES, DEFAULTS, LABELS, SETTING_LABELS, FOREGROUND_LABELS, STRINGS, TOPICS, ONCE_LABELS, CALL_STRINGS,
         fill, normalizeSettings, patchSettings, category, decide, clip, present, systemBody, systemTitle, topicOf, entryTopic, isViewOnce, listBody, callLabel, callIsVideo, place,
-        emptyState, add, addMany, dismiss, pause, resume, expire, nextExpiry,
+        emptyState, slim, add, addMany, dismiss, pause, resume, expire, nextExpiry,
     });
 })();

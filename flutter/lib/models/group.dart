@@ -74,6 +74,8 @@ class Group {
     this.inviteEpoch = 0,
     this.metaUpdatedAt = 0,
     this.metaUpdatedBy,
+    this.metaBy,
+    List<String>? metaAdmins,
     this.genesisOwner,
     this.genesisNonce,
     this.lastModTs = 0,
@@ -96,6 +98,7 @@ class Group {
         members = members ?? <String>[],
         mods = mods ?? <String>[],
         admins = admins ?? <String>[],
+        metaAdmins = metaAdmins ?? <String>[],
         banned = banned ?? <String>[],
         modLog = modLog ?? <ModLogEntry>[],
         modTsByTarget = modTsByTarget ?? <String, int>{},
@@ -119,6 +122,10 @@ class Group {
   int metaUpdatedAt;
 
   String? metaUpdatedBy;
+
+  Map<String, String>? metaBy;
+
+  List<String> metaAdmins;
 
   String? genesisOwner;
   String? genesisNonce;
@@ -173,6 +180,8 @@ class Group {
         'inviteEpoch': inviteEpoch,
         'metaUpdatedAt': metaUpdatedAt,
         'metaUpdatedBy': metaUpdatedBy,
+        if (metaBy != null) 'metaBy': metaBy,
+        if (metaAdmins.isNotEmpty) 'metaAdmins': metaAdmins,
         'genesisOwner': genesisOwner,
         'genesisNonce': genesisNonce,
         'lastModTs': lastModTs,
@@ -191,6 +200,36 @@ class Group {
         if (memberRemovedAt.isNotEmpty) 'memberRemovedAt': memberRemovedAt,
         if (joinedVia != null) 'joinedVia': joinedVia,
       };
+
+  static const List<String> metaFields = [
+    'name',
+    'avatar',
+    'banner',
+    'description',
+  ];
+
+  static final RegExp _hexKey = RegExp(r'^[0-9a-fA-F]{64}$');
+
+  static List<String> parseKeyList(Object? v) {
+    if (v is! List) return <String>[];
+    final out = <String>[];
+    for (final pk in v) {
+      if (pk is String && _hexKey.hasMatch(pk) && !out.contains(pk)) out.add(pk);
+    }
+    return out;
+  }
+
+  static Map<String, String>? parseMetaBy(Object? v) {
+    if (v is! Map) return null;
+    final out = <String, String>{};
+    v.forEach((k, by) {
+      final key = k.toString();
+      if (metaFields.contains(key) && by is String && _hexKey.hasMatch(by)) {
+        out[key] = by;
+      }
+    });
+    return out;
+  }
 
   static Map<String, int>? parseTimeMap(Object? v) {
     if (v is! Map) return null;
@@ -226,6 +265,8 @@ class Group {
         inviteEpoch: (j['inviteEpoch'] as num?)?.toInt() ?? 0,
         metaUpdatedAt: (j['metaUpdatedAt'] as num?)?.toInt() ?? 0,
         metaUpdatedBy: j['metaUpdatedBy'] as String?,
+        metaBy: parseMetaBy(j['metaBy']),
+        metaAdmins: parseKeyList(j['metaAdmins']),
         genesisOwner: j['genesisOwner'] as String?,
         genesisNonce: j['genesisNonce'] as String?,
         lastModTs: (j['lastModTs'] as num?)?.toInt() ?? 0,

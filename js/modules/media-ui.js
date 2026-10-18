@@ -124,8 +124,12 @@
                 const st = this.mediaFeatureState(feature);
                 btn.classList.toggle('media-off', st.state === 'off');
                 btn.classList.toggle('media-warn', st.state === 'warn');
-                const title = st.reason ? this._mt(label) + ' — ' + this._mt(st.reason) : this._mt(label);
-                if (btn.getAttribute('title') !== title) btn.setAttribute('title', title);
+                if (feature === 'voice') {
+                    const title = st.reason ? this._mt(label) + ' — ' + this._mt(st.reason) : this._mt(label);
+                    if (btn.getAttribute('title') !== title) btn.setAttribute('title', title);
+                } else if (btn.hasAttribute('title')) {
+                    btn.removeAttribute('title');
+                }
                 btn.setAttribute('aria-disabled', st.state === 'off' ? 'true' : 'false');
             }
             if (this._composerAttachments && this._composerAttachments.length) this._renderMediaOptions();

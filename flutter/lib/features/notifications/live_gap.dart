@@ -8,11 +8,17 @@ bool gapWrapIsFresh({required int rumorCreatedAtSec, required int floorSec}) =>
     rumorCreatedAtSec >= floorSec;
 
 class LiveGap {
+  static Duration followUpDelay = const Duration(milliseconds: 7000);
+
+  static Duration settleDelay = const Duration(seconds: 35);
+
   int _startMs = 0;
   int _seq = 0;
   bool _inFlight = false;
 
   bool get pending => _startMs > 0;
+
+  bool get inFlight => _inFlight;
 
   int get startMs => _startMs;
 

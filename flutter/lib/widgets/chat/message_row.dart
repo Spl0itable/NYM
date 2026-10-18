@@ -932,9 +932,23 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final c = context.nym;
     final isAction = message.kind == MessageKind.action;
     final size = settings.textSize.toDouble() - 3;
+    if (message.people.isNotEmpty) {
+      ref.watch(appStateProvider.select((s) =>
+          Object.hash(s.contentFilterSignature, s.autoMutedUsers.length)));
+    }
+    final app = ref.read(appStateProvider);
+    final key = widget.scrollKey ?? app.view.storageKey;
+    final groupId = message.groupId ??
+        (key.startsWith('group-') ? key.substring(6) : null);
+    final known = [
+      app.selfPubkey,
+      if (groupId != null)
+        ...?ref.read(appStateProvider.notifier).groupById(groupId)?.members,
+    ];
     // Action messages replace the `.system-message` class, so no pill or centering.
     final text = NymText(
-      message.content,
+      app.systemRowText(message),
+      known: known,
       textAlign: isAction ? TextAlign.start : TextAlign.center,
       style: TextStyle(
         color: isAction ? c.purple : c.textDim,
@@ -1023,7 +1037,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   ) {
     final c = context.nym;
     final pk = member.pubkey;
-    final baseNym = pickDisplayNym(users[pk]?.nym, null);
+    final mask = ref.watch(appStateProvider).personMaskLabel(pk);
+    final baseNym = mask.isNotEmpty ? mask : pickDisplayNym(users[pk]?.nym, null);
     final suffix = getPubkeySuffix(pk);
     final nymStyle = TextStyle(color: c.textDim, fontSize: size, height: 1.3);
     return Row(
@@ -1032,17 +1047,18 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         NymAvatar(
           seed: pk,
           size: 22,
-          imageUrl: users[pk]?.profile?.picture,
+          imageUrl: mask.isNotEmpty ? null : users[pk]?.profile?.picture,
         ),
         const SizedBox(width: 6),
         Flexible(
           child: NymLabel(baseNym, suffix: suffix, style: nymStyle),
         ),
-        CosmeticNymBadges(
-          cosmetics: ref.watch(userCosmeticsProvider(pk)),
-          flairSize: 20,
-          supporterHeight: 20,
-        ),
+        if (mask.isEmpty)
+          CosmeticNymBadges(
+            cosmetics: ref.watch(userCosmeticsProvider(pk)),
+            flairSize: 20,
+            supporterHeight: 20,
+          ),
         if (member.labels.isNotEmpty) ...[
           const SizedBox(width: 6),
           Text(
@@ -2241,7 +2257,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         return;
       case 'copy':
         if (message.content.isEmpty) return;
-        Clipboard.setData(ClipboardData(text: message.content));
+        Clipboard.setData(ClipboardData(
+            text: ref.read(appStateProvider).shownContent(message)));
         showToast(tr('Message copied to clipboard'));
         return;
       case 'react':
@@ -2426,6 +2443,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       // Lets a tapped blockquote exclude the host message when finding its source.
       hostMessageId: message.id,
       scrollKey: widget.scrollKey,
+      quoted: message.quoted,
     );
     final gradient = deco?.gradient;
     if (gradient != null && gradient.length >= 2) {
@@ -2446,6 +2464,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           blurImages: blur,
           hostMessageId: message.id,
           scrollKey: widget.scrollKey,
+          quoted: message.quoted,
         ),
       );
       final glow = deco?.gradientGlow;
@@ -2460,6 +2479,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
             fontSize: fontSize,
             blurImages: false,
             glyphShadows: [glow],
+            quoted: message.quoted,
           ),
           clipped,
         ],
@@ -2494,6 +2514,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       failed
           ? tr(SendAsStrings.failedShort, {'nym': nym})
           : tr(SendAsStrings.sending, {'nym': nym}),
+      known: [message.pubkey],
       style: TextStyle(
         color: failed ? c.danger : c.textDim,
         fontSize: 11,

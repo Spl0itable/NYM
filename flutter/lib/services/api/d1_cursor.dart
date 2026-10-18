@@ -11,6 +11,7 @@ typedef D1CursorHold = ({int? since, Object? after});
 abstract final class D1Cursor {
   static const int overlapMs = 120000;
   static const int maxPages = 5;
+  static const int catchupPages = 50;
   static const int pageLimit = 200;
   static const int inboxChunk = 200;
   static const int holdMs = 86400000;
@@ -74,14 +75,14 @@ abstract final class D1Cursor {
   static String? fromHead(Object? h) {
     if (h is! String || !_headRe.hasMatch(h)) return null;
     final n = int.tryParse(h);
-    return (n != null && n <= _maxSafe) ? h : null;
+    return (n != null && n > 0 && n <= _maxSafe) ? h : null;
   }
 
   static D1CursorStep step(
       int page, String? after, Object? xCursor, Object? xHasMore) {
     if (!valid(xCursor)) return (serverOk: false, cursor: null, next: null);
     final c = xCursor as String;
-    final more = xHasMore == '1' && page + 1 < maxPages && c != after;
+    final more = xHasMore == '1' && page + 1 < catchupPages && c != after;
     return (serverOk: true, cursor: c, next: more ? c : null);
   }
 
@@ -118,12 +119,22 @@ abstract final class D1Cursor {
             i + inboxChunk < without.length ? i + inboxChunk : without.length),
     ];
     final cursor = <D1InboxGroup>[];
-    for (var i = 0; i < withCur.length; i += inboxChunk) {
-      final chunk = withCur.sublist(
-          i, i + inboxChunk < withCur.length ? i + inboxChunk : withCur.length);
+    var chunk = <({String k, int s})>[];
+    void close() {
+      if (chunk.isEmpty) return;
       final s = chunk.first.s - overlapMs;
       cursor.add((keys: [for (final e in chunk) e.k], after: '${s < 0 ? 0 : s}'));
+      chunk = [];
     }
+
+    for (final e in withCur) {
+      if (chunk.isNotEmpty &&
+          (chunk.length >= inboxChunk || e.s - chunk.first.s > overlapMs)) {
+        close();
+      }
+      chunk.add(e);
+    }
+    close();
     return (legacy: legacy, cursor: cursor);
   }
 

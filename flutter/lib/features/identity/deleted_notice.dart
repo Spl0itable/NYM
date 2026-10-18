@@ -2,7 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../../core/utils/nym_utils.dart';
 import '../i18n/i18n.dart';
-import '../../widgets/common/nym_label.dart' show nymRangeSpans, nymSuffixRanges;
+import '../../widgets/common/nym_label.dart' show composedNymRanges, isolateNym, nymRangeSpans, splitNymLabel;
 
 class DeletedNotice {
   DeletedNotice({required String nym, required String pubkey})
@@ -22,7 +22,7 @@ class DeletedNotice {
       : tr('{nym} was deleted from another device.', {'nym': label});
 }
 
-bool hasNymSuffix(String text) => nymSuffixRanges(text).isNotEmpty;
+bool hasNymSuffix(String text) => composedNymRanges(text).isNotEmpty;
 
 List<InlineSpan> dimRangeSpans(
     String text, List<List<int>> ranges, TextStyle dim) {
@@ -38,8 +38,17 @@ List<InlineSpan> dimRangeSpans(
   return parts;
 }
 
+TextSpan dimNymLabel(String label, TextStyle dim) {
+  final p = splitNymLabel(label);
+  if (p.suffix.isEmpty) return TextSpan(text: label);
+  return TextSpan(children: [
+    TextSpan(text: isolateNym(p.base)),
+    TextSpan(text: p.suffix, style: dim),
+  ]);
+}
+
 TextSpan dimNymSuffixes(String text, TextStyle dim) {
-  final ranges = nymSuffixRanges(text);
+  final ranges = composedNymRanges(text);
   if (ranges.isEmpty) return TextSpan(text: text);
   return TextSpan(children: nymRangeSpans(text, ranges, dim));
 }

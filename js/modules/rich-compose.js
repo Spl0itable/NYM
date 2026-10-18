@@ -14,7 +14,7 @@ const NYM_FORMAT_TOOLS = [
         html: '<span class="ft-glyph ft-underline">U</span>'
     },
     {
-        id: 'strike', wrap: '~~', title: 'Strikethrough',
+        id: 'strike', wrap: '~~', title: 'Strikethrough', shiftKey: 'x',
         html: '<span class="ft-glyph ft-strike">S</span>'
     },
     {
@@ -56,6 +56,23 @@ const NYM_FORMAT_TOOLS = [
 ];
 
 const NYM_FORMAT_TOOLS_BY_ID = NYM_FORMAT_TOOLS.reduce((m, t) => { m[t.id] = t; return m; }, {});
+
+function nymFormatToolKeys(tool, mac) {
+    const letter = tool.shiftKey || tool.key;
+    if (!letter) return '';
+    const k = letter.toUpperCase();
+    if (mac) return (tool.shiftKey ? '\u2318\u21e7' : '\u2318') + k;
+    return (tool.shiftKey ? 'Ctrl+Shift+' : 'Ctrl+') + k;
+}
+
+function nymFormatKeysMac() {
+    try {
+        if (window.NymShortcuts && typeof window.NymShortcuts.isMac === 'function') return window.NymShortcuts.isMac();
+        const nav = window.navigator || {};
+        const p = (nav.userAgentData && nav.userAgentData.platform) || nav.platform || '';
+        return /mac|iphone|ipad|ipod/i.test(p);
+    } catch (_) { return false; }
+}
 
 // Kept in sync with the media regexes in message-format.js.
 const NYM_COMPOSER_MEDIA_RX = /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?[^\s]*)?)/gi;
@@ -281,9 +298,12 @@ Object.assign(NYM.prototype, {
         if (!toolbar || !input) return;
 
         toolbar.querySelectorAll('.format-tool[data-format-tool]').forEach((el) => el.remove());
-        toolbar.insertAdjacentHTML('beforeend', NYM_FORMAT_TOOLS.map(t =>
-            `<button type="button" class="format-tool" data-format-tool="${t.id}" title="${this.escapeHtml(t.title)}" aria-label="${this.escapeHtml(t.title)}">${t.html}</button>`
-        ).join(''));
+        const mac = nymFormatKeysMac();
+        toolbar.insertAdjacentHTML('beforeend', NYM_FORMAT_TOOLS.map((t) => {
+            const keys = nymFormatToolKeys(t, mac);
+            const keyAttr = keys ? ` data-tip-key="${this.escapeHtml(keys)}"` : '';
+            return `<button type="button" class="format-tool" data-format-tool="${t.id}" aria-label="${this.escapeHtml(t.title)}" data-tip=""${keyAttr}>${t.html}</button>`;
+        }).join(''));
 
         toolbar.addEventListener('mousedown', (e) => {
             const tool = e.target.closest('.format-tool');
@@ -300,12 +320,13 @@ Object.assign(NYM.prototype, {
         input.addEventListener('keydown', (e) => {
             if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
             const key = (e.key || '').toLowerCase();
-            if (key === 'x' && e.shiftKey) {
+            if (e.shiftKey) {
+                const shifted = NYM_FORMAT_TOOLS.find(t => t.shiftKey === key);
+                if (!shifted) return;
                 e.preventDefault();
-                this.applyInputFormat('strike');
+                this.applyInputFormat(shifted.id);
                 return;
             }
-            if (e.shiftKey) return;
             const tool = NYM_FORMAT_TOOLS.find(t => t.key === key);
             if (!tool) return;
             e.preventDefault();
@@ -325,6 +346,8 @@ Object.assign(NYM.prototype, {
             if (!open) {
                 const dropdown = document.getElementById('translateInputDropdown');
                 if (dropdown) dropdown.classList.remove('active');
+                const trigger = document.getElementById('translateInputBtn');
+                if (trigger) trigger.setAttribute('aria-expanded', 'false');
             }
         }
         if (typeof this.syncComposerInlineActions === 'function') this.syncComposerInlineActions();
@@ -722,7 +745,7 @@ Object.assign(NYM.prototype, {
                 : `<img class="media-preview-thumb" src="${s}" alt="" decoding="async">`;
             return `<div class="media-preview-item" data-media-index="${i}" data-media-kind="${m.kind}">
                 ${media}
-                <button type="button" class="media-preview-remove" data-media-remove="${i}" title="Remove attachment" aria-label="Remove attachment">
+                <button type="button" class="media-preview-remove" data-media-remove="${i}" aria-label="Remove attachment" data-tip="">
                     <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
             </div>`;
@@ -737,6 +760,7 @@ Object.assign(NYM.prototype, {
             + '<polyline points="1 4 1 10 7 10"></polyline>'
             + '<path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>';
 
+        const ui = (t) => (typeof this.uiText === 'function' ? this.uiText(t) : t);
         const tiles = attachments.map(a => {
             const s = this.escapeHtml(a.objectUrl);
             const media = a.kind === 'video'
@@ -744,19 +768,20 @@ Object.assign(NYM.prototype, {
                 : `<img class="media-preview-thumb" src="${s}" alt="${this.escapeHtml(a.alt || '')}" decoding="async">`;
             const id = this.escapeHtml(a.id);
             let overlay = '';
-            let title = '';
+            let tip = '';
             if (a.status === 'uploading') {
                 overlay = '<span class="media-preview-spinner" aria-hidden="true"></span>';
-                title = 'Uploading\u2026';
+                tip = ` role="group" aria-label="${this.escapeHtml(ui('Uploading\u2026'))}" data-tip=""`;
             } else if (a.status === 'failed') {
                 overlay = `<span class="media-preview-retry" aria-hidden="true">${retrySvg}</span>`;
-                title = (a.error ? a.error + ' \u2014 ' : '') + 'Tap to retry';
+                const label = (a.error ? a.error + ' \u2014 ' : '') + ui('Tap to retry');
+                tip = ` role="group" aria-label="${this.escapeHtml(label)}" data-tip=""`;
             } else if (a.kind === 'video') {
                 overlay = '<span class="media-preview-play" aria-hidden="true">\u25B6</span>';
             }
-            return `<div class="media-preview-item ${a.status}" data-attachment-id="${id}" data-media-kind="${a.kind}" title="${this.escapeHtml(title)}">
+            return `<div class="media-preview-item ${a.status}" data-attachment-id="${id}" data-media-kind="${a.kind}"${tip}>
                 ${media}${overlay}
-                <button type="button" class="media-preview-remove" data-attachment-remove="${id}" title="Remove attachment" aria-label="Remove attachment">${closeSvg}</button>
+                <button type="button" class="media-preview-remove" data-attachment-remove="${id}" aria-label="Remove attachment" data-tip="">${closeSvg}</button>
             </div>`;
         });
 

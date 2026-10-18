@@ -349,6 +349,18 @@ class SendAsService {
     await publishPlain(s, signed);
   }
 
+  Stream<Map<String, dynamic>> botChannelLines(
+      Map<String, dynamic> body) async* {
+    final api = _api();
+    try {
+      yield* api.botChannelLines(body);
+    } finally {
+      try {
+        api.dispose();
+      } catch (_) {}
+    }
+  }
+
   Future<Map<String, dynamic>> botAction(Map<String, dynamic> body) async {
     final api = _api();
     try {

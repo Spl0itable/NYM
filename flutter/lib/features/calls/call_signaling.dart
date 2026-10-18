@@ -290,3 +290,26 @@ List<String> callReactionBarEmojis(
   }
   return out.take(8).toList();
 }
+
+class SdpOrigin {
+  const SdpOrigin(this.id, this.version);
+  final String id;
+  final String version;
+}
+
+final RegExp _sdpOriginLine = RegExp(r'^o=\S+ (\S+) (\d+) ', multiLine: true);
+
+SdpOrigin? sdpOrigin(String? sdp) {
+  if (sdp == null) return null;
+  final m = _sdpOriginLine.firstMatch(sdp);
+  return m == null ? null : SdpOrigin(m.group(1)!, m.group(2)!);
+}
+
+bool sdpStale(SdpOrigin? seen, String? sdp) {
+  final o = sdpOrigin(sdp);
+  if (o == null || seen == null || seen.id != o.id) return false;
+  final mine = BigInt.tryParse(o.version);
+  final theirs = BigInt.tryParse(seen.version);
+  if (mine == null || theirs == null) return false;
+  return mine <= theirs;
+}

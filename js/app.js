@@ -2243,10 +2243,14 @@ function previewTextSize(value) {
 
 function commitTextSize(value) {
     const size = parseInt(value, 10);
+    if (!Number.isFinite(size) || size < 12 || size > 28) return;
+    const label = document.getElementById('textSizeValue');
+    if (label) label.textContent = size + 'px';
+    document.documentElement.style.setProperty('--user-text-size', size + 'px');
+    if (nym.settings.textSize === size && localStorage.getItem('nym_text_size') === String(size)) return;
     nym.settings.textSize = size;
     localStorage.setItem('nym_text_size', String(size));
-    document.documentElement.style.setProperty('--user-text-size', size + 'px');
-    nostrSettingsSave();
+    nym.notePrefChanged('textSize');
 }
 
 function resetTextSize() {
@@ -2257,7 +2261,7 @@ function resetTextSize() {
     document.documentElement.style.setProperty('--user-text-size', '15px');
     nym.settings.textSize = 15;
     localStorage.setItem('nym_text_size', '15');
-    nostrSettingsSave();
+    nym.notePrefChanged('textSize');
 }
 
 function applyTransparency(enabled) {
@@ -2277,7 +2281,7 @@ function onColumnsWallpaperChange(value) {
     nym.settings.columnsWallpaper = enabled;
     localStorage.setItem('nym_columns_wallpaper', String(enabled));
     applyColumnsWallpaper(enabled);
-    nostrSettingsSave();
+    nym.notePrefChanged('columnsWallpaper');
 }
 window.onColumnsWallpaperChange = onColumnsWallpaperChange;
 window.applyColumnsWallpaper = applyColumnsWallpaper;
@@ -2287,7 +2291,7 @@ function onThreadsEnabledChange(value) {
     nym.settings.threadsEnabled = enabled;
     localStorage.setItem('nym_threads_enabled', String(enabled));
     if (typeof nym.applyThreadsEnabled === 'function') nym.applyThreadsEnabled();
-    nostrSettingsSave();
+    nym.notePrefChanged('threadsEnabled');
 }
 window.onThreadsEnabledChange = onThreadsEnabledChange;
 
@@ -2327,6 +2331,7 @@ function resolvePillProximity(on, el) {
             if (nym._proximityAsk !== ask) { resolve(false); return; }
             nym.userLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
             store(true);
+            el.checked = true;
             nym.sortChannelsByActivity();
             nym.displaySystemMessage('Location access granted. Geohash channels sorted by proximity.');
             resolve(true);
@@ -2413,23 +2418,236 @@ const SETTING_PILLS = {
 
 async function onSettingPillChange(el) {
     if (!el || typeof nym === 'undefined' || !nym) return;
-    const apply = SETTING_PILLS[String(el.dataset.settingKey || '').split('.')[0]];
+    const name = String(el.dataset.settingKey || '').split('.')[0];
+    const apply = SETTING_PILLS[name];
     if (!apply) return;
     if ((await apply(!!el.checked, el)) === false) return;
-    if (typeof nym._debouncedNostrSettingsSave === 'function') nym._debouncedNostrSettingsSave(1500);
-    else nostrSettingsSave();
+    nym.notePrefChanged(name);
 }
 window.onSettingPillChange = onSettingPillChange;
+
+const SETTING_INDICATOR_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'];
+const SETTING_SWIPE_ACTIONS = ['quote', 'translate', 'copy', 'react', 'zap', 'slap', 'hug', 'none'];
+
+function settingIndicatorScope(kind, raw) {
+    const scope = SETTING_INDICATOR_SCOPES.includes(raw) ? raw : 'everywhere';
+    nym.settings[kind + 'Scope'] = scope;
+    nym.settings[kind + 'Enabled'] = scope !== 'disabled';
+    localStorage.setItem(kind === 'readReceipts' ? 'nym_read_receipts_scope' : 'nym_typing_indicators_scope', scope);
+    localStorage.setItem(kind === 'readReceipts' ? 'nym_read_receipts_enabled' : 'nym_typing_indicators_enabled', String(scope !== 'disabled'));
+}
+
+const SETTING_FIELDS = {
+    theme(v) {
+        nym.settings.theme = v;
+        localStorage.setItem('nym_theme', v);
+        nym.applyTheme(v);
+    },
+    uiLanguage(v) {
+        const code = v || '';
+        if (typeof nym.applyUiLanguage === 'function') nym.applyUiLanguage(code).catch(() => { });
+        if (typeof nym._syncTranslateLanguageToUi === 'function') nym._syncTranslateLanguageToUi(code);
+        if (typeof nym._markUiLanguageChosen === 'function') nym._markUiLanguageChosen();
+        nym.settings.uiLanguage = code;
+        return ['uiLanguage', 'translateLanguage'];
+    },
+    timeFormat(v) {
+        nym.settings.timeFormat = v;
+        localStorage.setItem('nym_time_format', v);
+        nym.refreshMessageTimestamps();
+    },
+    dateFormat(v) {
+        nym.settings.dateFormat = v || 'default';
+        localStorage.setItem('nym_date_format', nym.settings.dateFormat);
+        nym.refreshMessageTimestamps();
+    },
+    nickStyle(v) {
+        nym.settings.nickStyle = v;
+        localStorage.setItem('nym_nick_style', v);
+    },
+    powDifficulty(v) {
+        const bits = normalizePowDifficulty(v);
+        nym.powDifficulty = bits;
+        nym.enablePow = bits > 0;
+        localStorage.setItem('nym_pow_difficulty', String(bits));
+    },
+    acceptPMs(v) {
+        nym.settings.acceptPMs = v;
+        localStorage.setItem('nym_accept_pms', v);
+    },
+    acceptCalls(v) {
+        nym.settings.acceptCalls = v;
+        localStorage.setItem('nym_accept_calls', v);
+    },
+    dmTTLSeconds(v) {
+        const ttl = parseInt(v || '86400', 10);
+        nym.settings.dmTTLSeconds = isFinite(ttl) && ttl > 0 ? ttl : 86400;
+        localStorage.setItem('nym_dm_ttl_seconds', String(nym.settings.dmTTLSeconds));
+    },
+    readReceiptsScope(v) { settingIndicatorScope('readReceipts', v); },
+    typingIndicatorsScope(v) { settingIndicatorScope('typingIndicators', v); },
+    showStatus(v) {
+        const showStatus = v === 'false' ? false : (v === 'friends' ? 'friends' : true);
+        const prev = nym.settings.showStatus;
+        nym.settings.showStatus = showStatus;
+        localStorage.setItem('nym_show_status', String(showStatus));
+        if (prev !== showStatus) {
+            if (typeof nym.publishStatusVisibility === 'function') nym.publishStatusVisibility();
+            if (typeof nym.refreshPMHeaderStatus === 'function') nym.refreshPMHeaderStatus();
+            if (typeof nym.updateUserList === 'function') nym.updateUserList();
+        }
+    },
+    blurOthersImages(v) {
+        nym.blurOthersImages = v === 'friends' ? 'friends' : v === 'true';
+        nym.saveImageBlurSettings();
+        nym.reapplyImageBlur();
+    },
+    translateLanguage(v) {
+        nym.settings.translateLanguage = v;
+        localStorage.setItem('nym_translate_language', v);
+    },
+    sound(v) {
+        nym.settings.sound = v;
+        localStorage.setItem('nym_sound', v);
+        nym._lastSoundPlayedAt = 0;
+        nym.playSound(v);
+    },
+    swipeLeftAction(v) {
+        if (!SETTING_SWIPE_ACTIONS.includes(v)) return false;
+        nym.settings.swipeLeftAction = v;
+        localStorage.setItem('nym_swipe_left_action', v);
+    },
+    swipeRightAction(v) {
+        if (!SETTING_SWIPE_ACTIONS.includes(v)) return false;
+        nym.settings.swipeRightAction = v;
+        localStorage.setItem('nym_swipe_right_action', v);
+    },
+    swipeThreshold(v) {
+        const t = parseInt(v, 10);
+        if (!Number.isFinite(t) || t < 30 || t > 120) return false;
+        nym.settings.swipeThreshold = t;
+        localStorage.setItem('nym_swipe_threshold', String(t));
+    },
+};
+
+function onSettingFieldChange(el) {
+    if (!el || typeof nym === 'undefined' || !nym) return;
+    const name = String(el.dataset.settingKey || '');
+    const apply = SETTING_FIELDS[name];
+    if (!apply) return;
+    const stamped = apply(el.value, el);
+    if (stamped === false) return;
+    nym.notePrefChanged(Array.isArray(stamped) ? stamped : name);
+}
+window.onSettingFieldChange = onSettingFieldChange;
+
+function onAutoEphemeralChange(el) {
+    if (!el) return;
+    if (el.value === 'true') {
+        localStorage.setItem('nym_auto_ephemeral', 'true');
+    } else {
+        localStorage.removeItem('nym_auto_ephemeral');
+        localStorage.removeItem('nym_auto_ephemeral_nick');
+        localStorage.removeItem('nym_auto_ephemeral_channel');
+    }
+}
+window.onAutoEphemeralChange = onAutoEphemeralChange;
+
+const KEYPAIR_MODE_CONFIRM = {
+    persistent: {
+        title: 'Keep this identity?',
+        body: "Nymchat will save this identity's private key (nsec) on this device, so the same nym comes back every time you open Nymchat here.",
+        ok: 'Keep identity',
+        danger: false,
+    },
+    random: {
+        title: 'New identity every session?',
+        body: "Nymchat deletes this identity's private key (nsec) from this device. The next time you reload or reopen Nymchat you get a new random identity, and this one, with its PMs and group chats, can't be recovered unless you back up its nsec first. Settings also stop syncing across devices.",
+        ok: 'Delete key',
+        danger: true,
+    },
+    hardcore: {
+        title: 'New keypair for every message?',
+        body: "Nymchat deletes this identity's private key (nsec) from this device and switches to a new identity after every message you send. PMs and group chats won't work reliably, settings stop syncing across devices, and this identity can't be recovered unless you back up its nsec first.",
+        ok: 'Delete key',
+        danger: true,
+    },
+};
+
+const KEYPAIR_MODE_SWITCH = {
+    random: {
+        title: 'New identity every session?',
+        body: "Nymchat keeps this identity until you reload or reopen it, then starts a new random identity each session. Settings still don't sync across devices.",
+        ok: 'Change mode',
+        danger: false,
+    },
+    hardcore: {
+        title: 'New keypair for every message?',
+        body: "Nymchat switches to a new identity after every message you send instead of once per session. PMs and group chats won't work reliably, and settings still don't sync across devices.",
+        ok: 'Change mode',
+        danger: false,
+    },
+};
+
+function keypairModeConfirm(prev, next) {
+    const rotating = (m) => m === 'random' || m === 'hardcore';
+    if (rotating(prev) && rotating(next)) return KEYPAIR_MODE_SWITCH[next];
+    return KEYPAIR_MODE_CONFIRM[next] || null;
+}
+
+function applyKeypairMode(mode) {
+    const addedBefore = typeof nym._addedRelaysInUse === 'function' ? nym._addedRelaysInUse() : null;
+    localStorage.setItem('nym_keypair_mode', mode);
+    if (mode === 'random' || mode === 'hardcore') {
+        localStorage.setItem('nym_random_keypair_per_session', 'true');
+        nymSecretRemove('nym_session_nsec');
+    } else {
+        localStorage.removeItem('nym_random_keypair_per_session');
+        if (nym.privkey && !nymSecretGet('nym_session_nsec')) {
+            try {
+                nymSecretSet('nym_session_nsec', window.NostrTools.nip19.nsecEncode(nym.privkey));
+            } catch (_) { }
+        }
+        if (nym.nym && !(typeof nym.isReservedNick === 'function' && nym.isReservedNick(nym.nym))) {
+            try { localStorage.setItem('nym_auto_ephemeral_nick', nym.nym); } catch (_) { }
+        }
+    }
+    if (addedBefore) nym._addedRelayUseChanged(addedBefore);
+}
+
+async function onRandomKeypairChange(el) {
+    if (!el || typeof nym === 'undefined' || !nym || isNostrLoggedIn()) return;
+    const prev = el.dataset.prevValue || localStorage.getItem('nym_keypair_mode') || 'persistent';
+    const mode = el.value;
+    const warn = document.getElementById('hardcoreKeypairWarning');
+    const showWarning = (m) => { if (warn) warn.style.display = m === 'hardcore' ? 'block' : 'none'; };
+    if (el.dataset.asking === '1') return;
+    const c = keypairModeConfirm(prev, mode);
+    if (!c || mode === prev) { el.value = prev; showWarning(prev); return; }
+    const ui = (t) => (typeof nym.uiText === 'function' ? nym.uiText(t) : t);
+    el.dataset.asking = '1';
+    let ok = false;
+    try {
+        ok = await window.showAppConfirm(ui(c.body), { title: ui(c.title), okLabel: ui(c.ok), danger: c.danger });
+    } catch (_) { ok = false; }
+    delete el.dataset.asking;
+    if (!ok) {
+        el.value = prev;
+        showWarning(prev);
+        return;
+    }
+    applyKeypairMode(mode);
+    el.dataset.prevValue = mode;
+    showWarning(mode);
+}
+window.onRandomKeypairChange = onRandomKeypairChange;
 
 function onTransparencyChange(value) {
     const enabled = value === 'true' || value === true;
     nym.settings.transparencyEnabled = enabled;
     localStorage.setItem('nym_transparency_enabled', String(enabled));
     applyTransparency(enabled);
-    // Block stale relay-cached settings echoes from overriding the user's new choice.
-    nym._lastSettingsSyncTs = Math.floor(Date.now() / 1000);
-    try { localStorage.setItem('nym_last_settings_sync_ts', String(nym._lastSettingsSyncTs)); } catch (_) { }
-    nostrSettingsSave();
+    nym.notePrefChanged('transparencyEnabled');
 }
 
 function selectImage() {
@@ -3599,7 +3817,7 @@ async function showSettings() {
                 btn.classList.add('active');
                 localStorage.setItem('nym_color_mode', btn.dataset.mode);
                 nym.applyColorMode();
-                nostrSettingsSave();
+                nym.notePrefChanged('colorMode');
             };
         });
     }
@@ -3640,6 +3858,7 @@ async function showSettings() {
                 randomKeypairSelect.value = randomKeypair ? 'random' : 'persistent';
             }
         }
+        randomKeypairSelect.dataset.prevValue = randomKeypairSelect.value;
         const hardcoreWarning = document.getElementById('hardcoreKeypairWarning');
         if (hardcoreWarning) hardcoreWarning.style.display = randomKeypairSelect.value === 'hardcore' ? 'block' : 'none';
     }
@@ -3653,16 +3872,6 @@ async function showSettings() {
     const uiLangSelect = document.getElementById('uiLanguageSelect');
     if (uiLangSelect) {
         uiLangSelect.value = nym.getUiLanguage ? nym.getUiLanguage() : '';
-        uiLangSelect.onchange = function () {
-            const code = uiLangSelect.value || '';
-            if (typeof nym.applyUiLanguage === 'function') {
-                nym.applyUiLanguage(code).catch(() => { });
-            }
-            // Adopt the app language as the message translation language too.
-            if (typeof nym._syncTranslateLanguageToUi === 'function') nym._syncTranslateLanguageToUi(code);
-            if (typeof nym._markUiLanguageChosen === 'function') nym._markUiLanguageChosen();
-            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-        };
     }
 
     const gesturesEnabledToggle = document.getElementById('gesturesEnabledToggle');
@@ -3703,6 +3912,7 @@ async function showSettings() {
             localStorage.setItem('nym_swipe_react_emoji', emoji);
             localStorage.setItem('nym_swipe_react_emoji_ts', String(Math.floor(Date.now() / 1000)));
             renderEmojiPreview(emoji);
+            nym.notePrefChanged([]);
         });
     };
     if (swipeReactEmojiBtn) swipeReactEmojiBtn.onclick = openSwipeReactEmojiPicker;
@@ -3825,52 +4035,85 @@ async function showSettings() {
                     this.style.background = 'transparent';
                 });
                 option.addEventListener('click', function () {
-                    const valueData = JSON.parse(this.dataset.value);
-                    pinnedSearchInput.value = this.textContent;
-                    pinnedValueInput.value = this.dataset.value;
-                    pinnedDropdown.style.display = 'none';
+                    commitLanding(this.dataset.value, this.textContent);
                 });
             });
         };
 
-        pinnedSearchInput.addEventListener('focus', () => {
+        const commitLanding = (raw, label) => {
+            let value;
+            try { value = JSON.parse(raw); } catch (_) { return; }
+            if (!value || value.type !== 'geohash' || typeof value.geohash !== 'string' || !value.geohash) return;
+            pinnedSearchInput.value = label;
+            pinnedValueInput.value = JSON.stringify(value);
+            pinnedDropdown.style.display = 'none';
+            if (JSON.stringify(nym.pinnedLandingChannel || null) === JSON.stringify(value)) return;
+            nym.pinnedLandingChannel = value;
+            nym.settings.pinnedLandingChannel = value;
+            localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(value));
+            nym.notePrefChanged('pinnedLandingChannel');
+        };
+        const committedLabel = () => {
+            const cur = nym.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
+            const opt = channelOptions.find(o => JSON.stringify(o.value) === JSON.stringify(cur));
+            return opt ? opt.label : '#' + (cur.geohash || 'nymchat');
+        };
+
+        if (typeof pinnedSearchInput._nymUnbind === 'function') pinnedSearchInput._nymUnbind();
+        const onFocus = () => {
             renderOptions(pinnedSearchInput.value);
             pinnedDropdown.style.display = 'block';
-        });
-
-        pinnedSearchInput.addEventListener('input', () => {
+        };
+        const onInput = () => {
             renderOptions(pinnedSearchInput.value);
             pinnedDropdown.style.display = 'block';
-        });
-
-        // Delay so a click on an option registers first.
-        pinnedSearchInput.addEventListener('blur', () => {
+        };
+        const onKey = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const first = pinnedDropdown.querySelector('.channel-dropdown-option');
+                if (first && pinnedDropdown.style.display !== 'none') commitLanding(first.dataset.value, first.textContent);
+            } else if (e.key === 'Escape' && pinnedDropdown.style.display !== 'none') {
+                e.stopPropagation();
+                pinnedDropdown.style.display = 'none';
+                pinnedSearchInput.value = committedLabel();
+            }
+        };
+        const onBlur = () => {
             setTimeout(() => {
                 pinnedDropdown.style.display = 'none';
+                if (document.activeElement !== pinnedSearchInput) pinnedSearchInput.value = committedLabel();
             }, 200);
-        });
-
-        pinnedDropdown.addEventListener('mousedown', (e) => {
+        };
+        const onDown = (e) => { e.preventDefault(); };
+        const settingsModalEl = document.getElementById('settingsModal');
+        const onSheetEscape = (e) => {
+            if (document.activeElement !== pinnedSearchInput || getComputedStyle(pinnedDropdown).display === 'none') return;
             e.preventDefault();
-        });
+            pinnedDropdown.style.display = 'none';
+            pinnedSearchInput.value = committedLabel();
+        };
+        pinnedSearchInput.addEventListener('focus', onFocus);
+        pinnedSearchInput.addEventListener('input', onInput);
+        pinnedSearchInput.addEventListener('keydown', onKey);
+        pinnedSearchInput.addEventListener('blur', onBlur);
+        pinnedDropdown.addEventListener('mousedown', onDown);
+        if (settingsModalEl) settingsModalEl.addEventListener('nym-sheet-escape', onSheetEscape);
+        pinnedSearchInput._nymUnbind = () => {
+            pinnedSearchInput.removeEventListener('focus', onFocus);
+            pinnedSearchInput.removeEventListener('input', onInput);
+            pinnedSearchInput.removeEventListener('keydown', onKey);
+            pinnedSearchInput.removeEventListener('blur', onBlur);
+            pinnedDropdown.removeEventListener('mousedown', onDown);
+            if (settingsModalEl) settingsModalEl.removeEventListener('nym-sheet-escape', onSheetEscape);
+        };
     }
 
     const themeSelect = document.getElementById('themeSelect');
     themeSelect.value = nym.settings.theme;
-    themeSelect.onchange = function () {
-        nym.settings.theme = this.value;
-        nym.applyTheme(this.value);
-        nym.saveSettings();
-        nostrSettingsSave();
-    };
 
     const soundSelect = document.getElementById('soundSelect');
     soundSelect.value = nym.settings.sound;
-    soundSelect.onchange = function () {
-        // Preview bypasses the replay dedupe window.
-        nym._lastSoundPlayedAt = 0;
-        nym.playSound(this.value);
-    };
     document.getElementById('autoscrollToggle').checked = String(nym.settings.autoscroll) === 'true';
     const threadsToggleEl = document.getElementById('threadsToggle');
     if (threadsToggleEl) threadsToggleEl.checked = nym.settings.threadsEnabled !== false;
@@ -4146,181 +4389,6 @@ async function refreshAppCacheSize() {
 }
 
 
-async function saveSettings() {
-    const theme = document.getElementById('themeSelect').value;
-    const sound = document.getElementById('soundSelect').value;
-    const timeFormat = document.getElementById('timeFormatSelect').value;
-    const dateFormatEl = document.getElementById('dateFormatSelect');
-    const dateFormat = dateFormatEl ? dateFormatEl.value : (nym.settings.dateFormat || 'default');
-    const blurImagesVal = document.getElementById('blurImagesSelect').value;
-    const blurImages = blurImagesVal === 'friends' ? 'friends' : blurImagesVal === 'true';
-    const nickStyle = document.getElementById('nickStyleSelect').value;
-
-    const colorModeGroup = document.getElementById('colorModeGroup');
-    const activeColorBtn = colorModeGroup ? colorModeGroup.querySelector('.color-mode-btn.active') : null;
-    const colorMode = activeColorBtn ? activeColorBtn.dataset.mode : 'auto';
-    localStorage.setItem('nym_color_mode', colorMode);
-    nym.applyColorMode();
-
-    nym.settings.nickStyle = nickStyle;
-    localStorage.setItem('nym_nick_style', nickStyle);
-
-    nym.settings.theme = theme;
-    nym.settings.sound = sound;
-    nym.settings.timeFormat = timeFormat;
-    nym.settings.dateFormat = dateFormat;
-
-    nym.blurOthersImages = blurImages;
-    nym.saveImageBlurSettings();
-
-    const acceptPMsEl = document.getElementById('acceptPMsSelect');
-    if (acceptPMsEl) {
-        nym.settings.acceptPMs = acceptPMsEl.value;
-        localStorage.setItem('nym_accept_pms', acceptPMsEl.value);
-    }
-
-    const acceptCallsEl = document.getElementById('acceptCallsSelect');
-    if (acceptCallsEl) {
-        nym.settings.acceptCalls = acceptCallsEl.value;
-        localStorage.setItem('nym_accept_calls', acceptCallsEl.value);
-    }
-
-    const dmTTL = parseInt(document.getElementById('dmTTLSelect').value || '86400', 10);
-    nym.settings.dmTTLSeconds = isFinite(dmTTL) && dmTTL > 0 ? dmTTL : 86400;
-    localStorage.setItem('nym_dm_ttl_seconds', String(nym.settings.dmTTLSeconds));
-
-    const SAVE_INDICATOR_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'];
-    const rrRaw = document.getElementById('readReceiptsSelect').value;
-    const readReceiptsScope = SAVE_INDICATOR_SCOPES.includes(rrRaw) ? rrRaw : 'everywhere';
-    nym.settings.readReceiptsScope = readReceiptsScope;
-    nym.settings.readReceiptsEnabled = readReceiptsScope !== 'disabled';
-    localStorage.setItem('nym_read_receipts_scope', readReceiptsScope);
-    localStorage.setItem('nym_read_receipts_enabled', String(readReceiptsScope !== 'disabled'));
-
-    const translateLangEl = document.getElementById('translateLanguageSelect');
-    if (translateLangEl) {
-        nym.settings.translateLanguage = translateLangEl.value;
-        localStorage.setItem('nym_translate_language', translateLangEl.value);
-    }
-
-    // Already applied live via onchange; this guarantees persistence for programmatic changes.
-    const uiLangEl = document.getElementById('uiLanguageSelect');
-    if (uiLangEl) {
-        const uiLang = uiLangEl.value || '';
-        if (uiLang !== (nym.getUiLanguage ? nym.getUiLanguage() : '')) {
-            if (typeof nym.applyUiLanguage === 'function') {
-                nym.applyUiLanguage(uiLang).catch(() => { });
-            }
-            if (typeof nym._syncTranslateLanguageToUi === 'function') nym._syncTranslateLanguageToUi(uiLang);
-        }
-        nym.settings.uiLanguage = uiLang;
-    }
-
-    const VALID_SWIPE_ACTIONS = ['quote', 'translate', 'copy', 'react', 'zap', 'slap', 'hug', 'none'];
-    const swipeLeftEl = document.getElementById('swipeLeftActionSelect');
-    if (swipeLeftEl && VALID_SWIPE_ACTIONS.includes(swipeLeftEl.value)) {
-        nym.settings.swipeLeftAction = swipeLeftEl.value;
-        localStorage.setItem('nym_swipe_left_action', swipeLeftEl.value);
-    }
-    const swipeRightEl = document.getElementById('swipeRightActionSelect');
-    if (swipeRightEl && VALID_SWIPE_ACTIONS.includes(swipeRightEl.value)) {
-        nym.settings.swipeRightAction = swipeRightEl.value;
-        localStorage.setItem('nym_swipe_right_action', swipeRightEl.value);
-    }
-    const swipeThresholdEl = document.getElementById('swipeThresholdSelect');
-    if (swipeThresholdEl) {
-        const t = parseInt(swipeThresholdEl.value, 10);
-        if (Number.isFinite(t) && t >= 30 && t <= 120) {
-            nym.settings.swipeThreshold = t;
-            localStorage.setItem('nym_swipe_threshold', String(t));
-        }
-    }
-    // No default is written on Save, or it would sync and overwrite another device's pick.
-
-    const tiRaw = document.getElementById('typingIndicatorsSelect').value;
-    const typingIndicatorsScope = SAVE_INDICATOR_SCOPES.includes(tiRaw) ? tiRaw : 'everywhere';
-    nym.settings.typingIndicatorsScope = typingIndicatorsScope;
-    nym.settings.typingIndicatorsEnabled = typingIndicatorsScope !== 'disabled';
-    localStorage.setItem('nym_typing_indicators_scope', typingIndicatorsScope);
-    localStorage.setItem('nym_typing_indicators_enabled', String(typingIndicatorsScope !== 'disabled'));
-
-    // Broadcast changes so other clients suppress this user's status dot.
-    const showStatusEl = document.getElementById('showStatusSelect');
-    if (showStatusEl) {
-        const val = showStatusEl.value; // 'true' | 'friends' | 'false'
-        const showStatus = val === 'false' ? false : (val === 'friends' ? 'friends' : true);
-        const prev = nym.settings.showStatus;
-        nym.settings.showStatus = showStatus;
-        localStorage.setItem('nym_show_status', String(showStatus));
-        if (prev !== showStatus) {
-            if (typeof nym.publishStatusVisibility === 'function') nym.publishStatusVisibility();
-            if (typeof nym.refreshPMHeaderStatus === 'function') nym.refreshPMHeaderStatus();
-            if (typeof nym.updateUserList === 'function') nym.updateUserList();
-        }
-    }
-
-    // Hidden, kept for compatibility.
-    const autoEphemeral = document.getElementById('autoEphemeralSelect').value === 'true';
-    if (autoEphemeral) {
-        localStorage.setItem('nym_auto_ephemeral', 'true');
-    } else {
-        localStorage.removeItem('nym_auto_ephemeral');
-        localStorage.removeItem('nym_auto_ephemeral_nick');
-        localStorage.removeItem('nym_auto_ephemeral_channel');
-    }
-
-    const randomKeypairEl = document.getElementById('randomKeypairSelect');
-    if (randomKeypairEl && !isNostrLoggedIn()) {
-        const keypairMode = randomKeypairEl.value; // 'persistent', 'random', or 'hardcore'
-        localStorage.setItem('nym_keypair_mode', keypairMode);
-        if (keypairMode === 'random' || keypairMode === 'hardcore') {
-            localStorage.setItem('nym_random_keypair_per_session', 'true');
-            nymSecretRemove('nym_session_nsec');
-        } else {
-            localStorage.removeItem('nym_random_keypair_per_session');
-            if (nym.privkey && !nymSecretGet('nym_session_nsec')) {
-                try {
-                    const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
-                    nymSecretSet('nym_session_nsec', nsec);
-                } catch (e) { }
-            }
-        }
-    }
-
-    const pinnedValueInput = document.getElementById('pinnedLandingChannelValue');
-    if (pinnedValueInput && pinnedValueInput.value) {
-        try {
-            const pinnedLandingChannel = JSON.parse(pinnedValueInput.value);
-            nym.pinnedLandingChannel = pinnedLandingChannel;
-            nym.settings.pinnedLandingChannel = pinnedLandingChannel;
-            localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(pinnedLandingChannel));
-        } catch (e) {
-            const defaultChannel = { type: 'geohash', geohash: 'nymchat' };
-            nym.pinnedLandingChannel = defaultChannel;
-            nym.settings.pinnedLandingChannel = defaultChannel;
-            localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(defaultChannel));
-        }
-    }
-
-    nym.applyTheme(theme);
-    nym.saveSettings();
-    localStorage.setItem('nym_time_format', timeFormat);
-    localStorage.setItem('nym_date_format', dateFormat);
-
-    nym.refreshMessageTimestamps();
-
-    const textSize = parseInt(document.getElementById('textSizeSlider').value || '15', 10);
-    nym.settings.textSize = textSize;
-    localStorage.setItem('nym_text_size', String(textSize));
-    document.documentElement.style.setProperty('--user-text-size', textSize + 'px');
-
-    nym.displaySystemMessage('Settings saved');
-
-    nostrSettingsSave();
-
-    closeModal('settingsModal');
-}
-
 // Clears the on-device app cache only.
 async function clearLocalStorageCache() {
     if (!(await window.showAppConfirm('Clear cached channel history, PMs, group chats, profiles, and reactions? This will not log you out or change your settings.', { danger: true, okLabel: 'Clear' }))) {
@@ -4445,6 +4513,27 @@ async function resetSettings() {
     closeModal('settingsModal');
 }
 
+const RESET_COLUMNS_CONFIRM = {
+    title: 'Reset columns to defaults?',
+    body: 'The columns you added and their order are removed on this device and on your other devices.',
+    ok: 'Reset',
+};
+
+async function resetColumnView() {
+    if (typeof nym === 'undefined' || !nym || typeof nym.cvResetColumns !== 'function') return;
+    const ui = (t) => (typeof nym.uiText === 'function' ? nym.uiText(t) : t);
+    let ok = false;
+    try {
+        ok = await window.showAppConfirm(ui(RESET_COLUMNS_CONFIRM.body), {
+            title: ui(RESET_COLUMNS_CONFIRM.title),
+            okLabel: ui(RESET_COLUMNS_CONFIRM.ok),
+            danger: true,
+        });
+    } catch (_) { ok = false; }
+    if (ok) nym.cvResetColumns();
+}
+window.resetColumnView = resetColumnView;
+
 function selectChatView(view) {
     const mode = view === 'columns' ? 'columns' : 'single';
     document.querySelectorAll('.view-option').forEach(opt => {
@@ -4453,7 +4542,7 @@ function selectChatView(view) {
     nym.settings.chatViewMode = mode;
     localStorage.setItem('nym_chat_view_mode', mode);
     if (typeof nym.applyChatViewMode === 'function') nym.applyChatViewMode(mode);
-    nostrSettingsSave();
+    nym.notePrefChanged('chatViewMode');
 }
 window.selectChatView = selectChatView;
 
@@ -4464,7 +4553,7 @@ function selectMessageLayout(layout) {
     nym.settings.chatLayout = layout;
     localStorage.setItem('nym_chat_layout', layout);
     applyMessageLayout(layout);
-    nostrSettingsSave();
+    nym.notePrefChanged('chatLayout');
 }
 
 function applyMessageLayout(layout) {
@@ -4486,16 +4575,38 @@ function applyMessageLayout(layout) {
     }
 }
 
-function selectWallpaper(type) {
+const WALLPAPER_REPLACE_CONFIRM = {
+    title: 'Replace your uploaded wallpaper?',
+    body: 'Your uploaded image is removed from Nymchat on this device and on your other devices. To use it again, upload it again.',
+    ok: 'Replace',
+};
+
+function showWallpaperSelection(type) {
     document.querySelectorAll('.wallpaper-option').forEach(opt => {
         opt.classList.toggle('selected', opt.dataset.wallpaper === type);
     });
+}
 
-    if (type !== 'custom') {
-        nym.applyWallpaper(type);
-        nym.saveWallpaper(type);
-        nostrSettingsSave();
+async function selectWallpaper(type) {
+    if (type === 'custom') return;
+    const fromSync = !!(nym && nym._applyingRemoteSettings);
+    const current = localStorage.getItem('nym_wallpaper_type') || 'geometric';
+    if (!fromSync && current === 'custom' && localStorage.getItem('nym_wallpaper_custom_url')) {
+        const ui = (t) => (typeof nym.uiText === 'function' ? nym.uiText(t) : t);
+        let ok = false;
+        try {
+            ok = await window.showAppConfirm(ui(WALLPAPER_REPLACE_CONFIRM.body), {
+                title: ui(WALLPAPER_REPLACE_CONFIRM.title),
+                okLabel: ui(WALLPAPER_REPLACE_CONFIRM.ok),
+                danger: true,
+            });
+        } catch (_) { ok = false; }
+        if (!ok) { showWallpaperSelection('custom'); return; }
     }
+    showWallpaperSelection(type);
+    nym.applyWallpaper(type);
+    nym.saveWallpaper(type);
+    if (!fromSync) nym.notePrefChanged('wallpaperType');
 }
 
 function triggerSetupAvatarUpload() {
@@ -4531,7 +4642,7 @@ async function handleWallpaperUpload(event) {
 
         nym.applyWallpaper('custom', url);
         nym.saveWallpaper('custom', url);
-        nostrSettingsSave();
+        nym.notePrefChanged('wallpaperType');
         nym.displaySystemMessage('Wallpaper uploaded and applied.');
     } else {
         customPreview.innerHTML = originalContent;
@@ -4847,6 +4958,8 @@ async function checkSavedConnection() {
             nym.nostrLoginSecretKey = secretKey;
             nym.nostrLoginMethod = method;
             dropReplacedSessionNym();
+            const resume = takeLoginResume(pubkey);
+            if (resume && resume.pq && typeof nym.pqRootPresetFor === 'function') nym.pqRootPresetFor(pubkey, resume.pq, !!resume.fresh);
 
             // Apply the cached profile before relays connect; fresh data overwrites later.
             nym.nym = 'nym'; // fallback until kind 0 profile is fetched
@@ -4870,6 +4983,7 @@ async function checkSavedConnection() {
             nym.applyCachedShopItemsToNewIdentity();
 
             applyNostrLogin(pubkey, secretKey, method);
+            if (resume) finishLoginResume(resume);
 
             if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
                 Notification.requestPermission();
@@ -5119,6 +5233,9 @@ async function initializeNym() {
         }
 
         localStorage.setItem('nym_auto_ephemeral', 'true');
+        if (!nymInput && !nostrPubkey && !isDeveloperLogin && nym.nym && localStorage.getItem('nym_random_keypair_per_session') !== 'true') {
+            try { localStorage.setItem('nym_auto_ephemeral_nick', nym.nym); } catch (e) { }
+        }
         if (nymInput) {
             if (!nostrPubkey) {
                 localStorage.setItem('nym_auto_ephemeral_nick', nymInput);
@@ -5171,6 +5288,7 @@ async function initializeNym() {
         nym._loadLastPMSyncTime();
         nym._refreshPmSupportBadges();
         nym._loadLeftGroups();
+        if (typeof nym._restorePMDepositQueue === 'function') nym._restorePMDepositQueue().catch(() => { });
 
         // Load synced settings from D1 (encrypted), falling back to relays.
         settingsLoad();
@@ -5380,6 +5498,7 @@ async function nostrLoginWithExtension() {
         } catch (_) { }
 
         if (typeof nym.remotePanicNoteLogin === 'function') nym.remotePanicNoteLogin();
+        if (await nostrLoginRestart(pubkey, null)) return;
         applyNostrLogin(pubkey, null, 'extension');
 
         await finishNostrLogin('Logged in with Nostr extension.');
@@ -5418,7 +5537,7 @@ async function nostrLoginWithNsec() {
 async function nostrLoginImportKey(privkeyInput, opts) {
     const secretKey = nym.decodeNsec(privkeyInput);
     const pubkey = window.NostrTools.getPublicKey(secretKey);
-    await nostrLoginApplyKey(privkeyInput, secretKey, pubkey, opts);
+    return nostrLoginApplyKey(privkeyInput, secretKey, pubkey, opts);
 }
 
 function adoptGeneratedNym() {
@@ -5449,10 +5568,61 @@ async function nostrLoginApplyKey(nsecInput, secretKey, pubkey, opts) {
     } catch (_) { }
 
     if (typeof nym.remotePanicNoteLogin === 'function') nym.remotePanicNoteLogin();
+    const resume = opts && (opts.fresh || opts.pq || opts.pqBad)
+        ? { fresh: !!opts.fresh, pq: typeof opts.pq === 'string' ? opts.pq : null, pqBad: !!opts.pqBad }
+        : null;
+    if (await nostrLoginRestart(pubkey, resume)) return 'restart';
     applyNostrLogin(pubkey, secretKey, 'nsec');
 
     await finishNostrLogin('Logged in with Nostr identity.');
     if (opts && opts.fresh) adoptGeneratedNym();
+    return 'done';
+}
+
+const LOGIN_RESUME_KEY = 'nym_login_resume';
+
+function nymLiveConnection() {
+    if (!window.nym) return false;
+    if (nym.connected) return true;
+    try { if (typeof nym._isAnyPoolOpen === 'function' && nym._isAnyPoolOpen()) return true; } catch (_) { }
+    try {
+        for (const r of nym.relayPool.values()) {
+            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) return true;
+        }
+    } catch (_) { }
+    return false;
+}
+
+async function nostrLoginRestart(pubkey, resume) {
+    if (!nym.pubkey || nym.pubkey === pubkey || !nymLiveConnection()) return false;
+    const overlay = document.getElementById('acctSwitchOverlay');
+    if (overlay) overlay.classList.add('active');
+    try { if (typeof nym._sendAsShutdown === 'function') nym._sendAsShutdown(); } catch (_) { }
+    try { if (typeof nym._acctPrepareLeave === 'function') await nym._acctPrepareLeave(); } catch (_) { }
+    if (resume) {
+        try { await nymSecretSet(LOGIN_RESUME_KEY, JSON.stringify(Object.assign({ pubkey }, resume))); } catch (_) { }
+    }
+    location.reload();
+    return true;
+}
+
+function takeLoginResume(pubkey) {
+    let raw = null;
+    try { raw = nymSecretGet(LOGIN_RESUME_KEY); } catch (_) { raw = null; }
+    if (raw == null) return null;
+    nymSecretRemove(LOGIN_RESUME_KEY);
+    let r = null;
+    try { r = JSON.parse(raw); } catch (_) { r = null; }
+    return r && r.pubkey === pubkey ? r : null;
+}
+
+function finishLoginResume(r) {
+    if (r.fresh) {
+        adoptGeneratedNym();
+        return;
+    }
+    const KB = window.NymKeyBackup;
+    if (KB && typeof KB.afterSignIn === 'function') KB.afterSignIn(r);
 }
 
 let _nip46State = null; // holds active connection state during login flow
@@ -5714,6 +5884,7 @@ async function _nip46CompleteLogin(remotePubkey) {
         }
 
         if (typeof nym.remotePanicNoteLogin === 'function') nym.remotePanicNoteLogin();
+        if (await nostrLoginRestart(pubkey, null)) return;
         applyNostrLogin(pubkey, null, 'nip46');
 
         await finishNostrLogin('Logged in with remote signer (NIP-46).');
@@ -6193,12 +6364,18 @@ function startOnboardingWhenHydrated() {
     else run();
 }
 
-async function nostrSettingsSave() {
-    if (nym && nym._applyingRemoteSettings) return;
-    if (nym && nym._restoreFromD1Depth > 0) return;
+async function nostrSettingsSave(opts) {
+    if (nym && nym._applyingRemoteSettings) {
+        if (opts && opts.flush && typeof nym._holdSettingsSave === 'function') nym._holdSettingsSave(opts.since);
+        return;
+    }
+    if (nym && nym._restoreFromD1Depth > 0 && !(opts && opts.flush)) {
+        if (typeof nym._holdSettingsSaveForReplay === 'function') nym._holdSettingsSaveForReplay();
+        return;
+    }
     if (!isNostrLoggedIn()) {
         if (nym && typeof nym.saveSyncedSettings === 'function') {
-            nym.saveSyncedSettings();
+            await nym.saveSyncedSettings();
         }
         return;
     }
@@ -6357,89 +6534,9 @@ async function applyNostrSettingsAdditive(s) {
         if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
     }
 
-    // Match on eventId, else on (senderPubkey, body, ~minute timestamp), so duplicates collapse.
     if (Array.isArray(s.notificationHistory) && s.notificationHistory.length > 0) {
         try {
-            const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-            const findLocalMatch = (n) => {
-                const evId = n.eventId || n.channelInfo?.eventId || '';
-                if (evId) {
-                    for (const m of nym.notificationHistory) {
-                        const mid = m.eventId || m.channelInfo?.eventId || '';
-                        if (mid && mid === evId) return m;
-                    }
-                }
-                for (const m of nym.notificationHistory) {
-                    if (evId && (m.eventId || m.channelInfo?.eventId)) continue;
-                    if (m.body !== n.body) continue;
-                    if ((m.senderPubkey || '') !== (n.senderPubkey || '')) continue;
-                    if (Math.abs((m.timestamp || 0) - (n.timestamp || 0)) > 60000) continue;
-                    return m;
-                }
-                return null;
-            };
-            let changed = false;
-            let seenAdded = false;
-            for (const n of s.notificationHistory) {
-                if (!n || typeof n.timestamp !== 'number') continue;
-                // Clamp future-dated entries to the origin device's observation time, not our own now.
-                if (typeof n.receivedAt === 'number' && n.receivedAt > 0
-                    && n.timestamp > n.receivedAt) {
-                    n.timestamp = n.receivedAt;
-                }
-                if (n.timestamp <= cutoff) continue;
-                const existing = findLocalMatch(n);
-                if (existing) {
-                    if (n.viewed && !existing.viewed) {
-                        existing.viewed = true;
-                        changed = true;
-                    }
-                    if (!existing.eventId && (n.eventId || n.channelInfo?.eventId)) {
-                        existing.eventId = n.eventId || n.channelInfo?.eventId;
-                        changed = true;
-                    }
-                    if (existing.viewed) {
-                        seenAdded = nym._rememberNotificationSeen(existing, false) || seenAdded;
-                    }
-                    continue;
-                }
-                const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
-                if (pk && nym.blockedUsers && nym.blockedUsers.has(pk)) continue;
-                // The answered status is the tombstone for a missed-call entry.
-                const evId = n.eventId || n.channelInfo?.eventId || '';
-                if (evId.indexOf('missed-call-') === 0 && typeof nym._callStatus === 'function'
-                    && nym._callStatus(evId.slice(12)) === 'answered') continue;
-                // Use receivedAt when present so synced notifications keep their unread status.
-                const observedAt = (typeof n.receivedAt === 'number' && n.receivedAt > 0) ? n.receivedAt : n.timestamp;
-                const viewedFromLastRead = observedAt <= (nym.notificationLastReadTime || 0);
-                const entry = {
-                    title: n.title || '',
-                    body: n.body || '',
-                    channelInfo: n.channelInfo || null,
-                    timestamp: n.timestamp,
-                    receivedAt: observedAt,
-                    senderNym: n.senderNym || '',
-                    senderPubkey: pk,
-                    eventId: n.eventId || n.channelInfo?.eventId || undefined
-                };
-                if (!entry.channelInfo) {
-                    for (const k of ['type', 'route', 'threadRoot']) if (typeof n[k] === 'string' && n[k]) entry[k] = n[k];
-                }
-                entry.viewed = !!n.viewed || viewedFromLastRead || nym._isNotificationSeen(entry);
-                if (entry.viewed) {
-                    seenAdded = nym._rememberNotificationSeen(entry, false) || seenAdded;
-                }
-                nym.notificationHistory.push(entry);
-                changed = true;
-            }
-            if (seenAdded) nym._saveSeenNotificationKeys();
-            if (changed) {
-                nym.notificationHistory = nym.notificationHistory
-                    .filter(n => n && n.timestamp > cutoff)
-                    .sort((a, b) => a.timestamp - b.timestamp);
-                if (typeof nym._saveNotificationHistory === 'function') nym._saveNotificationHistory();
-                if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
-            }
+            if (typeof nym._mergeSyncedNotificationHistory === 'function') nym._mergeSyncedNotificationHistory(s.notificationHistory);
         } catch (_) { }
     }
 
@@ -6514,6 +6611,9 @@ async function applyNostrSettingsAdditive(s) {
                     if (group.genesisOwner) g.genesisOwner = group.genesisOwner;
                     if (group.genesisNonce) g.genesisNonce = group.genesisNonce;
                     if (group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
+                    const syncedBy = nym._cleanGroupMetaBy(group.metaBy);
+                    if (syncedBy) g.metaBy = syncedBy;
+                    if (typeof nym._mergeSyncedMetaAdmins === 'function') nym._mergeSyncedMetaAdmins(g, group);
                     g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                 }
             } else {
@@ -6533,12 +6633,18 @@ async function applyNostrSettingsAdditive(s) {
                         if (group.shareHistory !== undefined) g.shareHistory = group.shareHistory === true;
                         g.metaUpdatedAt = incomingMetaTs;
                         if (group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
+                        const syncedBy = nym._cleanGroupMetaBy(group.metaBy);
+                        if (syncedBy) g.metaBy = syncedBy;
+                        else delete g.metaBy;
                         nym.updateGroupConversationUI(groupId);
                     } else {
-                        if (!g.banner && group.banner) g.banner = group.banner;
-                        if (!g.avatar && group.avatar) g.avatar = group.avatar;
-                        if (!g.description && group.description) g.description = group.description;
+                        for (const f of nym._groupMetaFields()) {
+                            if (g[f] || !group[f]) continue;
+                            g[f] = group[f];
+                            nym._adoptGroupMetaBy(g, f, nym._syncedGroupMetaBy(group, f));
+                        }
                     }
+                    if (typeof nym._mergeSyncedMetaAdmins === 'function') nym._mergeSyncedMetaAdmins(g, group);
                     if ((Array.isArray(group.members) && group.members.length) || group.memberRemovedAt) {
                         nym._gcMergeSynced(groupId, group);
                     }
@@ -6670,6 +6776,11 @@ async function applyNostrSettingsAdditive(s) {
     } finally {
         nym._applyRemoteDepth = Math.max(0, (nym._applyRemoteDepth || 1) - 1);
         nym._applyingRemoteSettings = nym._applyRemoteDepth > 0;
+        if (!nym._applyingRemoteSettings && nym._notifSyncRepairDue) {
+            nym._notifSyncRepairDue = false;
+            if (typeof nym._debouncedNostrSettingsSave === 'function') nym._debouncedNostrSettingsSave(8000);
+        }
+        if (!nym._applyingRemoteSettings && typeof nym._flushHeldSettingsSave === 'function') nym._flushHeldSettingsSave();
     }
 }
 
@@ -6682,8 +6793,15 @@ function isValidSwipeReactEmoji(v) {
     return v.length <= 16 && !SWIPE_REACT_TEXTISH_RE.test(v);
 }
 
-async function applyNostrSettings(s) {
+async function applyNostrSettings(s, opts) {
     if (!s || typeof s !== 'object') return;
+    const accepted = !!(opts && opts.accepted);
+    const M = window.NymSyncMerge;
+    const gate = !accepted && M && typeof M.prefGate === 'function' && typeof nym._prefStamps === 'function'
+        ? M.prefGate(s, nym._prefStamps(), M.STAMPED, opts && opts.rowTs)
+        : null;
+    const gateIn = s;
+    if (gate) s = gate.payload;
     nym._applyRemoteDepth = (nym._applyRemoteDepth || 0) + 1;
     nym._applyingRemoteSettings = true;
     try {
@@ -7230,6 +7348,10 @@ async function applyNostrSettings(s) {
                     if (group.inviteEpoch) g.inviteEpoch = group.inviteEpoch;
                     if (group.shareHistory === true) g.shareHistory = true;
                     if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
+                    if (group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
+                    const syncedBy = nym._cleanGroupMetaBy(group.metaBy);
+                    if (syncedBy) g.metaBy = syncedBy;
+                    if (typeof nym._mergeSyncedMetaAdmins === 'function') nym._mergeSyncedMetaAdmins(g, group);
                 }
             } else {
                 const g = nym.groupConversations.get(groupId);
@@ -7247,12 +7369,18 @@ async function applyNostrSettings(s) {
                         if (group.shareHistory !== undefined) g.shareHistory = group.shareHistory === true;
                         g.metaUpdatedAt = incomingMetaTs;
                         if (group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
+                        const syncedBy = nym._cleanGroupMetaBy(group.metaBy);
+                        if (syncedBy) g.metaBy = syncedBy;
+                        else delete g.metaBy;
                         nym.updateGroupConversationUI(groupId);
                     } else {
-                        if (!g.banner && group.banner) g.banner = group.banner;
-                        if (!g.avatar && group.avatar) g.avatar = group.avatar;
-                        if (!g.description && group.description) g.description = group.description;
+                        for (const f of nym._groupMetaFields()) {
+                            if (g[f] || !group[f]) continue;
+                            g[f] = group[f];
+                            nym._adoptGroupMetaBy(g, f, nym._syncedGroupMetaBy(group, f));
+                        }
                     }
+                    if (typeof nym._mergeSyncedMetaAdmins === 'function') nym._mergeSyncedMetaAdmins(g, group);
                     if ((Array.isArray(group.members) && group.members.length) || group.memberRemovedAt) {
                         nym._gcMergeSynced(groupId, group);
                     }
@@ -7387,6 +7515,17 @@ async function applyNostrSettings(s) {
             if (nym._applyStampedPrefs(s)) setTimeout(() => nym._debouncedNostrSettingsSave(2000), 0);
         } catch (_) { }
     }
+    if (gate) {
+        for (const name of Object.keys(gate.take)) nym._prefStampSet(name, gate.take[name]);
+        if (gate.skipped) {
+            const kept = Object.keys(M.STAMPED).filter((name) => !(name in gate.take) && M.STAMPED[name].some((k) => k in gateIn));
+            if (typeof nym._forgetPublishedPrefs === 'function') nym._forgetPublishedPrefs(kept);
+            setTimeout(() => { if (!nym._settingsSaveTimer) nym._debouncedNostrSettingsSave(2000); }, 0);
+        }
+    } else if (accepted && M && typeof nym._prefStampSet === 'function') {
+        const now = Date.now();
+        for (const name of Object.keys(M.STAMPED)) if (M.STAMPED[name].some((k) => k in s)) nym._prefStampSet(name, now);
+    }
 
     nym._updateNotificationBadge();
     if (!nym._settingsSyncMessageShown) {
@@ -7395,13 +7534,17 @@ async function applyNostrSettings(s) {
     } finally {
         nym._applyRemoteDepth = Math.max(0, (nym._applyRemoteDepth || 1) - 1);
         nym._applyingRemoteSettings = nym._applyRemoteDepth > 0;
+        if (!nym._applyingRemoteSettings && typeof nym._flushHeldSettingsSave === 'function') nym._flushHeldSettingsSave();
     }
 }
 
 async function signOut() {
     if (nym && typeof nym.acctLogout === 'function' && await nym.acctLogout()) return;
     const who = nym && nym.pubkey ? identityLabel(nym.nym, nym.pubkey) : uiVars('this identity');
-    const ask = uiVars('Sign out of {nym} and disconnect from Nymchat?', { nym: who }) + '\n\n' + uiVars('You will return to the welcome screen.');
+    const keys = nym && typeof nym._acctKeyLine === 'function'
+        ? nym._acctKeyLine(nym._acctLiveMethod())
+        : uiVars('Its key is stored only on this device: back up the nsec first or you lose this identity.');
+    const ask = [uiVars('Sign out of {nym} and disconnect from Nymchat?', { nym: who }), keys, uiVars('You will return to the welcome screen.')].join('\n\n');
     if (!(await window.showAppConfirm(ask, { okLabel: uiVars('Sign out'), danger: true }))) return;
     localStorage.removeItem('nym_auto_ephemeral');
     localStorage.removeItem('nym_auto_ephemeral_nick');
@@ -7920,6 +8063,7 @@ function openRelayStats() {
     nym._relaySearchQuery = '';
     if (search) search.value = '';
     _rsExpandedRelay = null;
+    rsResetAddRelay();
     syncLowDataToggleFromState();
     modal.classList.add('active');
     startRelayStatsLoop();
@@ -7947,6 +8091,7 @@ function toggleLowDataModeFromStats(e) {
     if (settingsToggle) settingsToggle.checked = enabled;
 
     nym.applyLowDataMode(enabled);
+    nym.notePrefChanged('lowDataMode');
     nym.displaySystemMessage(enabled ? 'Low Data Mode enabled' : 'Low Data Mode disabled');
 }
 
@@ -8363,13 +8508,22 @@ async function rsConfirmBlockRelay(url) {
     if (!ok) return;
     const res = nym.blockRelay(url, { confirmed: why === 'signer' });
     if (res === 'blocked' && _rsExpandedRelay === url) _rsExpandedRelay = null;
+    if (res === 'blocked' && _rsAdd.url === url && (_rsAdd.mode === 'added' || _rsAdd.mode === 'restored')) rsSetAddStatus('', '', '', '');
     renderRelayStats();
 }
 
 function rsUnblockRelay(url) {
     if (typeof nym === 'undefined' || typeof nym.unblockRelay !== 'function') return;
     nym.unblockRelay(url);
+    rsNoteRestored(url);
     renderRelayStats();
+}
+
+function rsNoteRestored(url) {
+    if (typeof nym.addedRelayList !== 'function' || !nym.addedRelayList().includes(url)) return false;
+    const over = typeof nym.addedRelayOverCap === 'function' && nym.addedRelayOverCap(url);
+    rsSetAddStatus('restored', rsAddMsg(over ? 'restoredCap' : 'restored', rsAddVars(url)), over ? 'warn' : 'ok', url);
+    return true;
 }
 
 function rsEnsureRelaySearch() {
@@ -8476,6 +8630,286 @@ function rsRenderBlockedRelays(query) {
     }
 }
 
+const RS_ADD_STATUS = { connected: 'Connected', connecting: 'Connecting…', offline: 'Not connected', unused: 'Over the limit' };
+
+let _rsAdd = { seq: 0, url: '', mode: '', text: '', tone: '' };
+
+function rsAddMsg(code, vars) {
+    if (typeof NymRelayAdd === 'undefined') return '';
+    return NymRelayAdd.fill(rsText(NymRelayAdd.MESSAGES[code] || ''), vars || {});
+}
+
+function rsAddVars(url, extra) {
+    const RA = typeof NymRelayAdd !== 'undefined' ? NymRelayAdd : null;
+    const defaults = (nym && nym.defaultRelays) || [];
+    return Object.assign({
+        relay: url ? NymRelayBlock.shown(url) : '',
+        cap: RA ? RA.cap(defaults) : 0,
+        defaults: defaults.length
+    }, extra || {});
+}
+
+function rsEnsureAddRelayForm(box) {
+    let form = box.querySelector('.relay-stats-add');
+    if (form) return form;
+    form = document.createElement('div');
+    form.className = 'relay-stats-add';
+    const row = document.createElement('div');
+    row.className = 'relay-stats-add-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'rsAddRelayInput';
+    input.className = 'form-input relay-stats-add-input';
+    input.setAttribute('autocomplete', 'off');
+    input.setAttribute('autocapitalize', 'off');
+    input.setAttribute('spellcheck', 'false');
+    input.setAttribute('inputmode', 'url');
+    input.setAttribute('enterkeyhint', 'done');
+    input.addEventListener('input', () => {
+        if (_rsAdd.mode && _rsAdd.mode !== 'checking') rsSetAddStatus('', '', '', '');
+    });
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            rsAddRelaySubmit();
+        }
+    });
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'rsAddRelayBtn';
+    btn.className = 'rs-relay-add-btn';
+    btn.addEventListener('click', (e) => { e.stopPropagation(); rsAddRelaySubmit(); });
+    row.append(input, btn);
+    const status = document.createElement('div');
+    status.id = 'rsAddRelayStatus';
+    status.className = 'relay-stats-add-status';
+    status.setAttribute('aria-live', 'polite');
+    const msg = document.createElement('span');
+    msg.className = 'relay-stats-add-msg';
+    const actions = document.createElement('span');
+    actions.className = 'relay-stats-add-actions';
+    status.append(msg, actions);
+    form.append(row, status);
+    box.appendChild(form);
+    return form;
+}
+
+function rsSetAddStatus(mode, text, tone, url) {
+    _rsAdd.mode = mode;
+    _rsAdd.text = text;
+    _rsAdd.tone = tone;
+    _rsAdd.url = url || '';
+    rsPaintAddStatus();
+}
+
+function rsPaintAddStatus() {
+    const status = document.getElementById('rsAddRelayStatus');
+    const btn = document.getElementById('rsAddRelayBtn');
+    const input = document.getElementById('rsAddRelayInput');
+    if (!status) return;
+    const msg = status.querySelector('.relay-stats-add-msg');
+    const actions = status.querySelector('.relay-stats-add-actions');
+    const off = typeof nym !== 'undefined' && typeof nym._addedRelaysOff === 'function' && nym._addedRelaysOff();
+    const atCap = off || (typeof nym !== 'undefined' && typeof nym.addedRelayList === 'function' && typeof nym.addedRelayCap === 'function'
+        && nym.addedRelayList().length >= nym.addedRelayCap());
+    let text = _rsAdd.text;
+    let tone = _rsAdd.tone;
+    const capped = atCap && _rsAdd.mode !== 'checking';
+    if (off) {
+        text = rsAddMsg('keypair', rsAddVars(''));
+        tone = 'warn';
+    } else if (capped) {
+        const capText = rsAddMsg('cap', rsAddVars(''));
+        text = _rsAdd.mode === 'added' || _rsAdd.mode === 'restored' ? text + ' ' + capText : capText;
+        tone = 'warn';
+    }
+    if (msg.textContent !== text) msg.textContent = text;
+    status.dataset.tone = tone || '';
+    status.hidden = !text;
+    const sig = off ? 'keypair' : (capped ? 'cap' : _rsAdd.mode + '|' + _rsAdd.url);
+    if (actions.dataset.sig !== sig) {
+        actions.dataset.sig = sig;
+        actions.textContent = '';
+        const make = (label, cls, fn) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = cls;
+            b.textContent = rsText(label);
+            b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+            actions.appendChild(b);
+            return b;
+        };
+        if (!capped && _rsAdd.mode === 'failed') {
+            make('Add anyway', 'rs-relay-add-btn rs-relay-add-anyway', () => rsAddRelayNow(_rsAdd.url, null));
+            make('Cancel', 'rs-relay-clear-btn', () => rsSetAddStatus('', '', '', ''));
+        } else if (!capped && _rsAdd.mode === 'blocked') {
+            make('Unblock', 'rs-relay-unblock-btn', () => rsAddRelayUnblock(_rsAdd.url));
+            make('Cancel', 'rs-relay-clear-btn', () => rsSetAddStatus('', '', '', ''));
+        }
+    }
+    if (btn) {
+        const label = rsText('Add relay');
+        if (btn.textContent !== label) btn.textContent = label;
+        btn.disabled = _rsAdd.mode === 'checking' || atCap;
+    }
+    if (input) {
+        const ph = 'wss://relay.example.com';
+        if (input.placeholder !== ph) input.placeholder = ph;
+        const al = rsText('Relay address');
+        if (input.getAttribute('aria-label') !== al) input.setAttribute('aria-label', al);
+        input.disabled = capped;
+    }
+}
+
+function rsResetAddRelay() {
+    _rsAdd.seq++;
+    const input = document.getElementById('rsAddRelayInput');
+    if (input) input.value = '';
+    rsSetAddStatus('', '', '', '');
+}
+
+async function rsAddRelaySubmit() {
+    if (typeof nym === 'undefined' || typeof nym.addedRelayCheck !== 'function') return;
+    const input = document.getElementById('rsAddRelayInput');
+    if (!input || _rsAdd.mode === 'checking') return;
+    const r = nym.addedRelayCheck(input.value);
+    if (r.status === 'blocked') {
+        rsSetAddStatus('blocked', rsAddMsg('blocked', rsAddVars(r.url)), 'warn', r.url);
+        return;
+    }
+    if (r.status !== 'ok') {
+        rsSetAddStatus('refused', rsAddMsg(r.status, rsAddVars(r.url, { host: r.host || '' })), 'error', r.url || '');
+        return;
+    }
+    const seq = ++_rsAdd.seq;
+    const viaPool = typeof nym.relayCheckViaPool === 'function' ? nym.relayCheckViaPool() : !!nym.useRelayProxy;
+    rsSetAddStatus('checking', rsAddMsg(viaPool ? 'checkingPool' : 'checkingDirect', rsAddVars(r.url)), '', r.url);
+    let res = null;
+    try { res = await nym.checkRelayReachable(r.url); } catch (_) { res = { ok: false, code: viaPool ? 'poolDown' : 'unreachable' }; }
+    if (seq !== _rsAdd.seq) return;
+    const vars = rsAddVars(r.url, { ms: res.ms, s: res.s, reason: res.reason || '' });
+    if (res.ok) {
+        rsAddRelayNow(r.url, rsAddMsg('reachable', vars));
+        return;
+    }
+    rsSetAddStatus('failed', rsAddMsg(res.code, vars), 'error', r.url);
+}
+
+function rsAddRelayNow(url, lead) {
+    if (typeof nym === 'undefined' || typeof nym.addRelay !== 'function') return;
+    _rsAdd.seq++;
+    const got = nym.addRelay(url);
+    if (got !== 'ok') {
+        rsSetAddStatus(got === 'blocked' ? 'blocked' : 'refused', rsAddMsg(got, rsAddVars(url)), got === 'blocked' ? 'warn' : 'error', url);
+        return;
+    }
+    const input = document.getElementById('rsAddRelayInput');
+    if (input) input.value = '';
+    const done = rsAddMsg('done', rsAddVars(url));
+    rsSetAddStatus('added', lead ? lead + ' ' + done : done, 'ok', url);
+    renderRelayStats();
+}
+
+function rsAddRelayUnblock(url) {
+    if (typeof nym === 'undefined' || typeof nym.unblockRelay !== 'function') return;
+    nym.unblockRelay(url);
+    const isDefault = (nym.defaultRelays || []).some(u => NymRelayBlock.canon(u) === url);
+    if (isDefault) {
+        rsSetAddStatus('unblocked', rsAddMsg('unblocked', rsAddVars(url)), 'ok', url);
+        renderRelayStats();
+        return;
+    }
+    if (rsNoteRestored(url)) {
+        const input = document.getElementById('rsAddRelayInput');
+        if (input) input.value = '';
+        renderRelayStats();
+        return;
+    }
+    rsSetAddStatus('', '', '', '');
+    const input = document.getElementById('rsAddRelayInput');
+    if (input) input.value = url;
+    rsAddRelaySubmit();
+}
+
+function rsRemoveAddedRelay(url) {
+    if (typeof nym === 'undefined' || typeof nym.removeAddedRelay !== 'function') return;
+    nym.removeAddedRelay(url);
+    if (_rsAdd.url === url && (_rsAdd.mode === 'added' || _rsAdd.mode === 'restored')) rsSetAddStatus('', '', '', '');
+    renderRelayStats();
+}
+
+function rsRenderAddedRelays(query) {
+    const box = document.getElementById('rsAddedRelays');
+    if (!box || typeof nym === 'undefined' || typeof nym.addedRelayList !== 'function') return;
+    let title = box.querySelector('.relay-stats-added-title');
+    if (!title) {
+        title = document.createElement('div');
+        title.className = 'relay-stats-section-title relay-stats-added-title';
+        box.appendChild(title);
+    }
+    let rows = box.querySelector('.relay-stats-added-list');
+    if (!rows) {
+        rows = document.createElement('div');
+        rows.className = 'relay-stats-added-list';
+        box.appendChild(rows);
+    }
+    rsEnsureAddRelayForm(box);
+    let hint = box.querySelector('.relay-stats-added-hint');
+    if (!hint) {
+        hint = document.createElement('div');
+        hint.className = 'relay-stats-blocked-hint relay-stats-added-hint';
+        box.appendChild(hint);
+    }
+    const all = nym.addedRelayList();
+    const list = query ? all.filter(u => NymRelayBlock.searchMatch(u, query)) : all;
+    const states = list.map(u => (typeof nym.addedRelayStatus === 'function' ? nym.addedRelayStatus(u) : 'offline'));
+    const titleText = rsText('Added by you ({n})').replace('{n}', String(all.length));
+    if (title.textContent !== titleText) title.textContent = titleText;
+    const pool = !!nym.useRelayProxy;
+    const waiting = typeof nym._addedRelaysWaitForPool === 'function' && nym._addedRelaysWaitForPool() && !pool;
+    const hintText = waiting
+        ? rsText("The relay pool can't be reached, so relays you added wait until it's back: your device never connects to them itself.")
+        : pool
+            ? rsText('Relays you add are used like the default relays, by this identity only: the relay pool connects to them for you. Anonymous posts and Send as never use them.')
+            : rsText('Relays you add are used like the default relays, by this identity only: your device connects to them directly. Anonymous posts and Send as never use them.');
+    if (hint.textContent !== hintText) hint.textContent = hintText;
+    const sig = JSON.stringify([all.length, list, states, titleText, query]);
+    if (rows.dataset.sig !== sig) {
+        rows.dataset.sig = sig;
+        rows.textContent = '';
+        rows.hidden = !all.length;
+        if (all.length && !list.length) {
+            const empty = document.createElement('div');
+            empty.className = 'relay-stats-blocked-empty';
+            empty.textContent = rsText("No added relays match '{query}'").replace('{query}', query);
+            rows.appendChild(empty);
+        }
+        list.forEach((url, i) => {
+            const row = document.createElement('div');
+            row.className = 'relay-stats-added-row';
+            row.dataset.rsUrl = url;
+            const dot = document.createElement('span');
+            dot.className = 'relay-stats-dot ' + (states[i] === 'connected' ? 'open' : (states[i] === 'connecting' ? 'pending' : 'closed'));
+            const name = document.createElement('span');
+            name.className = 'relay-stats-url';
+            name.title = url;
+            name.textContent = NymRelayBlock.shown(url);
+            const st = document.createElement('span');
+            st.className = 'relay-stats-added-state';
+            st.textContent = rsText(RS_ADD_STATUS[states[i]] || RS_ADD_STATUS.offline);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'rs-relay-unblock-btn rs-relay-remove-btn';
+            btn.textContent = rsText('Remove');
+            btn.setAttribute('aria-label', rsText('Remove {relay}').replace('{relay}', NymRelayBlock.shown(url)));
+            btn.addEventListener('click', (e) => { e.stopPropagation(); rsRemoveAddedRelay(url); });
+            row.append(dot, name, st, btn);
+            rows.appendChild(row);
+        });
+    }
+    rsPaintAddStatus();
+}
+
 function renderRelayList(pool, stats) {
     const listEl = document.getElementById('rsRelayList');
     if (!listEl) return;
@@ -8523,6 +8957,7 @@ function renderRelayList(pool, stats) {
     const query = String((typeof nym !== 'undefined' && nym._relaySearchQuery) || '').trim();
     const searching = query.length > 0;
     rsEnsureRelaySearch();
+    rsRenderAddedRelays(query);
     rsRenderBlockedRelays(query);
     const countEl = document.getElementById('rsRelaySearchCount');
     const total = entries.length;
@@ -8617,6 +9052,10 @@ function renderRelayList(pool, stats) {
                 `<span class="relay-stats-url" title="${nym.escapeHtml(e.isApi ? 'App backend (D1 storage, profiles, messages)' : e.url)}">${nym.escapeHtml(shortUrl)}</span>` +
                 `<span class="relay-stats-latency">${e.latency !== null ? e.latency + 'ms' : '--'}</span>` +
                 `<span class="relay-stats-events">${metric}</span>`;
+            const tag = document.createElement('span');
+            tag.className = 'relay-stats-added-tag';
+            tag.hidden = true;
+            row.querySelector('.relay-stats-url').after(tag);
             row.addEventListener('click', () => {
                 const url = row.dataset.rsUrl;
                 _rsExpandedRelay = (_rsExpandedRelay === url) ? null : url;
@@ -8629,6 +9068,15 @@ function renderRelayList(pool, stats) {
             if (evtEl) evtEl.textContent = metric;
             const latEl = row.querySelector('.relay-stats-latency');
             if (latEl) latEl.textContent = e.latency !== null ? e.latency + 'ms' : '--';
+        }
+        const addedTag = row.querySelector('.relay-stats-added-tag');
+        if (addedTag) {
+            const isAdded = !e.isApi && typeof nym._isAddedRelay === 'function' && nym._isAddedRelay(e.url);
+            addedTag.hidden = !isAdded;
+            const tagText = rsText('Added');
+            if (addedTag.textContent !== tagText) addedTag.textContent = tagText;
+            const tagTitle = rsText('Added by you');
+            if (addedTag.title !== tagTitle) addedTag.title = tagTitle;
         }
         rsRenderRelayDetail(row, e.url, stats);
         place(row);

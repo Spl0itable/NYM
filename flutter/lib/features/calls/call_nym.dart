@@ -65,6 +65,15 @@ class CallNym extends ConsumerWidget {
         : ((nym != null && nym!.isNotEmpty)
             ? nym!
             : (user?.nym.isNotEmpty == true ? user!.nym : pubkey));
+    final mask = ref.watch(appStateProvider.select((s) {
+      final live = s.users[pubkey]?.nym;
+      return s.personMaskLabel(
+          pubkey, !isPlaceholderNym(live) ? live! : rawNym);
+    }));
+    if (mask.isNotEmpty) {
+      return Text(mask,
+          style: base, maxLines: 1, overflow: TextOverflow.ellipsis);
+    }
     final baseNym = stripPubkeySuffix(rawNym);
     final suffix = getPubkeySuffix(pubkey);
 

@@ -61,8 +61,9 @@ class UnifiedSearchIndex {
   }
 
   SearchMessageItem _itemFor(
-      String key, Message m, String Function(String text)? clean) {
-    final text = clean == null ? m.content : clean(m.content);
+      String key, Message m,
+      String Function(String text, List<String> quoted)? clean) {
+    final text = clean == null ? m.content : clean(m.content, m.quoted);
     final hit = _items[m];
     if (hit != null &&
         (identical(hit.text, text) || hit.text == text) &&
@@ -83,7 +84,8 @@ class UnifiedSearchIndex {
 
   List<SearchMessageItem> messages(
       Map<String, List<Message>> map, bool Function(String key) locked,
-      {int rev = 0, String Function(String text)? clean}) {
+      {int rev = 0,
+      String Function(String text, List<String> quoted)? clean}) {
     final lockedKeys = [
       for (final k in map.keys)
         if (locked(k)) k
@@ -149,7 +151,7 @@ SearchCorpus buildSearchCorpus(
     if (locked('group-${g.id}')) continue;
     channels.add(SearchChannelItem(
       key: g.id,
-      name: g.name,
+      name: s.groupLabel(g),
       kind: 'group',
       joined: true,
       at: g.lastMessageTime,
@@ -189,8 +191,14 @@ SearchCorpus buildSearchCorpus(
       k,
     ],
   };
-  final messages = index.messages(
-      s.messages, (k) => blockedRooms.contains(k) || locked(k),
+  bool peerHidden(String k) {
+    if (!k.startsWith('pm-')) return false;
+    final peer = k.substring(3);
+    return peer.isNotEmpty && peer != s.selfPubkey && s.isPersonHidden(peer);
+  }
+
+  final messages = index.messages(s.messages,
+      (k) => blockedRooms.contains(k) || locked(k) || peerHidden(k),
       rev: s.displayRev, clean: s.stripBlockedQuotes);
   bool visible(SearchMessageItem it) {
     final m = it.ref;

@@ -153,6 +153,25 @@ class FilterPacks {
 
   static Set<String> get active => _active;
 
+  static int _revision = 0;
+
+  static int get revision => _revision;
+
+  static final Set<void Function()> _listeners = <void Function()>{};
+
+  static void addListener(void Function() fn) => _listeners.add(fn);
+
+  static void removeListener(void Function() fn) => _listeners.remove(fn);
+
+  static void _changed() {
+    _revision++;
+    for (final fn in List.of(_listeners)) {
+      try {
+        fn();
+      } catch (_) {}
+    }
+  }
+
   static String _escape(String s) =>
       s.replaceAllMapped(_reSpecial, (m) => '\\${m[0]}');
 
@@ -262,26 +281,48 @@ class FilterPacks {
     final id = pack['id'] as String?;
     if (id == null || !kFilterPackIds.contains(id)) return;
     _compiled[id] = _compile(pack);
+    _revision++;
   }
 
   /// Sets and loads the enabled packs; one that fails to load simply does not filter.
   static Future<void> setActive(Iterable<String> ids) async {
-    _active = ids.where(kFilterPackIds.contains).toSet();
-    for (final id in _active) {
+    final next = ids.where(kFilterPackIds.contains).toSet();
+    var changed =
+        next.length != _active.length || !next.containsAll(_active);
+    _active = next;
+    if (changed) _revision++;
+    for (final id in next) {
       if (_compiled.containsKey(id)) continue;
       try {
         final raw =
             await rootBundle.loadString('assets/data/filter-packs/$id.json');
         loadFromJson(jsonDecode(raw) as Map<String, dynamic>);
+        if (_compiled.containsKey(id) && _active.contains(id)) changed = true;
       } catch (_) {
         // Leave it uncompiled; match() skips packs with no rules.
       }
     }
+    if (changed) _changed();
   }
 
   /// The id of the matching pack, or null.
-  static String? match(String? text, {String? nym}) {
-    if (_active.isEmpty) return null;
+  static String? match(String? text, {String? nym}) =>
+      matchIn(_active, text, nym: nym);
+
+  static Future<void> ensureLoaded(Iterable<String> ids) async {
+    for (final id in ids.where(kFilterPackIds.contains)) {
+      if (_compiled.containsKey(id)) continue;
+      try {
+        final raw =
+            await rootBundle.loadString('assets/data/filter-packs/$id.json');
+        loadFromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } catch (_) {}
+    }
+  }
+
+  static String? matchIn(Iterable<String> ids, String? text, {String? nym}) {
+    final packIds = ids.where(kFilterPackIds.contains).toList();
+    if (packIds.isEmpty) return null;
     final body = text ?? '';
     final subject = (nym != null && nym.isNotEmpty) ? '$nym $body' : body;
     if (subject.isEmpty) return null;
@@ -290,7 +331,7 @@ class FilterPacks {
     if (n.norm.isEmpty) return null;
     final nymNorm = (nym != null && nym.isNotEmpty) ? normalize(nym).norm : '';
 
-    for (final id in _active) {
+    for (final id in packIds) {
       final pack = _compiled[id];
       if (pack == null) continue;
       // Subtract the allow list first so "Scunthorpe" can't match the term inside it.
@@ -322,5 +363,6 @@ class FilterPacks {
   static void resetForTest() {
     _compiled.clear();
     _active = <String>{};
+    _revision++;
   }
 }

@@ -13,7 +13,7 @@ const NYM_I18N_SKIP_SELECTOR = [
     '#typingIndicator', '.typing-indicator', '.typing-indicator-text', '.cv-typing',
     '.notification-item-author', '.file-offer-name', '.shop-item-name',
     '.command-name', '.help-cmd-name', '.translate-dropdown-name',
-    '.translate-lang-option', '.emoji-name', '.hashtag',
+    '.translate-lang-option', '.emoji-name', '.emoji-option', '.hashtag',
     // Language names are endonyms and must never be translated.
     '#translateLanguageSelect', '#uiLanguageSelect', '.translate-lang-grid',
     // The translate dropdown's star aria-labels interpolate language names.
@@ -66,7 +66,7 @@ Object.assign(NYM.prototype, {
                 let added = 0;
                 for (const [key, translated] of Object.entries(pack)) {
                     if (typeof translated !== 'string' || !translated) continue;
-                    if (typeof cache[key] === 'string') continue;
+                    if (cache[key] === translated) continue;
                     cache[key] = translated;
                     added++;
                 }
@@ -380,7 +380,7 @@ Object.assign(NYM.prototype, {
 
     // Every read for keying or applying must use the original English, never the translated text.
     _i18nSourceText(node) {
-        return node.__i18nOrig != null ? node.__i18nOrig : node.nodeValue;
+        return node.__i18nOrig != null ? node.__i18nOrig : this.uiSourceOf(node.nodeValue);
     },
     _i18nSourceAttr(el, attr) {
         const kept = el.__i18nAttrOrig ? el.__i18nAttrOrig[attr] : null;

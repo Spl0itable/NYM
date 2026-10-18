@@ -1890,6 +1890,8 @@ ${bundleCodes || (code ? `
             if (!data.fromPubkey || !data.settings) return;
 
             if (event.pubkey !== data.fromPubkey) return;
+            if (typeof this.isPersonHidden === 'function'
+                && (this.isPersonHidden(event.pubkey) || this.isPersonHidden(event.pubkey, String(data.fromNym || '')))) return;
 
             if (this.dismissedTransferEvents.has(event.id)) return;
             if (this.pendingSettingsTransfers.some(t => t.eventId === event.id)) return;
@@ -1931,7 +1933,7 @@ ${bundleCodes || (code ? `
         const s = transfer.settings;
         if (s) {
             if (typeof applyNostrSettings === 'function') {
-                try { await applyNostrSettings(s); } catch (_) { }
+                try { await applyNostrSettings(s, { accepted: true }); } catch (_) { }
             }
 
             if (s.lightningAddress && this.pubkey) {
@@ -2045,12 +2047,14 @@ ${bundleCodes || (code ? `
         const container = document.getElementById('pendingSettingsTransfers');
         if (!container) return;
 
-        if (this.pendingSettingsTransfers.length === 0) {
+        const shown = this.pendingSettingsTransfers.filter((t) => !(typeof this.isPersonHidden === 'function'
+            && (this.isPersonHidden(t.fromPubkey) || this.isPersonHidden(t.fromPubkey, String(t.fromNym || '')))));
+        if (shown.length === 0) {
             container.innerHTML = '<div class="nm-shop-26">No pending transfers</div>';
             return;
         }
 
-        container.innerHTML = this.pendingSettingsTransfers.map(t => {
+        container.innerHTML = shown.map(t => {
             const date = new Date(t.transferredAt * 1000).toLocaleString();
             return `
                 <div class="nm-shop-27">

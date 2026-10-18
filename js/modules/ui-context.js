@@ -223,7 +223,7 @@ Object.assign(NYM.prototype, {
         document.getElementById('ctxCopyMessage').addEventListener('click', async () => {
             if (this.contextMenuData && this.contextMenuData.content) {
                 try {
-                    await navigator.clipboard.writeText(this.contextMenuData.content);
+                    if (!(await this._copyMessageText(this.contextMenuData.content, this.contextMenuData.messageId))) return;
                     this.displaySystemMessage('Message copied to clipboard');
                 } catch (err) {
                     this.displaySystemMessage('Failed to copy message');
@@ -337,9 +337,9 @@ Object.assign(NYM.prototype, {
         const supporterBadge = userShopItems?.supporter ?
             `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>` : '';
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
-            ? `<span class="verified-badge nm-ctx-1" title="${this.verifiedDeveloper.title}">✓</span>`
+            ? `<span class="verified-badge nm-ctx-1" data-tip="${this.verifiedDeveloper.title}">✓</span>`
             : this.isVerifiedBot(pubkey)
-                ? '<span class="verified-badge nm-ctx-1" title="Nymchat Bot">✓</span>'
+                ? '<span class="verified-badge nm-ctx-1" data-tip="Nymchat Bot">✓</span>'
                 : '';
         const ctxFriendBadge = pubkey !== this.pubkey && this.isFriend(pubkey)
             ? '<span class="friend-badge" title="Friend"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" class="nm-ctx-2"><circle cx="6" cy="5" r="2.5" /><path d="M 1.5 14 C 1.5 10.5 3.5 9 6 9 C 8.5 9 10.5 10.5 10.5 14" /><line x1="13" y1="6" x2="13" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /><line x1="11" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg></span>'
@@ -386,6 +386,7 @@ Object.assign(NYM.prototype, {
     updateRenderedProfileCard(pubkey) {
         if (!pubkey) return;
         if (!this.contextMenuData || this.contextMenuData.pubkey !== pubkey) return;
+        if (this.contextMenuData.masked) return;
 
         this._applyCtxBanner(this.getBannerUrl(pubkey));
 
@@ -409,6 +410,7 @@ Object.assign(NYM.prototype, {
     updateRenderedBanner(pubkey) {
         if (!pubkey) return;
         if (!this.contextMenuData || this.contextMenuData.pubkey !== pubkey) return;
+        if (this.contextMenuData.masked) return;
         this._applyCtxBanner(this.getBannerUrl(pubkey));
     },
 
@@ -417,30 +419,33 @@ Object.assign(NYM.prototype, {
         e.stopPropagation();
 
         const menu = document.getElementById('contextMenu');
-        const parsedNym = this.resolveDisplayNym(pubkey, nym);
+        const ctxMask = typeof this._personMask === 'function' ? this._personMask(pubkey) : '';
+        const parsedNym = ctxMask || this.resolveDisplayNym(pubkey, nym);
         const baseNym = this.stripPubkeySuffix(parsedNym);
         const suffix = this.getPubkeySuffix(pubkey);
         const fullNym = `${baseNym}#${suffix}`;
 
         // reactionId is the DOM-facing ID (nymMessageId for PMs); messageId is the real event ID.
-        this.contextMenuData = { nym: baseNym, pubkey, content, messageId, reactionId: reactionId || messageId };
+        this.contextMenuData = { nym: baseNym, pubkey, content, messageId, reactionId: reactionId || messageId, masked: !!ctxMask };
 
         // Shown only when opened from a group context menu, to return to it.
         this._ctxBackToGroup = backToGroupId || null;
         const ctxBackBtn = document.getElementById('ctxBackBtn');
         if (ctxBackBtn) ctxBackBtn.classList.toggle('nm-hidden', !backToGroupId);
 
-        this._applyCtxBanner(this.getBannerUrl(pubkey));
+        this._applyCtxBanner(ctxMask ? null : this.getBannerUrl(pubkey));
 
         const ctxAvatarImg = document.getElementById('ctxAvatarImg');
         const ctxAvatarNym = document.getElementById('ctxAvatarNym');
         if (ctxAvatarImg) {
-            ctxAvatarImg.src = this.getAvatarUrl(pubkey);
             const fallback = this.generateAvatarSvg(pubkey);
+            ctxAvatarImg.src = ctxMask ? fallback : this.getAvatarUrl(pubkey);
             ctxAvatarImg.onerror = function () { this.onerror = null; this.src = fallback; };
         }
         if (ctxAvatarNym) {
-            ctxAvatarNym.innerHTML = this._ctxNymHtml(pubkey, baseNym, suffix);
+            ctxAvatarNym.innerHTML = ctxMask
+                ? `${this.escapeHtml(ctxMask)}<span class="nym-suffix">#${suffix}</span>`
+                : this._ctxNymHtml(pubkey, baseNym, suffix);
         }
 
         // npub by default (see users.js).
@@ -653,7 +658,7 @@ Object.assign(NYM.prototype, {
 
         const ctxBio = document.getElementById('ctxBio');
         if (ctxBio) {
-            const bio = this.getBio(pubkey);
+            const bio = ctxMask ? '' : this.getBio(pubkey);
             ctxBio.textContent = bio;
         }
 

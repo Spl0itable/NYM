@@ -46,6 +46,8 @@ class _Peer {
   bool sharing = false; // peer is screen-sharing
   bool? videoOn;
   bool renegotiate = false;
+  Map<String, dynamic>? heldOffer;
+  SdpOrigin? remoteSdp;
 }
 
 class _ActiveCall {
@@ -259,7 +261,9 @@ class CallService {
     var name = _peerLabel(inc.from, inc.nym);
     if (inc.isGroup && inc.groupId != null) {
       final g = _groupById(inc.groupId!);
-      if (g != null && g.name.isNotEmpty) name = g.name;
+      if (g != null && g.name.isNotEmpty) {
+        name = _ref.read(appStateProvider).groupLabel(g);
+      }
     }
     try {
       final lock = _ref.read(chatLockProvider);
@@ -483,7 +487,8 @@ class CallService {
     if (isGroup && groupId != null) {
       final g = _groupById(groupId);
       if (g != null && g.name.isNotEmpty) {
-        body += tr(' in {group}', {'group': g.name});
+        body += tr(' in {group}',
+            {'group': _ref.read(appStateProvider).groupLabel(g)});
       }
     }
     var title = _peerLabel(callerPubkey, callerNym);
@@ -504,6 +509,7 @@ class CallService {
             route: isGroup ? (groupId ?? '') : callerPubkey,
             ts: whenMs,
             eventId: callId.isNotEmpty ? 'missed-call-$callId' : null,
+            stableId: callId.isNotEmpty,
             senderPubkey: callerPubkey,
           );
     } catch (_) {
@@ -559,9 +565,14 @@ class CallService {
       _system(tr('Already in a call'));
       return;
     }
+    if (canRejoinGroupCall(groupId)) {
+      return rejoinGroupCall(groupId, video: video);
+    }
     final group = _groupById(groupId);
     if (group == null) return;
-    final targets = group.members.where((pk) => pk != _self).toList();
+    final targets = group.members
+        .where((pk) => pk != _self && !_isBlocked(pk))
+        .toList();
     if (targets.isEmpty) {
       _system(tr('No one to call in this group'));
       return;
@@ -692,12 +703,15 @@ class CallService {
     await _attachLocalPreview(stream);
 
     // Broadcast accept to the other members, then connect.
-    for (final pk in active.members.where((pk) => pk != _self)) {
+    for (final pk
+        in active.members.where((pk) => pk != _self && !_isBlocked(pk))) {
       _send(pk, CallSignal.accept(active.callId));
     }
     await _connectToPeer(inc.from);
     for (final pk in early) {
-      if (pk != _self && pk != inc.from) await _connectToPeer(pk);
+      if (pk != _self && pk != inc.from && !_isBlocked(pk)) {
+        await _connectToPeer(pk);
+      }
     }
     _publish();
   }
@@ -753,7 +767,7 @@ class CallService {
     if (l == null || l.groupId != groupId) return false;
     if (_active != null || _incoming != null) return false;
     if (_groupById(groupId) == null) return false;
-    if (l.remaining.isEmpty) return false;
+    if (!l.remaining.any((pk) => !_isBlocked(pk))) return false;
     return clock() - l.at <= rejoinWindow.inMilliseconds;
   }
 
@@ -774,13 +788,14 @@ class CallService {
     }
   }
 
-  Future<void> rejoinGroupCall(String groupId) async {
+  Future<void> rejoinGroupCall(String groupId, {bool? video}) async {
     if (!canRejoinGroupCall(groupId) || _starting) return;
     final l = _left!;
+    final camera = video ?? l.kind == CallKind.video;
     _starting = true;
     MediaStream? stream;
     try {
-      stream = await _getLocalMedia(l.kind);
+      stream = await _getLocalMedia(camera ? CallKind.video : CallKind.audio);
     } finally {
       _starting = false;
     }
@@ -792,13 +807,13 @@ class CallService {
     _setLeft(null);
     final active = _ActiveCall(
       callId: l.callId,
-      kind: l.kind,
+      kind: camera ? CallKind.video : l.kind,
       isGroup: true,
       groupId: l.groupId,
       members: List.of(l.members),
       localStream: stream,
       status: 'connecting',
-    );
+    )..cameraOff = !camera && l.kind == CallKind.video;
     _active = active;
     _startOngoing(active);
     active.lostTimer = Timer(callLostAfter, () {
@@ -808,12 +823,19 @@ class CallService {
       end();
     });
     await _attachLocalPreview(stream);
-    for (final pk in active.members.where((pk) => pk != _self)) {
+    for (final pk
+        in active.members.where((pk) => pk != _self && !_isBlocked(pk))) {
       _send(pk, CallSignal.accept(active.callId));
     }
     _publish();
     for (final pk in l.remaining) {
+      if (_isBlocked(pk)) continue;
       await _connectToPeer(pk);
+      if (camera &&
+          l.kind != CallKind.video &&
+          !isOfferer(selfPubkey: _self, peerPubkey: pk)) {
+        await _makeOffer(pk);
+      }
     }
     _publish();
   }
@@ -825,8 +847,9 @@ class CallService {
         ? <String>{}
         : ac.peers.entries
             .where((e) =>
+                !_isBlocked(e.key) &&
                 e.value.pc.connectionState ==
-                RTCPeerConnectionState.RTCPeerConnectionStateConnected)
+                    RTCPeerConnectionState.RTCPeerConnectionStateConnected)
             .map((e) => e.key)
             .toSet();
     if (ac != null &&
@@ -843,7 +866,8 @@ class CallService {
       ));
     }
     if (ac != null) {
-      for (final pk in ac.members.where((pk) => pk != _self)) {
+      for (final pk
+          in ac.members.where((pk) => pk != _self && !_isBlocked(pk))) {
         if (ac.status == 'outgoing') _send(pk, CallSignal.cancel(ac.callId));
         _send(pk, CallSignal.hangup(ac.callId));
       }
@@ -854,6 +878,10 @@ class CallService {
   /// Blocking [pubkey] mid-call ends a 1:1 call or drops them from a group call and hides their chat.
   // Public so blocking from anywhere updates the live call.
   void onUserBlocked(String pubkey) {
+    final inc = _incoming;
+    if (inc != null && pubkey.isNotEmpty && inc.from == pubkey && !inc.accepting) {
+      _dropIncoming(inc);
+    }
     final ac = _active;
     if (ac == null || pubkey.isEmpty) return;
     _clearTyping(pubkey);
@@ -1089,6 +1117,7 @@ class CallService {
     final emoji = data['emoji'];
     if (ac == null || ac.callId != data['callId'] || emoji is! String) return;
     if (emoji.isEmpty || !ac.members.contains(sender)) return;
+    if (_callerHidden(sender)) return;
     // Register the sender's custom emoji defs so the shortcode resolves.
     _ingestEmojiTags(data['emojiTags']);
     _pushFly(emoji, pubkey: sender);
@@ -1168,7 +1197,7 @@ class CallService {
     // Drop blocked users' chat reactions.
     if (_isBlocked(sender)) return;
     // Register the sender's custom emoji defs.
-    _ingestEmojiTags(data['emojiTags']);
+    if (!_callerHidden(sender)) _ingestEmojiTags(data['emojiTags']);
     final map = ac.chatReactions.putIfAbsent(mid, () => {});
     final set = map.putIfAbsent(emoji, () => <String>{});
     if (data['op'] == 'remove') {
@@ -1222,6 +1251,10 @@ class CallService {
       ac.chatTypers.remove(sender)?.cancel();
     } else {
       ac.chatTypers.remove(sender)?.cancel();
+      if (_callerHidden(sender)) {
+        _publish();
+        return;
+      }
       ac.chatTypers[sender] = Timer(const Duration(seconds: 5), () {
         ac.chatTypers.remove(sender);
         if (_active == ac) _publish();
@@ -1256,9 +1289,9 @@ class CallService {
     final ac = _active;
     if (ac == null) return;
     for (final m in ac.chatLog) {
-      if (!m.isSelf && m.pubkey.isNotEmpty && m.mid.isNotEmpty) {
-        _sendChatRead(m.pubkey, m.mid);
-      }
+      if (m.isSelf || m.pubkey.isEmpty || m.mid.isEmpty) continue;
+      if (_chatHidden(m.pubkey, m.text)) continue;
+      _sendChatRead(m.pubkey, m.mid);
     }
   }
 
@@ -1282,6 +1315,7 @@ class CallService {
   void dispose() {
     _leftExpiry?.cancel();
     _leftExpiry = null;
+    _left = null;
     // The container may be tearing down; best-effort.
     try {
       _ref.read(nostrControllerProvider).setCallSignalHandler(null);
@@ -1364,14 +1398,13 @@ class CallService {
     }
     final sender = rumor['pubkey'] as String?;
     if (sender == null || sender == _self) return;
-    // Blocked users can't ring, join or signal.
-    if (_isBlocked(sender)) return;
     if (callSignalExpired(
         rumor['tags'], DateTime.now().millisecondsSinceEpoch ~/ 1000)) {
       return;
     }
     final data = _decodePayload(rumor);
     if (data == null) return;
+    if (_isBlocked(sender)) return;
     if (data.containsKey('wake')) {
       try {
         _ref.read(callWakeBookProvider).remember(_self, sender, data['wake']);
@@ -1383,6 +1416,7 @@ class CallService {
     if (type == GroupToolsCallSignals.join ||
         type == GroupToolsCallSignals.refused) {
       unawaited(_ref.read(groupToolsProvider).onCallSignal(sender, data,
+          createdAt: createdAt,
           busyFor: (kind) =>
               _incoming != null ||
               (_active != null && _active!.kind.wire != kind)));
@@ -1685,6 +1719,8 @@ class CallService {
       inviteIsLink: data['link'] != null,
     );
 
+    if (_callerHidden(sender, data['nym'] as String?)) return;
+
     // acceptCalls preference gate.
     final pref = _ref.read(settingsProvider).acceptCalls;
     final friend = _isFriend(sender);
@@ -1885,19 +1921,32 @@ class CallService {
     }
   }
 
-  Future<void> _onOffer(String sender, Map<String, dynamic> data) async {
+  Future<void> _onOffer(String sender, Map<String, dynamic> data,
+      {bool settled = false}) async {
     final ac = _active;
     if (ac == null || ac.callId != data['callId']) return;
     if (!ac.members.contains(sender)) return;
     if (!ac.peers.containsKey(sender)) await _connectToPeer(sender);
     final peer = ac.peers[sender];
     if (peer == null) return;
+    final text = _sdpText(data);
+    if (sdpStale(peer.remoteSdp, text)) return;
+    final signaling =
+        settled ? 'stable' : _signalingName(peer.pc.signalingState);
     final collision = offerCollision(
       selfPubkey: _self,
       peerPubkey: sender,
-      signalingState: _signalingName(peer.pc.signalingState),
+      signalingState: signaling,
     );
-    if (collision == 'ignore') return;
+    if (collision == 'ignore') {
+      if (signaling == 'have-local-offer') {
+        final held = peer.heldOffer;
+        if (held == null || !sdpStale(sdpOrigin(_sdpText(held)), text)) {
+          peer.heldOffer = data;
+        }
+      }
+      return;
+    }
     try {
       if (collision == 'rollback') {
         await peer.pc.setLocalDescription(RTCSessionDescription('', 'rollback'));
@@ -1907,6 +1956,7 @@ class CallService {
       await peer.pc.setRemoteDescription(
           RTCSessionDescription(sdp['sdp'] as String?, sdp['type'] as String?));
       peer.haveRemote = true;
+      _noteRemoteSdp(peer, text);
       await _flushCandidates(sender);
       final answer = await peer.pc.createAnswer();
       await peer.pc.setLocalDescription(answer);
@@ -1924,6 +1974,24 @@ class CallService {
     } catch (e) {
       debugPrint('CallService offer error: $e');
     }
+  }
+
+  static String? _sdpText(Map<String, dynamic> data) {
+    final sdp = data['sdp'];
+    return sdp is Map ? sdp['sdp'] as String? : null;
+  }
+
+  void _noteRemoteSdp(_Peer peer, String? text) {
+    final o = sdpOrigin(text);
+    if (o != null && !sdpStale(peer.remoteSdp, text)) peer.remoteSdp = o;
+  }
+
+  void _takeHeldOffer(String sender, _Peer peer) {
+    final held = peer.heldOffer;
+    peer.heldOffer = null;
+    if (held == null || _active?.peers[sender] != peer) return;
+    if (peer.remoteSdp == null || sdpOrigin(_sdpText(held)) == null) return;
+    unawaited(_onOffer(sender, held, settled: true));
   }
 
   static String _signalingName(RTCSignalingState? s) {
@@ -1954,15 +2022,19 @@ class CallService {
     if (peer.pc.signalingState == RTCSignalingState.RTCSignalingStateStable) {
       return;
     }
+    var applied = false;
     try {
       final sdp = data['sdp'] as Map;
       await peer.pc.setRemoteDescription(
           RTCSessionDescription(sdp['sdp'] as String?, sdp['type'] as String?));
       peer.haveRemote = true;
+      _noteRemoteSdp(peer, sdp['sdp'] as String?);
+      applied = true;
       await _flushCandidates(sender);
     } catch (e) {
       debugPrint('CallService answer error: $e');
     }
+    if (applied) _takeHeldOffer(sender, peer);
   }
 
   Future<void> _onIce(String sender, Map<String, dynamic> data) async {
@@ -2029,6 +2101,7 @@ class CallService {
   Future<void> _connectToPeer(String peerPubkey) {
     final ac = _active;
     if (ac == null || peerPubkey == _self) return Future.value();
+    if (_isBlocked(peerPubkey)) return Future.value();
     if (ac.peers.containsKey(peerPubkey)) return Future.value();
     final key = '${ac.callId}/$peerPubkey';
     final pending = _connecting[key];
@@ -2081,9 +2154,9 @@ class CallService {
       }
       _send(peerPubkey, CallSignal.share(callId: ac.callId, on: true));
     }
-    if (ac.kind == CallKind.video &&
-        _hasCamera(ac)) {
-      _send(peerPubkey, CallSignal.video(callId: ac.callId, on: !ac.cameraOff));
+    if (ac.kind == CallKind.video) {
+      _send(peerPubkey,
+          CallSignal.video(callId: ac.callId, on: !ac.cameraOff && _hasCamera(ac)));
     }
     // As a mod, sync presenter state to the new peer.
     if (_isCallMod(ac) && (ac.shareRestricted || ac.presenter != null)) {
@@ -2168,6 +2241,7 @@ class CallService {
       return;
     }
     try {
+      await _askForVideo(ac, peer);
       final offer = iceRestart
           ? await peer.pc.createOffer({'iceRestart': true})
           : await peer.pc.createOffer();
@@ -2181,6 +2255,24 @@ class CallService {
           ));
     } catch (e) {
       debugPrint('CallService makeOffer error: $e');
+    }
+  }
+
+  Future<void> _askForVideo(_ActiveCall ac, _Peer peer) async {
+    if (ac.kind != CallKind.video) return;
+    try {
+      final xs = await peer.pc.getTransceivers();
+      if (xs.any((t) =>
+          t.receiver.track?.kind == 'video' ||
+          t.sender.track?.kind == 'video')) {
+        return;
+      }
+      await peer.pc.addTransceiver(
+          kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
+          init:
+              RTCRtpTransceiverInit(direction: TransceiverDirection.RecvOnly));
+    } catch (e) {
+      debugPrint('CallService askForVideo error: $e');
     }
   }
 
@@ -2396,6 +2488,7 @@ class CallService {
   }
 
   Future<bool> _send(String to, Map<String, dynamic> payload) {
+    if (_isBlocked(to)) return Future<bool>.value(false);
     final wake = _ownWakeFor(to);
     return _ref
         .read(nostrControllerProvider)
@@ -2407,6 +2500,7 @@ class CallService {
 
   String? _ownWakeFor(String peer) {
     try {
+      if (_isBlocked(peer)) return null;
       final own = _ref.read(ringRegistrationProvider).wakeFor(_self);
       if (own == null) return null;
       final share = shouldShareWake(
@@ -2425,6 +2519,7 @@ class CallService {
       final book = _ref.read(callWakeBookProvider);
       final client = _ref.read(ringClientProvider);
       for (final pk in targets) {
+        if (_isBlocked(pk)) continue;
         final wake = book.wakeFor(_self, pk);
         if (wake != null) unawaited(client.ring(wake));
       }
@@ -2463,6 +2558,40 @@ class CallService {
 
   bool _isBlocked(String pubkey) =>
       _ref.read(appStateProvider).blockedUsers.contains(pubkey);
+
+  bool _callerHidden(String pubkey, [String? nym]) {
+    if (pubkey.isEmpty || pubkey == _self) return false;
+    final app = _ref.read(appStateProvider);
+    if (app.isPersonHidden(pubkey)) return true;
+    return nym != null && nym.isNotEmpty && app.isPersonHidden(pubkey, nym);
+  }
+
+  void _dropIncoming(_IncomingCall inc) {
+    if (_incoming != inc) return;
+    inc.timeout?.cancel();
+    _stopRingtone();
+    _markCallSeen(inc.callId, 'declined');
+    _incoming = null;
+    _publishIdle();
+  }
+
+  void onFiltersChanged() {
+    final inc = _incoming;
+    if (inc != null && !inc.accepting && _callerHidden(inc.from, inc.nym)) {
+      _dropIncoming(inc);
+    }
+    final live = _active;
+    if (live != null) {
+      final blocked = {...live.members, ...live.peers.keys}
+          .where((pk) => pk != _self && _isBlocked(pk))
+          .toList();
+      for (final pk in blocked) {
+        if (_active != live) break;
+        onUserBlocked(pk);
+      }
+    }
+    if (_active != null) _publish();
+  }
 
   String _peerLabel(String pubkey, [String? hint]) {
     var name = hint != null && hint.isNotEmpty ? stripPubkeySuffix(hint) : 'nym';
@@ -2590,7 +2719,14 @@ class CallService {
     if (ac == null || ac.callId != data['callId'] || !_isCallMod(ac)) return;
     if (!ac.members.contains(sender)) return;
     ac.presentRequests.add(sender);
-    _system(tr('{name} requested to present', {'name': _nymFor(sender)}));
+    final app = _ref.read(appStateProvider);
+    var mask = app.personMaskLabel(sender);
+    final claimed = data['nym'];
+    if (mask.isEmpty && claimed is String && claimed.isNotEmpty) {
+      mask = app.personMaskLabel(sender, claimed);
+    }
+    _system(tr('{name} requested to present',
+        {'name': mask.isNotEmpty ? mask : _nymFor(sender)}));
     _publish();
   }
 
@@ -2726,10 +2862,17 @@ class CallService {
         ac.chatLog
             .where((m) => m.isSelf || !_chatHidden(m.pubkey, m.text))
             .map((m) {
-      final r = ac.chatReactions[m.mid];
-      if (r == null || r.isEmpty) return m;
+      final r = _visibleReactions(ac.chatReactions[m.mid]);
+      final shown = m.readers.keys.any(_callerHidden)
+          ? {
+              for (final e in m.readers.entries)
+                if (!_callerHidden(e.key)) e.key: e.value,
+            }
+          : null;
+      if ((r == null || r.isEmpty) && shown == null) return m;
       return m.copyWith(
-        reactions: {for (final e in r.entries) e.key: Set<String>.of(e.value)},
+        readers: shown,
+        reactions: r == null || r.isEmpty ? null : r,
       );
     }).toList();
 
@@ -2758,8 +2901,14 @@ class CallService {
       elapsedSeconds: elapsed,
       chatLog: chatLog,
       chatUnread: ac.chatUnread,
-      typingPubkeys: ac.chatTypers.keys.toList(),
-      flyReactions: List.of(_flyReactions),
+      typingPubkeys: [
+        for (final pk in ac.chatTypers.keys)
+          if (!_callerHidden(pk)) pk,
+      ],
+      flyReactions: [
+        for (final f in _flyReactions)
+          if (f.pubkey == null || !_callerHidden(f.pubkey!)) f,
+      ],
       shareRestricted: ac.shareRestricted,
       presenter: ac.presenter,
       presentRequests: Set.of(ac.presentRequests),
@@ -2775,6 +2924,20 @@ class CallService {
               .toList()
           : const [],
     );
+  }
+
+  Map<String, Set<String>>? _visibleReactions(
+      Map<String, Set<String>>? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    final out = <String, Set<String>>{};
+    for (final e in raw.entries) {
+      final shown = {
+        for (final pk in e.value)
+          if (pk == _self || !_callerHidden(pk)) pk,
+      };
+      if (shown.isNotEmpty) out[e.key] = shown;
+    }
+    return out;
   }
 
   static String _formatTimer(int seconds) {

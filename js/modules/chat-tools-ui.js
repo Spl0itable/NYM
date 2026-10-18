@@ -89,11 +89,12 @@
                 nid: m.nymMessageId || '',
                 pubkey: m.pubkey || '',
                 author: m.pubkey ? this._ctDisplayNym(m.pubkey, m.author) : (m.author || ''),
-                content: m.content || '',
+                content: (typeof this._shownContent === 'function' ? this._shownContent(m) : m.content) || '',
                 at: Number(m.created_at) || Math.floor(((m.timestamp && m.timestamp.getTime && m.timestamp.getTime()) || 0) / 1000),
                 edited: !!m.isEdited,
                 system: !m.pubkey || m.isSystem === true,
                 fileOffer: m.isFileOffer && m.fileOffer ? { name: m.fileOffer.name, size: m.fileOffer.size } : null,
+                quoted: typeof this._quotedOf === 'function' ? this._quotedOf(m) : [],
             };
         },
 
@@ -305,9 +306,24 @@
             const nym = (e.a && e.a.n) || '';
             if (!F || typeof this._cfCtx !== 'function') return !!(pk && pk !== this.pubkey && this.blockedUsers && this.blockedUsers.has(pk));
             const ctx = this._cfCtx();
-            if (e.chat && e.chat.t === 'channel' && e.chat.k && F.channelBlocked(ctx, e.chat.k)) return true;
-            if (e.chat && e.chat.t === 'dm' && e.chat.k && F.userBlocked(ctx, String(e.chat.k).replace(/^pm-/, ''))) return true;
-            return F.hidden(ctx, { pubkey: pk, content: e.text || '', nym: this._cfNym(nym) });
+            if (e.chat && e.chat.t === 'channel' && e.chat.k && F.channelHidden(ctx, e.chat.k)) return true;
+            if (e.chat && e.chat.t === 'dm' && e.chat.k) {
+                const peer = String(e.chat.k).replace(/^pm-/, '');
+                if (F.userBlocked(ctx, peer)) return true;
+                if (peer && peer !== this.pubkey && typeof this.isPersonHidden === 'function' && this.isPersonHidden(peer)) return true;
+            }
+            if (pk && pk !== this.pubkey && typeof this.isPersonHidden === 'function' && this.isPersonHidden(pk)) return true;
+            return F.hidden(ctx, { pubkey: pk, content: e.text || '', nym: this._cfNym(nym), quoted: Array.isArray(e.q) ? e.q : [] });
+        },
+
+        _savedGroupLabel(e) {
+            const gid = String((e.chat && e.chat.k) || '').replace(/^group-/, '');
+            const g = this.groupConversations && this.groupConversations.get(gid);
+            const src = g || { name: (e.chat && e.chat.n) || '' };
+            const label = typeof this._groupLabel === 'function' ? this._groupLabel(src) : String(src.name || '');
+            return label === String(src.name || '').trim() && label
+                ? this._ct('Group: {name}', { name: label })
+                : this._ct('Group');
         },
 
         _ctRefreshSavedIfOpen() {
@@ -322,10 +338,10 @@
             const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
             const rows = items.map((e) => {
                 const when = this._formatFullTimestamp((e.at || 0) * 1000);
-                const chat = e.chat.t === 'channel' ? e.chat.n : e.chat.t === 'group' ? this._ct('Group: {name}', { name: e.chat.n }) : this._ct('PM with {name}', { name: e.chat.n });
+                const chat = e.chat.t === 'channel' ? e.chat.n : e.chat.t === 'group' ? this._savedGroupLabel(e) : this._ct('PM with {name}', { name: e.chat.n });
                 return `<div class="ct-saved-item" data-saved-id="${esc(e.id)}">
                     <div class="ct-saved-meta"><span class="ct-saved-author">${this.nymLabelHtml(e.a.n)}</span><span class="ct-saved-chat">${e.chat.t === 'channel' || e.chat.t === 'group' ? esc(chat) : this.nymTextHtml(chat, [e.chat.n])}</span><span class="ct-saved-time">${esc(when)}</span></div>
-                    <div class="ct-saved-text message-content">${this.formatMessageWithQuotes(e.text, 0)}</div>
+                    <div class="ct-saved-text message-content">${this.formatMessageWithQuotes(e.text, 0, false, Array.isArray(e.q) ? e.q : [])}</div>
                     <div class="ct-saved-actions">
                         <button type="button" class="ct-btn" data-action="ctSavedJump" data-saved-id="${esc(e.id)}">${esc(this._ct('Jump to original'))}</button>
                         <button type="button" class="ct-btn danger" data-action="ctSavedRemove" data-saved-id="${esc(e.id)}">${esc(this._ct('Remove'))}</button>
@@ -415,9 +431,12 @@
             if (view !== 'versions') { body.innerHTML = empty("Earlier versions aren't available on this device."); return; }
             const found = this._ctFindMessage(domId);
             const current = found ? found.msg.content : '';
+            const quoted = found && typeof this._quotedOf === 'function' ? this._quotedOf(found.msg) : [];
+            const hiddenText = (v) => !v.current && !!found && typeof this.isContentHidden === 'function'
+                && this.isContentHidden(Object.assign({}, found.msg, { content: String(v.text || '') }));
             body.innerHTML = C().editTimeline(this.editHistoryFor(domId), current).map((v) => `<div class="ct-version${v.current ? ' current' : ''}">
                 <div class="ct-version-time">${esc(v.current ? this._ct('Current, edited {time}', { time: this._formatFullTimestamp(v.at * 1000) }) : this._formatFullTimestamp(v.at * 1000))}</div>
-                <div class="ct-version-text message-content">${this.formatMessageWithQuotes(v.text, 0)}</div>
+                ${hiddenText(v) ? `<div class="ct-version-text message-content ct-version-hidden">${esc(this._ct('Content hidden'))}</div>` : `<div class="ct-version-text message-content">${this.formatMessageWithQuotes(v.text, 0, false, quoted)}</div>`}
             </div>`).join('');
         },
 
@@ -747,7 +766,7 @@
             }
             const nym = this._ctDisplayNym(m.pubkey, m.author);
             if (typeof this.openUserPM === 'function') this.openUserPM(nym, m.pubkey);
-            if (typeof this.setQuoteReply === 'function') this.setQuoteReply(nym, m.content || '');
+            if (typeof this.setQuoteReply === 'function') this.setQuoteReply(nym, typeof this._shownContent === 'function' ? this._shownContent(m) : (m.content || ''));
             if (!this.connected && !this.meshPmPeerId(m.pubkey)) {
                 this._ctNotice(this._ct("You're offline. Your reply will need the internet or this person in Bluetooth range."));
             }
@@ -790,7 +809,7 @@
             let list = this.pmMessages.get(conversationKey) || [];
             list.push(msg);
             if (typeof this._compareMessages === 'function') list.sort((a, b) => this._compareMessages(a, b));
-            if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
+            if (list.length > this.pmStorageLimit) list = typeof this._storeTrim === 'function' ? this._storeTrim(list, this.pmStorageLimit) : list.slice(-this.pmStorageLimit);
             this.pmMessages.set(conversationKey, list);
             if (typeof this.persistPMMessages === 'function') this.persistPMMessages(conversationKey);
             if (typeof this.displayMessage === 'function') this.displayMessage(msg);

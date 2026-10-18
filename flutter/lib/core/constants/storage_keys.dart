@@ -160,6 +160,7 @@ class StorageKeys {
   static const friends = 'nym_friends';
   static const blockedKeywords = 'nym_blocked_keywords';
   static const blockedRelays = 'nym_blocked_relays';
+  static const addedRelays = 'nym_added_relays';
 
   static const spamFilterEnabled = 'nym_spam_filter_enabled';
   static const spamFilterAggressive = 'nym_spam_filter_aggressive';

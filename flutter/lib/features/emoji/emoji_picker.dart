@@ -198,8 +198,14 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
       });
     // At most 50 packs with a known emoji, 120 emojis each; search only hides cells, freeing no slots.
     var shownPacks = 0;
+    final filters = ref.read(appStateProvider);
     for (final pack in orderedPacks) {
       if (shownPacks >= 50) break;
+      if (filters.emojiPackHidden(
+          pack.pubkey, pack.title.isNotEmpty ? pack.title : pack.identifier,
+          chosen: packFavSet.contains(pack.key) || isSubscribed(pack))) {
+        continue;
+      }
       final known = <({String shortcode, String url})>[];
       for (final e in pack.emojis) {
         final url = custom.codeToUrl[e.shortcode];
@@ -414,6 +420,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
   Widget _unicodeCell(String emoji) {
     return _EmojiCell(
       onTap: () => widget.onSelect(emoji),
+      tip: (_emojiToNames[emoji] ?? const <String>[]).join(', '),
       child: Text(
         emoji,
         style: const TextStyle(fontSize: 23, height: 1.1),
@@ -426,6 +433,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
   Widget _customCell(String shortcode, String url) {
     return _EmojiCell(
       onTap: () => widget.onSelect(':$shortcode:'),
+      tip: ':$shortcode:',
       // SVG-aware and decode-safe; an undecodable image shows a broken-image glyph instead of throwing.
       child: InlineNetworkImage(
         // Always proxied so the user's IP is hidden from the host; an explicit [proxyBase] wins (tests).
@@ -553,9 +561,10 @@ class _FavStar extends StatelessWidget {
 
 /// Emoji cell that fills and scales to 1.15 on hover.
 class _EmojiCell extends StatefulWidget {
-  const _EmojiCell({required this.onTap, required this.child});
+  const _EmojiCell({required this.onTap, required this.child, this.tip = ''});
   final VoidCallback onTap;
   final Widget child;
+  final String tip;
 
   @override
   State<_EmojiCell> createState() => _EmojiCellState();
@@ -566,7 +575,7 @@ class _EmojiCellState extends State<_EmojiCell> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
+    final cell = MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: Material(
@@ -589,5 +598,7 @@ class _EmojiCellState extends State<_EmojiCell> {
         ),
       ),
     );
+    if (widget.tip.isEmpty) return cell;
+    return NymTooltip(message: widget.tip, child: cell);
   }
 }

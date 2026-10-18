@@ -3093,6 +3093,15 @@ function sanitizeInput(text, max) {
   return wellFormedText(text).trim();
 }
 
+function giftSenderLabel(raw, pubkey) {
+  var pk = String(pubkey || "").toLowerCase();
+  if (typeof raw !== "string" || !/^[0-9a-f]{64}$/.test(pk)) return "";
+  var m = sanitizeInput(raw, 64).match(/^([\s\S]*)#([0-9a-f]{4})$/i);
+  if (!m || m[2].toLowerCase() !== pk.slice(-4)) return "";
+  var base = m[1].replace(/[\u0000-\u001f\u007f<>#]/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
+  return base ? base + "#" + pk.slice(-4) : "";
+}
+
 function ipv6Groups(ip) {
   var s = String(ip || "").toLowerCase().replace(/^\[|\]$/g, "");
   var pct = s.indexOf("%");
@@ -3470,6 +3479,7 @@ export {
   bolt11PaymentHash,
   invoicePaymentConfirmed,
   sanitizeInput,
+  giftSenderLabel,
   truncateText,
   wellFormedText,
   bytesToHex,

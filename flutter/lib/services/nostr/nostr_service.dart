@@ -419,7 +419,10 @@ class NostrService {
         writeOnlyRelays: RelayConfig.writeOnlyRelays,
         verify: _verifyOffThread,
       ))
-    ..setBlockedRelays(_blockedRelays);
+    ..setBlockedRelays(_blockedRelays)
+    ..setAddedRelays(_directAdded)
+    ..anonKeys = _anonKeys
+    ..anonLane = _anonLane;
 
   RelayPoolProxy _newProxyPool() => (_proxyPoolFactory?.call() ??
       RelayPoolProxy(
@@ -427,7 +430,10 @@ class NostrService {
         dmRelays: RelayConfig.defaultRelays,
         verify: _verifyOffThread,
       ))
-    ..setBlockedRelays(_blockedRelays);
+    ..setBlockedRelays(_blockedRelays)
+    ..setAddedRelays(_addedRelays)
+    ..anonKeys = _anonKeys
+    ..anonLane = _anonLane;
 
   Set<String> _blockedRelays = const {};
 
@@ -440,6 +446,51 @@ class NostrService {
       p.setBlockedRelays(_blockedRelays);
     } else if (p is RelayPool) {
       p.setBlockedRelays(_blockedRelays);
+    }
+  }
+
+  List<String> _addedRelays = const [];
+
+  List<String> get addedRelays => _addedRelays;
+
+  bool get addedRelaysWaitForPool => _poolFallbackActive && !_userDirect;
+
+  bool get relayChecksViaPool => isProxyMode || addedRelaysWaitForPool;
+
+  List<String> get _directAdded =>
+      addedRelaysWaitForPool ? const <String>[] : _addedRelays;
+
+  void setAddedRelays(Iterable<String> urls) {
+    _addedRelays = List.unmodifiable(urls);
+    final p = _pool;
+    if (p is RelayPoolProxy) {
+      p.setAddedRelays(_addedRelays);
+    } else if (p is RelayPool) {
+      p.setAddedRelays(_directAdded);
+    }
+  }
+
+  Set<String> Function()? _anonLane;
+
+  set anonLane(Set<String> Function()? fn) {
+    _anonLane = fn;
+    final p = _pool;
+    if (p is RelayPoolProxy) {
+      p.anonLane = fn;
+    } else if (p is RelayPool) {
+      p.anonLane = fn;
+    }
+  }
+
+  Set<String> Function()? _anonKeys;
+
+  set anonKeys(Set<String> Function()? fn) {
+    _anonKeys = fn;
+    final p = _pool;
+    if (p is RelayPoolProxy) {
+      p.anonKeys = fn;
+    } else if (p is RelayPool) {
+      p.anonKeys = fn;
     }
   }
 
@@ -592,6 +643,7 @@ class NostrService {
     _wireProxyFallback();
     _wireRetract(_pool);
     _wireLiveness(_pool);
+    _wireCount(_pool);
     _wireOutbox(_pool);
     _loadQuietList();
     pool.connectAll();
@@ -624,6 +676,8 @@ class NostrService {
 
   /// Whether D1 backs history: natively, when the relay-pool proxy is the active transport.
   bool get _d1Available => ApiConfig.apiHost.isNotEmpty && isProxyMode;
+
+  bool get d1Backed => _d1Available;
 
   /// Port of the PWA's `_buildCriticalFilters`: live-only windows under D1, full 24h windows in direct mode.
   List<NostrFilter> _buildCriticalFilters() {
@@ -947,9 +1001,22 @@ class NostrService {
     }
   }
 
+  void _wireCount(PoolTransport p) {
+    void note() {
+      if (!identical(_pool, p) || _stopped) return;
+      _handlers?.onConnectionChanged?.call(p.connectedCount);
+    }
+
+    if (p is RelayPoolProxy) p.onConnectedChanged = note;
+    if (p is RelayPool) p.onConnectedChanged = note;
+  }
+
   void probePool() {
     final p = _pool;
-    if (p is RelayPoolProxy) p.probeNow();
+    if (p is RelayPoolProxy) {
+      p.reconnectDownShards();
+      p.probeNow();
+    }
   }
 
   static const int giftWrapBackdateSec = 172800;
@@ -1023,14 +1090,17 @@ class NostrService {
       await _detachSockets(old);
 
       // Replay live subs on the direct pool, but rebuild the main REQ since its filters are mode-shaped.
+      direct.setAddedRelays(_directAdded);
       _pool = direct;
+      _wireCount(direct);
       direct.geoOriginAllows = geoOriginAllowsEvent;
       direct.connectAll();
       _handOverHeld(old, direct);
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
         if (_isRetiringMain(entry.sub)) continue;
-        direct.replaySubscription(entry.sub, entry.filters);
+        final filters = _replayFilters(entry.sub, entry.filters);
+        if (filters != null) direct.replaySubscription(entry.sub, filters);
       }
       _retireAllMain();
       resubscribeMain();
@@ -1136,6 +1206,7 @@ class NostrService {
       final live = _activeSubsOf(old);
       await _detachSockets(old);
       _pool = restored;
+      _wireCount(restored);
       restored.geoOriginAllows = geoOriginAllowsEvent;
       restored.onProxyUnreachable = _onProxyUnreachable; // Future blips.
       _wireRetract(restored);
@@ -1145,7 +1216,8 @@ class NostrService {
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
         if (_isRetiringMain(entry.sub)) continue;
-        restored.replaySubscription(entry.sub, entry.filters);
+        final filters = _replayFilters(entry.sub, entry.filters);
+        if (filters != null) restored.replaySubscription(entry.sub, filters);
       }
       _retireAllMain();
       // Back on the proxy: rebuild the main REQ into its D1 shape.
@@ -1191,7 +1263,9 @@ class NostrService {
       _userDirect = true;
       _poolFallbackActive = false;
       _stopBgRestore();
-      if (_pool is! RelayPoolProxy) {
+      final current = _pool;
+      if (current is RelayPool) current.setAddedRelays(_directAdded);
+      if (current is! RelayPoolProxy) {
         _handlers?.onConnectionChanged?.call(_pool.connectedCount);
         return;
       }
@@ -1211,6 +1285,8 @@ class NostrService {
       return;
     }
     _poolFallbackActive = true;
+    final current = _pool;
+    if (current is RelayPool) current.setAddedRelays(_directAdded);
     retryProxyNow();
   }
 
@@ -1302,13 +1378,19 @@ class NostrService {
     return sub.answered;
   }
 
+  static const int ephemeralBackfillSec = 604800;
+
+  static const int ephemeralBackfillPerKey = 200;
+
+  final Expando<List<String>> _ephemeralSubKeys = Expando<List<String>>();
+
   /// Adds ephemeral group pubkeys as `#p` gift-wrap subs; [limit]/[since] choose live-only or 7-day backfill.
   Subscription subscribeEphemeral(
     List<String> ephemeralPubkeys, {
     int? limit,
     int? since,
   }) {
-    return pool.subscribe([
+    final sub = pool.subscribe([
       NostrFilter(
         kinds: [EventKind.giftWrap],
         since: since,
@@ -1316,6 +1398,29 @@ class NostrService {
         tags: {'p': ephemeralPubkeys},
       ),
     ]);
+    _ephemeralSubKeys[sub] = List<String>.of(ephemeralPubkeys);
+    return sub;
+  }
+
+  NostrFilter ephemeralFilter(List<String> pubkeys) {
+    final live = isProxyMode;
+    return NostrFilter(
+      kinds: const [EventKind.giftWrap],
+      limit: live ? 1 : ephemeralBackfillPerKey * pubkeys.length,
+      since: live
+          ? null
+          : DateTime.now().millisecondsSinceEpoch ~/ 1000 -
+              ephemeralBackfillSec,
+      tags: {'p': pubkeys},
+    );
+  }
+
+  List<NostrFilter>? _replayFilters(
+      Subscription sub, List<NostrFilter> filters) {
+    if (_wrapCatchUpSubs.contains(sub) && d1Backed) return null;
+    final keys = _ephemeralSubKeys[sub];
+    if (keys == null || keys.isEmpty) return filters;
+    return [ephemeralFilter(keys)];
   }
 
   /// Routes a verified event: gift wraps are unwrapped to [NostrHandlers.onGiftWrap], all else to [onEvent].

@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math';
 
+import '../../core/utils/nym_utils.dart';
+
 class AccountEntry {
   const AccountEntry({
     required this.id,
@@ -434,7 +436,7 @@ class AccountLogic {
         ns: a['ns'] is String ? a['ns'] as String : id,
         pubkey: str(a['pubkey']),
         method: str(a['method']),
-        nym: str(a['nym']),
+        nym: withOwnNymSuffix(str(a['nym']), str(a['pubkey'])),
         avatar: str(a['avatar']),
         addedAt: number(a['addedAt']),
         notifyInactive: a['notifyInactive'] == true,
@@ -472,7 +474,7 @@ class AccountLogic {
         id: id,
         pubkey: pubkey,
         method: method,
-        nym: nymFromStorage(get, method),
+        nym: withOwnNymSuffix(nymFromStorage(get, method), pubkey),
         addedAt: now,
       ),
     ]);

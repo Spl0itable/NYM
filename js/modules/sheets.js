@@ -83,7 +83,11 @@
     }
 
     function guardsAll(modal) {
-        return modal.id === 'settingsModal' || modal.getAttribute('data-sheet-guard') === 'all';
+        return modal.getAttribute('data-sheet-guard') === 'all';
+    }
+
+    function unguarded(modal) {
+        return modal.getAttribute('data-sheet-guard') === 'none';
     }
 
     function tracked(modal, el) {
@@ -116,7 +120,7 @@
 
     function dirty(modal) {
         var s = modal._sheet;
-        if (!s) return false;
+        if (!s || unguarded(modal)) return false;
         var out = false;
         s.orig.forEach(function (v, el) {
             if (!out && el.isConnected && modal.contains(el) && valueOf(el) !== v) out = true;

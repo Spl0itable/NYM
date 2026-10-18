@@ -16,7 +16,9 @@ import '../../features/notifications/notifications_service.dart';
 import '../../features/search/unified_search_panel.dart' show nymSuffixStyle;
 import '../../models/message.dart';
 import '../../state/app_state.dart';
+import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../common/nym_label.dart' show mergeNymRanges, nymSuffixRanges;
 import 'sidebar_chrome.dart';
 
 final rowClockProvider = StateProvider<int>((ref) => 0);
@@ -50,7 +52,7 @@ RowLast? lastPreviewable(AppState s, List<Message>? list) {
     id: m.id,
     author: m.author,
     pubkey: m.pubkey,
-    content: m.content,
+    content: s.stripBlockedQuotes(m.content, m.quoted),
     own: m.isOwn,
     ts: ts,
   );
@@ -83,9 +85,21 @@ RowPreview sidebarRowPreview(WidgetRef ref, String storageKey, String kind) {
     t: _ui,
   );
   final now = DateTime.now().millisecondsSinceEpoch;
+  var dim = parts.dim;
+  final from = parts.bodyAt > 0 ? parts.bodyAt : (parts.sender == null ? 0 : -1);
+  if (parts.text.isNotEmpty &&
+      !hide &&
+      !locked &&
+      from >= 0 &&
+      ref.read(nostrControllerProvider).isVerifiedBot(last.pubkey)) {
+    dim = mergeNymRanges(dim, [
+      for (final r in nymSuffixRanges(parts.text.substring(from)))
+        [r[0] + from, r[1] + from],
+    ]);
+  }
   return (
     text: parts.text,
-    dim: parts.dim,
+    dim: dim,
     sender: parts.sender,
     bodyAt: parts.bodyAt,
     time: relativeTime(now, last.ts, _ui),

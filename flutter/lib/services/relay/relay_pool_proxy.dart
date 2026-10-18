@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/constants/relays.dart';
+import '../../features/relays/relay_add.dart';
 import '../../features/relays/relay_block.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
@@ -27,7 +28,7 @@ class RelayShard {
   });
 
   final String id;
-  final String role; // 'critical' | 'geo' | 'discovered'
+  final String role;
   final List<String> relays;
   final List<String> dmRelays;
 }
@@ -50,6 +51,7 @@ List<RelayShard> shardRelaysByRole(
   String appRelay = RelayConfig.appRelay,
   Set<String> permanentBlacklist = const {},
   Set<String> blocked = const {},
+  List<String> added = const [],
   int chunkSize = RelayConfig.relaysPerWorker,
 }) {
   bool isValid(String url) =>
@@ -71,6 +73,13 @@ List<RelayShard> shardRelaysByRole(
 
   final reservedSet = <String>{...critical};
   if (appValid) reservedSet.add(appRelay);
+
+  final addedRelays = <String>[];
+  for (final u in added) {
+    if (!isValid(u) || reservedSet.contains(u)) continue;
+    reservedSet.add(u);
+    addedRelays.add(u);
+  }
 
   // Geo = CSV relays not already reserved.
   final geo = <String>[
@@ -130,6 +139,15 @@ List<RelayShard> shardRelaysByRole(
       relays: criticalChunks[i],
       dmRelays: i == 0 ? criticalDmRelays : const [],
     ));
+  }
+
+  final addedChunks = chunk(addedRelays);
+  for (var i = 0; i < addedChunks.length; i++) {
+    shards.add(RelayShard(
+        id: 'added-$i',
+        role: 'added',
+        relays: addedChunks[i],
+        dmRelays: [...addedChunks[i]]));
   }
 
   final geoChunks = chunk(geo);
@@ -379,6 +397,19 @@ class PoolRetract extends PoolMessage {
   final String? reason;
 }
 
+const int kReconnectQuickMaxMs = 250;
+
+const int kReconnectQuickAfterOpenMs = 2000;
+
+bool reconnectQuick(int? openMs) =>
+    openMs != null && openMs >= kReconnectQuickAfterOpenMs;
+
+int shardReconnectDelayMs(int step, double rand) {
+  if (step < 0) return (rand * kReconnectQuickMaxMs).floor();
+  final base = min(3000 * pow(1.7, step), 60000).toDouble();
+  return (base * (0.7 + rand * 0.3)).floor();
+}
+
 /// One shard's `/api/relay-pool` socket; reconnect backoff min(3000*1.7^n, 60000) with 0.7–1.0 jitter.
 class _ShardSocket {
   _ShardSocket({
@@ -391,9 +422,12 @@ class _ShardSocket {
     required this.onConnected,
     required this.onClosed,
     this.onLost,
+    this.reqFilter,
     this.confirmTimeout = const Duration(seconds: 12),
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now;
+
+  final String? Function(String frame)? reqFilter;
 
   final void Function(_ShardSocket sock, DateTime? lastLiveAt)? onLost;
 
@@ -547,6 +581,10 @@ class _ShardSocket {
     _settled = true;
     _open = false;
     final wasLive = _frameSinceConnect;
+    final opened = openedAt;
+    final openMs = wasLive && opened != null
+        ? _now().difference(opened).inMilliseconds
+        : null;
     final lastLiveAt = _lostAtOverride ?? upstreamAt ?? openedAt;
     _lostAtOverride = null;
     probe = null;
@@ -561,7 +599,7 @@ class _ShardSocket {
     onClosed(this);
     if (wasLive && !_closedByUser) onLost?.call(this, lastLiveAt);
     if (_closedByUser) return;
-    _scheduleReconnect();
+    _scheduleReconnect(quick: reconnectQuick(openMs));
   }
 
   void _cleanup() {
@@ -572,25 +610,37 @@ class _ShardSocket {
     _channel = null;
   }
 
-  void _scheduleReconnect() {
+  void _scheduleReconnect({bool quick = false}) {
     if (_closedByUser) return;
     _reconnectTimer?.cancel();
-    // base = min(3000*1.7^n, 60000); jitter 0.7–1.0.
-    final base = min(3000 * pow(1.7, _reconnectAttempt), 60000).toDouble();
-    final delayMs = (base * (0.7 + rng.nextDouble() * 0.3)).floor();
-    _reconnectAttempt++;
+    final delayMs =
+        shardReconnectDelayMs(quick ? -1 : _reconnectAttempt, rng.nextDouble());
+    if (!quick) _reconnectAttempt++;
     _reconnectTimer = Timer(Duration(milliseconds: delayMs), () {
       if (_closedByUser) return;
       connect();
     });
   }
 
+  void reconnectNow() {
+    if (_closedByUser || _open) return;
+    _reconnectAttempt = 0;
+    _scheduleReconnect(quick: true);
+  }
+
   bool send(String frame) {
     final ch = _channel;
     if (ch == null || !_open) return false;
+    var out = frame;
+    final filter = reqFilter;
+    if (filter != null && shard.role == 'added') {
+      final f = filter(frame);
+      if (f == null) return frame.startsWith('["REQ"');
+      out = f;
+    }
     try {
-      ch.sink.add(frame);
-      stats.bytesSent += utf8.encode(frame).length;
+      ch.sink.add(out);
+      stats.bytesSent += utf8.encode(out).length;
       return true;
     } catch (_) {
       return false;
@@ -685,6 +735,25 @@ class RelayPoolProxy implements PoolTransport {
   void Function(DateTime? lastLiveAt)? onShardLost;
 
   void Function()? onShardReconnected;
+
+  void Function()? onConnectedChanged;
+
+  int _notedCount = 0;
+
+  void _noteCount() {
+    if (_disposed) return;
+    final n = connectedCount;
+    if (n == _notedCount) return;
+    _notedCount = n;
+    onConnectedChanged?.call();
+  }
+
+  void reconnectDownShards() {
+    if (_disposed) return;
+    for (final sock in _sockets) {
+      sock.reconnectNow();
+    }
+  }
 
   static const Duration probeQuiet = Duration(seconds: 60);
   static const Duration probeTimeout = Duration(seconds: 10);
@@ -923,6 +992,68 @@ class RelayPoolProxy implements PoolTransport {
     _reconcileShards();
   }
 
+  List<String> _added = const [];
+
+  List<String> get addedRelays => List.unmodifiable(_added);
+
+  ({bool open, DateTime? openedAt})? addedShardState(String url) {
+    for (final s in _sockets) {
+      if (s.shard.role == 'added' && s.shard.relays.contains(url)) {
+        return (open: s.isOpen, openedAt: s.openedAt);
+      }
+    }
+    return null;
+  }
+
+  Set<String> Function()? anonKeys;
+
+  Set<String> Function()? anonLane;
+
+  void setAddedRelays(Iterable<String> urls) {
+    final next = urls.toList();
+    if (next.length == _added.length &&
+        Iterable<int>.generate(next.length).every((i) => next[i] == _added[i])) {
+      return;
+    }
+    _added = next;
+    _reconcileShards();
+  }
+
+  String? _addedFrame(String frame) {
+    if (frame.startsWith('["REQ"')) return _addedReq(frame);
+    if (!frame.startsWith('["EVENT"') &&
+        !frame.startsWith('["DM_EVENT"') &&
+        !frame.startsWith('["GEO_EVENT"')) {
+      return frame;
+    }
+    final keys = anonKeys?.call() ?? const <String>{};
+    final lane = anonLane?.call() ?? const <String>{};
+    if (keys.isEmpty && lane.isEmpty) return frame;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(frame);
+    } catch (_) {
+      return frame;
+    }
+    if (decoded is! List || decoded.length < 2) return frame;
+    return RelayAdd.anonEvent(decoded[1], keys, lane) ? null : frame;
+  }
+
+  String? _addedReq(String frame) {
+    final keys = anonKeys?.call() ?? const <String>{};
+    if (keys.isEmpty) return frame;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(frame);
+    } catch (_) {
+      return frame;
+    }
+    if (decoded is! List) return frame;
+    final out = RelayAdd.stripKeys(decoded, keys);
+    if (identical(out, decoded)) return frame;
+    return out == null ? null : jsonEncode(out);
+  }
+
   static const Duration relayListGrace = Duration(seconds: 15);
 
   final Map<String, DateTime> _relayLastSeen = {};
@@ -959,6 +1090,7 @@ class RelayPoolProxy implements PoolTransport {
       _dmRelays,
       permanentBlacklist: _permanentBlacklist,
       blocked: _blocked,
+      added: _added,
     );
     for (final shard in layout) {
       final sock = _ShardSocket(
@@ -971,6 +1103,7 @@ class RelayPoolProxy implements PoolTransport {
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
         onLost: _onShardLost,
+        reqFilter: _addedFrame,
         confirmTimeout: confirmTimeout,
         now: _now,
       );
@@ -1148,6 +1281,7 @@ class RelayPoolProxy implements PoolTransport {
       _dmRelays,
       permanentBlacklist: _permanentBlacklist,
       blocked: _blocked,
+      added: _added,
     );
     final byId = {for (final s in layout) s.id: s};
 
@@ -1193,6 +1327,7 @@ class RelayPoolProxy implements PoolTransport {
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
         onLost: _onShardLost,
+        reqFilter: _addedFrame,
         confirmTimeout: confirmTimeout,
         now: _now,
       );
@@ -1301,6 +1436,7 @@ class RelayPoolProxy implements PoolTransport {
   }
 
   void _onShardClosed(_ShardSocket sock) {
+    _noteCount();
     // Only detect host-unreachable here: repeated closes before the pool ever confirmed.
     if (_unreachableFired || _disposed) return;
     final streak = _proxyEverConnected
@@ -1429,6 +1565,7 @@ class RelayPoolProxy implements PoolTransport {
           _stats.latencyPerRelay[url] = ms;
         });
         _noteConnectedRelays();
+        _noteCount();
         break;
       case PoolSeen(:final eventId, :final relayUrl):
         eventProvenance.addSource(eventId, relayUrl);

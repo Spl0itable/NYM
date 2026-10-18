@@ -70,6 +70,8 @@ class P2PService extends ChangeNotifier {
 
   void Function(String message)? onSystemMessage;
 
+  bool Function(String pubkey)? peerHidden;
+
   /// Completed-download sink; unset saves to disk and opens the share sheet so the file always lands somewhere.
   void Function(String filename, Uint8List bytes)? onDownloadReady;
 
@@ -139,6 +141,7 @@ class P2PService extends ChangeNotifier {
       _system('Cannot download your own file');
       return;
     }
+    if (peerHidden?.call(offer.seederPubkey) == true) return;
     if (_unseeded.contains(offerId)) {
       _system('This file is no longer being seeded by the owner');
       return;
@@ -184,6 +187,54 @@ class P2PService extends ChangeNotifier {
     notifyListeners();
   }
 
+  String _peerOf(String transferId) {
+    for (final id in _connections.keys) {
+      if (id.endsWith('-$transferId')) {
+        return id.substring(0, id.length - transferId.length - 1);
+      }
+    }
+    final t = _transfers[transferId];
+    if (t != null && !t.isOutgoing) return t.offer.seederPubkey;
+    return '';
+  }
+
+  bool _transferPeerHidden(String transferId) {
+    final peer = _peerOf(transferId);
+    return peer.isNotEmpty &&
+        peer != _transport.selfPubkey &&
+        peerHidden?.call(peer) == true;
+  }
+
+  void _dropTransfer(String transferId) {
+    _transfers.remove(transferId);
+    _received.remove(transferId);
+    for (final id in _connections.keys
+        .where((id) => id.endsWith('-$transferId'))
+        .toList()) {
+      _cleanupConnection(id);
+    }
+  }
+
+  void refreshForFilters() {
+    final drop = <String>{};
+    for (final id in _connections.keys) {
+      if (id.length > 65 && id[64] == '-') {
+        final peer = id.substring(0, 64);
+        if (peer != _transport.selfPubkey && peerHidden?.call(peer) == true) {
+          drop.add(id.substring(65));
+        }
+      }
+    }
+    for (final e in _transfers.entries) {
+      if (_transferPeerHidden(e.key)) drop.add(e.key);
+    }
+    if (drop.isEmpty) return;
+    for (final id in drop) {
+      _dropTransfer(id);
+    }
+    notifyListeners();
+  }
+
   void cancelTransfer(String transferId, {bool silent = false}) {
     final transfer = _transfers.remove(transferId);
     _received.remove(transferId);
@@ -196,6 +247,7 @@ class P2PService extends ChangeNotifier {
   }
 
   void _onSignalEvent(String senderPubkey, int kind, String content) {
+    if (senderPubkey.isEmpty || peerHidden?.call(senderPubkey) == true) return;
     if (kind == P2PConstants.fileStatusKind) {
       try {
         final data = jsonDecode(content);
@@ -352,6 +404,11 @@ class P2PService extends ChangeNotifier {
   Future<void> _startSending(String transferId, RTCDataChannel dc) async {
     final transfer = _transfers[transferId];
     if (transfer == null) return;
+    if (_transferPeerHidden(transferId)) {
+      _dropTransfer(transferId);
+      notifyListeners();
+      return;
+    }
     final bytes = _pendingFiles[transfer.offerId];
     if (bytes == null) {
       try {
@@ -372,6 +429,12 @@ class P2PService extends ChangeNotifier {
 
     final chunks = chunkBytes(bytes);
     for (final chunk in chunks) {
+      if (!_transfers.containsKey(transferId) ||
+          _transferPeerHidden(transferId)) {
+        _dropTransfer(transferId);
+        notifyListeners();
+        return;
+      }
       if (dc.state != RTCDataChannelState.RTCDataChannelOpen) {
         _updateStatus(
             transferId, P2PStatus.error, 'Connection closed during transfer');
@@ -409,6 +472,11 @@ class P2PService extends ChangeNotifier {
   void _handleChunk(String transferId, RTCDataChannelMessage msg) {
     final transfer = _transfers[transferId];
     if (transfer == null) return;
+    if (_transferPeerHidden(transferId)) {
+      _dropTransfer(transferId);
+      notifyListeners();
+      return;
+    }
 
     if (!msg.isBinary) {
       try {
@@ -616,6 +684,10 @@ class P2PService extends ChangeNotifier {
   }
 
   void _sendSignal(String targetPubkey, Map<String, dynamic> data) {
+    if (targetPubkey != _transport.selfPubkey &&
+        peerHidden?.call(targetPubkey) == true) {
+      return;
+    }
     final payload = buildSignalPayload(targetPubkey: targetPubkey, data: data);
     unawaited(_transport
         .publishP2P(

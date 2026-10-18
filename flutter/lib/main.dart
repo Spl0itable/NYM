@@ -98,7 +98,11 @@ Future<AccountSession> bootAccountSession() async {
   await runtime.boot();
   return AccountSession(
     runtime: runtime,
-    probe: InactiveProbe(prefs: prefs),
+    probe: InactiveProbe(
+      prefs: prefs,
+      secretOf: runtime.storedNsec,
+      rootOf: (id) => runtime.storedSecret(id, SecretKeys.pqRoot),
+    ),
   );
 }
 

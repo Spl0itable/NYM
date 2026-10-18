@@ -178,6 +178,10 @@
             return raw.filter((id) => PACK_IDS.includes(id));
         },
 
+        loadedFilterPacks() {
+            return this.activeFilterPacks().filter((id) => compiled.has(id));
+        },
+
         // A pack that fails to load does not filter; a failed fetch must never swallow a channel.
         async loadFilterPack(id) {
             if (!PACK_URLS[id]) return null;
@@ -190,6 +194,7 @@
                     const pack = await res.json();
                     const built = this._compileFilterPack(pack);
                     compiled.set(id, built);
+                    if (this.activeFilterPacks().includes(id) && typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
                     return built;
                 } catch (_) {
                     return null;
@@ -210,7 +215,11 @@
 
         // Returns the matching pack id, or '', so the UI can say which pack hid a message.
         filterPackMatch(text, nickname) {
-            const ids = this.activeFilterPacks();
+            return this.filterPackMatchIn(this.activeFilterPacks(), text, nickname);
+        },
+
+        filterPackMatchIn(packIds, text, nickname) {
+            const ids = (Array.isArray(packIds) ? packIds : []).filter((id) => PACK_IDS.includes(id));
             if (ids.length === 0) return '';
             const body = typeof text === 'string' ? text : '';
             const nick = nickname && typeof this.parseNymFromDisplay === 'function'

@@ -10,6 +10,7 @@ import '../../models/group.dart';
 import '../group_tools/group_tools.dart';
 import '../../models/nostr_event.dart';
 import '../pms/pm_logic.dart';
+import 'control_answers.dart';
 
 /// Max retained previous ephemeral keys per group, for post-compromise recovery.
 const int kEphemeralPrevKeysMax = 30;
@@ -124,6 +125,8 @@ class GroupEphemeralKeys {
   /// member real pubkey -> advertised key timestamp (out-of-order guard).
   final Map<String, int> memberKeyTs = {};
 
+  final Map<String, int> answered = {};
+
   EphemeralKey ensureSelf() => selfCurrent ??= EphemeralKey.generate();
 
   /// Pushes current to prev (cap 30) and generates a fresh current.
@@ -177,11 +180,25 @@ class GroupEphemeralKeys {
         'prev': [for (final k in selfPrev) k.toJson()],
       };
     }
+    if (answered.isNotEmpty) {
+      final keys = answered.keys.toList()..sort();
+      entry['answered'] = {for (final k in keys) k: answered[k]!};
+    }
     return entry;
   }
 
   /// Member keys keep the newest advertisement; self keys accumulate across devices.
-  void mergeSyncJson(Map<String, dynamic> entry) {
+  void mergeSyncJson(Map<String, dynamic> entry, {bool settle = false}) {
+    final syncedAnswered = entry['answered'];
+    if (syncedAnswered is Map && syncedAnswered.isNotEmpty) {
+      final merged = ControlAnswers.mergeAnswered(answered, {
+        for (final e in syncedAnswered.entries)
+          if (e.value is num) '${e.key}': (e.value as num).toInt(),
+      });
+      answered
+        ..clear()
+        ..addAll(merged);
+    }
     final syncedMembers = entry['members'];
     final syncedTs = entry['memberKeyTs'];
     if (syncedMembers is Map) {
@@ -223,7 +240,14 @@ class GroupEphemeralKeys {
     } else {
       final known = <String>{selfCurrent!.pk, for (final k in selfPrev) k.pk};
       if (syncedCurrent != null && !known.contains(syncedCurrent.pk)) {
-        selfPrev.add(syncedCurrent);
+        if (settle &&
+            ControlAnswers.pickSelf(selfCurrent!.pk, syncedCurrent.pk) ==
+                syncedCurrent.pk) {
+          selfPrev.insert(0, selfCurrent!);
+          selfCurrent = syncedCurrent;
+        } else {
+          selfPrev.add(syncedCurrent);
+        }
         known.add(syncedCurrent.pk);
       }
       for (final k in syncedPrev) {
@@ -312,6 +336,132 @@ class GroupLogic {
       tags: tags,
       content: content,
     );
+  }
+
+  static String? metaField(Group g, String field) => switch (field) {
+        'name' => g.name,
+        'avatar' => g.avatar,
+        'banner' => g.banner,
+        _ => g.description,
+      };
+
+  static Map<String, String> metaSnapshot(Group? g) => {
+        for (final f in Group.metaFields)
+          f: g == null ? '' : (metaField(g, f) ?? ''),
+      };
+
+  static Map<String, String> metaSetters(Group g) {
+    var by = g.metaBy;
+    if (by == null) {
+      by = <String, String>{};
+      final legacy = g.metaUpdatedBy ?? '';
+      if (legacy.isNotEmpty) {
+        for (final f in Group.metaFields) {
+          if ((metaField(g, f) ?? '').isNotEmpty) by[f] = legacy;
+        }
+      }
+      g.metaBy = by;
+      if (legacy.isNotEmpty && by.isNotEmpty) {
+        noteMetaAdmin(g, legacy, known: true);
+      }
+    }
+    return by;
+  }
+
+  static final RegExp _metaKey = RegExp(r'^[0-9a-fA-F]{64}$');
+
+  static List<String> metaAdminList(Group g) {
+    final by = g.metaBy;
+    final held = by != null
+        ? by.values.toSet()
+        : {if ((g.metaUpdatedBy ?? '').isNotEmpty) g.metaUpdatedBy!};
+    final out = <String>[];
+    for (final pk in g.metaAdmins) {
+      if (_metaKey.hasMatch(pk) && held.contains(pk) && !out.contains(pk)) {
+        out.add(pk);
+      }
+    }
+    return out.length > 20 ? out.sublist(0, 20) : out;
+  }
+
+  static void noteMetaAdmin(Group g, String pubkey, {bool known = false}) {
+    if (!_metaKey.hasMatch(pubkey)) return;
+    if (!known && g.createdBy != pubkey && !g.admins.contains(pubkey)) return;
+    if (!g.metaAdmins.contains(pubkey)) {
+      g.metaAdmins = [...g.metaAdmins, pubkey];
+    }
+    g.metaAdmins = metaAdminList(g);
+  }
+
+  static void mergeMetaAdmins(Group g, Object? synced) {
+    final add = Group.parseKeyList(synced);
+    if (add.isEmpty) return;
+    g.metaAdmins = [
+      ...g.metaAdmins,
+      for (final pk in add)
+        if (!g.metaAdmins.contains(pk)) pk,
+    ];
+    g.metaAdmins = metaAdminList(g);
+  }
+
+  static List<String> metaRoles(Group g) => [
+        if ((g.createdBy ?? '').isNotEmpty) g.createdBy!,
+        ...g.admins,
+        ...metaAdminList(g),
+        if (g.metaBy == null && (g.metaUpdatedBy ?? '').isNotEmpty)
+          g.metaUpdatedBy!,
+      ];
+
+  static void noteMetaSetters(
+      Group g, Map<String, String> before, String by) {
+    final setters = metaSetters(g);
+    for (final f in Group.metaFields) {
+      final now = metaField(g, f) ?? '';
+      if ((before[f] ?? '') == now) continue;
+      if (now.isNotEmpty && by.isNotEmpty) {
+        setters[f] = by;
+      } else {
+        setters.remove(f);
+      }
+    }
+  }
+
+  static void adoptMetaSetter(Group g, String field, String by) {
+    final setters = metaSetters(g);
+    if ((metaField(g, field) ?? '').isNotEmpty && by.isNotEmpty) {
+      setters[field] = by;
+      noteMetaAdmin(g, by);
+    } else {
+      setters.remove(field);
+    }
+  }
+
+  static bool confirmMetaSetter(Group g, String field, String by) {
+    if (by.isEmpty || (metaField(g, field) ?? '').isEmpty) return false;
+    if (!canAdminister(g, by)) return false;
+    final legacy = g.metaBy == null;
+    final roles = metaRoles(g);
+    final setters = metaSetters(g);
+    final cur = setters[field] ?? '';
+    if (cur == by) return legacy;
+    if (!legacy && cur.isNotEmpty && roles.contains(cur)) return false;
+    setters[field] = by;
+    noteMetaAdmin(g, by);
+    return true;
+  }
+
+  static void stampMeta(Group g, String by, int ts,
+      [Map<String, String>? before]) {
+    noteMetaSetters(g, before ?? metaSnapshot(g), by);
+    g.metaUpdatedAt = ts;
+    g.metaUpdatedBy = by;
+    noteMetaAdmin(g, by);
+  }
+
+  static String metaSetter(Group g, String field) {
+    final by = g.metaBy;
+    if (by != null) return by[field] ?? '';
+    return g.metaUpdatedBy ?? '';
   }
 
   /// Owner metadata as tags on every owner message, the only way other members (e.g. D1-archive rehydrators) converge on it.
@@ -872,6 +1022,7 @@ class GroupLogic {
     required int ts,
     String? eventId,
     String selfPubkey = '',
+    bool piggyback = false,
   }) {
     final modKey = modEventKey(tags, eventId);
     switch (type) {
@@ -1006,7 +1157,8 @@ class GroupLogic {
         return GroupControlResult.applied;
 
       case GroupControlType.metadata:
-        return _applyMetadata(group, tags, senderPubkey, ts)
+        return _applyMetadata(group, tags, senderPubkey, ts,
+                deliberate: !piggyback)
             ? GroupControlResult.applied
             : GroupControlResult.noop;
 
@@ -1050,7 +1202,8 @@ class GroupLogic {
   }
 
   static bool _applyMetadata(
-      Group g, List<List<String>> tags, String senderPubkey, int ts) {
+      Group g, List<List<String>> tags, String senderPubkey, int ts,
+      {bool deliberate = true}) {
     // A zero metadata timestamp is rejected.
     if (ts <= 0) return false;
     var changed = false;
@@ -1066,6 +1219,7 @@ class GroupLogic {
         (g.metaUpdatedBy ?? '').compareTo(senderPubkey) > 0) {
       return changed;
     }
+    final before = metaSnapshot(g);
     final subject = tagValue(tags, 'subject');
     if (subject != null && subject.isNotEmpty && subject != g.name) {
       g.name = subject;
@@ -1119,11 +1273,19 @@ class GroupLogic {
       }
     }
     if (applyGroupToolsMeta(g, tags, ts)) changed = true;
-    if (changed) {
-      g.metaUpdatedAt = ts;
-      g.metaUpdatedBy = senderPubkey;
+    var confirmed = false;
+    for (final f in Group.metaFields) {
+      final v = tagValue(tags, f == 'name' ? 'subject' : f);
+      if (deliberate &&
+          v != null &&
+          v.isNotEmpty &&
+          (before[f] ?? '') == v &&
+          confirmMetaSetter(g, f, senderPubkey)) {
+        confirmed = true;
+      }
     }
-    return changed;
+    if (changed) stampMeta(g, senderPubkey, ts, before);
+    return changed || confirmed;
   }
 }
 

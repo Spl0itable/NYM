@@ -142,12 +142,48 @@ Object.assign(NYM.prototype, {
             bot: (pk) => typeof n.isVerifiedBot === 'function' && n.isVerifiedBot(pk),
             pack: (text, nym) => typeof n.hasFilterPackMatch === 'function' && n.hasFilterPackMatch(text, nym),
             muted: (pk) => gates() && typeof n.isAutoMuted === 'function' && n.isAutoMuted(pk),
+            nymOf: (pk) => n._cfNym(typeof n.getNymFromPubkey === 'function' ? n.getNymFromPubkey(pk) : ''),
             deleted: (m) => n._cfDeleted(m),
             quiet: (m) => typeof n._quietMessage === 'function' && n._quietMessage(m),
             spam: (m) => (m.isPM || gates()) && typeof n.isSpamMessage === 'function' && n.isSpamMessage(m.content),
             gated: (m) => m._spamGated === true
         };
         return this._cfCtxObj;
+    },
+
+    _personMask(pubkey, nym) {
+        const F = window.NymContentFilter;
+        if (!F || typeof F.personMask !== 'function' || !pubkey || pubkey === this.pubkey) return '';
+        const name = nym !== undefined && nym !== null ? nym
+            : (typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pubkey) : '');
+        const mask = F.personMask(this._cfCtx(), pubkey, this._cfNym(name));
+        if (!mask) return '';
+        const label = mask === 'blocked' ? 'Blocked user' : 'Hidden member';
+        return typeof this.uiText === 'function' ? this.uiText(label) : label;
+    },
+
+    _maskedAvatar(pubkey) {
+        return typeof this.generateAvatarSvg === 'function' ? this.generateAvatarSvg(pubkey) : '';
+    },
+
+    _storeTrim(list, limit, keyOf) {
+        if (!Array.isArray(list)) return list;
+        const max = Number(limit) || 0;
+        const F = window.NymContentFilter;
+        let kept;
+        if (!F || typeof F.storeOverflow !== 'function') {
+            if (!(max > 0) || list.length <= max) return list;
+            kept = list.slice(-max);
+        } else {
+            const drop = F.storeOverflow(this._cfCtx(), list.map((m) => ({ pubkey: m ? m.pubkey : '', own: !!(m && m.isOwn) })), max, F.BLOCKED_KEEP);
+            if (!drop.length) return list;
+            const gone = new Set(drop);
+            kept = list.filter((_, i) => !gone.has(i));
+        }
+        if (typeof keyOf === 'function' && typeof this._withPinnedThreadRoots === 'function') {
+            kept = this._withPinnedThreadRoots(list, kept, keyOf);
+        }
+        return kept;
     },
 
     _cfDeleted(m) {
@@ -165,8 +201,93 @@ Object.assign(NYM.prototype, {
             nym: this._cfNym(m.author),
             own: !!m.isOwn || (!!this.pubkey && m.pubkey === this.pubkey),
             system: false,
-            mesh: !!m.isMesh
+            mesh: !!m.isMesh,
+            people: Array.isArray(m.people) ? m.people : [],
+            quoted: this._quotedOf(m)
         };
+    },
+
+    _botAskerOf(event) {
+        if (!event || !Array.isArray(event.tags) || typeof this.isVerifiedBot !== 'function' || !this.isVerifiedBot(event.pubkey)) return undefined;
+        const out = [];
+        const t = event.tags.find((x) => Array.isArray(x) && x[0] === 'asker' && typeof x[1] === 'string' && /^[0-9a-f]{64}$/i.test(x[1]));
+        if (t) out.push(t[1].toLowerCase());
+        for (const x of event.tags) {
+            if (out.length >= 26) break;
+            if (!Array.isArray(x) || x[0] !== 'about' || typeof x[1] !== 'string' || !/^[0-9a-f]{64}$/i.test(x[1])) continue;
+            const pk = x[1].toLowerCase();
+            if (!out.includes(pk)) out.push(pk);
+        }
+        return out.length ? out : undefined;
+    },
+
+    _quotedOf(m) {
+        return m && Array.isArray(m.quoted) ? m.quoted : [];
+    },
+
+    _quotedFromTags(tags) {
+        const out = [];
+        for (const t of Array.isArray(tags) ? tags : []) {
+            if (!Array.isArray(t) || t[0] !== 'quote_pk' || typeof t[1] !== 'string') continue;
+            const pk = t[1].toLowerCase();
+            if (/^[0-9a-f]{64}$/.test(pk) && !out.includes(pk)) out.push(pk);
+            if (out.length >= 4) break;
+        }
+        return out;
+    },
+
+    _shownContent(m) {
+        const F = window.NymContentFilter;
+        const s = m && typeof m.content === 'string' ? m.content : '';
+        if (!F || s.indexOf('>') === -1 || typeof this._cfCtx !== 'function') return s;
+        return F.stripBlockedQuotes(this._cfCtx(), s, this._quotedOf(m));
+    },
+
+    _shownTextFor(text, sourceId) {
+        const s = typeof text === 'string' ? text : '';
+        if (s.indexOf('>') === -1) return s;
+        const src = sourceId ? this._messageIndex().get(sourceId) : null;
+        return this._shownContent({ content: s, quoted: this._quotedOf(src) });
+    },
+
+    _editedContent(edit, text) {
+        const next = typeof text === 'string' ? text : '';
+        if (!edit || next === edit.content) return null;
+        return (edit.head || '') + next;
+    },
+
+    async _copyMessageText(content, messageId) {
+        const text = this._shownTextFor(content, messageId);
+        if (!text) return false;
+        await navigator.clipboard.writeText(text);
+        return true;
+    },
+
+    _noteQuoteSource(author, sourceId) {
+        const a = String(author || '').trim().toLowerCase();
+        if (!a || !sourceId) return;
+        const src = this._messageIndex().get(sourceId);
+        const pk = src && typeof src.pubkey === 'string' ? src.pubkey.toLowerCase() : '';
+        if (!src || src.isOwn || !/^[0-9a-f]{64}$/.test(pk) || pk === String(this.pubkey || '').toLowerCase()) return;
+        const F = window.NymContentFilter;
+        const sfx = F ? F.nymSuffix(a) : '';
+        if (!sfx || pk.slice(-4) !== sfx) return;
+        if (!this._quoteSources) this._quoteSources = new Map();
+        this._quoteSources.delete(a);
+        this._quoteSources.set(a, pk);
+        while (this._quoteSources.size > 50) this._quoteSources.delete(this._quoteSources.keys().next().value);
+    },
+
+    quoteTagsForContent(content) {
+        const F = window.NymContentFilter;
+        if (!F || !this._quoteSources || !this._quoteSources.size || typeof content !== 'string' || content.indexOf('>') === -1) return [];
+        const out = [];
+        for (const author of F.quoteAuthors(content)) {
+            const pk = this._quoteSources.get(String(author).trim().toLowerCase());
+            if (pk && !out.some((t) => t[1] === pk)) out.push(['quote_pk', pk]);
+            if (out.length >= 4) break;
+        }
+        return out;
     },
 
     isContentHidden(m) {
@@ -190,9 +311,15 @@ Object.assign(NYM.prototype, {
         const F = window.NymContentFilter;
         if (!F || typeof document === 'undefined') return;
         const ctx = this._cfCtx();
+        let idx = null;
         document.querySelectorAll('.message blockquote > .quote-author').forEach((a) => {
             const sfx = a.querySelector('.nym-suffix');
-            if (sfx && F.quoteBlocked(ctx, 'q' + String(sfx.textContent || '').trim()) && a.parentElement) a.parentElement.remove();
+            if (!sfx) return;
+            const row = typeof a.closest === 'function' ? a.closest('.message') : null;
+            const id = row && row.dataset ? row.dataset.messageId : '';
+            if (id && !idx) idx = this._messageIndex();
+            const quoted = id ? this._quotedOf(idx.get(id)) : [];
+            if (F.quoteBlocked(ctx, 'q' + String(sfx.textContent || '').trim(), quoted) && a.parentElement) a.parentElement.remove();
         });
     },
 
@@ -201,15 +328,83 @@ Object.assign(NYM.prototype, {
         return !!F && F.activeFilters(this._cfCtx());
     },
 
+    _cfListSig(list) {
+        const last = list[list.length - 1];
+        const size = (v) => (v && typeof v.size === 'number' ? v.size : 0);
+        return [list.length, last ? (last.id || '') + ':' + (typeof last.content === 'string' ? last.content.length : 0) : '',
+            this._cfVersion || 0, this._cfEditEpoch || 0, size(this.deletedEventIds), size(this.blockedUsers), size(this.blockedKeywords),
+            size(this.friends), size(this.autoMutedPubkeys), Math.floor(Date.now() / 60000),
+            typeof this._clientGatesActive === 'function' && this._clientGatesActive() ? 1 : 0,
+            this.spamFilterEnabled === false ? 0 : 1, this.spamFilterAggressive === false ? 0 : 1].join('|');
+    },
+
+    _visibleCount(list) {
+        const F = window.NymContentFilter;
+        if (!Array.isArray(list)) return 0;
+        if (!F) return list.length;
+        const sig = this._cfListSig(list);
+        if (!this._visibleCountMemo) this._visibleCountMemo = new WeakMap();
+        const hit = this._visibleCountMemo.get(list);
+        if (hit && hit.sig === sig) return hit.n;
+        const ctx = this._cfCtx();
+        let n = 0;
+        for (const m of list) {
+            if (m && !F.hidden(ctx, this._cfView(m), m)) n++;
+        }
+        this._visibleCountMemo.set(list, { sig, n });
+        return n;
+    },
+
+    _blockedOverCap(list) {
+        const F = window.NymContentFilter;
+        const cap = F && F.BLOCKED_KEEP ? F.BLOCKED_KEEP : 200;
+        if (!Array.isArray(list) || list.length <= cap || !this.blockedUsers || !this.blockedUsers.size) return false;
+        let n = 0;
+        for (const m of list) {
+            if (m && !m.isOwn && m.pubkey !== this.pubkey && this.blockedUsers.has(m.pubkey) && ++n > cap) return true;
+        }
+        return false;
+    },
+
+    _messageIndex() {
+        const idx = new Map();
+        if (this.messages) {
+            for (const list of this.messages.values()) {
+                if (!Array.isArray(list)) continue;
+                for (const m of list) if (m && m.id && !idx.has(m.id)) idx.set(m.id, m);
+            }
+        }
+        if (this.pmMessages) {
+            for (const list of this.pmMessages.values()) {
+                if (!Array.isArray(list)) continue;
+                for (const m of list) {
+                    if (!m) continue;
+                    if (m.id) idx.set(m.id, m);
+                    if (m.nymMessageId) idx.set(m.nymMessageId, m);
+                }
+            }
+        }
+        return idx;
+    },
+
+    _refreshRenderedVisibility(pubkey) {
+        if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+        const safe = pubkey && typeof this._safePubkey === 'function' ? this._safePubkey(pubkey) : '';
+        if (pubkey && !safe) return;
+        const rows = document.querySelectorAll(safe ? `.message[data-pubkey="${safe}"]` : '.message');
+        if (!rows || !rows.length) return;
+        const idx = this._messageIndex();
+        for (const el of Array.from(rows)) {
+            const id = el && el.dataset ? el.dataset.messageId : '';
+            const m = id ? idx.get(id) : null;
+            if (m) el.classList.toggle('blocked', this.isContentHidden(m));
+        }
+    },
+
     _previewMessage(list) {
         const F = window.NymContentFilter;
         if (!Array.isArray(list) || !F) return null;
-        const last = list[list.length - 1];
-        const size = (v) => (v && typeof v.size === 'number' ? v.size : 0);
-        const sig = [list.length, last ? (last.id || '') + ':' + (typeof last.content === 'string' ? last.content.length : 0) : '',
-            this._cfVersion || 0, this._cfEditEpoch || 0, size(this.deletedEventIds), size(this.blockedUsers), size(this.blockedKeywords),
-            size(this.friends), size(this.autoMutedPubkeys), Math.floor(Date.now() / 60000),
-            typeof this._clientGatesActive === 'function' && this._clientGatesActive() ? 1 : 0].join('|');
+        const sig = this._cfListSig(list);
         if (!this._previewMemo) this._previewMemo = new WeakMap();
         const hit = this._previewMemo.get(list);
         if (hit && hit.sig === sig) return hit.m;
@@ -219,16 +414,24 @@ Object.assign(NYM.prototype, {
         return m;
     },
 
-    _previewBody(text) {
+    _previewBody(text, quoted) {
         const F = window.NymContentFilter;
         const s = typeof text === 'string' ? text : '';
-        const clean = F && s ? F.stripBlockedQuotes(this._cfCtx(), s) : s;
+        const clean = F && s ? F.stripBlockedQuotes(this._cfCtx(), s, quoted) : s;
         return typeof this._notifPreviewText === 'function' ? this._notifPreviewText(clean) : clean;
     },
 
     _keepsBlockedGroupControl(type) {
         const F = window.NymContentFilter;
         return !!F && F.keepsBlockedGroupControl(type || '');
+    },
+
+    _keepsBlockedChatRumor(rumor) {
+        const F = window.NymContentFilter;
+        if (!F || !rumor) return false;
+        const tags = Array.isArray(rumor.tags) ? rumor.tags : [];
+        const type = tags.find((t) => Array.isArray(t) && t[0] === 'type' && t[1]);
+        return F.keepsBlockedChat(rumor.kind, type ? type[1] : '');
     },
 
     _keepsBlockedGroupRumor(rumor) {
@@ -265,11 +468,10 @@ Object.assign(NYM.prototype, {
         if (currentAuthor !== null) {
             conversation.push({ author: currentAuthor, text: currentText.join('\n').trim() });
         }
-        // Text below the quote is the replier's, not Nymbot's, or the worker echoes it back as an assistant turn.
         const nonQuotedText = lines.filter(l => !l.startsWith('>')).join('\n').trim();
-        if (nonQuotedText && (conversation.length === 0 || conversation[conversation.length - 1].text !== nonQuotedText)) {
-            const senderNym = (this.nym && this.pubkey) ? String(this.nym || 'nym').replace(/#[0-9a-f]{4}$/i, '') + '#' + this.getPubkeySuffix(this.pubkey) : (this.nym || 'nym');
-            conversation.push({ author: senderNym, text: nonQuotedText });
+        const quotedAuthor = typeof quoteContext.author === 'string' ? quoteContext.author.trim() : '';
+        if (nonQuotedText && quotedAuthor && (conversation.length === 0 || conversation[conversation.length - 1].text !== nonQuotedText)) {
+            conversation.push({ author: quotedAuthor, text: nonQuotedText });
         }
         // Strip the wire envelope from Nymbot's own turns, or the model imitates it.
         if (typeof this._stripBotEnvelope === 'function') {
@@ -647,6 +849,71 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _emojiSourceHidden(pubkey, nym, content, opts) {
+        const pk = typeof pubkey === 'string' ? pubkey : '';
+        if (!pk || pk === this.pubkey) return false;
+        if (this.blockedUsers && this.blockedUsers.has(pk)) return true;
+        const o = opts || {};
+        const author = nym || (typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pk) : '');
+        if (typeof this.isPersonHidden === 'function' && this.isPersonHidden(pk, author)) return true;
+        const probe = {
+            id: typeof o.id === 'string' ? o.id : '', pubkey: pk, author, content: typeof content === 'string' ? content : '', isPM: o.pm === true,
+            quoted: Array.isArray(o.quoted) ? o.quoted : [], people: Array.isArray(o.people) ? o.people : []
+        };
+        if (typeof this.isContentHidden === 'function') {
+            if (this.isContentHidden(probe)) return true;
+            if (o.msg && typeof o.msg === 'object' && !o.msg.isOwn && this.isContentHidden(o.msg)) return true;
+        }
+        return o.pm !== true && this._wotGated(pk);
+    },
+
+    _channelEmojiHidden(event, nym) {
+        if (!event || typeof event !== 'object' || event.pubkey === this.pubkey) return false;
+        const tags = Array.isArray(event.tags) ? event.tags : [];
+        const editTag = tags.find((t) => Array.isArray(t) && t[0] === 'edit' && typeof t[1] === 'string' && t[1]);
+        const content = typeof this._channelDisplayContent === 'function' ? this._channelDisplayContent(event) : (typeof event.content === 'string' ? event.content : '');
+        if (typeof this._quietMessage === 'function' && (this._quietMessage({ pubkey: event.pubkey, id: event.id }) || (editTag && this._quietMessage({ pubkey: event.pubkey, id: editTag[1] })))) return true;
+        return this._emojiSourceHidden(event.pubkey, nym, content, {
+            id: editTag ? editTag[1] : (typeof event.id === 'string' ? event.id : ''),
+            quoted: typeof this._quotedFromTags === 'function' ? this._quotedFromTags(tags) : [],
+            people: typeof this._botAskerOf === 'function' ? this._botAskerOf(event) : undefined
+        });
+    },
+
+    _holdEmojiTags(msg, tags) {
+        if (!msg || !Array.isArray(tags)) return;
+        const held = Array.isArray(msg.heldTags) ? msg.heldTags.slice() : [];
+        for (const t of tags) {
+            if (held.length >= 24) break;
+            if (!Array.isArray(t) || (t[0] !== 'emoji' && t[0] !== 'imeta') || !t.every((x) => typeof x === 'string')) continue;
+            const sig = JSON.stringify(t);
+            if (!held.some((h) => JSON.stringify(h) === sig)) held.push(t.slice(0, 8));
+        }
+        if (held.length) msg.heldTags = held;
+    },
+
+    _releaseHeldTags() {
+        const stores = [[this.messages, 'channel'], [this.pmMessages, 'pm']];
+        for (const [store, kind] of stores) {
+            if (!store || typeof store.forEach !== 'function') continue;
+            store.forEach((list, key) => {
+                if (!Array.isArray(list)) return;
+                let released = false;
+                for (const m of list) {
+                    if (!m || !Array.isArray(m.heldTags) || !m.heldTags.length) continue;
+                    if (this._emojiSourceHidden(m.pubkey, m.isPM ? '' : (m.author || ''), m.content, { pm: !!m.isPM, msg: m })) continue;
+                    if (typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(m.heldTags);
+                    if (typeof this.ingestImetaTags === 'function') this.ingestImetaTags(m.heldTags);
+                    delete m.heldTags;
+                    released = true;
+                }
+                if (!released) return;
+                if (kind === 'pm' && typeof this.persistPMMessages === 'function') this.persistPMMessages(key);
+                else if (kind === 'channel' && typeof this.persistChannelMessages === 'function') this.persistChannelMessages(key);
+            });
+        }
+    },
+
     _wotGated(pubkey) {
         return WOT_SPAM_GATE && !!pubkey && pubkey !== this.pubkey && this._clientGatesActive() &&
             !this.isFriend(pubkey) && !this.nymchatPubkeys.has(pubkey) && this._isPubkeyGated(pubkey);
@@ -734,6 +1001,16 @@ Object.assign(NYM.prototype, {
         );
     },
 
+    _noteOwnHidden(message) {
+        if (!message || message._cfNoticed || message.isHistorical) return;
+        const ms = typeof this._messageMs === 'function' ? this._messageMs(message) : (message.created_at || 0) * 1000;
+        if (!message._optimistic && !(ms > 0 && Date.now() - ms < 30000)) return;
+        if (!this.hasBlockedKeyword(message.content, '', message.pubkey)) return;
+        message._cfNoticed = true;
+        const tx = (t, v) => (typeof this._gx === 'function' ? this._gx(t, v) : (v ? t.replace('{reason}', v.reason) : t));
+        this.displaySystemMessage(tx('Your message {reason} and was hidden locally. It was still sent.', { reason: tx('matched one of your blocked keywords') }));
+    },
+
     _countArrivedUnread(storageKey, message, exists) {
         if (!message || message.isOwn || exists) return;
         if (this.isContentHidden(message)) return;
@@ -779,7 +1056,7 @@ Object.assign(NYM.prototype, {
 
         this._applyPendingEdit(message);
 
-        if (message.blocked || this.blockedUsers.has(message.pubkey)) {
+        if (message.blocked) {
             return;
         }
 
@@ -838,13 +1115,9 @@ Object.assign(NYM.prototype, {
                 this._insertMessageSorted(this.messages.get(storageKey), message);
 
                 const messages = this.messages.get(storageKey);
-                if (messages && messages.length > this.channelMessageLimit) {
-                    let trimmed = messages.slice(-this.channelMessageLimit);
-                    // Keep thread roots the kept window still references so busy channels don't break live threads.
-                    if (typeof this._withPinnedThreadRoots === 'function') {
-                        trimmed = this._withPinnedThreadRoots(messages, trimmed, m => m.id);
-                    }
-                    this.messages.set(storageKey, trimmed);
+                const blockedArrival = !message.isOwn && this.blockedUsers && this.blockedUsers.has(message.pubkey);
+                if (messages && (messages.length > this.channelMessageLimit || (blockedArrival && this._blockedOverCap(messages)))) {
+                    this.messages.set(storageKey, this._storeTrim(messages, this.channelMessageLimit, m => m.id));
                 }
 
                 if (typeof this._maybeRefreshZapNotif === 'function') {
@@ -863,17 +1136,18 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
+            const arrivedHidden = !message.isOwn && this.isContentHidden(message);
             if (this._cvActive) {
                 _cvContainer = this._cvListForKey(storageKey);
                 if (!_cvContainer) {
                     this._countArrivedUnread(storageKey, message, exists);
                     return;
                 }
-                const seen = this._cvMarkColumnRead(storageKey);
+                const seen = !arrivedHidden && this._cvMarkColumnRead(storageKey);
                 if (!seen) {
                     this._countArrivedUnread(storageKey, message, exists);
                 } else if (!message.isOwn && !message.isHistorical && message.geohash &&
-                    message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
+                    message.id && /^[0-9a-f]{64}$/i.test(message.id) && this._channelReceiptOk(message) &&
                     typeof this.sendChannelReadReceipt === 'function') {
                     this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);
                 }
@@ -891,7 +1165,7 @@ Object.assign(NYM.prototype, {
                 // A collapsed thread reply is off screen, so it must not advance the read watermark.
                 if (document.hidden) {
                     this._countArrivedUnread(storageKey, message, exists);
-                } else if (typeof this._markChannelRead === 'function' && message.created_at &&
+                } else if (!arrivedHidden && typeof this._markChannelRead === 'function' && message.created_at &&
                     !(typeof this._threadReplyHidden === 'function' && this._threadReplyHidden(message))) {
                     this._markChannelRead(storageKey, message.created_at);
                 }
@@ -899,14 +1173,17 @@ Object.assign(NYM.prototype, {
                 // Public read receipts (kind 24421) only for messages the user can actually see.
                 const canBeSeen = !document.hidden && !this.userScrolledUp;
                 if (canBeSeen && !message.isOwn && !message.isHistorical && message.geohash &&
-                    message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
+                    message.id && /^[0-9a-f]{64}$/i.test(message.id) && this._channelReceiptOk(message) &&
                     typeof this.sendChannelReadReceipt === 'function') {
                     this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);
                 }
             }
         }
 
-        if (this.isContentHidden(message)) return;
+        if (this.isContentHidden(message)) {
+            if (message.isOwn && !_threadRender) this._noteOwnHidden(message);
+            return;
+        }
 
         // Thread replies update the root's reply row instead; replies with no local root render normally (threads.js).
         if (!_threadRender && message.threadRoot &&
@@ -1052,9 +1329,9 @@ Object.assign(NYM.prototype, {
 
             const verifiedBadge = message.senderVerified === false ? ''
                 : this.isVerifiedDeveloper(message.pubkey)
-                ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+                ? `<span class="verified-badge" data-tip="${this.verifiedDeveloper.title}">✓</span>`
                 : (message.isBot || this.isVerifiedBot(message.pubkey))
-                    ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
+                    ? '<span class="verified-badge" data-tip="Nymchat Bot">✓</span>'
                     : '';
 
             let _lockVerified = '';
@@ -1106,15 +1383,16 @@ Object.assign(NYM.prototype, {
                 : '';
 
             const _botAuthored = !!(message.isBot || this.isVerifiedBot(message.pubkey));
-            const preformatted = _botAuthored ? null : (this._fmtCache && this._fmtCache.get(message.content));
+            const _shown = this._shownContent(message);
+            const preformatted = _botAuthored ? null : (this._fmtCache && this._fmtCache.get(_shown));
             let formattedContent;
             if (preformatted != null) {
                 formattedContent = preformatted;
             } else if (!_botAuthored && this._shouldDeferLiveFormat(message)) {
-                formattedContent = this._placeholderContentHtml(message.content);
+                formattedContent = this._placeholderContentHtml(_shown);
                 deferFormat = true;
             } else {
-                formattedContent = this.formatMessageWithQuotes(message.content, 0, _botAuthored);
+                formattedContent = this.formatMessageWithQuotes(_shown, 0, _botAuthored, this._quotedOf(message));
             }
             if (_botAuthored) {
                 // Show Nymbot's canonical command names in this client's localized vocabulary.
@@ -1687,15 +1965,16 @@ Object.assign(NYM.prototype, {
 
     _queueLiveFormat(message, messageEl) {
         const content = message.content;
+        const shown = this._shownContent(message);
         messageEl.dataset.fmtPending = '1';
         const finishInline = () => {
             let html;
-            try { html = this.formatMessageWithQuotes(content); }
-            catch (_) { html = this._placeholderContentHtml(content); }
+            try { html = this.formatMessageWithQuotes(shown, 0, false, this._quotedOf(message)); }
+            catch (_) { html = this._placeholderContentHtml(shown); }
             this._swapMessageContent(messageEl, message, html, content);
         };
         if (!this._getFormatWorker()) { finishInline(); return; }
-        const items = [{ key: content, content, quoteInfo: this._resolveQuoteInfo(content), mentionInfo: this._resolveMentionInfo(content) }];
+        const items = [{ key: shown, content: shown, quoteInfo: this._resolveQuoteInfo(shown), mentionInfo: this._resolveMentionInfo(shown) }];
         this._workerFormatBatch(items, this._buildFormatCtx()).then(results => {
             const html = results && results[0] ? results[0].html : null;
             if (html != null) this._swapMessageContent(messageEl, message, html, content);
@@ -1720,10 +1999,10 @@ Object.assign(NYM.prototype, {
         this._finalizeMessageContent(messageEl, message);
     },
 
-    formatMessageWithQuotes(content, depth = 0, commonMark = false) {
+    formatMessageWithQuotes(content, depth = 0, commonMark = false, quoted) {
         const F = window.NymContentFilter;
         if (F && !depth && typeof content === 'string' && content.indexOf('>') !== -1) {
-            content = F.stripBlockedQuotes(this._cfCtx(), content);
+            content = F.stripBlockedQuotes(this._cfCtx(), content, Array.isArray(quoted) ? quoted : []);
         }
         return window.NymFormat.formatWithQuotes(content, Object.assign(this._mainFormatCtx(content), { commonMark }), depth);
     },
@@ -1749,6 +2028,15 @@ Object.assign(NYM.prototype, {
         return this._suffixIndex.get(key) || null;
     },
 
+    _mentionPersonHidden(pubkey) {
+        if (!pubkey || pubkey === this.pubkey) return false;
+        if (this.blockedUsers && this.blockedUsers.has(pubkey)) return true;
+        const F = window.NymContentFilter;
+        if (!F || typeof this._cfCtx !== 'function') return false;
+        const nym = typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pubkey) : '';
+        return F.textBlocked(this._cfCtx(), '', this._cfNym(nym), pubkey);
+    },
+
     // Main-thread only (needs this.users); keyed by suffix -> { avatar, flair } in ctx.mentionInfo.
     _resolveMentionInfo(content) {
         if (!content || content.indexOf('@') === -1 || !window.NymFormat
@@ -1758,7 +2046,7 @@ Object.assign(NYM.prototype, {
         const out = {};
         for (const sfx of suffixes) {
             const pubkey = this._pubkeyForSuffix(sfx);
-            if (!pubkey) { out[sfx] = { avatar: '', flair: '' }; continue; }
+            if (!pubkey || this._mentionPersonHidden(pubkey)) { out[sfx] = { avatar: '', flair: '' }; continue; }
             const safePk = this._safePubkey(pubkey) || '';
             const avatarSrc = this.getAvatarUrl(pubkey);
             out[sfx] = {
@@ -1952,7 +2240,9 @@ Object.assign(NYM.prototype, {
         modalVid.style.display = '';
     },
 
-    displaySystemMessage(content, type = 'system', { html = false, feed = false, kind = null } = {}) {
+    displaySystemMessage(content, type = 'system', { html = false, feed = false, kind = null, people = null } = {}) {
+        const named = Array.isArray(people) ? people.filter((pk) => typeof pk === 'string' && pk && pk !== this.pubkey) : [];
+        if (named.length && !feed && this._feedPeopleHidden(named)) return;
         if (type !== 'action' && !feed && typeof this.showToast === 'function') {
             this.showToast(content, { html, kind });
             return;
@@ -1962,7 +2252,11 @@ Object.assign(NYM.prototype, {
         const messageEl = document.createElement('div');
         messageEl.className = type === 'action' ? 'action-message' : 'system-message';
         const shown = this.localizeCommandTokensIn(content);
-        if (html) {
+        if (named.length) {
+            messageEl.dataset.people = named.join(',');
+            messageEl._feedLine = { content: shown, html, names: this._feedNames(named, html) };
+            this._paintFeedLine(messageEl);
+        } else if (html) {
             messageEl.innerHTML = shown;
         } else {
             this.renderNymText(messageEl, shown);
@@ -1972,6 +2266,58 @@ Object.assign(NYM.prototype, {
         if (!this._cvActive || container === document.getElementById('messagesContainer')) {
             this._scheduleScrollToBottom();
         }
+    },
+
+    _feedPeopleHidden(people) {
+        return typeof this.isPersonHidden === 'function' && people.some((pk) => this.isPersonHidden(pk));
+    },
+
+    _feedNames(people, html) {
+        const out = {};
+        for (const pk of people) {
+            const names = [];
+            const plain = typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pk) : '';
+            if (plain) names.push(String(plain));
+            if (html && typeof this.getNymHtmlFromPubkey === 'function') {
+                const h = this.getNymHtmlFromPubkey(pk);
+                if (h) names.push(String(h));
+            }
+            out[pk] = names.sort((a, b) => b.length - a.length);
+        }
+        return out;
+    },
+
+    _paintFeedLine(el) {
+        const line = el && el._feedLine;
+        if (!line) return;
+        let text = String(line.content || '');
+        for (const pk of Object.keys(line.names || {})) {
+            const mask = this._personMask(pk);
+            if (!mask) continue;
+            const shown = line.html ? this.escapeHtml(mask) : mask;
+            for (const name of line.names[pk]) {
+                if (name) text = text.split(name).join(shown);
+            }
+        }
+        if (line.html) el.innerHTML = text;
+        else this.renderNymText(el, text);
+    },
+
+    _refreshFeedLinesForFilters() {
+        const boxes = [document.getElementById('messagesContainer')].concat(
+            typeof document.querySelectorAll === 'function' ? Array.from(document.querySelectorAll('.cv-messages')) : []);
+        for (const box of boxes) {
+            if (!box || !box.children) continue;
+            for (const el of Array.from(box.children)) {
+                if (!el || !el._feedLine) continue;
+                el.classList.remove('cf-hidden-row');
+                this._paintFeedLine(el);
+            }
+        }
+    },
+
+    _channelReceiptOk(message) {
+        return !!message && !message._spamGated && !this.isContentHidden(message);
     },
 
     _getMessagesScroller() {
@@ -2389,6 +2735,7 @@ Object.assign(NYM.prototype, {
     },
 
     setQuoteReply(author, text, sourceId) {
+        text = this._shownTextFor(text, sourceId);
         // Strip all nested quotes; keep only the last message being quoted.
         const MAX_NESTED = 1;
         const strippedLines = [];
@@ -2409,15 +2756,15 @@ Object.assign(NYM.prototype, {
             text = window.NymMediaNotes.previewText(text);
         }
         this.pendingQuote = { author, text: strippedText, fullText: text, sourceId: typeof sourceId === 'string' ? sourceId : '' };
+        if (typeof sourceId === 'string' && sourceId) this._noteQuoteSource(author, sourceId);
         const preview = document.getElementById('quotePreview');
         const authorEl = document.getElementById('quotePreviewAuthor');
         const textEl = document.getElementById('quotePreviewText');
-        const hashIdx = author.indexOf('#');
-        if (hashIdx >= 0) {
-            const base = author.substring(0, hashIdx);
-            const suffix = author.substring(hashIdx);
-            const sfx = suffix.replace(/^#/, '').toLowerCase();
-            const pubkey = /^[0-9a-f]{4}$/.test(sfx) ? this._pubkeyForSuffix(sfx) : null;
+        const split = window.NymSuffix.split(author);
+        if (split) {
+            const base = split.base;
+            const suffix = split.suffix;
+            const pubkey = this._pubkeyForSuffix(suffix.slice(1).toLowerCase());
             let avatarHtml = '', flairHtml = '';
             if (pubkey) {
                 const safePk = this._safePubkey(pubkey) || '';
@@ -2448,8 +2795,10 @@ Object.assign(NYM.prototype, {
     },
 
     startEditMessage(contextData) {
-        const { messageId, content, pubkey } = contextData;
-        if (!messageId || !content || pubkey !== this.pubkey) return;
+        const { messageId, content: raw, pubkey } = contextData;
+        if (!messageId || !raw || pubkey !== this.pubkey) return;
+        const content = this._shownTextFor(raw, messageId);
+        const head = content !== raw && raw.endsWith(content) ? raw.slice(0, raw.length - content.length) : '';
 
         let isPM = false;
         let isGroup = false;
@@ -2477,7 +2826,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        this.pendingEdit = { messageId, content, pubkey, isPM, isGroup, groupId, conversationKey, nymMessageId };
+        this.pendingEdit = { messageId, content, head, pubkey, isPM, isGroup, groupId, conversationKey, nymMessageId };
 
         this.clearQuoteReply();
 
@@ -2576,7 +2925,8 @@ Object.assign(NYM.prototype, {
             const bubbleTimeEl = contentEl.querySelector('.bubble-time-inner');
             const hoverButtonsEl = contentEl.querySelector('.msg-hover-buttons');
             const editBotAuthored = !!(msgEl.dataset.pubkey && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(msgEl.dataset.pubkey));
-            const formattedContent = this.formatMessageWithQuotes(newContent, 0, editBotAuthored);
+            const editedMsg = this._messageIndex().get(messageId);
+            const formattedContent = this.formatMessageWithQuotes(this._shownContent({ content: newContent, quoted: this._quotedOf(editedMsg) }), 0, editBotAuthored, this._quotedOf(editedMsg));
             if (bubbleTimeEl) {
                 if (!bubbleTimeEl.querySelector('.edited-indicator')) {
                     const bubbleEdited = document.createElement('span');
@@ -2638,7 +2988,7 @@ Object.assign(NYM.prototype, {
                     const content = msgEl.dataset.rawContent || msgEl.querySelector('.message-content')?.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
                     if (!content) return;
                     try {
-                        await navigator.clipboard.writeText(content);
+                        if (!(await this._copyMessageText(content, msgEl.dataset.messageId))) return;
                         this.displaySystemMessage('Message copied to clipboard');
                     } catch (_) {
                         this.displaySystemMessage('Failed to copy message');
@@ -2944,9 +3294,11 @@ Object.assign(NYM.prototype, {
             const edit = this.pendingEdit;
             this.cancelEditMessage();
 
-            if (content === edit.content) {
+            const edited = this._editedContent(edit, content);
+            if (edited === null) {
                 return;
             }
+            content = edited;
 
             if (edit.isGroup && edit.groupId) {
                 await this.sendEditedGroupMessage(content, edit.messageId, edit.groupId, edit.nymMessageId);
@@ -3102,7 +3454,7 @@ Object.assign(NYM.prototype, {
         if (content.startsWith('/')) {
             this.handleCommand(content);
         } else if (this.currentGeohash) {
-            sent = await this.publishMessagePseudonymous(content, this.currentGeohash, this.currentGeohash, savedQuote, threadRoot);
+            sent = await this.publishMessagePseudonymous(content, this.currentGeohash, this.currentGeohash, savedQuote, threadRoot, { keep: askBot });
             if (!sent) return false;
         } else {
             return false;
@@ -3145,14 +3497,19 @@ Object.assign(NYM.prototype, {
             mesh: typeof this.meshShouldCarry === 'function' && !!this.meshShouldCarry(geohash || this.currentChannel),
             validChannel: !geohash || typeof this.isValidChannelTag !== 'function' || this.isValidChannelTag(geohash)
         });
+        const lane = sender && sender.lane;
+        const done = () => { if (lane) lane.release(); };
         if (blocked) {
+            done();
             say(blocked);
             return Promise.resolve(blocked);
         }
-        const anon = { nym: sender && sender.nym, pubkey: sender && sender.pubkey };
+        const anon = { nym: sender && sender.nym, pubkey: sender && sender.pubkey, lane, posted: sender && sender.posted, sends: [] };
         return Promise.resolve(this._handleBotCommand(rawInput, geohash, botQuote, content, threadRoot, anon))
             .catch(() => 'failed')
+            .then((reason) => Promise.all(anon.sends).catch(() => null).then(() => reason))
             .then((reason) => {
+                done();
                 say(reason);
                 return reason || null;
             });
@@ -3209,7 +3566,48 @@ Object.assign(NYM.prototype, {
         });
     },
 
+    _restorePqVerdicts(pubkey) {
+        if (!pubkey || !this.pmMessages || typeof this.pqSealRootVerdict !== 'function') return;
+        const touched = new Set();
+        const persist = (k) => { if (typeof this.persistPMMessages === 'function') this.persistPMMessages(k); };
+        this.pmMessages.forEach((list, key) => {
+            if (!Array.isArray(list)) return;
+            for (const m of list) {
+                if (!m || !m.pqPending || m.isOwn || m.pubkey !== pubkey) continue;
+                const id = m.nymMessageId || m.id;
+                const v = this.pqSealRootVerdict(pubkey);
+                if (v === null && typeof this.pqResolveRootVerdict === 'function') {
+                    this.pqResolveRootVerdict(pubkey, id, (x) => {
+                        if (!m.pqPending) return;
+                        delete m.pqPending;
+                        m.pqRoot = x === true;
+                        persist(key);
+                    });
+                } else if (v !== null) {
+                    delete m.pqPending;
+                    touched.add(key);
+                    m.pqRoot = v === true;
+                    if (typeof this.refreshMessagePqBadge === 'function') this.refreshMessagePqBadge(id);
+                }
+            }
+        });
+        touched.forEach(persist);
+    },
+
+    _resumeOwedPqVerdicts() {
+        if (!this.pmMessages) return;
+        const owed = new Set();
+        this.pmMessages.forEach((list) => {
+            if (!Array.isArray(list)) return;
+            for (const m of list) {
+                if (m && m.pqPending && !m.isOwn && m.pubkey && !(this.blockedUsers && this.blockedUsers.has(m.pubkey))) owed.add(m.pubkey);
+            }
+        });
+        owed.forEach((pk) => this._restorePqVerdicts(pk));
+    },
+
     showMessagesFromUnblockedUser(pubkey) {
+        this._restorePqVerdicts(pubkey);
         // Unmark stored messages first.
         this.messages.forEach((channelMessages, channel) => {
             channelMessages.forEach(msg => {
@@ -3227,14 +3625,21 @@ Object.assign(NYM.prototype, {
             });
         });
 
+        const personHidden = typeof this.isPersonHidden === 'function' && this.isPersonHidden(pubkey);
+        const index = typeof this._messageIndex === 'function' ? this._messageIndex() : null;
         document.querySelectorAll('.message.blocked-user-message').forEach(msg => {
-            if (msg.dataset.pubkey === pubkey) {
+            if (msg.dataset.pubkey !== pubkey) return;
+            const found = msg.dataset.messageId && index ? index.get(msg.dataset.messageId) : null;
+            let hidden;
+            if (found && typeof this.isContentHidden === 'function') {
+                hidden = this.isContentHidden(found);
+            } else {
                 const content = msg.querySelector('.message-content');
-                if (!content || !this.hasBlockedKeyword(content.textContent)) {
-                    msg.style.display = '';
-                    msg.classList.remove('blocked-user-message');
-                }
+                hidden = personHidden || (!!content && this.hasBlockedKeyword(content.textContent));
             }
+            msg.style.display = '';
+            msg.classList.remove('blocked-user-message');
+            msg.classList.toggle('blocked', hidden);
         });
 
         document.querySelectorAll('.message-group.blocked-user-group').forEach(group => {

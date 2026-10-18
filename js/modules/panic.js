@@ -289,6 +289,7 @@ Object.assign(NYM.prototype, {
   async deleteAccountAndWipe(targets) {
     if (this._panicking || this._deletingAccount) return;
     this._deletingAccount = true;
+    try { if (typeof this._resetAppBadge === 'function') this._resetAppBadge(); } catch (e) {}
     const plan = targets || await this.deleteAccountTargets();
     const ui = this._panicShowOverlay(this._panicText('Deleting'));
     const jobs = plan.jobs.filter((j) => !j.active);
@@ -335,6 +336,7 @@ Object.assign(NYM.prototype, {
   async panicWipe(opts) {
     if (this._panicking) return;
     this._panicking = true;
+    try { if (typeof this._resetAppBadge === 'function') this._resetAppBadge(); } catch (e) {}
     const localOnly = !!(opts && opts.localOnly);
     const startedAt = Date.now();
     const accountDbs = [];

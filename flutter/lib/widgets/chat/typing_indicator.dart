@@ -71,13 +71,23 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
 
     final controller = ref.read(nostrControllerProvider);
 
+    final lineStyle = TextStyle(color: c.textDim, fontSize: 12, height: 1);
+
     List<InlineSpan> typerSpans(String pk) {
       final split = splitNymSuffix(nymOf(pk));
       final isVerified =
           controller.isVerifiedDeveloper(pk) || controller.isVerifiedBot(pk);
       return [
-        ...nymLabelSpans(context, split.base, split.suffix,
-            TextStyle(color: c.textDim, fontSize: 12, height: 1)),
+        TextSpan(text: isolateNym(split.base), style: lineStyle),
+        if (split.suffix.isNotEmpty)
+          WidgetSpan(
+            alignment: PlaceholderAlignment.baseline,
+            baseline: TextBaseline.alphabetic,
+            child: Text(split.suffix,
+                style: nymSuffixStyleOf(context, lineStyle),
+                maxLines: 1,
+                softWrap: false),
+          ),
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
           child: CosmeticNymBadges(
@@ -157,7 +167,7 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
             Expanded(
               child: Text.rich(
                 TextSpan(children: spans),
-                style: TextStyle(color: c.textDim, fontSize: 12, height: 1),
+                style: lineStyle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),

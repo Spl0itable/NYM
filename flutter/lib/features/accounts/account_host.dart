@@ -8,6 +8,7 @@ import '../../core/constants/storage_keys.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../services/nostr/nostr_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/relay/relay_connection.dart' show WebSocketChannelFactory;
 import '../../services/storage/key_value_store.dart';
 import '../../services/storage/revocable_prefs.dart';
 import '../../state/app_state.dart';
@@ -18,6 +19,7 @@ import '../toasts/toast_center.dart';
 import 'account_logic.dart';
 import 'account_runtime.dart';
 import 'inactive_probe.dart';
+import 'inactive_watch.dart';
 
 abstract class AccountsController {
   ValueListenable<AccountIndex> get changes;
@@ -67,8 +69,59 @@ class AccountSession extends ChangeNotifier implements AccountsController {
     this.probe,
     this._detach,
     InactiveNotifier? notify,
+    WebSocketChannelFactory? watchChannel,
+    Duration Function(bool first)? watchDelay,
   }) : _notify = notify ?? NotificationService().showNotification {
     _container = _build();
+    final p = probe;
+    if (p != null) {
+      p.muted = _autoMuted;
+      p.onLocked = _bump;
+      _watch = InactiveWatch(
+        probe: p,
+        onFresh: _noticeFor,
+        channel: watchChannel,
+        delay: watchDelay,
+      );
+      runtime.changes.addListener(_onIndexChanged);
+    }
+  }
+
+  InactiveWatch? _watch;
+  bool _watchOn = false;
+
+  bool _autoMuted(String pubkey) {
+    final c = _container;
+    if (c == null) return false;
+    try {
+      final s = c.read(appStateProvider);
+      return s.clientGatesActive && s.isAutoMuted(pubkey);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Set<String> get watching => _watch?.watching ?? const {};
+
+  void setWatchForeground(bool on) {
+    _watchOn = on;
+    _syncWatch();
+  }
+
+  void _onIndexChanged() => _syncWatch();
+
+  void _syncWatch() {
+    final w = _watch;
+    if (w == null) return;
+    if (!_watchOn || _disposed) {
+      w.stopAll();
+      return;
+    }
+    final active = runtime.index.active;
+    w.sync([
+      for (final a in runtime.index.accounts)
+        if (a.id != active && a.notifyInactive) a,
+    ]);
   }
 
   final AccountRuntime runtime;
@@ -97,6 +150,8 @@ class AccountSession extends ChangeNotifier implements AccountsController {
   @override
   void dispose() {
     _disposed = true;
+    if (_watch != null) runtime.changes.removeListener(_onIndexChanged);
+    _watch?.stopAll();
     _container?.dispose();
     _container = null;
     super.dispose();
@@ -272,13 +327,7 @@ class AccountSession extends ChangeNotifier implements AccountsController {
   bool biometricHeldByOther() => runtime.biometricHeldByOther();
 
   @override
-  Future<String?> storedNsec(String id) async {
-    for (final key in const ['nym_nostr_login_nsec', 'nym_session_nsec']) {
-      final v = await runtime.storedSecret(id, key);
-      if (v != null && v.startsWith('nsec1')) return v;
-    }
-    return null;
-  }
+  Future<String?> storedNsec(String id) => runtime.storedNsec(id);
 
   @override
   Future<String?> storedSecret(String id, String key) =>
@@ -309,27 +358,49 @@ class AccountSession extends ChangeNotifier implements AccountsController {
         if (a.id == runtime.index.active || !a.notifyInactive) continue;
         final fresh = await p.probe(a);
         if (fresh <= 0) continue;
-        final notice = AccountLogic.inactiveNotice(
-          a.id,
-          getNymFromPubkey(a.nym.isEmpty ? 'nym' : a.nym, a.pubkey),
-          runtime.storedPref(runtime.index.active, StorageKeys.hidePreviews),
-          runtime.storedPref(a.id, StorageKeys.hidePreviews),
-        );
-        final nym = notice.nym;
-        try {
-          await _notify(
-            title: 'Nymchat',
-            body: nym == null
-                ? tr('New message on another identity')
-                : tr('New message for {nym}', {'nym': nym}),
-            payload: '$kAccountPayloadPrefix${a.id}',
-            conversationKey: 'account-${notice.group}',
-          );
-        } catch (_) {}
+        await _noticeFor(a, fresh);
       }
     } finally {
       _probing = false;
     }
+  }
+
+  Future<void> _bump(AccountEntry a, int n) async {
+    final idx = runtime.index;
+    if (_disposed || _busy || n <= 0 || a.id == idx.active) return;
+    final cur = idx.byId(a.id);
+    if (cur == null || !cur.notifyInactive) return;
+    await runtime.commit(AccountPlan(
+      ok: true,
+      effects: const [],
+      index: AccountIndex(active: idx.active, accounts: [
+        for (final x in idx.accounts)
+          x.id == a.id ? x.copyWith(unread: x.unread + n) : x,
+      ]),
+    ));
+  }
+
+  Future<void> _noticeFor(AccountEntry a, [int n = 1]) async {
+    if (_disposed || a.id == runtime.index.active) return;
+    await _bump(a, n);
+    if (_disposed) return;
+    final notice = AccountLogic.inactiveNotice(
+      a.id,
+      getNymFromPubkey(a.nym.isEmpty ? 'nym' : a.nym, a.pubkey),
+      runtime.storedPref(runtime.index.active, StorageKeys.hidePreviews),
+      runtime.storedPref(a.id, StorageKeys.hidePreviews),
+    );
+    final nym = notice.nym;
+    try {
+      await _notify(
+        title: 'Nymchat',
+        body: nym == null
+            ? tr('New message on another identity')
+            : tr('New message for {nym}', {'nym': nym}),
+        payload: '$kAccountPayloadPrefix${a.id}',
+        conversationKey: 'account-${notice.group}',
+      );
+    } catch (_) {}
   }
 }
 
@@ -349,7 +420,8 @@ class AccountHost extends StatefulWidget {
   State<AccountHost> createState() => _AccountHostState();
 }
 
-class _AccountHostState extends State<AccountHost> {
+class _AccountHostState extends State<AccountHost>
+    with WidgetsBindingObserver {
   Timer? _probeTimer;
 
   @override
@@ -360,12 +432,31 @@ class _AccountHostState extends State<AccountHost> {
       _probeTimer = Timer.periodic(widget.probeEvery, (_) {
         unawaited(widget.session.runInactiveProbes());
       });
+      WidgetsBinding.instance.addObserver(this);
+      final state = WidgetsBinding.instance.lifecycleState;
+      widget.session.setWatchForeground(
+          state == null || state == AppLifecycleState.resumed);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      widget.session.setWatchForeground(true);
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      widget.session.setWatchForeground(false);
     }
   }
 
   @override
   void dispose() {
     _probeTimer?.cancel();
+    if (widget.session.probe != null) {
+      WidgetsBinding.instance.removeObserver(this);
+      widget.session.setWatchForeground(false);
+    }
     widget.session.detach = null;
     super.dispose();
   }
@@ -451,7 +542,7 @@ class _AccountReporterState extends ConsumerState<_AccountReporter> {
       unawaited(api.register(
         pubkey: pubkey,
         method: method,
-        nym: nym,
+        nym: withOwnNymSuffix(nym, pubkey),
         avatar: avatar,
       ));
     } catch (_) {}

@@ -98,7 +98,8 @@ List<QuickContextItem> buildQuickContextItems(
         return onThread;
       case MsgAction.copy:
         return () async {
-          await Clipboard.setData(ClipboardData(text: message.content));
+          await Clipboard.setData(
+              ClipboardData(text: app.shownContent(message)));
           showToast(tr('Message copied to clipboard'));
         };
       case MsgAction.translate:

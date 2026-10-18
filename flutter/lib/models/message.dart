@@ -72,6 +72,7 @@ class Message {
     this.senderVerified,
     this.pqEncrypted = false,
     this.pqRoot = false,
+    this.pqPending = false,
     this.pqCoverage,
     this.bitchatMessageId,
     this.nymMessageId,
@@ -100,8 +101,20 @@ class Message {
     this.expiresAt,
     this.slowHeld = false,
     Map<String, String>? readers,
+    this.people = const [],
+    this.names = const [],
+    this.quoted = const [],
+    this.heldTags = const [],
   })  : timestamp = timestamp ?? createdAt * 1000,
         readers = readers ?? <String, String>{};
+
+  List<String> people;
+
+  List<String> quoted;
+
+  List<List<String>> heldTags;
+
+  final List<String> names;
 
   String id;
   String author;
@@ -141,6 +154,8 @@ class Message {
 
   /// Whether every ML-KEM key was root-seeded; defaults false, as history used nsec-derived keys.
   bool pqRoot;
+
+  bool pqPending;
 
   /// PQ wraps out of total members for a group message we sent; overrides [pqEncrypted].
   ({int pq, int total})? pqCoverage;
@@ -240,6 +255,7 @@ class Message {
         'senderVerified': senderVerified,
         'pqEncrypted': pqEncrypted,
         'pqRoot': pqRoot,
+        if (pqPending) 'pqPending': true,
         if (pqCoverage != null) 'pqCoverPq': pqCoverage!.pq,
         if (pqCoverage != null) 'pqCoverTotal': pqCoverage!.total,
         'bitchatMessageId': bitchatMessageId,
@@ -260,6 +276,10 @@ class Message {
         if (powTarget != null) 'powTarget': powTarget,
         if (expiresAt != null) 'expiresAt': expiresAt,
         if (slowHeld) 'slowHeld': true,
+        if (people.isNotEmpty) 'people': people,
+        if (names.isNotEmpty) 'names': names,
+        if (quoted.isNotEmpty) 'quoted': quoted,
+        if (heldTags.isNotEmpty) 'heldTags': heldTags,
       };
 
   /// Centered system pill like `displaySystemMessage`; [action] selects the italic action variant.
@@ -267,6 +287,8 @@ class Message {
     String content, {
     bool action = false,
     int? createdAtMs,
+    List<String> people = const [],
+    List<String> names = const [],
   }) {
     final ms = createdAtMs ?? DateTime.now().millisecondsSinceEpoch;
     return Message(
@@ -277,6 +299,8 @@ class Message {
       createdAt: ms ~/ 1000,
       timestamp: ms,
       kind: action ? MessageKind.action : MessageKind.system,
+      people: people,
+      names: names,
     );
   }
 
@@ -323,6 +347,7 @@ class Message {
       // Absent in messages persisted before post-quantum shipped.
       pqEncrypted: j['pqEncrypted'] is bool ? j['pqEncrypted'] as bool : false,
       pqRoot: j['pqRoot'] is bool ? j['pqRoot'] as bool : false,
+      pqPending: j['pqPending'] == true,
       pqCoverage: (j['pqCoverPq'] is int && j['pqCoverTotal'] is int)
           ? (pq: j['pqCoverPq'] as int, total: j['pqCoverTotal'] as int)
           : null,
@@ -344,7 +369,64 @@ class Message {
       powTarget: (j['powTarget'] as num?)?.toInt(),
       expiresAt: (j['expiresAt'] as num?)?.toInt(),
       slowHeld: j['slowHeld'] == true,
+      people: _people(j['people']),
+      names: _names(j['people'], j['names']),
+      quoted: quotedKeys(j['quoted']),
+      heldTags: heldTagsOf(j['heldTags']),
     );
+  }
+
+  static List<List<String>> heldTagsOf(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <List<String>>[];
+    for (final t in raw) {
+      if (out.length >= 24) break;
+      if (t is! List || t.isEmpty || t.any((x) => x is! String)) continue;
+      final tag = [for (final x in t.take(8)) x as String];
+      if (tag[0] != 'emoji' && tag[0] != 'imeta') continue;
+      if (out.any((h) => h.join('\u0000') == tag.join('\u0000'))) continue;
+      out.add(tag);
+    }
+    return out;
+  }
+
+  static final RegExp _hex64 = RegExp(r'^[0-9a-f]{64}$');
+
+  static List<String> quotedKeys(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <String>[];
+    for (final p in raw) {
+      if (p is! String) continue;
+      final k = p.toLowerCase();
+      if (_hex64.hasMatch(k) && !out.contains(k)) out.add(k);
+      if (out.length >= 4) break;
+    }
+    return out;
+  }
+
+  static List<String> quotedFromTags(List<List<String>> tags) => quotedKeys([
+        for (final t in tags)
+          if (t.length > 1 && t[0] == 'quote_pk') t[1],
+      ]);
+
+  static List<String> _people(Object? raw) => raw is List
+      ? [
+          for (final p in raw)
+            if (p is String && p.isNotEmpty) p,
+        ]
+      : const [];
+
+  static List<String> _names(Object? rawPeople, Object? rawNames) {
+    if (rawNames is! List) return const [];
+    final people = rawPeople is List ? rawPeople : const [];
+    final out = <String>[];
+    for (var i = 0; i < rawNames.length; i++) {
+      final p = i < people.length ? people[i] : null;
+      if (p is! String || p.isEmpty) continue;
+      final n = rawNames[i];
+      out.add(n is String ? n : '');
+    }
+    return out;
   }
 }
 

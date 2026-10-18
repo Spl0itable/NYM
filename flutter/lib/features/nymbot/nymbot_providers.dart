@@ -26,6 +26,7 @@ import '../ai_consent/ai_consent.dart';
 import '../i18n/localization_service.dart';
 import '../i18n/i18n.dart';
 import '../pms/pm_logic.dart';
+import '../relays/relay_add.dart' show RelayAdd;
 import '../shop/shop_controller.dart' show shopControllerProvider;
 import '../commands/command_i18n.dart';
 import '../toasts/toast_center.dart';
@@ -455,16 +456,18 @@ class BotChatController extends StateNotifier<BotChatState> {
         ? linked.toLowerCase()
         : run.id;
     final event = data['event'];
+    final selfEvent = data['selfEvent'];
+    final anonLane =
+        run.anon || RelayAdd.anonEvent(event, anon.pubkeys.toSet(), anon.laneIds);
     if (event is Map) {
       final wrapJson = event.cast<String, dynamic>();
-      _publishDmEvent(wrapJson);
+      _publishDmEvent(wrapJson, anon: anonLane);
       await _displayBotReplyWrap(wrapJson, replyTo: replyTo);
     }
-    final selfEvent = data['selfEvent'];
     if (selfEvent is Map &&
         RegExp(r'^[0-9a-f]{64}$', caseSensitive: false)
             .hasMatch((selfEvent['id'] ?? '').toString())) {
-      _publishDmEvent(selfEvent.cast<String, dynamic>());
+      _publishDmEvent(selfEvent.cast<String, dynamic>(), anon: anonLane);
     }
     final balance = (data['balanceCredits'] as num?)?.toDouble() ??
         (data['balance'] as num?)?.toDouble();
@@ -968,7 +971,8 @@ class BotChatController extends StateNotifier<BotChatState> {
         nowMs: nowMs,
       );
       botWrap = await _wrapRumor(rumor, kNymbotPubkey, sender: anonSender);
-      if (botWrap != null && !_publishDmEvent(botWrap.toJson())) {
+      if (botWrap != null &&
+          !_publishDmEvent(botWrap.toJson(), anon: anonSender != null)) {
         botWrap = null;
       }
       if (botWrap != null) {
@@ -977,7 +981,9 @@ class BotChatController extends StateNotifier<BotChatState> {
                 sender: anonSender,
                 recipientKem: anon.kemFor(anonSender)?.publicKey)
             : await _wrapRumor(rumor, selfPubkey);
-        if (selfWrap != null) _publishDmEvent(selfWrap.toJson());
+        if (selfWrap != null) {
+          _publishDmEvent(selfWrap.toJson(), anon: anonSender != null);
+        }
         // Record own activity like every other send surface.
         try {
           _ref.read(nostrControllerProvider).recordOwnActivity();
@@ -1010,10 +1016,12 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 
   /// Publishes a pre-signed kind-1059 wrap to the DM relays; false before a publisher is wired.
-  bool _publishDmEvent(Map<String, dynamic> event) {
+  bool _publishDmEvent(Map<String, dynamic> event, {bool anon = false}) {
     final publish =
         _ref.read(shopControllerProvider.notifier).giftEventPublisher;
     if (publish == null) return false;
+    final id = event['id'];
+    if (anon && id is String) this.anon.markLane(id);
     try {
       publish(event);
       return true;
@@ -1210,7 +1218,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         ],
       );
       final wrap = await _wrapRumor(rumor, kNymbotPubkey, sender: anonId);
-      if (wrap != null && _publishDmEvent(wrap.toJson())) {
+      if (wrap != null && _publishDmEvent(wrap.toJson(), anon: anonId != null)) {
         wrapId = wrap.id;
       }
     }

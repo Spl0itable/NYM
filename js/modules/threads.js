@@ -209,7 +209,7 @@ Object.assign(NYM.prototype, {
         const list = this._threadListForMessage(msg);
         if (!list || !list.length) return 0;
         const c = this._threadCountCache;
-        const ver = this._cfVersion || 0;
+        const ver = (this._cfVersion || 0) + ':' + (this._cfEditEpoch || 0);
         if (!c || c.list !== list || c.len !== list.length || c.ver !== ver) {
             const map = new Map();
             for (const m of list) {
@@ -350,15 +350,15 @@ Object.assign(NYM.prototype, {
         return { type: 'channel', channel: this.currentChannel, geohash: this.currentGeohash || '', storageKey, isPM: false };
     },
 
-    _threadCtxLabel(ctx) {
+    _threadCtxHtml(ctx) {
         if (!ctx) return '';
-        if (ctx.type === 'channel') return `#${ctx.geohash || ctx.channel || ''}`;
+        if (ctx.type === 'channel') return this.escapeHtml(`#${ctx.geohash || ctx.channel || ''}`);
         if (ctx.type === 'group') {
             const g = this.groupConversations && this.groupConversations.get(ctx.groupId);
-            return g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : 'Group chat';
+            return this.escapeHtml(g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : 'Group chat');
         }
         if (ctx.type === 'pm') {
-            return `@${this.resolveDisplayNym(ctx.pubkey, ctx.nym || '')}`;
+            return '@' + this.formatNymWithPubkey(this.resolveDisplayNym(ctx.pubkey, ctx.nym || ''), ctx.pubkey);
         }
         return '';
     },
@@ -447,7 +447,7 @@ Object.assign(NYM.prototype, {
     </button>
     <span class="thread-view-icon">${this.THREAD_ICON_SVG}</span>
     <span class="thread-view-title">Thread</span>
-    <span class="thread-view-context">${this.escapeHtml(this._threadCtxLabel(at.ctx))}</span>`;
+    <span class="thread-view-context">${this._threadCtxHtml(at.ctx)}</span>`;
         container.appendChild(bar);
 
         const root = this._threadFindMessage(at.ctx, at.rootId);

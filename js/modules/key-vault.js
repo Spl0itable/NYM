@@ -15,7 +15,7 @@ Object.assign(NYM.prototype, {
 
   // `nym_pq_root` seeds the ML-KEM identity key, so it is protected and reset exactly like the nsec (spec §5.3).
   _VAULT_KEYS: ['nym_session_nsec', 'nym_dev_nsec', 'nym_nostr_login_nsec', 'nym_nip46_client_secret',
-    'nym_pq_root', 'nym_botpm_git'],
+    'nym_pq_root', 'nym_botpm_git', 'nym_login_resume'],
 
   // Prefixes of extra secrets encrypted alongside the identity keys (per-pubkey group ephemeral keys).
   _VAULT_EXTRA_PREFIXES: ['nym_ephemeral_keys_'],

@@ -40,6 +40,7 @@ import {
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
+  giftSenderLabel,
   bytesToHex,
   hexToBytes,
   utf8ToBytes,
@@ -56,7 +57,7 @@ import {
 import { isNymchatClient } from "./_client.js";
 import { isPrivateUrl, ssrfSafeFetch, readBounded } from "./proxy.js";
 import { filterSet, rowHit, pubkeyHit, listPayload } from "./_filters.js";
-import { hiddenAmong, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
+import { hiddenAmong, hiddenSenders, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
 import { handleScheduleAction } from "./_schedule.js";
 
 function shopKnown(id) {
@@ -232,7 +233,7 @@ var STORAGE_PQ_RELAYS = [
 ];
 
 // PQ-wrapped when the recipient announced an ML-KEM key, else plain NIP-17; never throws.
-async function buildStoragePqDM(env, botPrivkey, botPubkey, recipient, msg) {
+async function buildStoragePqDM(env, botPrivkey, botPubkey, recipient, msg, opts) {
   try {
     var botPq = botPqSelfFromEnv(env);
     var recipKem = null;
@@ -247,10 +248,10 @@ async function buildStoragePqDM(env, botPrivkey, botPubkey, recipient, msg) {
         recipKem = await fetchPqAnnouncementKey(recipient, STORAGE_PQ_RELAYS, 2500);
       }
     }
-    return buildPqGiftWrappedDM(msg, botPrivkey, botPubkey, recipient, recipKem);
+    return buildPqGiftWrappedDM(msg, botPrivkey, botPubkey, recipient, recipKem, opts);
   } catch (e) {
     try {
-      return buildPqGiftWrappedDM(msg, botPrivkey, botPubkey, recipient, null);
+      return buildPqGiftWrappedDM(msg, botPrivkey, botPubkey, recipient, null, opts);
     } catch (e2) {
       return null;
     }
@@ -482,10 +483,10 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var crec = { owned: claimRes.owned, active: claimRes.active };
     var giftEvent = null;
     if (isGift) {
-      var gifterName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
+      var gifterName = giftSenderLabel(body.gifterNym, userPubkey);
       var giftMsg = (gifterName ? gifterName + " gifted you " : "You've been gifted ") +
         "a Nymchat shop item. Open the Flair Shop to find it in your inventory.";
-      giftEvent = await buildStoragePqDM(env, botPrivkey, botPubkey, recipient, giftMsg);
+      giftEvent = await buildStoragePqDM(env, botPrivkey, botPubkey, recipient, giftMsg, gifterName ? { gifter: userPubkey } : null);
     }
     return json({
       itemId: pending.itemId, code: isGift ? null : code, gift: isGift, recipient: recipient, giftEvent: giftEvent,
@@ -508,10 +509,10 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     readCacheDelete(context, "/shop-status/" + userPubkey);
     var transferEvent = null;
     try {
-      var tName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
+      var tName = giftSenderLabel(body.gifterNym, userPubkey);
       var tMsg = (tName ? tName + " transferred you " : "You've been transferred ") +
         "a Nymchat shop item. Open the Flair Shop to find it in your inventory.";
-      transferEvent = await buildStoragePqDM(env, botPrivkey, botPubkey, toPubkey, tMsg);
+      transferEvent = await buildStoragePqDM(env, botPrivkey, botPubkey, toPubkey, tMsg, tName ? { gifter: userPubkey } : null);
     } catch (e) {
       transferEvent = null;
     }
@@ -1106,22 +1107,51 @@ function archiveSanitizeChannel(name) {
   return name.trim().toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, "").slice(0, 80);
 }
 
-async function spamAwareActivityRows(db, innerWhere, binds, limit) {
+async function spamAwareActivityRows(db, innerWhere, binds, limit, flagged) {
   var lim = limit ? (" LIMIT " + limit) : "";
+  var cut = activityFlaggedClause(flagged);
+  var where = innerWhere + cut.sql;
+  var allBinds = binds.concat(cut.binds);
   var spamSql = "SELECT channel, age, COUNT(*) AS c, MAX(mx) AS mx FROM (" +
     "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, created_at AS mx, " +
-    "COUNT(*) OVER (PARTITION BY pubkey) AS pk FROM events WHERE " + innerWhere + ") " +
+    "COUNT(*) OVER (PARTITION BY pubkey) AS pk FROM events WHERE " + where + ") " +
     "WHERE pk >= 2 GROUP BY channel, age" + lim;
   try {
-    return (await db.prepare(spamSql).bind(...binds).all()).results || [];
+    return (await db.prepare(spamSql).bind(...allBinds).all()).results || [];
   } catch (e) {
     var plainSql = "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, " +
-      "COUNT(*) AS c, MAX(created_at) AS mx FROM events WHERE " + innerWhere +
+      "COUNT(*) AS c, MAX(created_at) AS mx FROM events WHERE " + where +
       " GROUP BY channel, age" + lim;
     try {
-      return (await db.prepare(plainSql).bind(...binds).all()).results || [];
+      return (await db.prepare(plainSql).bind(...allBinds).all()).results || [];
     } catch (e2) { return []; }
   }
+}
+
+function activityFlaggedClause(flagged) {
+  var f = flagged || {};
+  var pubkeys = Array.isArray(f.pubkeys) ? f.pubkeys.filter(function (v) { return typeof v === "string" && v; }) : [];
+  var ids = Array.isArray(f.ids) ? f.ids.filter(function (v) { return typeof v === "string" && v; }) : [];
+  var sql = "";
+  var binds = [];
+  if (pubkeys.length) { sql += " AND pubkey NOT IN (SELECT value FROM json_each(?))"; binds.push(JSON.stringify(pubkeys)); }
+  if (ids.length) { sql += " AND id NOT IN (SELECT value FROM json_each(?))"; binds.push(JSON.stringify(ids)); }
+  return { sql: sql, binds: binds };
+}
+
+async function activityFlagged(env) {
+  var pubkeys = new Set();
+  var ids = new Set();
+  try {
+    var set = await filterSet(env);
+    set.p.forEach(function (_, pk) { pubkeys.add(pk); });
+    set.e.forEach(function (_, id) { ids.add(id); });
+  } catch (e) { }
+  try {
+    var senders = await hiddenSenders(env, Date.now() - 24 * 3600 * 1000);
+    senders.forEach(function (pk) { pubkeys.add(pk); });
+  } catch (e) { }
+  return { pubkeys: Array.from(pubkeys), ids: Array.from(ids) };
 }
 
 function buildActivityResult(rows) {
@@ -1138,32 +1168,67 @@ function buildActivityResult(rows) {
   return { activity: activity, last: last };
 }
 
-async function topChannelActivityRows(db, kind, now, minTs, channelLimit) {
-  var seen = "(SELECT channel, created_at, COUNT(*) OVER (PARTITION BY pubkey) AS pk " +
-    "FROM events WHERE kind = ? AND created_at >= ?)";
-  var spamSql =
-    "SELECT pb.channel AS channel, pb.age AS age, pb.c AS c, pb.mx AS mx FROM (" +
-    "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
-    "FROM " + seen + " WHERE pk >= 2 GROUP BY channel, age" +
-    ") pb JOIN (" +
-    "SELECT channel FROM " + seen + " WHERE pk >= 2 " +
-    "GROUP BY channel ORDER BY COUNT(*) DESC, channel LIMIT ?" +
-    ") top ON pb.channel = top.channel";
+async function topChannelActivityRows(db, kind, now, minTs, channelLimit, flagged) {
+  var rows = await spamAwareActivityRows(db, "kind = ? AND created_at >= ?", [now, kind, minTs], 0, flagged);
+  var totals = new Map();
+  rows.forEach(function (r) { totals.set(r.channel, (totals.get(r.channel) || 0) + (Number(r.c) || 0)); });
+  var keep = new Set(Array.from(totals.keys()).sort(function (a, b) {
+    var d = totals.get(b) - totals.get(a);
+    if (d) return d;
+    return a < b ? -1 : (a > b ? 1 : 0);
+  }).slice(0, channelLimit));
+  return rows.filter(function (r) { return keep.has(r.channel); });
+}
+
+var ACTIVITY_SNAPSHOT_TTL = 300;
+var ACTIVITY_SNAPSHOT_LEASE = 120;
+var activitySnapshotReady = false;
+
+async function activitySnapshotTable(db) {
+  if (activitySnapshotReady) return;
+  await db.prepare("CREATE TABLE IF NOT EXISTS activity_snapshot (key TEXT PRIMARY KEY, body TEXT NOT NULL DEFAULT '', at INTEGER NOT NULL DEFAULT 0, lease INTEGER NOT NULL DEFAULT 0)").run();
+  activitySnapshotReady = true;
+}
+
+async function activitySnapshot(context, env, key, compute) {
+  var db = env && env.DB_CHANNELS;
+  if (!db || typeof db.prepare !== "function") return await compute();
+  var now = Math.floor(Date.now() / 1000);
+  var parse = function (row) {
+    if (!row || !row.body) return null;
+    try { return { at: Number(row.at) || 0, value: JSON.parse(row.body) }; } catch (e) { return null; }
+  };
+  var held = null;
+  try { held = parse(await replica(db).prepare("SELECT body, at FROM activity_snapshot WHERE key = ?").bind(key).first()); } catch (e) { held = null; }
+  if (held && now - held.at < ACTIVITY_SNAPSHOT_TTL) return held.value;
+  var won = false;
   try {
-    return (await db.prepare(spamSql).bind(now, kind, minTs, kind, minTs, channelLimit).all()).results || [];
-  } catch (e) {
-    var plainSql =
-      "SELECT pb.channel AS channel, pb.age AS age, pb.c AS c, pb.mx AS mx FROM (" +
-      "SELECT channel, CAST((? - created_at) / 3600 AS INTEGER) AS age, COUNT(*) AS c, MAX(created_at) AS mx " +
-      "FROM events WHERE kind = ? AND created_at >= ? GROUP BY channel, age" +
-      ") pb JOIN (" +
-      "SELECT channel FROM events WHERE kind = ? AND created_at >= ? " +
-      "GROUP BY channel ORDER BY COUNT(*) DESC, channel LIMIT ?" +
-      ") top ON pb.channel = top.channel";
+    await activitySnapshotTable(db);
+    var res = await db.prepare("INSERT INTO activity_snapshot (key, lease) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET lease = excluded.lease " +
+      "WHERE activity_snapshot.lease < ? AND activity_snapshot.at <= ?").bind(key, now + ACTIVITY_SNAPSHOT_LEASE, now, now - ACTIVITY_SNAPSHOT_TTL).run();
+    won = !!(res && res.meta && res.meta.changes > 0);
+  } catch (e) { won = !held; }
+  if (!won) {
+    if (held) return held.value;
     try {
-      return (await db.prepare(plainSql).bind(now, kind, minTs, kind, minTs, channelLimit).all()).results || [];
-    } catch (e2) { return []; }
+      var primary = parse(await db.prepare("SELECT body, at FROM activity_snapshot WHERE key = ?").bind(key).first());
+      if (primary) return primary.value;
+    } catch (e) { }
   }
+  var refresh = async function () {
+    var value = await compute();
+    var body = JSON.stringify(value);
+    try {
+      if (body.length <= 1800000) await db.prepare("UPDATE activity_snapshot SET body = ?, at = ?, lease = 0 WHERE key = ?").bind(body, Math.floor(Date.now() / 1000), key).run();
+      else await db.prepare("UPDATE activity_snapshot SET lease = 0 WHERE key = ?").bind(key).run();
+    } catch (e) { }
+    return value;
+  };
+  if (held && context && typeof context.waitUntil === "function") {
+    context.waitUntil(refresh().catch(function () { }));
+    return held.value;
+  }
+  return await refresh();
 }
 
 // Storable only if it is a valid kind 1059/1060 event addressed to that user via a `p` tag.
@@ -1225,7 +1290,6 @@ function pmKeyGroups(pks) {
 }
 
 async function pmCursorHead(db, pks) {
-  if (!pks.length) return "0";
   var best = 0;
   try {
     var groups = pmKeyGroups(pks);
@@ -1235,8 +1299,9 @@ async function pmCursorHead(db, pks) {
       var m = row && Number(row.m);
       if (Number.isFinite(m) && m > best) best = m;
     }
-  } catch (e) { return "0"; }
-  return best > 0 ? String(best) : "0";
+  } catch (e) { return null; }
+  var now = Date.now();
+  return String(best > now ? best : now);
 }
 
 async function pmCursorResponse(db, pks, cursor, rawLimit) {
@@ -1245,6 +1310,7 @@ async function pmCursorResponse(db, pks, cursor, rawLimit) {
   if (limit > 1000) limit = 1000;
   limit = Math.floor(limit);
   var rows = [];
+  var failed = false;
   if (pks.length) {
     var groups = pmKeyGroups(pks);
     try {
@@ -1266,12 +1332,16 @@ async function pmCursorResponse(db, pks, cursor, rawLimit) {
         rows.sort(function (a, b) { return (a.stored_at - b.stored_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0); });
         rows = rows.slice(0, limit);
       }
-    } catch (e) { rows = []; }
+    } catch (e) { rows = []; failed = true; }
   }
   var last = rows.length ? rows[rows.length - 1] : null;
+  var more = rows.length >= limit;
+  var next = last ? String(last.stored_at) + ":" + last.id : cursor.raw;
+  var now = Date.now();
+  if (!more && !failed && now > (last ? Number(last.stored_at) : cursor.s)) next = String(now);
   return pmNdjson(rows, {
-    "X-Cursor": last ? String(last.stored_at) + ":" + last.id : cursor.raw,
-    "X-Has-More": rows.length >= limit ? "1" : "0"
+    "X-Cursor": next,
+    "X-Has-More": more ? "1" : "0"
   });
 }
 
@@ -1303,12 +1373,11 @@ async function handlePmAction(context, body) {
     if (!Number.isFinite(inboxLimit) || inboxLimit <= 0) inboxLimit = 1000;
     if (inboxLimit > 1000) inboxLimit = 1000;
     var inboxRows = [];
-    var inboxHead = "0";
+    var inboxDb = replica(env.DB_PM);
+    var inboxHead = await pmCursorHead(inboxDb, inboxPks);
     if (inboxPks.length) {
-      var inboxDb = replica(env.DB_PM);
       var inboxAsc = body.asc === true;
       var inboxGroups = pmKeyGroups(inboxPks);
-      inboxHead = await pmCursorHead(inboxDb, inboxPks);
       try {
         for (var ig = 0; ig < inboxGroups.length; ig++) {
           var inboxPh = inboxGroups[ig].map(function () { return "?"; }).join(",");
@@ -1321,12 +1390,11 @@ async function handlePmAction(context, body) {
           inboxRows.sort(function (a, b) { return inboxAsc ? (a.created_at - b.created_at) : (b.created_at - a.created_at); });
           inboxRows = inboxRows.slice(0, inboxLimit);
         }
-      } catch (e) { inboxRows = []; }
+      } catch (e) { inboxRows = []; inboxHead = null; }
     }
-    return pmNdjson(inboxRows, {
-      "X-Has-More": inboxRows.length >= inboxLimit ? "1" : "0",
-      "X-Cursor-Head": inboxHead
-    });
+    var inboxHeaders = { "X-Has-More": inboxRows.length >= inboxLimit ? "1" : "0" };
+    if (inboxHead !== null) inboxHeaders["X-Cursor-Head"] = inboxHead;
+    return pmNdjson(inboxRows, inboxHeaders);
   }
 
   var userPubkey = body.pubkey;
@@ -1408,7 +1476,7 @@ async function handlePmAction(context, body) {
     var ownDb = replica(env.DB_PM);
     var ownHead = before ? null : await pmCursorHead(ownDb, [userPubkey]);
     var rows = [];
-    try { rows = (await ownDb.prepare(sql).bind(...binds).all()).results || []; } catch (e) { rows = []; }
+    try { rows = (await ownDb.prepare(sql).bind(...binds).all()).results || []; } catch (e) { rows = []; ownHead = null; }
     var ownHeaders = { "X-Has-More": rows.length >= limit ? "1" : "0" };
     if (ownHead !== null) ownHeaders["X-Cursor-Head"] = ownHead;
     return pmNdjson(rows, ownHeaders);
@@ -1604,10 +1672,28 @@ async function handleChannelAction(context, body) {
         try {
           var zph = targetIds.map(function () { return "?"; }).join(",");
           zapRows = (await replica(env.DB_CHANNELS).prepare(
-            "SELECT json FROM zaps WHERE target_id IN (" + zph + ") ORDER BY created_at DESC LIMIT 1000"
+            "SELECT id, json, stored_at FROM zaps WHERE target_id IN (" + zph + ") ORDER BY created_at DESC LIMIT 1000"
           ).bind(...targetIds).all()).results || [];
         } catch (e) { zapRows = []; }
       }
+    }
+    if (since > 0) {
+      try {
+        var zcph = reqChannels.map(function () { return "?"; }).join(",");
+        var zAuthorClause = reqAuthors.length
+          ? " AND pubkey IN (" + reqAuthors.map(function () { return "?"; }).join(",") + ")"
+          : "";
+        var sinceZaps = (await replica(env.DB_CHANNELS).prepare(
+          "SELECT id, json, stored_at FROM zaps WHERE stored_at >= ? AND target_id IN (SELECT id FROM events WHERE channel IN (" + zcph + ")"
+          + zAuthorClause + " AND kind IN (20000, 23333) AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC LIMIT ?) ORDER BY created_at DESC LIMIT 1000"
+        ).bind(since * 1000, ...reqChannels, ...reqAuthors, minTsSec, Math.floor(Date.now() / 1000) + CHANNEL_FUTURE_SKEW_S, isSingle ? 500 : 1500).all()).results || [];
+        if (sinceZaps.length) {
+          var zapSeen = new Set(zapRows.map(function (z) { return z.id; }));
+          for (var sz = 0; sz < sinceZaps.length; sz++) {
+            if (!zapSeen.has(sinceZaps[sz].id)) { zapSeen.add(sinceZaps[sz].id); zapRows.push(sinceZaps[sz]); }
+          }
+        }
+      } catch (e) { }
     }
     var encoder = new TextEncoder();
     var cacheBuf = (isSingle && !since && !reqAuthors.length) ? [] : null;
@@ -1625,7 +1711,13 @@ async function handleChannelAction(context, body) {
           if (cacheBuf) cacheBuf.push(line);
         }
         for (var z = 0; z < zapRows.length; z++) {
-          var zline = zapRows[z].json + "\n";
+          var zJson = zapRows[z].json;
+          var zsa = zapRows[z].stored_at;
+          if (typeof zJson === "string" && typeof zsa === "number" && zsa > 0 &&
+              zJson.charCodeAt(0) === 123 && zJson.charCodeAt(1) !== 125) {
+            zJson = '{"stored_at":' + zsa + ',' + zJson.slice(1);
+          }
+          var zline = zJson + "\n";
           controller.enqueue(encoder.encode(zline));
           if (cacheBuf) cacheBuf.push(zline);
         }
@@ -1665,7 +1757,8 @@ async function handleChannelAction(context, body) {
       var ph3 = misses.map(function () { return "?"; }).join(",");
       // Only channel messages (20000 geohash, 23333 named) count toward activity.
       var innerWhereA = "channel IN (" + ph3 + ") AND kind IN (20000, 23333) AND created_at >= ?";
-      var rowsA = await spamAwareActivityRows(replica(env.DB_CHANNELS), innerWhereA, [nowSecA].concat(misses, [minTsA]), 0);
+      var flaggedA = await activityFlagged(env);
+      var rowsA = await spamAwareActivityRows(replica(env.DB_CHANNELS), innerWhereA, [nowSecA].concat(misses, [minTsA]), 0, flaggedA);
       var builtA = buildActivityResult(rowsA);
       misses.forEach(function (anm) {
         var b = builtA.activity[anm] || new Array(24).fill(0);
@@ -1684,12 +1777,17 @@ async function handleChannelAction(context, body) {
     if (cachedActive && cachedActive.activity && typeof cachedActive.activity === "object") {
       return json({ activity: cachedActive.activity, last: cachedActive.last || {} });
     }
-    var nowSecD = Math.floor(Date.now() / 1000);
-    var minTsD = nowSecD - 24 * 3600;
-    var rowsD = await topChannelActivityRows(replica(env.DB_CHANNELS), 20000, nowSecD, minTsD, 4000);
-    var builtD = buildActivityResult(rowsD);
-    readCachePut(context, "/channel-active", { activity: builtD.activity, last: builtD.last }, CHANNEL_READ_TTL);
-    return json({ activity: builtD.activity, last: builtD.last });
+    var snapD = await activitySnapshot(context, env, "channel-active", async function () {
+      var nowSecD = Math.floor(Date.now() / 1000);
+      var minTsD = nowSecD - 24 * 3600;
+      var flaggedD = await activityFlagged(env);
+      var rowsD = await topChannelActivityRows(replica(env.DB_CHANNELS), 20000, nowSecD, minTsD, 4000, flaggedD);
+      var builtD = buildActivityResult(rowsD);
+      return { activity: builtD.activity, last: builtD.last };
+    });
+    var outD = { activity: (snapD && snapD.activity) || {}, last: (snapD && snapD.last) || {} };
+    readCachePut(context, "/channel-active", outD, CHANNEL_READ_TTL);
+    return json(outD);
   }
 
   if (body.action === "channel-active-named") {
@@ -1697,12 +1795,17 @@ async function handleChannelAction(context, body) {
     if (cachedActiveN && cachedActiveN.activity && typeof cachedActiveN.activity === "object") {
       return json({ activity: cachedActiveN.activity, last: cachedActiveN.last || {} });
     }
-    var nowSecN = Math.floor(Date.now() / 1000);
-    var minTsN = nowSecN - 24 * 3600;
-    var rowsN = await topChannelActivityRows(replica(env.DB_CHANNELS), 23333, nowSecN, minTsN, 4000);
-    var builtN = buildActivityResult(rowsN);
-    readCachePut(context, "/channel-active-named", { activity: builtN.activity, last: builtN.last }, CHANNEL_READ_TTL);
-    return json({ activity: builtN.activity, last: builtN.last });
+    var snapN = await activitySnapshot(context, env, "channel-active-named", async function () {
+      var nowSecN = Math.floor(Date.now() / 1000);
+      var minTsN = nowSecN - 24 * 3600;
+      var flaggedN = await activityFlagged(env);
+      var rowsN = await topChannelActivityRows(replica(env.DB_CHANNELS), 23333, nowSecN, minTsN, 4000, flaggedN);
+      var builtN = buildActivityResult(rowsN);
+      return { activity: builtN.activity, last: builtN.last };
+    });
+    var outN = { activity: (snapN && snapN.activity) || {}, last: (snapN && snapN.last) || {} };
+    readCachePut(context, "/channel-active-named", outN, CHANNEL_READ_TTL);
+    return json(outN);
   }
 
   // NIP-09: delete only when the archived event's author matches the deletion's signer.

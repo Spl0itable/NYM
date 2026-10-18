@@ -47,10 +47,6 @@ class GroupToolIcons {
       '$_open<rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg>';
   static const String location =
       '$_open<path d="M8 14.5s4.5-4.2 4.5-8a4.5 4.5 0 0 0-9 0c0 3.8 4.5 8 4.5 8z"/><circle cx="8" cy="6.5" r="1.6"/></svg>';
-  static const String checkboxOn =
-      '$_open<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M 5 8 L 7 10 L 11 5.5"/></svg>';
-  static const String checkboxOff =
-      '$_open<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/></svg>';
   static const String callLink =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/><path d="M16.6 7.4l2.8-2.8" stroke-width="1.75"/><path d="M17.3 3.5l.5-.5a2.05 2.05 0 0 1 2.9 2.9l-.5.5" stroke-width="1.75"/><path d="M18.7 8.5l-.5.5a2.05 2.05 0 0 1-2.9-2.9l.5-.5" stroke-width="1.75"/></svg>';
 }
@@ -300,11 +296,12 @@ class GtEventCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(groupToolsRevisionProvider);
+    ref.watch(contentFilterRevisionProvider);
     final c = context.nym;
     final svc = ref.read(groupToolsProvider);
     final group = ref.read(appStateProvider.notifier).groupById(groupId);
     final entries = svc.rsvpEntries(event.id);
-    final tally = GroupTools.rsvpTally(entries, group?.members);
+    final tally = svc.visibleRsvps(event.id, group?.members);
     final self = ref.read(appStateProvider).selfPubkey;
     final mine = entries[self]?.s;
     final labels = {
@@ -790,7 +787,8 @@ class GtDescriptionLine extends ConsumerWidget {
     for (final cand in app.groups) {
       if (cand.id == groupId) g = cand;
     }
-    final line = GroupTools.descriptionLine(g?.description);
+    final line = GroupTools.descriptionLine(
+        g == null ? null : app.groupDescription(g));
     if (g == null || line.isEmpty) return const SizedBox.shrink();
     final c = context.nym;
     final group = g;
@@ -801,8 +799,8 @@ class GtDescriptionLine extends ConsumerWidget {
         behavior: HitTestBehavior.opaque,
         onTap: () => showAppAlert(
           context,
-          group.description ?? '',
-          title: group.name.isEmpty ? tr('Group') : group.name,
+          app.groupDescription(group),
+          title: app.groupLabel(group),
         ),
         child: Text(
           line,
@@ -968,7 +966,10 @@ Future<bool> showGtInvitePreview(
 ) async {
   final svc = _svc(context);
   final fields = svc.verifySummary(payload);
-  final p = GroupTools.invitePreview(payload, fields);
+  final raw = GroupTools.invitePreview(payload, fields);
+  final app = ProviderScope.containerOf(context, listen: false)
+      .read(appStateProvider);
+  final p = invitePreviewFor(app, payload, raw);
   final waiting = svc.pendingJoins()[payload.g]?.waiting == true;
   final res = await _gtPanel<bool>(
     context,
@@ -976,6 +977,30 @@ Future<bool> showGtInvitePreview(
     _InvitePreviewBody(preview: p, waiting: waiting),
   );
   return res == true;
+}
+
+InvitePreview invitePreviewFor(
+    AppState app, InvitePayload payload, InvitePreview raw) {
+  final blocked = payload.a.isNotEmpty &&
+      payload.a != app.selfPubkey &&
+      app.isUserBlocked(payload.a);
+  return InvitePreview(
+    name: app.groupNameLabel(blocked ? '' : raw.name),
+    description: blocked ||
+            (raw.description.isNotEmpty &&
+                app.hasBlockedKeyword(raw.description))
+        ? ''
+        : raw.description,
+    avatar: blocked ? '' : raw.avatar,
+    banner: blocked ? '' : raw.banner,
+    memberCount: raw.memberCount,
+    admins: [
+      for (final a in raw.admins)
+        if (!app.labelHidden(a)) a,
+    ],
+    approval: raw.approval,
+    verified: raw.verified,
+  );
 }
 
 class _InvitePreviewBody extends StatefulWidget {
@@ -1154,6 +1179,7 @@ class _JoinRequestsBody extends ConsumerWidget {
     );
     final full = g != null && g.members.length >= kMaxGroupMembers;
     final nym = ref.read(nostrControllerProvider);
+    final app = ref.read(appStateProvider);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1170,7 +1196,9 @@ class _JoinRequestsBody extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       NymLabel(
-                        nym.gtNym(r.pubkey),
+                        app.personMaskLabel(r.pubkey).isNotEmpty
+                            ? '${app.personMaskLabel(r.pubkey)}#${getPubkeySuffix(r.pubkey)}'
+                            : nym.gtNym(r.pubkey),
                         pubkey: r.pubkey,
                         style: TextStyle(color: c.text),
                       ),
@@ -1794,9 +1822,10 @@ Future<bool> showGtCreateCallLink(
   }
   var name = '';
   if (groupId != null) {
-    name =
-        container.read(appStateProvider.notifier).groupById(groupId)?.name ??
-        '';
+    final g = container.read(appStateProvider.notifier).groupById(groupId);
+    name = g == null
+        ? ''
+        : container.read(appStateProvider).groupLabel(g, tr('Call'));
   } else if (pubkey != null) {
     name = container.read(nostrControllerProvider).gtNym(pubkey);
   }
@@ -2165,6 +2194,9 @@ class GtMenuItem {
     this.trailing,
     this.disabled = false,
     this.openSheet,
+    this.toggled,
+    this.toggleKey,
+    this.disabledReason,
   });
 
   final String key;
@@ -2174,6 +2206,9 @@ class GtMenuItem {
   final bool disabled;
   final void Function(BuildContext rootContext) onTap;
   final Future<bool> Function(BuildContext rootContext)? openSheet;
+  final bool? toggled;
+  final String? toggleKey;
+  final String? disabledReason;
 }
 
 List<GtMenuItem> gtGroupMenuItems(WidgetRef ref, Group g) {
@@ -2201,11 +2236,12 @@ List<GtMenuItem> gtGroupMenuItems(WidgetRef ref, Group g) {
     out.add(
       GtMenuItem(
         key: 'gtMenuApproval',
-        svg: g.joinApproval
-            ? GroupToolIcons.checkboxOn
-            : GroupToolIcons.checkboxOff,
+        svg: '',
         label: tr('Admins approve join requests'),
         disabled: offline,
+        toggled: g.joinApproval,
+        toggleKey: 'joinApproval',
+        disabledReason: offline ? tr(GroupToolsStrings.groupsNeedNet) : null,
         onTap: (ctx) => offline
             ? blocked(ctx, GroupToolsStrings.groupsNeedNet)
             : svc.setJoinApproval(g.id, !g.joinApproval),

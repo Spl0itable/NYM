@@ -220,6 +220,23 @@ Object.assign(NYM.prototype, {
         return 0;
     },
 
+    _channelNameHidden(name) {
+        return typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword(String(name || ''), '', '');
+    },
+
+    _discoveryRefreshForFilters() {
+        if (!this.channels || typeof this._dropBlockedChannelRow !== 'function') return;
+        const joined = this.userJoinedChannels || new Set();
+        let dropped = false;
+        for (const key of Array.from(this.channels.keys())) {
+            if (!key || joined.has(key) || key === this.currentChannel || key === this.currentGeohash || !this._channelNameHidden(key)) continue;
+            const entry = this.channels.get(key) || {};
+            this._dropBlockedChannelRow(entry.channel || key, entry.geohash || '');
+            dropped = true;
+        }
+        if (dropped && typeof this.updateViewMoreButton === 'function') this.updateViewMoreButton('channelList');
+    },
+
     // The relay proxy pool relies on D1 instead of relay backfill, so this is how the sidebar learns of active channels.
     _populateSidebarFromD1Activity() {
         if (!this._getApiHost()) return [];
@@ -240,7 +257,7 @@ Object.assign(NYM.prototype, {
                 }
                 return;
             }
-            if (this.isChannelBlocked(nm, nm)) return;
+            if (this.isChannelBlocked(nm, nm) || this._channelNameHidden(nm)) return;
             candidates.push({ nm, key, ts });
         };
         if (this._geohashD1Activity) this._geohashD1Activity.forEach((b, n) => { if (this.isValidGeohash(n)) consider(n, b); });
@@ -943,7 +960,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const list = document.getElementById(listId);
         if (!list) return [];
         const visible = Array.from(list.querySelectorAll('.list-item:not(.search-hidden)'))
-            .filter(el => el.style.display !== 'none');
+            .filter(el => el.style.display !== 'none' && !el.classList.contains('cf-hidden-row'));
         const isExpanded = this.listExpansionStates.get(listId) || false;
         const cap = this.COLLAPSED_LIST_VISIBLE;
         list.querySelectorAll('.list-overflow').forEach(el => el.classList.remove('list-overflow'));
@@ -984,7 +1001,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     saveHiddenChannels() {
         localStorage.setItem('nym_hidden_channels', JSON.stringify(Array.from(this.hiddenChannels)));
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
         if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
 
@@ -995,7 +1012,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     saveBlockedChannels() {
         localStorage.setItem('nym_blocked_channels', JSON.stringify(Array.from(this.blockedChannels)));
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
         if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
 
@@ -1048,7 +1065,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const key = geohash || channel;
         this.blockedChannels.delete(key);
         this.saveBlockedChannels();
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
         if (geohash) {
             this.addChannel(geohash, geohash);
@@ -1111,7 +1127,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     unhideChannelFromSettings(key) {
         this.hiddenChannels.delete(key);
         this.saveHiddenChannels();
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.applyHiddenChannels();
         this.updateHiddenChannelsList();
     },
@@ -1574,6 +1589,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (typeof this._persistChannelCovered === 'function') this._persistChannelCovered();
     },
 
+    _archiveEventNym(ev) {
+        const tag = (Array.isArray(ev && ev.tags) ? ev.tags : []).find((t) => Array.isArray(t) && t[0] === 'n' && typeof t[1] === 'string');
+        const raw = tag ? (typeof this.stripPubkeySuffix === 'function' ? this.stripPubkeySuffix(tag[1]) : tag[1]) : '';
+        return raw || (typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(ev.pubkey) : '');
+    },
+
     async _channelRestoreGroupFromD1(names, since) {
         let resp;
         try {
@@ -1590,13 +1611,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (!batch.length) return;
             if (typeof this._preformatBatch === 'function') {
                 for (const ev of batch) {
+                    if (ev && ev.pubkey !== this.pubkey && this.blockedUsers && this.blockedUsers.has(ev.pubkey)) continue;
+                    if (ev && typeof this._quietHit === 'function' && this._quietHit(ev)) continue;
+                    if (ev && typeof this._channelEmojiHidden === 'function' && this._channelEmojiHidden(ev, this._archiveEventNym(ev))) continue;
                     if (typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(ev.tags);
                     if (typeof this.ingestImetaTags === 'function') this.ingestImetaTags(ev.tags);
                 }
                 try { await this._preformatBatch(batch.map(ev => ev && ev.content)); } catch (_) { }
             }
             for (const ev of batch) {
-                if (ev && Number.isFinite(ev.created_at) && ev.created_at > newest) newest = ev.created_at;
+                if (ev && Number.isFinite(ev.created_at)) {
+                    const storedSec = Number(ev.stored_at) > 0 ? Math.floor(Number(ev.stored_at) / 1000) : 0;
+                    const at = storedSec > 0 ? Math.min(ev.created_at, storedSec) : ev.created_at;
+                    if (at > newest) newest = at;
+                }
                 if (typeof this._quietHit === 'function' && this._quietHit(ev)) continue;
                 if (await this._verifyRelayEventAsync(ev)) {
                     if (!this._archiveEvents) this._archiveEvents = new WeakSet();
@@ -2636,10 +2664,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (window.NymLayout && typeof window.NymLayout.refreshPreviews === 'function') window.NymLayout.refreshPreviews();
             if (typeof this._updateNotificationBadge === 'function') this._updateNotificationBadge();
             if (typeof this._refreshNotificationsModalIfOpen === 'function') this._refreshNotificationsModalIfOpen();
-            for (const hook of ['_cnPruneHiddenMentions', '_refreshVisibleReactions', '_refreshAllThreadIndicators',
+            for (const hook of ['_cnRefreshMentionsForFilters', '_refreshVisibleReactions', '_refreshAllThreadIndicators',
                 'renderTypingIndicator', '_refreshGroupReaders', '_pruneHiddenNostrCards', '_pruneBlockedQuotes',
                 '_refreshChannelPollsForFilters', '_ctRefreshSavedIfOpen', '_chRefreshForFilters', '_meshRefreshForFilters',
-                '_cvRefreshForFilters', '_refreshGroupLabelsForFilters', '_closeHiddenSystemNotifications']) {
+                '_cvRefreshForFilters', '_refreshGroupLabelsForFilters', '_closeHiddenSystemNotifications', '_etPruneHidden',
+                '_callsRefreshForFilters', '_refreshFeedLinesForFilters', '_emojiRefreshForFilters', '_refreshGroupInfoForFilters', '_releaseHeldTags', '_p2pRefreshForFilters',
+                '_botThinkingRefreshForFilters', '_discoveryRefreshForFilters']) {
                 if (typeof this[hook] === 'function') {
                     try { this[hook](); } catch (_) { }
                 }
@@ -2664,6 +2694,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         muted.sort();
         const packs = typeof this.activeFilterPacks === 'function' ? sorted(this.activeFilterPacks()) : [];
+        const ready = typeof this.loadedFilterPacks === 'function' ? sorted(this.loadedFilterPacks()) : [];
         const snap = {
             blockedUsers: new Set(this.blockedUsers || []),
             keywords: sorted(this.blockedKeywords),
@@ -2673,10 +2704,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             friendsOnly: !!this.notifyFriendsOnly,
             muted: new Set(muted),
             packs,
-            gates: !!gates
+            gates: !!gates,
+            spamOn: this.spamFilterEnabled !== false,
+            spamAgg: this.spamFilterAggressive !== false
         };
         snap.sig = JSON.stringify([sorted(snap.blockedUsers), snap.keywords, snap.blockedChannels, snap.hiddenChannels,
-            sorted(snap.friends), snap.friendsOnly, muted, packs, snap.gates]);
+            sorted(snap.friends), snap.friendsOnly, muted, packs, ready, snap.gates, snap.spamOn, snap.spamAgg]);
         return snap;
     },
 
@@ -2694,9 +2727,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             bot: cur.bot,
             pack: snap.packs.length ? cur.pack : undefined,
             muted: (pk) => snap.gates && snap.muted.has(pk),
+            nymOf: cur.nymOf,
             deleted: cur.deleted,
             quiet: cur.quiet,
-            spam: (m) => (m.isPM || snap.gates) && typeof this.isSpamMessage === 'function' && this.isSpamMessage(m.content),
+            spam: (m) => (m.isPM || snap.gates) && typeof this.isSpamMessage === 'function'
+                && this.isSpamMessage(m.content, { enabled: snap.spamOn !== false, aggressive: snap.spamAgg !== false }),
             gated: cur.gated
         };
     },
@@ -2753,9 +2788,19 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return { all, visible: i >= 0 ? this._messageMs(list[i]) : 0 };
     },
 
+    _pmPeerHidden(pubkey) {
+        return !!pubkey && pubkey !== this.pubkey && typeof this.isPersonHidden === 'function' && this.isPersonHidden(pubkey);
+    },
+
     _cfRefreshRows() {
         const pmList = typeof document !== 'undefined' ? document.getElementById('pmList') : null;
         const moved = [];
+        if (pmList) {
+            for (const item of pmList.querySelectorAll('.pm-item')) {
+                const pk = item.dataset ? item.dataset.pubkey : '';
+                if (pk) item.classList.toggle('cf-hidden-row', this._pmPeerHidden(pk));
+            }
+        }
         const place = (selector, ts) => {
             const item = pmList && pmList.querySelector(selector);
             if (!item || !item.dataset || String(item.dataset.lastMessageTime) === String(ts)) return;
@@ -2804,6 +2849,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.insertPMInOrder(item, pmList);
             }
         }
+        if (pmList && this.listExpansionStates && typeof this.updateViewMoreButton === 'function') this.updateViewMoreButton('pmList');
         let channelsMoved = false;
         if (this.messages && this.channelLastActivity) {
             for (const [key, list] of this.messages) {

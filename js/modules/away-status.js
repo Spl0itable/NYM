@@ -175,7 +175,7 @@
             const F = window.NymContentFilter;
             if (x.geohash && F && typeof this._cfCtx === 'function' && F.channelHidden(this._cfCtx(), x.geohash)) return false;
             if (typeof this.isContentHidden === 'function' &&
-                this.isContentHidden({ id: x.id || '', pubkey: x.pubkey || '', author: x.nym || '', content: typeof x.content === 'string' ? x.content : '' })) return false;
+                this.isContentHidden({ id: x.id || '', pubkey: x.pubkey || '', author: x.nym || '', content: typeof x.content === 'string' ? x.content : '', quoted: Array.isArray(x.quoted) ? x.quoted : [], people: Array.isArray(x.people) ? x.people : [] })) return false;
             return !(typeof this._wotGated === 'function' && this._wotGated(x.pubkey || ''));
         },
 

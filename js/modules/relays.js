@@ -21,6 +21,8 @@ const POOL_PROBE_TIMEOUT_MS = 10000;
 const POOL_RESUME_FRESH_MS = 5000;
 const POOL_PROBE_BACKOFF_MAX_MS = 10 * 60 * 1000;
 const POOL_CONNECT_TIMEOUT_MS = 12000;
+const RECONNECT_QUICK_MAX_MS = 250;
+const RECONNECT_QUICK_AFTER_OPEN_MS = 2000;
 
 Object.assign(NYM.prototype, {
 
@@ -467,7 +469,7 @@ Object.assign(NYM.prototype, {
     async ensureDefaultRelaysConnected() {
         if (this.useRelayProxy) return;
 
-        for (const relayUrl of this.defaultRelays) {
+        for (const relayUrl of this._coreRelayUrls()) {
             const relay = this.relayPool.get(relayUrl);
             const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
 
@@ -488,7 +490,7 @@ Object.assign(NYM.prototype, {
                 // _poolSendRelayConfig respects lowDataMode (defaults + DM relays + active geo relays).
                 this._poolSendRelayConfig();
             } else {
-                const keepRelays = new Set(this.defaultRelays);
+                const keepRelays = new Set(this._coreRelayUrls());
                 for (const url of this.currentGeoRelays) {
                     keepRelays.add(url);
                 }
@@ -504,7 +506,7 @@ Object.assign(NYM.prototype, {
             if (this.useRelayProxy) {
                 this._poolSendRelayConfig();
             } else {
-                this.defaultRelays.forEach(relayUrl => {
+                this._coreRelayUrls().forEach(relayUrl => {
                     if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                         this.connectToRelay(relayUrl, 'relay').then(() => {
                             const r = this.relayPool.get(relayUrl);
@@ -548,7 +550,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        const keepRelays = new Set(this.defaultRelays);
+        const keepRelays = new Set(this._coreRelayUrls());
 
         for (const url of previousGeoRelays) {
             if (!stillNeededRelays.has(url) && !keepRelays.has(url)) {
@@ -829,7 +831,7 @@ Object.assign(NYM.prototype, {
         } else {
             this.updateConnectionStatus();
 
-            const missingEssential = this.defaultRelays.filter(url => !this.relayPool.has(url));
+            const missingEssential = this._coreRelayUrls().filter(url => !this.relayPool.has(url));
             if (missingEssential.length > 0) {
                 this.reconnectToBroadcastRelays();
             }
@@ -852,7 +854,7 @@ Object.assign(NYM.prototype, {
 
         let connectedCount = 0;
 
-        const relaysToConnect = [...this.defaultRelays];
+        const relaysToConnect = this._coreRelayUrls();
         if (this.previouslyConnectedRelays && this.previouslyConnectedRelays.size > 0) {
             relaysToConnect.sort((a, b) => {
                 const aWasConnected = this.previouslyConnectedRelays.has(a);
@@ -893,7 +895,6 @@ Object.assign(NYM.prototype, {
         this.reconnectionInterval = null;
 
         window.addEventListener('online', () => {
-            this.displaySystemMessage('Network connection restored, reconnecting...');
             this.reconnectionAttempts = 0;
 
             this.updateConnectionStatus('Reconnecting...');
@@ -951,7 +952,6 @@ Object.assign(NYM.prototype, {
             });
 
             this.connected = false;
-            this.displaySystemMessage('Network connection lost');
             this.updateConnectionStatus('Disconnected');
         });
 
@@ -1124,6 +1124,7 @@ Object.assign(NYM.prototype, {
     },
 
     async connectToRelays() {
+        if (typeof this._botChannelRunsRecover === 'function') this._botChannelRunsRecover();
         try {
             this.initialConnectionInProgress = true;
             this._loadQuietList();
@@ -1329,7 +1330,7 @@ Object.assign(NYM.prototype, {
                 }
             }, 100);
 
-            this.defaultRelays.forEach(relayUrl => {
+            this._coreRelayUrls().forEach(relayUrl => {
                 if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                     this.connectToRelay(relayUrl, 'relay').then(() => {
                         const r = this.relayPool.get(relayUrl);
@@ -1436,7 +1437,7 @@ Object.assign(NYM.prototype, {
     },
 
     _isGeoOrDiscoveredRelay(relayUrl) {
-        const defaultSet = new Set(this.defaultRelays || []);
+        const defaultSet = new Set(this._coreRelayUrls());
         return !defaultSet.has(relayUrl);
     },
 
@@ -1588,8 +1589,9 @@ Object.assign(NYM.prototype, {
         // Storage key uses a # prefix for every channel with a g-tag.
         const storageKey = `#${channelKey}`;
         const currentMessages = this.messages.get(storageKey) || [];
+        const shown = typeof this._visibleCount === 'function' ? this._visibleCount(currentMessages) : currentMessages.length;
 
-        if (currentMessages.length < 50) {
+        if (shown < 50) {
             this._queueChannelSubscription(channelKey, channelType);
         } else {
             this.channelLoadedFromRelays.add(channelKey);
@@ -1906,12 +1908,14 @@ Object.assign(NYM.prototype, {
             this._poolFallbackActive = false;
             this._stopPoolReconnectInBackground();
             if (this.useRelayProxy) await this._switchPoolToDirect();
+            else for (const u of this._addedRelaysInUse()) this._connectAddedRelay(u);
             this.updateConnectionStatus();
             return;
         }
         this._userDirectMode = false;
         if (this.useRelayProxy) return;
         this._poolFallbackActive = true;
+        this._dropAddedDirect();
         this._schedulePoolReconnectInBackground(true);
     },
 
@@ -2026,6 +2030,10 @@ Object.assign(NYM.prototype, {
         const reservedSet = new Set(critical);
         if (appValid) reservedSet.add(appRelay);
 
+        const added = (typeof this._addedRelaysInUse === 'function' ? this._addedRelaysInUse() : [])
+            .filter(url => isValid(url) && !reservedSet.has(url));
+        for (const url of added) reservedSet.add(url);
+
         const geo = [...geoSet].filter(url => !reservedSet.has(url));
 
         const geoForDiscovered = new Set(geo);
@@ -2056,6 +2064,10 @@ Object.assign(NYM.prototype, {
         const criticalDmRelays = (dmRelays || []).filter(url => isValid(url) && url !== appRelay);
         chunkArray(critical, size).forEach((chunk, i) => {
             shards.push({ id: `critical-${i}`, role: 'critical', relays: chunk, dmRelays: i === 0 ? criticalDmRelays : [] });
+        });
+
+        chunkArray(added, size).forEach((chunk, i) => {
+            shards.push({ id: `added-${i}`, role: 'added', relays: chunk, dmRelays: chunk.slice() });
         });
 
         chunkArray(geo, size).forEach((chunk, i) => {
@@ -2161,8 +2173,22 @@ Object.assign(NYM.prototype, {
         return this._reloadForEdgeChallenge();
     },
 
+    _reconnectQuick(openMs) {
+        return typeof openMs === 'number' && openMs >= RECONNECT_QUICK_AFTER_OPEN_MS;
+    },
+
+    _poolReconnectDelay(step, rand) {
+        if (step < 0) return Math.floor(rand * RECONNECT_QUICK_MAX_MS);
+        return Math.floor(Math.min(3000 * Math.pow(2, step), 30000) * (0.5 + rand * 0.5));
+    },
+
+    _shardReconnectDelay(step, rand) {
+        if (step < 0) return Math.floor(rand * RECONNECT_QUICK_MAX_MS);
+        return Math.floor(Math.min(3000 * Math.pow(1.7, step), 60000) * (0.7 + rand * 0.3));
+    },
+
     // Schedule a pool reconnection with exponential backoff, preventing concurrent attempts.
-    _schedulePoolReconnect() {
+    _schedulePoolReconnect(opts) {
         if (this._poolReconnecting) return;
         if (this.initialConnectionInProgress || this._poolConnecting) return;
         if (!this.useRelayProxy) return;
@@ -2172,7 +2198,7 @@ Object.assign(NYM.prototype, {
         if (this._lastPoolReconnectSchedule && now - this._lastPoolReconnectSchedule < 2000) return;
         this._lastPoolReconnectSchedule = now;
 
-        const attempt = (retries) => {
+        const attempt = (retries, quick) => {
             if (this._isAnyWorkerPoolOpen()) {
                 this._poolReconnecting = false;
                 return;
@@ -2183,8 +2209,7 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            const baseDelay = Math.min(3000 * Math.pow(2, retries), 30000);
-            const delay = Math.floor(baseDelay * (0.5 + Math.random() * 0.5));
+            const delay = this._poolReconnectDelay(quick ? -1 : retries, Math.random());
             this.updateConnectionStatus(retries > 0
                 ? `Reconnecting (attempt ${retries + 1})...`
                 : 'Reconnecting...');
@@ -2208,12 +2233,12 @@ Object.assign(NYM.prototype, {
                         this.retryPendingDMsOnReconnect();
                     })
                     .catch(async (err) => {
-                        if (err && err.inProgress) {
-                            attempt(retries);
+                        if ((err && err.inProgress) || quick) {
+                            attempt(retries, false);
                             return;
                         }
                         if (retries < 1) {
-                            attempt(retries + 1);
+                            attempt(retries + 1, false);
                         } else {
                             this._poolReconnecting = false;
                             this._poolReconnectRetries = 0;
@@ -2231,11 +2256,11 @@ Object.assign(NYM.prototype, {
         };
 
         this._poolReconnecting = true;
-        attempt(this._poolReconnectRetries || 0);
+        attempt(this._poolReconnectRetries || 0, !(opts && opts.quick === false));
     },
 
     // Retries until reconnected or no longer needed; _ensureAllShardsConnected is the safety net.
-    _reconnectPoolShard(shard) {
+    _reconnectPoolShard(shard, opts) {
         if (!this.useRelayProxy) return;
         if (!this._getApiHost()) return;
         const shardId = shard.id;
@@ -2249,7 +2274,7 @@ Object.assign(NYM.prototype, {
         }
         this._shardReconnecting.add(shardId);
 
-        const attempt = (retries) => {
+        const attempt = (retries, quick) => {
             this._shardReconnectAt.set(shardId, Date.now());
             const existing = this.poolSockets.find(p => p.id === shardId);
             if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
@@ -2261,8 +2286,8 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            const baseDelay = Math.min(3000 * Math.pow(1.7, retries), 60000);
-            const delay = Math.floor(baseDelay * (0.7 + Math.random() * 0.3));
+            const delay = this._shardReconnectDelay(quick ? -1 : retries, Math.random());
+            const next = quick ? retries : retries + 1;
             const fire = () => {
                 const stillDown = this.poolSockets.find(p => p.id === shardId);
                 if (stillDown && stillDown.ws && stillDown.ws.readyState === WebSocket.OPEN) {
@@ -2280,7 +2305,7 @@ Object.assign(NYM.prototype, {
                     return;
                 }
                 if (!navigator.onLine) {
-                    attempt(retries + 1);
+                    attempt(next, false);
                     return;
                 }
 
@@ -2291,13 +2316,13 @@ Object.assign(NYM.prototype, {
                     })
                     .catch(() => {
                         // The health check stops us if the shard is no longer expected.
-                        attempt(retries + 1);
+                        attempt(next, false);
                     });
             };
             setTimeout(fire, delay);
         };
 
-        attempt(0);
+        attempt(0, !!(opts && opts.quick));
     },
 
     _poolShardConnectPendingMs(entry) {
@@ -2346,7 +2371,7 @@ Object.assign(NYM.prototype, {
                     try { existing.ws.close(); } catch (_) { }
                     existing.ws = null;
                     if (this._shardReconnecting) this._shardReconnecting.delete(shard.id);
-                    this._reconnectPoolShard(shard);
+                    this._reconnectPoolShard(shard, { quick: this._reconnectQuick(existing._openedAt ? now - existing._openedAt : null) });
                     continue;
                 }
                 if (this._poolShardDeaf(existing, now)) {
@@ -2500,6 +2525,7 @@ Object.assign(NYM.prototype, {
             const url = this._getRelayPoolUrl();
             if (!url) return reject(new Error('Relay proxy unavailable on this host'));
             const ws = new WebSocket(url);
+            ws._nymShardRole = shard.role;
 
             const poolEntry = {
                 id: shard.id,
@@ -2654,6 +2680,7 @@ Object.assign(NYM.prototype, {
                     return;
                 }
 
+                const quick = this._reconnectQuick(poolEntry._openedAt ? Date.now() - poolEntry._openedAt : null);
                 this._noteLiveGap(poolEntry._upstreamAt, true);
                 if (!this._reconnectingShards) this._reconnectingShards = new Set();
                 this._reconnectingShards.add(shard.id);
@@ -2669,9 +2696,9 @@ Object.assign(NYM.prototype, {
                     this.poolReady = false;
                     this.connected = false;
                     this.updateConnectionStatus('Disconnected');
-                    this._schedulePoolReconnect();
+                    this._schedulePoolReconnect({ quick });
                 } else {
-                    this._reconnectPoolShard(shard);
+                    this._reconnectPoolShard(shard, { quick });
                 }
             };
 
@@ -3170,28 +3197,55 @@ Object.assign(NYM.prototype, {
     _scheduleLiveGapSettle(since) {
         if (this._liveGapSettleTimer) clearTimeout(this._liveGapSettleTimer);
         this._liveGapSettleSince = Math.min(since, this._liveGapSettleSince || since);
+        if (this._d1Backed()) {
+            if (this._liveGapFollowTimer) clearTimeout(this._liveGapFollowTimer);
+            this._liveGapFollowTimer = setTimeout(() => {
+                this._liveGapFollowTimer = null;
+                this._liveGapD1Pass(this._liveGapSettleSince || since, false);
+            }, this._liveGapFollowUpMs || 7000);
+        }
         this._liveGapSettleTimer = setTimeout(() => {
             const from = this._liveGapSettleSince;
             this._liveGapSettleTimer = null;
             this._liveGapSettleSince = 0;
-            const passes = [];
-            if (typeof this.channelRestoreManyFromD1 === 'function') {
-                passes.push(Promise.resolve()
-                    .then(() => this.channelRestoreManyFromD1(this._liveGapChannelKeys(), { force: true, since: from }))
-                    .then((ok) => !!ok, () => false));
-            }
-            if (typeof this.pmRestoreFromD1 === 'function') {
-                passes.push(Promise.resolve()
-                    .then(() => this.pmRestoreFromD1())
-                    .then(() => true, () => false));
-            }
-            if (!passes.length) return;
-            Promise.all(passes).then((oks) => {
-                if (oks.some(Boolean) && typeof this.recomputeAllUnreadCounts === 'function') this.recomputeAllUnreadCounts();
-                if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile(0);
-            }, () => { });
+            this._liveGapD1Pass(from, true);
         }, this._liveGapSettleMs || 35000);
     },
+
+    _liveGapD1Pass(from, channels) {
+        const passes = [];
+        if (channels && typeof this.channelRestoreManyFromD1 === 'function') {
+            passes.push(Promise.resolve()
+                .then(() => this.channelRestoreManyFromD1(this._liveGapChannelKeys(), { force: true, since: from }))
+                .then((ok) => !!ok, () => false));
+        }
+        const gap = this._d1Backed() && Number.isFinite(from) && from > 0 && typeof this._pmGapRestore === 'function';
+        if (gap) {
+            const prev = this._gapD1Floor > 0 ? this._gapD1Floor : 0;
+            const held = !prev || from < prev;
+            if (held) this._gapD1Floor = from;
+            const reads = [this._pmGapRestore(from)];
+            const ephPks = typeof this._getAllSelfEphemeralPubkeys === 'function' ? this._getAllSelfEphemeralPubkeys() : [];
+            if (ephPks && ephPks.length && typeof this._recoverEphemeralHistory === 'function') {
+                reads.push(this._recoverEphemeralHistory(ephPks, { force: true }));
+            }
+            passes.push(Promise.all(reads.map((p) => Promise.resolve(p).catch(() => { })))
+                .then(() => true, () => false)
+                .finally(() => { if (held && this._gapD1Floor === from) this._gapD1Floor = prev && this._liveGapInFlight ? prev : 0; }));
+        } else if (typeof this.pmRestoreFromD1 === 'function') {
+            passes.push(Promise.resolve()
+                .then(() => this.pmRestoreFromD1())
+                .then(() => true, () => false));
+        }
+        if (!passes.length) return Promise.resolve();
+        return Promise.all(passes).then((oks) => {
+            if (oks.some(Boolean) && typeof this.recomputeAllUnreadCounts === 'function') this.recomputeAllUnreadCounts();
+            if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile(0);
+        }, () => { });
+    },
+
+    _liveGapFollowUpMs: 7000,
+    _liveGapSettleMs: 35000,
 
     _giftWrapBackdateSec: 172800,
     _giftWrapCatchUpLimit: 500,
@@ -3261,10 +3315,12 @@ Object.assign(NYM.prototype, {
         if (this.useRelayProxy && !this._isAnyPoolOpen()) return;
         const seqAt = this._liveGapSeq;
         const since = Math.floor(this._liveGapAt / 1000) - 300;
-        this._catchUpGiftWraps(since);
+        const d1Only = this._d1Backed();
+        if (!d1Only) this._catchUpGiftWraps(since);
         if (!this._getApiHost || !this._getApiHost()) return;
         this._liveGapInFlight = true;
-        this.backfillFromD1OnReconnect({ force: true, since, socketLost: !!this._liveGapSocketLost, channels: this._liveGapChannelKeys() }).then((ok) => {
+        if (d1Only) this._gapD1Floor = since;
+        this.backfillFromD1OnReconnect({ force: true, since, socketLost: !!this._liveGapSocketLost, gap: d1Only, channels: this._liveGapChannelKeys() }).then((ok) => {
             if (!ok) return;
             if (this._liveGapSeq === seqAt) {
                 this._liveGapAt = 0;
@@ -3272,6 +3328,7 @@ Object.assign(NYM.prototype, {
             }
             this._scheduleLiveGapSettle(since);
         }, () => { }).finally(() => {
+            if (this._gapD1Floor === since) this._gapD1Floor = 0;
             this._liveGapInFlight = false;
             if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile(0);
             if (this._liveGapAt && this._liveGapSeq !== seqAt) this._catchUpLiveGap();
@@ -3326,9 +3383,15 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    _pmInboxRestore(keys) {
+    _pmInboxRestore(keys, opts) {
         if (!this._pmInboxQ) this._pmInboxQ = new Set();
-        for (const k of Array.isArray(keys) ? keys : []) if (typeof k === 'string' && k) this._pmInboxQ.add(k);
+        if (!this._pmInboxForced) this._pmInboxForced = new Set();
+        const force = !!(opts && opts.force);
+        for (const k of Array.isArray(keys) ? keys : []) {
+            if (typeof k !== 'string' || !k) continue;
+            this._pmInboxQ.add(k);
+            if (force) this._pmInboxForced.add(k);
+        }
         if (this._pmInboxRunning) return this._pmInboxRunning;
         const run = (async () => {
             const D = window.NymD1Cursor;
@@ -3337,7 +3400,9 @@ Object.assign(NYM.prototype, {
                 const batch = [...this._pmInboxQ];
                 this._pmInboxQ.clear();
                 const now = Date.now();
-                const due = D ? batch.filter((k) => !D.coalesce(this._pmInboxDoneAt.get(k), now)) : batch;
+                const forced = this._pmInboxForced;
+                const due = D ? batch.filter((k) => forced.has(k) || !D.coalesce(this._pmInboxDoneAt.get(k), now)) : batch;
+                for (const k of batch) forced.delete(k);
                 if (due.length) await this._pmInboxPass(due);
             }
         })().finally(() => { if (this._pmInboxRunning === run) this._pmInboxRunning = null; });
@@ -3379,13 +3444,14 @@ Object.assign(NYM.prototype, {
             for (let k = 0; k < events.length; k++) {
                 const ev = events[k];
                 if (!ev || typeof ev.id !== 'string') continue;
+                if (this._gapD1Floor > 0) this._noteGapWrapFloor(ev.id, this._gapD1Floor);
                 try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
                 const kind = hold && typeof this._pmWrapRetryable === 'function' ? this._pmWrapRetryable(ev) : false;
                 if (kind) hold(ev, kind);
                 if (k + 1 < events.length && typeof this._yieldIfDue === 'function') await this._yieldIfDue();
             }
         } finally {
-            this._restoreFromD1Depth = Math.max(0, (this._restoreFromD1Depth || 1) - 1);
+            this._restoreDepthLeave();
         }
     },
 
@@ -3429,7 +3495,7 @@ Object.assign(NYM.prototype, {
             let best = null;
             let legacy = false;
             try {
-                for (let page = 0; page < D.MAX_PAGES; page++) {
+                for (let page = 0; page < D.CATCHUP_PAGES; page++) {
                     const r = await this._pmInboxRead(group.keys, { after, limit: D.PAGE_LIMIT });
                     if (this.pubkey !== pk) return;
                     const step = D.step(page, after, r.headers.get('X-Cursor'), r.headers.get('X-Has-More'));
@@ -3442,6 +3508,10 @@ Object.assign(NYM.prototype, {
                     best = D.newer(best, step.cursor);
                     if (!step.next) break;
                     after = step.next;
+                    if ((page + 1) % D.MAX_PAGES === 0) {
+                        st.map = D.inboxStore(st.map, group.keys, best, null);
+                        this._pmInboxCommit();
+                    }
                 }
             } catch (_) { }
             if (this.pubkey !== pk) return;
@@ -3462,7 +3532,8 @@ Object.assign(NYM.prototype, {
         this._pmInboxCommit();
     },
 
-    async _botAnonInboxRestore(keys) {
+    async _botAnonInboxRestore(keys, opts) {
+        const force = !!(opts && opts.force);
         const D = window.NymD1Cursor;
         const pk = this.pubkey;
         if (!D || typeof this._botAnonStream !== 'function' || typeof this._botAnonIdentities !== 'function') return;
@@ -3472,7 +3543,7 @@ Object.assign(NYM.prototype, {
         const ids = this._botAnonIdentities();
         for (const key of keys) {
             const id = ids.find((i) => i.pk === key);
-            if (!id || D.coalesce(this._pmInboxDoneAt.get(key), Date.now())) continue;
+            if (!id || (!force && D.coalesce(this._pmInboxDoneAt.get(key), Date.now()))) continue;
             try {
                 if (!D.valid(st.map[key])) {
                     const r = await this._botAnonStream(id, { since: 0, before: 0, limit: 1000 });
@@ -3484,7 +3555,7 @@ Object.assign(NYM.prototype, {
                     let after = D.startAfter(st.map[key]);
                     let best = null;
                     let legacy = false;
-                    for (let page = 0; page < D.MAX_PAGES; page++) {
+                    for (let page = 0; page < D.CATCHUP_PAGES; page++) {
                         const r = await this._botAnonStream(id, { after, limit: D.PAGE_LIMIT });
                         if (this.pubkey !== pk) return;
                         const step = D.step(page, after, r.headers.get('X-Cursor'), r.headers.get('X-Has-More'));
@@ -3556,7 +3627,7 @@ Object.assign(NYM.prototype, {
         this._pmMetaCommit({ key: 'pmInboxCursors', pk: st.pk, map: out, heldSince: active.length ? st.heldSince || now : 0 });
     },
 
-    async _recoverEphemeralHistory(ephPks) {
+    async _recoverEphemeralHistory(ephPks, opts) {
         if (!Array.isArray(ephPks) || ephPks.length === 0) return;
         const since = this._isFreshDevice
             ? 0
@@ -3567,10 +3638,10 @@ Object.assign(NYM.prototype, {
             const groupKeys = ephPks.filter((k) => !anon.has(k));
             const anonKeys = ephPks.filter((k) => anon.has(k));
             if (groupKeys.length) {
-                try { await this._pmInboxRestore(groupKeys); } catch (_) { }
+                try { await this._pmInboxRestore(groupKeys, opts); } catch (_) { }
             }
             if (anonKeys.length) {
-                try { await this._botAnonInboxRestore(anonKeys); } catch (_) { }
+                try { await this._botAnonInboxRestore(anonKeys, opts); } catch (_) { }
             }
             return;
         }
@@ -3739,8 +3810,11 @@ Object.assign(NYM.prototype, {
 
         const restorePromises = [];
 
+        const gap = !!opts.gap;
         const conversations = extras || !!opts.socketLost;
-        if (conversations && typeof this.pmRestoreFromD1 === 'function') {
+        if (conversations && gap && typeof this._pmGapRestore === 'function') {
+            restorePromises.push(this._pmGapRestore(opts.since).catch(() => { }));
+        } else if (conversations && typeof this.pmRestoreFromD1 === 'function') {
             restorePromises.push(this.pmRestoreFromD1().catch(() => { }));
         }
 
@@ -3749,7 +3823,7 @@ Object.assign(NYM.prototype, {
             typeof this._getAllSelfEphemeralPubkeys === 'function') {
             const ephPks = this._getAllSelfEphemeralPubkeys();
             if (ephPks && ephPks.length) {
-                restorePromises.push(this._recoverEphemeralHistory(ephPks).catch(() => { }));
+                restorePromises.push(this._recoverEphemeralHistory(ephPks, gap ? { force: true } : undefined).catch(() => { }));
             }
         }
 
@@ -3877,6 +3951,8 @@ Object.assign(NYM.prototype, {
 
         if (this.isRelayBlocked(relayUrl)) return;
 
+        if (this._droppedRelays) this._droppedRelays.delete(relayUrl);
+
         // Block known-bad relays entirely.
         if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com' || relayUrl === 'wss://nostr-server-production.up.railway.app') {
             return;
@@ -3906,6 +3982,7 @@ Object.assign(NYM.prototype, {
 
                 const wsTarget = this._getProxiedRelayUrl(relayUrl);
                 const ws = new WebSocket(wsTarget);
+                ws._nymUrl = relayUrl;
                 const wsCreatedAt = Date.now();
                 let verificationTimeout;
                 let connectionTimeout;
@@ -3924,7 +4001,7 @@ Object.assign(NYM.prototype, {
                 ws.onopen = () => {
                     clearTimeout(connectionTimeout);
 
-                    if (this.isRelayBlocked(relayUrl)) {
+                    if (this.isRelayBlocked(relayUrl) || this._relayDropped(relayUrl)) {
                         try { ws.close(1000); } catch (_) { }
                         resolve();
                         return;
@@ -3972,8 +4049,11 @@ Object.assign(NYM.prototype, {
 
                     const wasConnected = this.relayPool.has(relayUrl) &&
                         this.relayPool.get(relayUrl).ws === ws;
+                    const openMs = wasConnected && this.relayPool.get(relayUrl).connectedAt
+                        ? Date.now() - this.relayPool.get(relayUrl).connectedAt
+                        : null;
 
-                    if (this.isRelayBlocked(relayUrl)) {
+                    if (this.isRelayBlocked(relayUrl) || this._relayDropped(relayUrl)) {
                         if (wasConnected) this.relayPool.delete(relayUrl);
                         this.updateConnectionStatus();
                         return;
@@ -3997,6 +4077,11 @@ Object.assign(NYM.prototype, {
                     this.relayPool.delete(relayUrl);
 
                     this.updateConnectionStatus();
+
+                    if (!this.useRelayProxy && !this.connected && !this.initialConnectionInProgress &&
+                        navigator.onLine && this._reconnectQuick(openMs)) {
+                        this.attemptReconnection();
+                    }
 
                     // Pool mode handles its own reconnections; previously connected relays skip the blacklist check.
                     if (!this.useRelayProxy && this.connected && (wasConnected || !this.blacklistedRelays.has(relayUrl))) {
@@ -4026,7 +4111,7 @@ Object.assign(NYM.prototype, {
                                     return;
                                 }
 
-                                if (!this.connected || this.isRelayBlocked(relayUrl)) {
+                                if (!this.connected || this.isRelayBlocked(relayUrl) || this._relayDropped(relayUrl)) {
                                     this.reconnectingRelays.delete(relayUrl);
                                     this.updateConnectionStatus();
                                     return;
@@ -4172,6 +4257,7 @@ Object.assign(NYM.prototype, {
 
     _setBlockedRelayState(next, opts) {
         const before = this._blockedRelaySet();
+        const usedBefore = this._addedRelaysInUse();
         this._blockedRelays = next;
         this._blockedRelaySetCache = null;
         try { localStorage.setItem('nym_blocked_relays', JSON.stringify(next)); } catch (_) { }
@@ -4179,8 +4265,10 @@ Object.assign(NYM.prototype, {
         const changes = [];
         for (const u of after) if (!before.has(u)) changes.push([u, true]);
         for (const u of before) if (!after.has(u)) changes.push([u, false]);
+        this._restoreAddedRelays(changes.filter(([, b]) => !b).map(([u]) => u), opts);
         if (changes.length) this._applyRelayBlockChanges(changes);
-        if (!(opts && opts.quiet) && typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500);
+        this._applyAddedRelayChanges(usedBefore, this._addedRelaysInUse());
+        if (!(opts && opts.quiet) && typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500, { wanted: true });
         return changes.length > 0;
     },
 
@@ -4241,6 +4329,7 @@ Object.assign(NYM.prototype, {
         if (this.useRelayProxy) return;
         const want = this._wantedRelaySpelling(url);
         if (!want) return;
+        if (this._isAddedRelay(url, true) && (!want.geo || this._addedRelaysWaitForPool())) return;
         for (const u of new Set([want.url, url])) {
             if (this.failedRelays) this.failedRelays.delete(u);
             this.blacklistedRelays.delete(u);
@@ -4313,6 +4402,357 @@ Object.assign(NYM.prototype, {
         if (!nearest.some(u => C(u) === C(url))) return '';
         if (!NymRelayBlock.geoAllBlocked(nearest, this._blockedRelaySet())) return '';
         return geohash;
+    },
+
+    _relayAddApi() {
+        return typeof NymRelayAdd !== 'undefined' ? NymRelayAdd : null;
+    },
+
+    _addedRelayStored() {
+        const RA = this._relayAddApi();
+        if (!RA) return [];
+        let raw = null;
+        try { raw = JSON.parse(localStorage.getItem(RA.STORAGE_KEY) || 'null'); } catch (_) { }
+        return Array.isArray(raw) ? raw : [];
+    },
+
+    _addedRelayContext() {
+        return { defaults: this.defaultRelays || [], blocked: [...this._blockedRelaySet()] };
+    },
+
+    _addedRelayViews() {
+        const RA = this._relayAddApi();
+        if (!RA) return null;
+        let raw = null;
+        try { raw = localStorage.getItem(RA.STORAGE_KEY); } catch (_) { }
+        const blocked = this._blockedRelaySet();
+        const c = this._addedRelaysCache;
+        if (c && c.raw === raw && c.blocked === blocked && c.defaults === this.defaultRelays) return c;
+        const ctx = this._addedRelayContext();
+        const stored = RA.norm(this._addedRelayStored(), ctx);
+        const list = RA.listed(stored, ctx);
+        const active = RA.inUse(stored, ctx);
+        this._addedRelaysCache = { raw, blocked, defaults: this.defaultRelays, stored, list, active, set: new Set(active), all: new Set(stored) };
+        return this._addedRelaysCache;
+    },
+
+    addedRelayList() {
+        const v = this._addedRelayViews();
+        return v ? v.list.slice() : [];
+    },
+
+    _addedRelayActive() {
+        const v = this._addedRelayViews();
+        return v ? v.active.slice() : [];
+    },
+
+    _addedRelayAll() {
+        const v = this._addedRelayViews();
+        return v ? v.stored.slice() : [];
+    },
+
+    addedRelayOverCap(url) {
+        const v = this._addedRelayViews();
+        if (!v || typeof url !== 'string') return false;
+        const c = NymRelayBlock.canon(url);
+        return v.list.includes(c) && !v.set.has(c);
+    },
+
+    _isAddedRelay(url, stored) {
+        if (typeof url !== 'string' || !url) return false;
+        const v = this._addedRelayViews();
+        const c = NymRelayBlock.canon(url);
+        return !!(v && (stored ? v.all.has(c) : v.set.has(c)));
+    },
+
+    _addedRelaysWaitForPool() {
+        return !!this._poolFallbackActive && !this._userDirectMode;
+    },
+
+    relayCheckViaPool() {
+        if (!this._getRelayPoolUrl || !this._getRelayPoolUrl()) return false;
+        return !!this.useRelayProxy || this._addedRelaysWaitForPool();
+    },
+
+    _coreRelayUrls() {
+        const out = [...(this.defaultRelays || [])];
+        if (this._addedRelaysWaitForPool()) return out;
+        for (const u of this._addedRelaysInUse()) if (!out.includes(u)) out.push(u);
+        return out;
+    },
+
+    _dropAddedDirect() {
+        for (const u of this._addedRelayActive()) {
+            if (this.relayPool.has(u) || (this.pendingConnections && this.pendingConnections.has(u))) this._dropAddedRelay(u);
+        }
+    },
+
+    addedRelayCap() {
+        return NymRelayAdd.cap(this.defaultRelays || []);
+    },
+
+    addedRelayCheck(input) {
+        return NymRelayAdd.check(input, Object.assign(this._addedRelayContext(), { added: this._addedRelayAll(), keypair: this._addedRelaysOff() }));
+    },
+
+    _addedRelaysOff() {
+        if (this.nostrLoginMethod) return false;
+        let mode = '';
+        try {
+            mode = localStorage.getItem('nym_keypair_mode')
+                || (localStorage.getItem('nym_random_keypair_per_session') === 'true' ? 'random' : 'persistent');
+        } catch (_) { }
+        return mode === 'random' || mode === 'hardcore';
+    },
+
+    _addedRelaysInUse() {
+        return this._addedRelaysOff() ? [] : this._addedRelayActive();
+    },
+
+    _addedRelayUseChanged(before) {
+        this._applyAddedRelayChanges(Array.isArray(before) ? before : [], this._addedRelaysInUse());
+    },
+
+    addRelay(input) {
+        const r = this.addedRelayCheck(input);
+        if (r.status !== 'ok') return r.status;
+        this._setAddedRelays(NymRelayAdd.add(this._addedRelayAll(), r.url, this._addedRelayContext()));
+        return 'ok';
+    },
+
+    removeAddedRelay(url) {
+        const before = this._addedRelayAll();
+        const next = NymRelayAdd.remove(before, url);
+        if (next.length === before.length) return false;
+        this._setAddedRelays(next);
+        return true;
+    },
+
+    applySyncedAddedRelays(list) {
+        this._setAddedRelays(NymRelayAdd.norm(list, this._addedRelayContext()), { quiet: true });
+    },
+
+    _addedRelaysForSync() {
+        return this._addedRelayAll();
+    },
+
+    _setAddedRelays(next, opts) {
+        const before = this._addedRelaysInUse();
+        try { localStorage.setItem(NymRelayAdd.STORAGE_KEY, JSON.stringify(next)); } catch (_) { }
+        this._addedRelaysCache = null;
+        const after = this.addedRelayList();
+        if (!(opts && opts.quiet)) this._stampAddedRelays();
+        this._applyAddedRelayChanges(before, this._addedRelaysInUse());
+        return after;
+    },
+
+    _stampAddedRelays() {
+        if (this._applyingRemoteSettings) {
+            if (typeof this._prefStampSet === 'function') this._prefStampSet(NymRelayAdd.SYNC_KEY, Date.now());
+            return;
+        }
+        if (typeof this.notePrefChanged === 'function') this.notePrefChanged(NymRelayAdd.SYNC_KEY);
+    },
+
+    _restoreAddedRelays(urls, opts) {
+        const RA = this._relayAddApi();
+        if (!RA || !urls.length) return;
+        const stored = this._addedRelayAll();
+        const next = RA.restore(stored, urls, this._addedRelayContext());
+        if (JSON.stringify(next) === JSON.stringify(stored)) return;
+        try { localStorage.setItem(RA.STORAGE_KEY, JSON.stringify(next)); } catch (_) { }
+        this._addedRelaysCache = null;
+        if (!(opts && opts.quiet)) this._stampAddedRelays();
+    },
+
+    _applyAddedRelayChanges(before, after) {
+        const gone = before.filter(u => !after.includes(u));
+        const fresh = after.filter(u => !before.includes(u));
+        if (!gone.length && !fresh.length) return;
+        if (!this._addedRelayAt) this._addedRelayAt = new Map();
+        for (const u of fresh) this._addedRelayAt.set(u, Date.now());
+        if (this.useRelayProxy) {
+            if (typeof this._poolSendRelayConfig === 'function') this._poolSendRelayConfig();
+        } else {
+            for (const u of gone) this._dropAddedRelay(u);
+            if (!this._addedRelaysWaitForPool()) for (const u of fresh) this._connectAddedRelay(u);
+        }
+        if (typeof this.updateConnectionStatus === 'function') this.updateConnectionStatus();
+        if (typeof this.updateAddedRelaysList === 'function') this.updateAddedRelaysList();
+    },
+
+    addedRelayStatus(url) {
+        const now = Date.now();
+        const poolOpen = this._isAnyPoolOpen();
+        let connected = false;
+        if (this.useRelayProxy && poolOpen) {
+            connected = (this.poolConnectedRelays || []).includes(url);
+        } else {
+            const r = this.relayPool.get(url);
+            connected = !!(r && r.ws && r.ws.readyState === WebSocket.OPEN);
+        }
+        const at = this._addedRelayAt && this._addedRelayAt.get(url);
+        let shard = null;
+        if (this.useRelayProxy) {
+            const p = (this.poolSockets || []).find(x => x.role === 'added' && (x.relays || []).includes(url));
+            if (p) shard = { open: !!(p.ws && p.ws.readyState === WebSocket.OPEN), openedAgoMs: p._openedAt ? now - p._openedAt : null };
+        }
+        return NymRelayAdd.status({
+            paused: (this._addedRelaysWaitForPool() && !poolOpen) || this._addedRelaysOff(),
+            overCap: this.addedRelayOverCap(url),
+            connected,
+            addedAgoMs: at ? now - at : null,
+            proxy: !!this.useRelayProxy,
+            shard,
+            connecting: !!((this.pendingConnections && this.pendingConnections.has(url)) || (this.reconnectingRelays && this.reconnectingRelays.has(url))),
+        });
+    },
+
+    _relayDropped(url) {
+        return !!(this._droppedRelays && this._droppedRelays.has(url));
+    },
+
+    _dropAddedRelay(url) {
+        if (this.currentGeoRelays && this.currentGeoRelays.has(url)) return;
+        if (!this._droppedRelays) this._droppedRelays = new Set();
+        this._droppedRelays.add(url);
+        const relay = this.relayPool.get(url);
+        if (relay && relay.ws) {
+            try { relay.ws.close(1000); } catch (_) { }
+        }
+        this.relayPool.delete(url);
+        if (this.relayStats && this.relayStats.latencyPerRelay) this.relayStats.latencyPerRelay.delete(url);
+    },
+
+    _connectAddedRelay(url) {
+        if (this._addedRelaysWaitForPool()) return;
+        if (this._droppedRelays) this._droppedRelays.delete(url);
+        if (this.isRelayBlocked(url)) return;
+        if (this.failedRelays) this.failedRelays.delete(url);
+        this.blacklistedRelays.delete(url);
+        this.blacklistTimestamps.delete(url);
+        const p = this.connectToRelay(url, 'relay');
+        if (!p || typeof p.then !== 'function') return;
+        p.then(() => {
+            const r = this.relayPool.get(url);
+            if (!r || !r.ws || r.ws.readyState !== WebSocket.OPEN) return;
+            this.subscribeToSingleRelay(url);
+            this.updateConnectionStatus();
+        }).catch(() => { });
+    },
+
+    _wsIsAdded(ws) {
+        if (!ws) return false;
+        if (ws._nymShardRole) return ws._nymShardRole === 'added';
+        return !!ws._nymUrl && this._isAddedRelay(ws._nymUrl);
+    },
+
+    _markAnonLane(ids) {
+        if (!this._anonLaneIds) this._anonLaneIds = new Set();
+        for (const id of ids || []) {
+            if (typeof id === 'string' && id) this._anonLaneIds.add(id);
+        }
+        while (this._anonLaneIds.size > 4000) this._anonLaneIds.delete(this._anonLaneIds.values().next().value);
+    },
+
+    _anonLaneEvent(ev) {
+        const RA = this._relayAddApi();
+        if (!RA) return false;
+        return RA.anonEvent(ev, this._botAnonKeySet(), this._anonLaneIds || []);
+    },
+
+    _frameForAdded(msg) {
+        if (msg.startsWith('["REQ"')) return this._reqWithoutAnonKeys(msg);
+        if (!msg.startsWith('["EVENT"') && !msg.startsWith('["DM_EVENT"') && !msg.startsWith('["GEO_EVENT"')) return msg;
+        let frame;
+        try { frame = JSON.parse(msg); } catch (_) { return msg; }
+        return Array.isArray(frame) && this._anonLaneEvent(frame[1]) ? null : msg;
+    },
+
+    _reqWithoutAnonKeys(msg) {
+        const RA = this._relayAddApi();
+        const anon = typeof this._botAnonKeySet === 'function' ? this._botAnonKeySet() : new Set();
+        if (!RA || !anon.size) return msg;
+        let req;
+        try { req = JSON.parse(msg); } catch (_) { return msg; }
+        const out = RA.stripKeys(req, anon);
+        if (out === req) return msg;
+        return out ? JSON.stringify(out) : null;
+    },
+
+    checkRelayReachable(url, opts) {
+        const o = opts || {};
+        const timeoutMs = o.timeoutMs || NymRelayAdd.CHECK_TIMEOUT_MS;
+        const viaPool = this.relayCheckViaPool();
+        const target = viaPool ? this._getRelayPoolUrl() : url;
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        const probeId = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+        const subId = 'nym-add-' + probeId.slice(0, 12);
+        return new Promise((resolve) => {
+            let ws = null;
+            let done = false;
+            let connectedAt = 0;
+            let latency = null;
+            let graceTimer = null;
+            const started = Date.now();
+            const finish = (res) => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                if (graceTimer) clearTimeout(graceTimer);
+                try { if (ws) ws.close(1000); } catch (_) { }
+                resolve(Object.assign({ via: viaPool ? 'pool' : 'direct' }, res));
+            };
+            const ok = () => finish({ ok: true, code: 'reachable', ms: latency !== null ? latency : Math.max(0, (connectedAt || Date.now()) - started) });
+            const timer = setTimeout(() => {
+                if (connectedAt) ok();
+                else finish({ ok: false, code: 'timeout', s: Math.round(timeoutMs / 1000) });
+            }, timeoutMs);
+            try { ws = new WebSocket(target); } catch (_) { finish({ ok: false, code: viaPool ? 'poolDown' : 'unreachable' }); return; }
+            let opened = false;
+            ws.onopen = () => {
+                opened = true;
+                try {
+                    if (viaPool) ws.send(JSON.stringify(['RELAYS', { relays: [url], dmRelays: [] }]));
+                    else connectedAt = Date.now();
+                    ws.send(JSON.stringify(['REQ', subId, { ids: [probeId], limit: 1 }]));
+                } catch (_) { finish({ ok: false, code: viaPool ? 'poolDown' : 'unreachable' }); }
+            };
+            ws.onmessage = (e) => {
+                let m;
+                try { m = JSON.parse(e.data); } catch (_) { return; }
+                if (!Array.isArray(m)) return;
+                if (viaPool && m[0] === 'POOL:STATUS' && m[1] && Array.isArray(m[1].connected)) {
+                    if (m[1].connected.includes(url) && !connectedAt) {
+                        connectedAt = Date.now();
+                        const lat = m[1].latency && m[1].latency[url];
+                        if (typeof lat === 'number' && isFinite(lat)) latency = Math.round(lat);
+                        graceTimer = setTimeout(ok, 3000);
+                    }
+                    return;
+                }
+                if (viaPool && m[0] === 'POOL:RELAY_BAN' && m[1] === url) {
+                    finish({ ok: false, code: 'refused', reason: String(m[2] || 'refused') });
+                    return;
+                }
+                if (m[0] === 'EOSE' && m[1] === subId) {
+                    if (!connectedAt) connectedAt = Date.now();
+                    ok();
+                    return;
+                }
+                if (m[0] === 'CLOSED' && m[1] === subId) {
+                    const why = String(m[2] || '');
+                    if (!viaPool || !m[3] || m[3] === url) finish({ ok: false, code: 'refused', reason: why || 'closed' });
+                }
+            };
+            ws.onerror = () => { if (!opened) finish({ ok: false, code: viaPool ? 'poolDown' : 'unreachable' }); };
+            ws.onclose = () => {
+                if (done) return;
+                if (opened && viaPool && connectedAt) ok();
+                else finish({ ok: false, code: viaPool ? 'poolDown' : 'unreachable' });
+            };
+        });
     },
 
     _throttledProxyFetch(url, opts) {
@@ -4529,12 +4969,21 @@ Object.assign(NYM.prototype, {
         return 'connecting';
     },
 
+    _composerConnectFailedFor(o) {
+        return !!(o.everConnected || o.statusFailed);
+    },
+
     _composerConnState() {
+        const relayOpen = this._anyRelayOpen();
+        if (relayOpen) this._connEverOpen = true;
         return this._composerConnStateFor({
-            relayOpen: this._anyRelayOpen(),
+            relayOpen,
             meshCarries: typeof this.meshShouldCarry === 'function' && !!this.meshShouldCarry(this.currentGeohash || this.currentChannel),
             deviceOffline: typeof navigator !== 'undefined' && navigator.onLine === false,
-            connectFailed: !this.initialConnectionInProgress && /Failed|Disconnected/.test(this._connStatusText || '')
+            connectFailed: this._composerConnectFailedFor({
+                everConnected: !!this._connEverOpen,
+                statusFailed: !this.initialConnectionInProgress && /Failed|Disconnected/.test(this._connStatusText || '')
+            })
         });
     },
 
@@ -4763,7 +5212,7 @@ Object.assign(NYM.prototype, {
         const priority = [];
         const rest = [];
 
-        for (const url of this.defaultRelays) {
+        for (const url of this._coreRelayUrls()) {
             const relay = this.relayPool.get(url);
             if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
                 priority.push(relay);
@@ -4933,7 +5382,7 @@ Object.assign(NYM.prototype, {
             this._broadcastAsync(otherTargets, msg, { critical: true });
         } else {
             const targets = [];
-            this.defaultRelays.forEach(relayUrl => {
+            this._coreRelayUrls().forEach(relayUrl => {
                 if (writeOnly.has(relayUrl)) return;
                 const relay = this.relayPool.get(relayUrl);
                 if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) targets.push(relay);
@@ -5617,7 +6066,7 @@ Object.assign(NYM.prototype, {
     _restRelay(relayUrl) {
         if (!relayUrl || relayUrl === 'relay-pool') return;
         if (relayUrl === this.appRelay) return;
-        if (this.defaultRelays && this.defaultRelays.includes(relayUrl)) return;
+        if (this._coreRelayUrls().includes(relayUrl)) return;
         this.blacklistedRelays.add(relayUrl);
         if (this.blacklistTimestamps) this.blacklistTimestamps.set(relayUrl, Date.now());
         this._noteRateLimit(relayUrl);
@@ -5628,7 +6077,7 @@ Object.assign(NYM.prototype, {
         if (!relayUrl || relayUrl === 'relay-pool') return;
         if (relayUrl === this.appRelay) return;
         // Default relays are curated and must stay eligible.
-        if (this.defaultRelays && this.defaultRelays.includes(relayUrl)) return;
+        if (this._coreRelayUrls().includes(relayUrl)) return;
         if (!this._permanentBlacklist) this._permanentBlacklist = new Set();
         if (this._permanentBlacklist.has(relayUrl)) return;
         this._permanentBlacklist.add(relayUrl);
@@ -5696,6 +6145,11 @@ Object.assign(NYM.prototype, {
     // bufferedAmount-aware send with an optional per-socket queue for critical messages.
     _safeWsSend(ws, msg, opts) {
         if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        if (typeof msg === 'string' && this._wsIsAdded(ws)) {
+            const kept = this._frameForAdded(msg);
+            if (!kept) return msg.startsWith('["REQ"');
+            msg = kept;
+        }
         const threshold = (opts && opts.threshold) || 1048576;
         if (ws.bufferedAmount > threshold) {
             if (opts && opts.critical) this._queueSocketSend(ws, msg);

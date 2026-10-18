@@ -33,7 +33,9 @@ bool lastViewStillExists(
       return !state.blockedChannels.contains(view.id.toLowerCase());
     case ViewKind.pm:
       if (view.id == kNymbotPubkey) return true;
-      if (state.blockedUsers.contains(view.id)) return false;
+      if (view.id != state.selfPubkey && state.isPersonHidden(view.id)) {
+        return false;
+      }
       return state.pmConversations.any((c) => c.pubkey == view.id);
     case ViewKind.group:
       if (isLeftGroup(view.id)) return false;

@@ -413,9 +413,22 @@ class CacheStore {
     final json = jsonEncode(trimmed.map((m) => m.toJson()).toList());
     await db.insert(
       'pms',
-      {'key': key, 'json': json, 'lastTouched': _now()},
+      {'key': key, 'json': json, 'lastTouched': _pmActivity(trimmed)},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  static int pmLastActivityMs(Iterable<Message> msgs) {
+    var newest = 0;
+    for (final m in msgs) {
+      if (m.createdAt > newest) newest = m.createdAt;
+    }
+    return newest * 1000;
+  }
+
+  int _pmActivity(Iterable<Message> msgs) {
+    final ms = pmLastActivityMs(msgs);
+    return ms > 0 ? ms : _now();
   }
 
   Future<List<Message>> loadPmMessages(String key) async {
@@ -662,7 +675,7 @@ class CacheStore {
 
   /// The `pms` counterpart; callers gate on `settings.cachePMs`.
   Future<void> savePmMessagesJson(String key, String json,
-      [DatabaseExecutor? executor]) async {
+      [DatabaseExecutor? executor, int lastActivityMs = 0]) async {
     if (key.isEmpty) return;
     final db = executor ?? _database;
     if (json.isEmpty || json == '[]') {
@@ -671,7 +684,11 @@ class CacheStore {
     }
     await db.insert(
       'pms',
-      {'key': key, 'json': json, 'lastTouched': _now()},
+      {
+        'key': key,
+        'json': json,
+        'lastTouched': lastActivityMs > 0 ? lastActivityMs : _now(),
+      },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
@@ -808,30 +825,34 @@ class CacheStore {
   // LRU enforcement
 
   /// Evicts oldest-`lastTouched` rows down to `floor(limit * 0.9)` per store; `meta` is unbounded, no time expiry.
-  Future<void> enforceLruLimits() async {
+  Future<int> enforceLruLimits() async {
+    var evictedPm = 0;
     for (final entry in storeLimits.entries) {
-      await _trimStore(entry.key, entry.value);
+      final newest = await _trimStore(entry.key, entry.value);
+      if (entry.key == 'pms') evictedPm = newest;
     }
+    return evictedPm;
   }
 
-  Future<void> _trimStore(String table, int limit) async {
+  Future<int> _trimStore(String table, int limit) async {
     final keyColumn = _keyColumnFor(table);
-    final countRows =
-        await _database.rawQuery('SELECT COUNT(*) AS c FROM $table');
+    final where = table == 'pms' ? "key NOT LIKE 'group-%'" : null;
+    final countRows = await _database.rawQuery(
+        'SELECT COUNT(*) AS c FROM $table${where == null ? '' : ' WHERE $where'}');
     final count = (countRows.first['c'] as int?) ?? 0;
-    if (count <= limit) return;
+    if (count <= limit) return 0;
 
     final target = (limit * 0.9).floor();
     final evictCount = count - target;
 
-    // Oldest first; rowid breaks ties deterministically.
     final victims = await _database.query(
       table,
-      columns: [keyColumn],
+      columns: [keyColumn, 'lastTouched'],
+      where: where,
       orderBy: 'lastTouched ASC, rowid ASC',
       limit: evictCount,
     );
-    if (victims.isEmpty) return;
+    if (victims.isEmpty) return 0;
     final keys = victims.map((r) => r[keyColumn]).toList();
     final placeholders = List.filled(keys.length, '?').join(',');
     await _database.delete(
@@ -839,7 +860,12 @@ class CacheStore {
       where: '$keyColumn IN ($placeholders)',
       whereArgs: keys,
     );
-    if (table == 'pms') await deleteCursorMeta(block: true);
+    var newest = 0;
+    for (final r in victims) {
+      final t = (r['lastTouched'] as int?) ?? 0;
+      if (t > newest) newest = t;
+    }
+    return newest ~/ 1000;
   }
 
   String _keyColumnFor(String table) {

@@ -166,6 +166,7 @@ class EventMapper {
       threadRoot: threadRoot,
       // Committed NIP-13 target, or null with no nonce tag; proven work is recomputed from the id.
       powTarget: powTargetOf(e),
+      quoted: Message.quotedFromTags(e.tags),
     );
   }
 

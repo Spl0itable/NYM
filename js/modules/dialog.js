@@ -66,6 +66,16 @@
             e.preventDefault();
             settle(resultFor(false));
         } else if (e.key === 'Enter' && !pending.multiline) {
+            var a = document.activeElement;
+            if (a && a.id === 'appDialogCancelBtn') {
+                e.preventDefault();
+                settle(resultFor(false));
+                return;
+            }
+            if (pending.danger && !(a && a.id === 'appDialogOkBtn')) {
+                e.preventDefault();
+                return;
+            }
             e.preventDefault();
             settle(resultFor(true));
         }
@@ -86,7 +96,7 @@
         ensureModal();
         if (pending) settle(resultFor(false));
         return new Promise(function (resolve) {
-            pending = { resolve: resolve, alertOnly: !!opts.alertOnly, prompt: !!opts.prompt, multiline: !!opts.multiline, maxLength: opts.maxLength || 0, hasCheckbox: !!opts.checkboxLabel };
+            pending = { resolve: resolve, alertOnly: !!opts.alertOnly, prompt: !!opts.prompt, multiline: !!opts.multiline, maxLength: opts.maxLength || 0, hasCheckbox: !!opts.checkboxLabel, danger: !!opts.danger && !opts.alertOnly && !opts.prompt };
             var cbRow = document.getElementById('appDialogCheckboxRow');
             var cb = document.getElementById('appDialogCheckbox');
             if (opts.checkboxLabel) {
@@ -151,9 +161,10 @@
             okBtn.classList.toggle('danger', !!opts.danger);
             document.getElementById('appDialogModal').classList.add('active');
             document.addEventListener('keydown', onKey, true);
+            var dangerFocus = pending.danger;
             setTimeout(function () {
                 try {
-                    (opts.prompt ? field : okBtn).focus();
+                    (opts.prompt ? field : (dangerFocus ? cancelBtn : okBtn)).focus();
                     if (opts.prompt) {
                         field.select();
                         if (typeof field.scrollIntoView === 'function') {

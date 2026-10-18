@@ -374,7 +374,7 @@ async function storeWraps(env, owner, events, now) {
   if (!db) return 0;
   const stmt = db.prepare("INSERT OR IGNORE INTO pm (pubkey, id, created_at, event, stored_at) VALUES (?, ?, ?, ?, ?)");
   const batch = [];
-  const nowMs = now * 1000;
+  const nowMs = Math.max(now * 1000, Date.now());
   for (const { e, r } of events) {
     if (e.kind !== 1059) continue;
     if (r === "self" || r === "arch") batch.push(stmt.bind(owner, e.id, Math.min(e.created_at, now), JSON.stringify(e), nowMs));

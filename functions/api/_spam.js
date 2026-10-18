@@ -1248,6 +1248,7 @@ const state = {
   dropped: new Map(),
   restored: new Map(),
   restoredValue: null,
+  restoredSenders: null,
   pending: new Map(),
   pendingBy: new Map(),
   velocity: new Map(),
@@ -1320,7 +1321,7 @@ const IO_ROOT = {};
 export function _resetSpamState() {
   state.settings = null; state.settingsAt = 0; state.settingsLoading = null; state.settingsLoadingAt = 0; state.settingsRetryAt = 0; state.settingsCheckAt = 0; state.settingsVersion = null;
   state.seen.clear(); state.unjudged.clear(); state.exact.clear(); state.muted.clear(); state.hidden.clear(); state.dropped.clear();
-  state.restored.clear(); state.restoredValue = null;
+  state.restored.clear(); state.restoredValue = null; state.restoredSenders = null;
   for (const pend of state.pending.values()) if (pend.timer) clearTimeout(pend.timer);
   state.pending.clear(); state.pendingBy.clear();
   state.velocity.clear(); state.examples = null; state.examplesLoading = null; state.examplesLoadingAt = 0;
@@ -1742,6 +1743,60 @@ export async function hiddenAmong(env, channels, sinceMs, ids) {
   const byId = await hiddenByIds(env, rest);
   for (const id of byId.hidden) hidden.add(id);
   return { hidden: withoutRestored(hidden), ok: byId.ok };
+}
+
+const HIDDEN_SENDERS_MAX = 2000;
+const HIDDEN_SENDERS_BUCKET_MS = 60000;
+const HIDDEN_SENDERS_CACHE_S = 60;
+
+export async function hiddenSenders(env, sinceMs) {
+  const out = new Set();
+  if (!env || !hasD1(env.DB_NOPE)) return out;
+  const bucket = Math.floor((Number(sinceMs) || 0) / HIDDEN_SENDERS_BUCKET_MS);
+  const since = bucket * HIDDEN_SENDERS_BUCKET_MS;
+  const key = "hidden-senders-by/" + bucket;
+  const hit = await cacheGet(null, key);
+  let rows = Array.isArray(hit) ? hit : null;
+  if (!rows) {
+    rows = [];
+    try {
+      const rs = await timed(replica(spamDb(env)).prepare("SELECT e.pubkey AS pubkey, COUNT(*) AS n, MAX(h.seen_at) AS last FROM spam_hidden h JOIN spam_events e ON e.id = h.id " +
+        "WHERE h.seen_at > ? GROUP BY e.pubkey ORDER BY last DESC LIMIT " + HIDDEN_SENDERS_MAX)
+        .bind(since).all(), D1_READ_TIMEOUT_MS, "hidden senders read");
+      for (const r of (rs && rs.results) || []) {
+        if (r && typeof r.pubkey === "string" && Number(r.n) > 0) rows.push([r.pubkey.toLowerCase(), Number(r.n)]);
+      }
+      await cachePut(null, key, rows, HIDDEN_SENDERS_CACHE_S);
+    } catch (_) { return out; }
+  }
+  const counts = new Map();
+  for (const r of rows) if (Array.isArray(r) && typeof r[0] === "string") counts.set(r[0], (counts.get(r[0]) || 0) + (Number(r[1]) || 0));
+  const restored = state.restored.size ? await restoredHiddenBySender(env, since) : null;
+  for (const [pk, n] of counts) if (n > ((restored && restored.get(pk)) || 0)) out.add(pk);
+  return out;
+}
+
+const RESTORED_LOOKUP_CHUNK = 90;
+
+async function restoredHiddenBySender(env, since) {
+  const memo = state.restoredSenders;
+  const memoKey = since + "|" + (state.restoredValue || "");
+  if (memo && memo.key === memoKey) return memo.map;
+  const ids = Array.from(state.restored.keys());
+  const map = new Map();
+  try {
+    for (let i = 0; i < ids.length; i += RESTORED_LOOKUP_CHUNK) {
+      const chunk = ids.slice(i, i + RESTORED_LOOKUP_CHUNK);
+      const ph = chunk.map(() => "?").join(",");
+      const rs = await timed(replica(spamDb(env)).prepare("SELECT h.id AS id, e.pubkey AS pubkey FROM spam_hidden h JOIN spam_events e ON e.id = h.id WHERE h.seen_at > ? AND h.id IN (" + ph + ")")
+        .bind(since, ...chunk).all(), D1_READ_TIMEOUT_MS, "restored senders read");
+      for (const r of (rs && rs.results) || []) {
+        if (r && typeof r.pubkey === "string") map.set(r.pubkey.toLowerCase(), (map.get(r.pubkey.toLowerCase()) || 0) + 1);
+      }
+    }
+  } catch (_) { return new Map(); }
+  state.restoredSenders = { key: memoKey, map };
+  return map;
 }
 
 export function spamDb(env) {

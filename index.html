@@ -854,24 +854,24 @@
                     <button class="bot-tier-btn" type="button" data-action="botSetTier" data-tier="standard" role="tab" aria-selected="true">Standard</button>
                     <button class="bot-tier-btn" type="button" data-action="botSetTier" data-tier="pro" role="tab" aria-selected="false">Pro</button>
                 </div>
-                <button class="bot-ctrl-btn" type="button" id="botModelBtn" data-action="openBotModelModal" title="Choose Pro model">
+                <button class="bot-ctrl-btn" type="button" id="botModelBtn" data-action="openBotModelModal" data-tip="Choose Pro model">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"></path></svg>
                     <span class="bot-ctrl-label" id="botModelBtnLabel">Auto-routed</span>
                 </button>
-                <button class="bot-ctrl-btn" type="button" id="botAnonBtn" data-action="openBotAnonModal" title="Chat from a throwaway key">
+                <button class="bot-ctrl-btn" type="button" id="botAnonBtn" data-action="openBotAnonModal" data-tip="Chat from a throwaway key Nymbot cannot link to your nym">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="21" x2="21" y2="3"></line></svg>
                     <span class="bot-ctrl-label" id="botAnonBtnLabel">Anon</span>
                 </button>
-                <button class="bot-ctrl-btn bot-stop-all-btn nm-hidden" type="button" id="botStopAllBtn" data-action="botRunStopAll" title="Stop every reply in this chat" aria-label="Stop every reply in this chat">
+                <button class="bot-ctrl-btn bot-stop-all-btn nm-hidden" type="button" id="botStopAllBtn" data-action="botRunStopAll" aria-label="Stop every reply in this chat" data-tip="">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
                     <span class="bot-ctrl-label">Stop</span>
                 </button>
-                <button class="bot-ctrl-btn bot-runs-btn" type="button" id="botRunsBtn" data-action="openBotRunsSheet" title="Running now">
+                <button class="bot-ctrl-btn bot-runs-btn" type="button" id="botRunsBtn" data-action="openBotRunsSheet">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
                     <span class="bot-ctrl-label">Running now</span>
                     <span class="bot-runs-count nm-hidden" id="botRunsCount" data-no-i18n>0</span>
                 </button>
-                <button class="bot-ctrl-btn bot-ctrl-buy" type="button" id="botBuyBtn" data-action="openBotCreditsModal" title="Buy Nymbot credits">
+                <button class="bot-ctrl-btn bot-ctrl-buy" type="button" id="botBuyBtn" data-action="openBotCreditsModal" data-tip="Buy Nymbot credits">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
                     <span class="bot-ctrl-label">Buy</span>
                 </button>
@@ -901,7 +901,7 @@
             </div>
 
             <div class="input-container">
-                <button class="icon-btn input-btn attach-btn" id="attachBtn" type="button" aria-label="Attach" aria-haspopup="menu" aria-controls="attachMenu" aria-expanded="false" data-tip="">
+                <button class="icon-btn input-btn attach-btn" id="attachBtn" type="button" aria-label="Attach" aria-haspopup="menu" aria-controls="attachMenuList" aria-expanded="false" data-tip="">
                     <svg viewBox="0 0 24 24">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
                         <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -993,51 +993,55 @@
                     </button>
                     <div class="send-split composer-action" id="sendSplit">
                         <button class="send-btn" id="sendBtn" aria-label="Send" hidden data-tip=""><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg></button>
-                        <button class="send-menu-btn" id="sendMenuBtn" type="button" hidden aria-haspopup="menu" aria-controls="sendMenu" aria-expanded="false" aria-label="More send options" data-tip="">
+                        <button class="send-menu-btn" id="sendMenuBtn" type="button" hidden aria-haspopup="menu" aria-controls="sendMenuList" aria-expanded="false" aria-label="More send options" data-tip="">
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="18 15 12 9 6 15"></polyline>
                             </svg>
                         </button>
                     </div>
                 </div>
-                <div class="composer-menu attach-menu" id="attachMenu" role="menu" aria-label="Attach" hidden>
-                    <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="photo" data-action="selectImage">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
-                        <span class="composer-menu-text"><span class="composer-menu-label">Photo or video</span><span class="composer-menu-reason"></span></span>
-                    </button>
-                    <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="file" data-action="selectP2PFile">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg>
-                        <span class="composer-menu-text"><span class="composer-menu-label">P2P file</span><span class="composer-menu-reason"></span></span>
-                    </button>
-                    <button type="button" class="composer-menu-item nm-hidden" id="gtLocationBtn" data-attach-item="location" data-action="gtOpenLocation" role="menuitem">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"></path><circle cx="12" cy="9" r="2.5"></circle></svg>
-                        <span class="composer-menu-text"><span class="composer-menu-label">Location</span><span class="composer-menu-reason"></span></span>
-                    </button>
-                    <button type="button" class="composer-menu-item media-round-btn" id="videoNoteBtn" data-attach-item="videoNote" role="menuitem">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"></circle><rect x="7" y="9" width="7" height="6" rx="1.2"></rect><path d="m14 11.2 3-1.7v5l-3-1.7"></path></svg>
-                        <span class="composer-menu-text"><span class="composer-menu-label">Video note</span><span class="composer-menu-reason"></span></span>
-                    </button>
-                    <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="poll" data-action="composerPoll">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="6" y1="20" x2="6" y2="13"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="18" y1="20" x2="18" y2="9"></line></svg>
-                        <span class="composer-menu-text"><span class="composer-menu-label">Poll</span><span class="composer-menu-reason"></span></span>
-                    </button>
-                    <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="event" data-action="composerEvent">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                        <span class="composer-menu-text"><span class="composer-menu-label">Event</span><span class="composer-menu-reason"></span></span>
-                    </button>
+                <div class="composer-menu attach-menu" id="attachMenu" hidden>
+                    <div class="composer-menu-list" id="attachMenuList" role="menu" aria-label="Attach">
+                        <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="photo" data-action="selectImage">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+                            <span class="composer-menu-text"><span class="composer-menu-label">Photo or video</span><span class="composer-menu-reason"></span></span>
+                        </button>
+                        <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="file" data-action="selectP2PFile">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg>
+                            <span class="composer-menu-text"><span class="composer-menu-label">P2P file</span><span class="composer-menu-reason"></span></span>
+                        </button>
+                        <button type="button" class="composer-menu-item nm-hidden" id="gtLocationBtn" data-attach-item="location" data-action="gtOpenLocation" role="menuitem">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"></path><circle cx="12" cy="9" r="2.5"></circle></svg>
+                            <span class="composer-menu-text"><span class="composer-menu-label">Location</span><span class="composer-menu-reason"></span></span>
+                        </button>
+                        <button type="button" class="composer-menu-item media-round-btn" id="videoNoteBtn" data-attach-item="videoNote" role="menuitem">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"></circle><rect x="7" y="9" width="7" height="6" rx="1.2"></rect><path d="m14 11.2 3-1.7v5l-3-1.7"></path></svg>
+                            <span class="composer-menu-text"><span class="composer-menu-label">Video note</span><span class="composer-menu-reason"></span></span>
+                        </button>
+                        <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="poll" data-action="composerPoll">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="6" y1="20" x2="6" y2="13"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="18" y1="20" x2="18" y2="9"></line></svg>
+                            <span class="composer-menu-text"><span class="composer-menu-label">Poll</span><span class="composer-menu-reason"></span></span>
+                        </button>
+                        <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="event" data-action="composerEvent">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                            <span class="composer-menu-text"><span class="composer-menu-label">Event</span><span class="composer-menu-reason"></span></span>
+                        </button>
+                    </div>
                 </div>
-                <div class="composer-menu send-menu" id="sendMenu" role="menu" aria-label="Send options" hidden>
-                    <button type="button" class="composer-menu-item" role="menuitem" data-send-item="later">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>
-                        <span class="composer-menu-text"><span class="composer-menu-label">Send later</span></span>
-                    </button>
-                    <button type="button" class="composer-menu-item" role="menuitem" data-send-item="anon">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="21" x2="21" y2="3"></line></svg>
-                        <span class="composer-menu-text"><span class="composer-menu-label">Send anonymously</span></span>
-                    </button>
-                    <div class="composer-menu-sep" id="sendAsSep" role="separator" hidden></div>
-                    <div class="composer-menu-heading" id="sendAsHeading" role="presentation" hidden>Send as…</div>
-                    <div class="send-as-group" id="sendAsGroup" role="group" aria-labelledby="sendAsHeading" hidden></div>
+                <div class="composer-menu send-menu" id="sendMenu" hidden>
+                    <div class="composer-menu-list" id="sendMenuList" role="menu" aria-label="Send options">
+                        <button type="button" class="composer-menu-item" role="menuitem" data-send-item="later">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>
+                            <span class="composer-menu-text"><span class="composer-menu-label">Send later</span></span>
+                        </button>
+                        <button type="button" class="composer-menu-item" role="menuitem" data-send-item="anon">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="21" x2="21" y2="3"></line></svg>
+                            <span class="composer-menu-text"><span class="composer-menu-label">Send anonymously</span></span>
+                        </button>
+                        <div class="composer-menu-sep" id="sendAsSep" role="separator" hidden></div>
+                        <div class="composer-menu-heading" id="sendAsHeading" role="presentation" hidden>Send as…</div>
+                        <div class="send-as-group" id="sendAsGroup" role="group" aria-labelledby="sendAsHeading" hidden></div>
+                    </div>
                 </div>
                 <div class="emoji-picker" id="emojiPicker"></div>
                 <div class="gif-picker" id="gifPicker"></div>
@@ -1368,6 +1372,7 @@
                         <span class="relay-stats-search-count" id="rsRelaySearchCount" aria-live="polite"></span>
                     </div>
                     <div class="relay-stats-relay-list" id="rsRelayList"></div>
+                    <div class="relay-stats-added" id="rsAddedRelays"></div>
                     <div class="relay-stats-blocked" id="rsBlockedRelays"></div>
                 </div>
 
@@ -1797,7 +1802,7 @@
     </div>
 
     <!-- Settings Modal -->
-    <div class="modal" id="settingsModal">
+    <div class="modal" id="settingsModal" data-sheet-guard="none">
         <div class="modal-content">
             <button class="modal-close" data-action="closeModal" data-modal-id="settingsModal" aria-label="Close">✕</button>
             <div class="modal-header">Settings</div>
@@ -1824,7 +1829,7 @@
 
                     <div class="form-group">
                         <label class="form-label">App Language</label>
-                        <select class="form-select" id="uiLanguageSelect" data-setting-key="uiLanguage" data-no-i18n>
+                        <select class="form-select" id="uiLanguageSelect" data-setting-key="uiLanguage" data-on-change="onSettingFieldChange" data-no-i18n>
                             <option value="">English (default)</option>
                         </select>
                         <div class="form-hint">Translate the entire app interface into your language. Message text is handled separately by the translation settings below.</div>
@@ -1832,7 +1837,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Theme</label>
-                        <select class="form-select" id="themeSelect" data-setting-key="theme">
+                        <select class="form-select" id="themeSelect" data-setting-key="theme" data-on-change="onSettingFieldChange">
                             <option value="bitchat">Bitchat (Multicolor)</option>
                             <option value="matrix">Matrix Green</option>
                             <option value="amber">Amber Terminal</option>
@@ -2021,7 +2026,7 @@
 
                     <div class="form-group" id="timeFormatGroup">
                         <label class="form-label">Time Format</label>
-                        <select class="form-select" id="timeFormatSelect" data-setting-key="timeFormat">
+                        <select class="form-select" id="timeFormatSelect" data-setting-key="timeFormat" data-on-change="onSettingFieldChange">
                             <option value="24hr">24-hour (14:30)</option>
                             <option value="12hr" selected>12-hour (2:30 PM)</option>
                         </select>
@@ -2029,7 +2034,7 @@
 
                     <div class="form-group" id="dateFormatGroup">
                         <label class="form-label">Date Format</label>
-                        <select class="form-select" id="dateFormatSelect" data-setting-key="dateFormat">
+                        <select class="form-select" id="dateFormatSelect" data-setting-key="dateFormat" data-on-change="onSettingFieldChange">
                             <option value="default" selected>Default (May 28, 2026)</option>
                             <option value="mdy">MM/DD/YYYY (05/28/2026)</option>
                             <option value="dmy">DD/MM/YYYY (28/05/2026)</option>
@@ -2144,7 +2149,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Proof of Work Difficulty</label>
-                        <select class="form-select" id="powDifficultySelect" data-setting-key="powDifficulty">
+                        <select class="form-select" id="powDifficultySelect" data-setting-key="powDifficulty" data-on-change="onSettingFieldChange">
                             <option value="0" selected>Disabled</option>
                             <option value="16">16 bits (Nymchat minimum)</option>
                             <option value="20">20 bits &mdash; also hides Nymchat messages</option>
@@ -2155,7 +2160,7 @@
 
                     <div class="form-group nm-hidden" id="autoEphemeralSettingGroup">
                         <label class="form-label">Auto Ephemeral Mode on Restart</label>
-                        <select class="form-select" id="autoEphemeralSelect">
+                        <select class="form-select" id="autoEphemeralSelect" data-on-change="onAutoEphemeralChange">
                             <option value="false">Disabled</option>
                             <option value="true">Enabled (auto sign-in)</option>
                         </select>
@@ -2164,7 +2169,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Random Nickname Style</label>
-                        <select class="form-select" id="nickStyleSelect" data-setting-key="nickStyle">
+                        <select class="form-select" id="nickStyleSelect" data-setting-key="nickStyle" data-on-change="onSettingFieldChange">
                             <option value="fancy">Fancy (adjective_noun)</option>
                             <option value="simple">Simple (nym1234)</option>
                         </select>
@@ -2181,7 +2186,7 @@
                     <div class="settings-section-body">
                     <div class="form-group">
                         <label class="form-label">Accept Private Messages &amp; Group Chat Requests</label>
-                        <select class="form-select" id="acceptPMsSelect" data-setting-key="acceptPMs">
+                        <select class="form-select" id="acceptPMsSelect" data-setting-key="acceptPMs" data-on-change="onSettingFieldChange">
                             <option value="enabled">Enabled</option>
                             <option value="friends">Friends only</option>
                             <option value="disabled">Disabled</option>
@@ -2191,7 +2196,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Accept Audio &amp; Video Calls</label>
-                        <select class="form-select" id="acceptCallsSelect" data-setting-key="acceptCalls">
+                        <select class="form-select" id="acceptCallsSelect" data-setting-key="acceptCalls" data-on-change="onSettingFieldChange">
                             <option value="enabled">Enabled</option>
                             <option value="friends">Friends only</option>
                             <option value="disabled">Disabled</option>
@@ -2232,7 +2237,7 @@
 
                     <div class="form-group form-subgroup nm-hidden" id="dmTTLGroup">
                         <label class="form-label">Disappear After</label>
-                        <select class="form-select" id="dmTTLSelect" data-setting-key="dmTTLSeconds">
+                        <select class="form-select" id="dmTTLSelect" data-setting-key="dmTTLSeconds" data-on-change="onSettingFieldChange">
                             <option value="3600">1 hour</option>
                             <option value="21600">6 hours</option>
                             <option value="86400" selected>1 day</option>
@@ -2244,7 +2249,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Read Receipts</label>
-                        <select class="form-select" id="readReceiptsSelect" data-setting-key="readReceiptsScope">
+                        <select class="form-select" id="readReceiptsSelect" data-setting-key="readReceiptsScope" data-on-change="onSettingFieldChange">
                             <option value="everywhere">Enabled everywhere</option>
                             <option value="pms-groups">Both PMs and group chats</option>
                             <option value="pms">Only PMs</option>
@@ -2257,7 +2262,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Typing Indicators</label>
-                        <select class="form-select" id="typingIndicatorsSelect" data-setting-key="typingIndicatorsScope">
+                        <select class="form-select" id="typingIndicatorsSelect" data-setting-key="typingIndicatorsScope" data-on-change="onSettingFieldChange">
                             <option value="everywhere">Enabled everywhere</option>
                             <option value="pms-groups">Both PMs and group chats</option>
                             <option value="pms">Only PMs</option>
@@ -2269,7 +2274,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Show Status Indicators</label>
-                        <select class="form-select" id="showStatusSelect" data-setting-key="showStatus">
+                        <select class="form-select" id="showStatusSelect" data-setting-key="showStatus" data-on-change="onSettingFieldChange">
                             <option value="true">Enabled</option>
                             <option value="friends">Friends only</option>
                             <option value="false">Disabled</option>
@@ -2311,7 +2316,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Blur Images from Others</label>
-                        <select class="form-select" id="blurImagesSelect" data-setting-key="blurOthersImages">
+                        <select class="form-select" id="blurImagesSelect" data-setting-key="blurOthersImages" data-on-change="onSettingFieldChange">
                             <option value="true">Enabled (blur by default)</option>
                             <option value="friends">Disabled (for friends only)</option>
                             <option value="false">Disabled (show all images)</option>
@@ -2398,7 +2403,7 @@
                     <div class="settings-section-body">
                     <div class="form-group">
                         <label class="form-label">Translation Language</label>
-                        <select class="form-select" id="translateLanguageSelect" data-setting-key="translateLanguage" data-no-i18n>
+                        <select class="form-select" id="translateLanguageSelect" data-setting-key="translateLanguage" data-on-change="onSettingFieldChange" data-no-i18n>
                             <option value="">Disabled</option>
                             <option value="en">English</option>
                             <option value="es">Spanish</option>
@@ -2452,7 +2457,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Notification Sound</label>
-                        <select class="form-select" id="soundSelect" data-setting-key="sound">
+                        <select class="form-select" id="soundSelect" data-setting-key="sound" data-on-change="onSettingFieldChange">
                             <option value="beep">Classic Beep</option>
                             <option value="low">Low Tone</option>
                             <option value="high">High Ping</option>
@@ -2565,7 +2570,7 @@
 
                     <div class="form-group mobile-only" id="swipeLeftActionGroup">
                         <label class="form-label">Swipe Left Action</label>
-                        <select class="form-select" id="swipeLeftActionSelect" data-setting-key="swipeLeftAction">
+                        <select class="form-select" id="swipeLeftActionSelect" data-setting-key="swipeLeftAction" data-on-change="onSettingFieldChange">
                             <option value="quote">Quote Reply</option>
                             <option value="translate">Translate</option>
                             <option value="copy">Copy Message</option>
@@ -2580,7 +2585,7 @@
 
                     <div class="form-group mobile-only" id="swipeRightActionGroup">
                         <label class="form-label">Swipe Right Action</label>
-                        <select class="form-select" id="swipeRightActionSelect" data-setting-key="swipeRightAction">
+                        <select class="form-select" id="swipeRightActionSelect" data-setting-key="swipeRightAction" data-on-change="onSettingFieldChange">
                             <option value="translate">Translate</option>
                             <option value="quote">Quote Reply</option>
                             <option value="copy">Copy Message</option>
@@ -2604,7 +2609,7 @@
 
                     <div class="form-group mobile-only" id="swipeThresholdGroup">
                         <label class="form-label">Swipe Sensitivity</label>
-                        <select class="form-select" id="swipeThresholdSelect" data-setting-key="swipeThreshold">
+                        <select class="form-select" id="swipeThresholdSelect" data-setting-key="swipeThreshold" data-on-change="onSettingFieldChange">
                             <option value="40">High (40px)</option>
                             <option value="60">Medium (60px)</option>
                             <option value="80">Low (80px)</option>
@@ -2686,8 +2691,7 @@
 
             </div>
             <div class="modal-actions">
-                <button class="icon-btn" data-action="closeModal" data-modal-id="settingsModal">Cancel</button>
-                <button class="send-btn" data-action="saveSettings">Save</button>
+                <button type="button" class="send-btn" id="settingsDoneBtn" data-action="closeModal" data-modal-id="settingsModal">Done</button>
             </div>
         </div>
     </div>
@@ -3010,6 +3014,7 @@
     <script defer src="js/modules/event-details.js"></script>
     <script defer src="js/modules/wrap-outbox.js"></script>
     <script defer src="js/modules/relay-block.js"></script>
+    <script defer src="js/modules/relay-add.js"></script>
     <script defer src="js/modules/d1-cursor.js"></script>
     <script defer src="js/modules/relays.js"></script>
     <script defer src="js/modules/upload-activity.js"></script>

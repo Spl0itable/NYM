@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../models/group.dart';
 import '../../models/user.dart';
+import '../../state/app_state.dart';
 import '../common/nym_avatar.dart';
 
-class GroupSidebarAvatar extends StatelessWidget {
+class GroupSidebarAvatar extends ConsumerWidget {
   const GroupSidebarAvatar({
     super.key,
     required this.group,
@@ -21,21 +23,36 @@ class GroupSidebarAvatar extends StatelessWidget {
   final double size;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    final avatarUrl = proxiedAvatarUrl(group.avatar);
     final otherMembers =
         group.members.where((pk) => pk != selfPubkey).toList(growable: false);
+    final shown = otherMembers.take(3).toList(growable: false);
+    final bits = ref.watch(appStateProvider.select((s) {
+      var b = 0;
+      for (var i = 0; i < shown.length; i++) {
+        if (s.isPersonHidden(shown[i], users[shown[i]]?.nym)) b |= 1 << i;
+      }
+      if (s.groupAvatar(group) == null) b |= 1 << 8;
+      return b;
+    }));
+    final groupImage = (bits & (1 << 8)) != 0 ? null : group.avatar;
+    final masked = <String>{
+      for (var i = 0; i < shown.length; i++)
+        if ((bits >> i) & 1 == 1) shown[i],
+    };
+    final avatarUrl = proxiedAvatarUrl(groupImage);
     if (size != 26) {
       final Widget inner;
       if (avatarUrl != null && avatarUrl.isNotEmpty) {
         inner = ClipOval(
-          child: NymAvatar(seed: group.id, size: size, imageUrl: group.avatar),
+          child: NymAvatar(seed: group.id, size: size, imageUrl: groupImage),
         );
       } else if (otherMembers.isNotEmpty) {
         inner = _GroupAvatarStack(
-          members: otherMembers.take(3).toList(),
+          members: shown,
           users: users,
+          masked: masked,
           size: size,
         );
       } else {
@@ -50,7 +67,7 @@ class GroupSidebarAvatar extends StatelessWidget {
           child: NymAvatar(
             seed: group.id,
             size: 26,
-            imageUrl: group.avatar,
+            imageUrl: groupImage,
           ),
         ),
       );
@@ -59,8 +76,9 @@ class GroupSidebarAvatar extends StatelessWidget {
       return Padding(
         padding: const EdgeInsets.only(right: 6),
         child: _GroupAvatarStack(
-          members: otherMembers.take(3).toList(),
+          members: shown,
           users: users,
+          masked: masked,
         ),
       );
     }
@@ -93,11 +111,18 @@ String _hex(Color c) {
 
 class _GroupAvatarStack extends StatelessWidget {
   const _GroupAvatarStack(
-      {required this.members, required this.users, this.size});
+      {required this.members,
+      required this.users,
+      this.masked = const <String>{},
+      this.size});
 
   final List<String> members;
   final Map<String, User> users;
+  final Set<String> masked;
   final double? size;
+
+  String? _picture(String pk) =>
+      masked.contains(pk) ? null : users[pk]?.profile?.picture;
 
   @override
   Widget build(BuildContext context) {
@@ -128,7 +153,7 @@ class _GroupAvatarStack extends StatelessWidget {
                     child: NymAvatar(
                       seed: members[i],
                       size: img - 2,
-                      imageUrl: users[members[i]]?.profile?.picture,
+                      imageUrl: _picture(members[i]),
                     ),
                   ),
                 ),
@@ -176,7 +201,7 @@ class _GroupAvatarStack extends StatelessWidget {
                   child: NymAvatar(
                     seed: members[i],
                     size: 18,
-                    imageUrl: users[members[i]]?.profile?.picture,
+                    imageUrl: _picture(members[i]),
                   ),
                 ),
               ),

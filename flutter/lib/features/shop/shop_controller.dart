@@ -355,6 +355,7 @@ class ShopController extends StateNotifier<ShopState> {
     Map<String, dynamic>? receipt,
     String? gifterNym,
   }) async {
+    final publishGift = giftEventPublisher;
     Map<String, dynamic>? data;
     for (var attempt = 0; attempt < 6; attempt++) {
       try {
@@ -381,7 +382,7 @@ class ShopController extends StateNotifier<ShopState> {
       }
     }
     data ??= const {};
-    await _applyShopClaim(data, identity);
+    await _applyShopClaim(data, identity, publishGift);
     removePendingPurchase(invoiceId);
     return data;
   }
@@ -390,13 +391,14 @@ class ShopController extends StateNotifier<ShopState> {
   Future<void> _applyShopClaim(
     Map<String, dynamic> data,
     ShopIdentity identity,
+    void Function(Map<String, dynamic> giftEvent)? publishGift,
   ) async {
     if (data['gift'] == true) {
       // Gifts go to the recipient, not us; broadcast the notification DM.
       final giftEvent = data['giftEvent'];
       if (giftEvent is Map) {
         try {
-          giftEventPublisher?.call(giftEvent.cast<String, dynamic>());
+          publishGift?.call(giftEvent.cast<String, dynamic>());
         } catch (_) {}
       }
       return;
@@ -457,6 +459,7 @@ class ShopController extends StateNotifier<ShopState> {
     required ShopIdentity identity,
     String? gifterNym,
   }) async {
+    final publishGift = giftEventPublisher;
     final body = <String, dynamic>{
       'action': 'shop-transfer',
       'pubkey': identity.pubkey,
@@ -472,7 +475,7 @@ class ShopController extends StateNotifier<ShopState> {
     final giftEvent = data['giftEvent'];
     if (giftEvent is Map) {
       try {
-        giftEventPublisher?.call(giftEvent.cast<String, dynamic>());
+        publishGift?.call(giftEvent.cast<String, dynamic>());
       } catch (_) {}
     }
     await applyOwnRecord(data);

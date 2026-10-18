@@ -100,7 +100,7 @@
                 case 'copy':
                     return async () => {
                         try {
-                            await navigator.clipboard.writeText(x.content);
+                            if (!(await this._copyMessageText(x.content, x.messageId))) return;
                             this.displaySystemMessage('Message copied to clipboard');
                         } catch (_) {
                             this.displaySystemMessage('Failed to copy message');

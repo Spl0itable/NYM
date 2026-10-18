@@ -123,7 +123,7 @@ class _ShareDestinationSheetState
 
     final groupMatches = [
       for (final g in groups)
-        if (_matches(g.name.isEmpty ? tr('Group') : g.name)) g
+        if (_matches(ref.read(appStateProvider).groupLabel(g))) g
     ];
     if (groupMatches.isNotEmpty) {
       section(tr('Groups'));
@@ -131,7 +131,7 @@ class _ShareDestinationSheetState
         rows.add(_row(
             c,
             Icon(Icons.group, size: 18, color: c.primary),
-            g.name.isEmpty ? tr('Group') : g.name,
+            ref.read(appStateProvider).groupLabel(g),
             () => _deliverTo(ChatView.group(g.id))));
       }
     }

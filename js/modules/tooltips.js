@@ -10,6 +10,7 @@
     var timer = 0;
     var keyboard = false;
     var warmUntil = 0;
+    var pressed = null;
 
     function hoverCapable() {
         try { return !window.matchMedia || window.matchMedia('(hover: hover), (any-hover: hover)').matches; } catch (_) { return true; }
@@ -98,11 +99,18 @@
                 } else if (r.attributeName === 'title' && r.target.getAttribute('title') != null) {
                     var el = r.target.closest ? r.target.closest(CONTROL) : null;
                     if (el === r.target) adopt(el);
+                } else if (r.attributeName === 'aria-expanded') {
+                    if (owner && owner === r.target && open(owner)) hide();
+                    else if (owner && r.target.getAttribute('aria-expanded') === 'true' && !place(owner)) hide();
+                } else if (r.attributeName === 'data-tip') {
+                    var tipText = r.target.getAttribute('data-tip');
+                    if (tipText) r.target.setAttribute('aria-description', ui(tipText));
+                    if (owner && owner === r.target) show(owner);
                 } else if (r.type === 'characterData' || r.attributeName === 'aria-label') {
                     if (owner && (owner === r.target || owner.contains(r.target))) show(owner);
                 }
             }
-        }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['title', 'aria-label'] });
+        }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['title', 'aria-label', 'aria-expanded', 'data-tip'] });
     }
 
     function textFor(el) {
@@ -110,6 +118,28 @@
         var label = explicit ? ui(explicit) : (el.getAttribute('aria-label') || '');
         var key = el.getAttribute('data-tip-key') || '';
         return { label: label, key: key };
+    }
+
+    var POPUPS = '#sendMenu, #attachMenu, #translateInputDropdown.active, #gifPicker.active, .enhanced-emoji-modal';
+
+    function popupRects(el) {
+        var out = [];
+        var list = document.querySelectorAll(POPUPS);
+        for (var i = 0; i < list.length; i++) {
+            var p = list[i];
+            if (p.hidden || p.contains(el)) continue;
+            var r = p.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) out.push(r);
+        }
+        return out;
+    }
+
+    function covers(rects, left, top, w, h) {
+        for (var i = 0; i < rects.length; i++) {
+            var r = rects[i];
+            if (left < r.right && left + w > r.left && top < r.bottom && top + h > r.top) return true;
+        }
+        return false;
     }
 
     function place(el) {
@@ -121,17 +151,29 @@
         var h = t.offsetHeight;
         var left = r.left + r.width / 2 - w / 2;
         left = Math.max(EDGE, Math.min(left, vw - w - EDGE));
-        var top = r.bottom + GAP;
-        if (top + h > vh - EDGE) top = r.top - GAP - h;
+        var below = r.bottom + GAP;
+        var above = r.top - GAP - h;
+        var top = below + h > vh - EDGE ? above : below;
+        var popups = popupRects(el);
+        if (popups.length && covers(popups, left, Math.max(EDGE, top), w, h)) {
+            var other = top === below ? above : below;
+            if (other < EDGE || other + h > vh - EDGE || covers(popups, left, other, w, h)) return false;
+            top = other;
+        }
         top = Math.max(EDGE, top);
         t.style.left = Math.round(left) + 'px';
         t.style.top = Math.round(top) + 'px';
+        return true;
+    }
+
+    function open(el) {
+        return el.hasAttribute('aria-haspopup') && el.getAttribute('aria-haspopup') !== 'false' && el.getAttribute('aria-expanded') === 'true';
     }
 
     function show(el) {
         clearTimeout(timer);
         var parts = textFor(el);
-        if (!parts.label || !el.isConnected || !(el.offsetWidth || el.offsetHeight)) return hide();
+        if (!parts.label || !el.isConnected || !(el.offsetWidth || el.offsetHeight) || open(el) || el === pressed) return hide();
         var t = layer();
         t.textContent = '';
         var span = document.createElement('span');
@@ -144,7 +186,7 @@
         }
         owner = el;
         t.classList.add('show');
-        place(el);
+        if (!place(el)) hide();
     }
 
     function hide(warm) {
@@ -180,6 +222,7 @@
         var el = tipTarget(e.target);
         if (!el) return;
         if (e.relatedTarget && el.contains(e.relatedTarget)) return;
+        if (el === pressed) pressed = null;
         if (el === owner || !owner) hide(true);
     }
 
@@ -187,7 +230,16 @@
         if (e.key === 'Escape' && owner) { hide(); return; }
         if (e.key === 'Tab' || e.key.indexOf('Arrow') === 0) keyboard = true;
     }, true);
-    document.addEventListener('pointerdown', function () { keyboard = false; hide(); }, true);
+    document.addEventListener('pointerdown', function (e) {
+        keyboard = false;
+        pressed = e.pointerType === 'touch' ? null : tipTarget(e.target);
+        hide();
+    }, true);
+    document.addEventListener('click', function (e) {
+        if (!owner) return;
+        if (owner === e.target || owner.contains(e.target)) pressed = owner;
+        hide();
+    }, true);
     document.addEventListener('pointerover', onOver, true);
     document.addEventListener('pointerout', onOut, true);
     document.addEventListener('focusin', function (e) {
@@ -198,9 +250,10 @@
         if (visible && hoverCapable()) show(el);
     }, true);
     document.addEventListener('focusout', function (e) {
+        if (e.target === pressed && !e.target.matches(':hover')) pressed = null;
         if (owner && e.target === owner) hide();
     }, true);
-    window.addEventListener('scroll', function () { if (owner) place(owner); }, true);
+    window.addEventListener('scroll', function () { if (owner && !place(owner)) hide(); }, true);
     window.addEventListener('resize', function () { hide(); });
     window.addEventListener('blur', function () { hide(); });
 

@@ -388,7 +388,7 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
         for (final x in app.groups) {
           if (x.id == id) g = x;
         }
-        final avatar = g?.avatar;
+        final avatar = g == null ? null : app.groupAvatar(g);
         if (g != null && avatar != null && avatar.isNotEmpty) {
           kind = 'groupAvatar';
           inner = ClipOval(

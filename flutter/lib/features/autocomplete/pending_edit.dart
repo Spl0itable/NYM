@@ -2,11 +2,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// One-shot "edit this message" request written by the context menu and consumed by the composer.
 class PendingEdit {
-  const PendingEdit({required this.messageId, required this.content});
+  const PendingEdit(
+      {required this.messageId, required this.content, this.head = ''});
 
   final String messageId;
 
   final String content;
+
+  final String head;
 }
 
 class PendingEditNotifier extends StateNotifier<PendingEdit?> {

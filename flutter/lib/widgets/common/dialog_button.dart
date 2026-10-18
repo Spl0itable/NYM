@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/theme/nym_theme.dart';
 import 'hit_slop.dart';
+import 'nym_focusable.dart';
 
 enum DialogButtonRole { primary, secondary, danger }
 
@@ -33,6 +35,8 @@ class DialogButton extends StatefulWidget {
     this.role = DialogButtonRole.primary,
     this.fullWidth = false,
     this.child,
+    this.focusNode,
+    this.autofocus = false,
   });
 
   const DialogButton.secondary({
@@ -41,6 +45,8 @@ class DialogButton extends StatefulWidget {
     required this.onTap,
     this.fullWidth = false,
     this.child,
+    this.focusNode,
+    this.autofocus = false,
   }) : role = DialogButtonRole.secondary;
 
   const DialogButton.danger({
@@ -49,6 +55,8 @@ class DialogButton extends StatefulWidget {
     required this.onTap,
     this.fullWidth = false,
     this.child,
+    this.focusNode,
+    this.autofocus = false,
   }) : role = DialogButtonRole.danger;
 
   final String label;
@@ -56,6 +64,8 @@ class DialogButton extends StatefulWidget {
   final DialogButtonRole role;
   final bool fullWidth;
   final Widget? child;
+  final FocusNode? focusNode;
+  final bool autofocus;
 
   @override
   State<DialogButton> createState() => _DialogButtonState();
@@ -63,6 +73,59 @@ class DialogButton extends StatefulWidget {
 
 class _DialogButtonState extends State<DialogButton> {
   bool _hover = false;
+  bool _ring = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.focusNode?.addListener(_onFocus);
+    if (widget.focusNode != null) {
+      FocusManager.instance.addHighlightModeListener(_onMode);
+    }
+  }
+
+  @override
+  void didUpdateWidget(DialogButton old) {
+    super.didUpdateWidget(old);
+    if (old.focusNode == widget.focusNode) return;
+    old.focusNode?.removeListener(_onFocus);
+    widget.focusNode?.addListener(_onFocus);
+    if (old.focusNode == null) {
+      FocusManager.instance.addHighlightModeListener(_onMode);
+    } else if (widget.focusNode == null) {
+      FocusManager.instance.removeHighlightModeListener(_onMode);
+    }
+    _onFocus();
+  }
+
+  @override
+  void dispose() {
+    widget.focusNode?.removeListener(_onFocus);
+    if (widget.focusNode != null) {
+      FocusManager.instance.removeHighlightModeListener(_onMode);
+    }
+    super.dispose();
+  }
+
+  bool _ringNow() =>
+      (widget.focusNode?.hasPrimaryFocus ?? false) &&
+      FocusManager.instance.highlightMode == FocusHighlightMode.traditional;
+
+  void _onFocus() {
+    final ring = _ringNow();
+    if (ring != _ring && mounted) setState(() => _ring = ring);
+  }
+
+  void _onMode(FocusHighlightMode _) => _onFocus();
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent e) {
+    final act = widget.onTap;
+    if (act == null || !NymFocusable.isActivateKey(e.logicalKey)) {
+      return KeyEventResult.ignored;
+    }
+    if (e is KeyDownEvent) act();
+    return KeyEventResult.handled;
+  }
 
   ({Color fill, Color border, Color fg, Color? glow}) _palette(
       NymColors c, bool hovered) {
@@ -163,7 +226,29 @@ class _DialogButtonState extends State<DialogButton> {
         ),
       ),
     );
-    final btn = HitSlop(child: body);
+    Widget btn = HitSlop(child: body);
+    final node = widget.focusNode;
+    if (node != null) {
+      btn = Focus(
+        focusNode: node,
+        autofocus: widget.autofocus,
+        canRequestFocus: enabled,
+        onKeyEvent: _onKey,
+        child: DecoratedBox(
+          position: DecorationPosition.foreground,
+          decoration: _ring
+              ? BoxDecoration(
+                  borderRadius: DialogButtonMetrics.radius,
+                  border: Border.all(
+                    color: c.secondary,
+                    width: NymFocusable.ringWidth,
+                  ),
+                )
+              : const BoxDecoration(),
+          child: btn,
+        ),
+      );
+    }
     return widget.fullWidth
         ? SizedBox(width: double.infinity, child: btn)
         : btn;

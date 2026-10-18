@@ -407,7 +407,7 @@ Object.assign(NYM.prototype, {
                     strong.appendChild(document.createTextNode(' '));
                     const badge = document.createElement('span');
                     badge.className = 'verified-badge';
-                    badge.title = isDev ? this.verifiedDeveloper.title : 'Nymchat Bot';
+                    badge.dataset.tip = isDev ? this.verifiedDeveloper.title : 'Nymchat Bot';
                     badge.textContent = '✓';
                     strong.appendChild(badge);
                 }
@@ -501,13 +501,14 @@ Object.assign(NYM.prototype, {
 
         const channelMap = new Map(); // geohash -> { name, messageCount, isJoined, isCurrent }
         const currentKey = this.currentGeohash || this.currentChannel;
+        const shownCount = (msgs) => (typeof this._visibleCount === 'function' ? this._visibleCount(msgs || []) : (msgs || []).length);
 
         this.messages.forEach((msgs, key) => {
             if (key.startsWith('#')) {
                 const name = key.substring(1);
                 channelMap.set(name, {
                     name,
-                    messageCount: msgs.length,
+                    messageCount: shownCount(msgs),
                     isJoined: this.userJoinedChannels.has(name) || this.channels.has(name),
                     isCurrent: name === currentKey
                 });
@@ -516,7 +517,7 @@ Object.assign(NYM.prototype, {
 
         this.channels.forEach((value, key) => {
             if (!channelMap.has(key)) {
-                const msgCount = (this.messages.get(`#${key}`) || []).length;
+                const msgCount = shownCount(this.messages.get(`#${key}`));
                 channelMap.set(key, {
                     name: key,
                     messageCount: msgCount,
@@ -528,7 +529,7 @@ Object.assign(NYM.prototype, {
 
         this.commonGeohashes.forEach(g => {
             if (!channelMap.has(g)) {
-                const msgCount = (this.messages.get(`#${g}`) || []).length;
+                const msgCount = shownCount(this.messages.get(`#${g}`));
                 channelMap.set(g, {
                     name: g,
                     messageCount: msgCount,
@@ -544,7 +545,7 @@ Object.assign(NYM.prototype, {
         const cfCtx = CF && typeof this._cfCtx === 'function' ? this._cfCtx() : null;
         let matches = Array.from(channelMap.values())
             .filter(ch => validChannelPattern.test(ch.name) && ch.name.toLowerCase().includes(searchLower) &&
-                !(cfCtx && CF.channelBlocked(cfCtx, ch.name)));
+                !(cfCtx && CF.channelHidden(cfCtx, ch.name)));
 
         matches.sort((a, b) => {
             if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;

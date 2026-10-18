@@ -82,6 +82,7 @@ class EventToastCenter extends ChangeNotifier {
   EventToastState _state = const EventToastState();
   List<EventToastEvent> _held = [];
   final Map<String, EventToastTarget> _targets = {};
+  final Map<String, EventToastEvent> _events = {};
   int _seq = 0;
   int _backlogAt = 0;
   int _backlogFirst = 0;
@@ -93,6 +94,7 @@ class EventToastCenter extends ChangeNotifier {
   EventToastSettings Function()? settingsOf;
   EventToastPrefs Function()? prefsOf;
   bool Function(String token)? stillUnread;
+  bool Function(String token)? hiddenOf;
   bool Function(EventToastTarget target)? seesOf;
   List<String> Function()? columnKeys;
   void Function(EventToastTarget target, List<EventToastTarget> all)? onOpen;
@@ -125,6 +127,7 @@ class EventToastCenter extends ChangeNotifier {
   }
 
   EventToastDecision consider(EventToastEvent ev) {
+    _events[ev.eventId] = ev;
     final d = EventToasts.decide(ev, currentView(), settings);
     if (d.toast == 'show') {
       _apply(EventToasts.add(_state, ev, _now()));
@@ -132,8 +135,64 @@ class EventToastCenter extends ChangeNotifier {
       _hold(ev, d.reason);
     } else {
       _targets.remove(ev.eventId);
+      _events.remove(ev.eventId);
     }
     return d;
+  }
+
+  void pruneHidden() {
+    final hidden = hiddenOf;
+    if (hidden == null) return;
+    var heldChanged = false;
+    if (_held.isNotEmpty) {
+      final keep = <EventToastEvent>[];
+      for (final e in _held) {
+        if (hidden(e.eventId)) {
+          heldChanged = true;
+          _targets.remove(e.eventId);
+          _events.remove(e.eventId);
+          _heldAt.remove(e.eventId);
+          _heldForSheet.remove(e.eventId);
+        } else {
+          keep.add(e);
+        }
+      }
+      _held = keep;
+    }
+    var changed = false;
+    final toasts = <EventToast>[];
+    for (final t in _state.toasts) {
+      final events = [
+        for (final tok in t.events)
+          if (!hidden(tok)) tok,
+      ];
+      if (events.length == t.events.length) {
+        toasts.add(t);
+        continue;
+      }
+      changed = true;
+      if (events.isEmpty) continue;
+      final kept = [
+        for (final tok in events)
+          if (_events[tok] != null) _events[tok]!,
+      ];
+      final keys = <String>[];
+      for (final e in kept) {
+        if (!keys.contains(e.key)) keys.add(e.key);
+      }
+      toasts.add(t.copyWith(
+        count: events.length,
+        events: events,
+        keys: keys.isEmpty ? t.keys : keys,
+        last: kept.isEmpty ? t.last : kept.last,
+      ));
+    }
+    if (!changed && !heldChanged) return;
+    if (changed) {
+      _state = EventToastState(toasts: toasts, seq: _state.seq);
+      _arm();
+    }
+    notifyListeners();
   }
 
   final Map<String, int> _heldAt = {};
@@ -228,6 +287,7 @@ class EventToastCenter extends ChangeNotifier {
                 now - (_heldAt[e.eventId] ?? now) <=
                     EventToastConfig.durationMs) &&
             (stillUnread?.call(e.eventId) ?? true) &&
+            !(hiddenOf?.call(e.eventId) ?? false) &&
             EventToasts.decide(e.asLive(seen: sees(_targets[e.eventId]!)),
                         calm, s)
                     .toast ==
@@ -237,7 +297,10 @@ class EventToastCenter extends ChangeNotifier {
     for (final e in held) {
       _heldAt.remove(e.eventId);
       _heldForSheet.remove(e.eventId);
-      if (!fresh.contains(e)) _targets.remove(e.eventId);
+      if (!fresh.contains(e)) {
+        _targets.remove(e.eventId);
+        _events.remove(e.eventId);
+      }
     }
     if (fresh.isNotEmpty) _apply(EventToasts.addMany(_state, fresh, _now()));
   }
@@ -313,6 +376,7 @@ class EventToastCenter extends ChangeNotifier {
     _heldForSheet.clear();
     lastActAt = 0;
     _targets.clear();
+    _events.clear();
     notifyListeners();
   }
 
@@ -323,6 +387,7 @@ class EventToastCenter extends ChangeNotifier {
       for (final e in _held) e.eventId,
     };
     _targets.removeWhere((k, _) => !keep.contains(k));
+    _events.removeWhere((k, _) => !keep.contains(k));
   }
 
   void _arm() {

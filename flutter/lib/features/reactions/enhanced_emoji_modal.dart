@@ -327,6 +327,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
   Widget _unicodeCell(String emoji) {
     return _EmojiOptionCell(
       onTap: () => widget.onSelect(emoji),
+      tip: (_emojiToNames[emoji] ?? const <String>[]).join(', '),
       child: Text(
         emoji,
         style: const TextStyle(fontSize: 23, height: 1.1),
@@ -339,6 +340,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
   Widget _customCell(String shortcode, String url) {
     return _EmojiOptionCell(
       onTap: () => widget.onSelect(':$shortcode:'),
+      tip: ':$shortcode:',
       child: InlineNetworkImage(
         url: proxiedMedia(url, emoji: true),
         width: 30,
@@ -512,9 +514,10 @@ class _FavStar extends StatelessWidget {
 
 /// Emoji cell that fills and scales to 1.15 on hover.
 class _EmojiOptionCell extends StatefulWidget {
-  const _EmojiOptionCell({required this.onTap, required this.child});
+  const _EmojiOptionCell({required this.onTap, required this.child, this.tip = ''});
   final VoidCallback onTap;
   final Widget child;
+  final String tip;
 
   @override
   State<_EmojiOptionCell> createState() => _EmojiOptionCellState();
@@ -525,7 +528,7 @@ class _EmojiOptionCellState extends State<_EmojiOptionCell> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
+    final cell = MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: Material(
@@ -550,5 +553,7 @@ class _EmojiOptionCellState extends State<_EmojiOptionCell> {
         ),
       ),
     );
+    if (widget.tip.isEmpty) return cell;
+    return NymTooltip(message: widget.tip, child: cell);
   }
 }

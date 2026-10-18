@@ -14,7 +14,7 @@ import '../../widgets/nym_icons.dart';
 import '../../widgets/sidebar/pm_context_menu.dart';
 import '../i18n/i18n.dart';
 import '../identity/modal_chrome.dart';
-import '../identity/deleted_notice.dart' show dimNymSuffixes;
+import '../identity/deleted_notice.dart' show dimNymLabel;
 import '../settings/settings_widgets.dart' show SettingsToggleRow;
 import '../search/unified_search_panel.dart' show nymSuffixStyle;
 import 'chat_lock.dart';
@@ -215,7 +215,7 @@ String chatLockLabel(WidgetRef ref, String lockKey) {
   }
   if (p.kind == 'group') {
     for (final g in ref.read(groupsProvider)) {
-      if (g.id.toLowerCase() == p.id) return g.name.isEmpty ? tr('Group') : g.name;
+      if (g.id.toLowerCase() == p.id) return app.groupLabel(g);
     }
     return tr('Group');
   }
@@ -398,7 +398,7 @@ class _LockedRow extends ConsumerWidget {
                     Expanded(
                       child: Text.rich(
                         lockParse(lockKey)?.kind == 'dm'
-                            ? dimNymSuffixes(
+                            ? dimNymLabel(
                                 chatLockLabel(ref, lockKey),
                                 nymSuffixStyle(
                                     TextStyle(color: c.text, fontSize: 14),

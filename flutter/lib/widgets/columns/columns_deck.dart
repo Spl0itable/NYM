@@ -371,20 +371,26 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
           pmOnly ? saved.where((d) => d.kind != _ColumnKind.channel) : saved);
     }
     final lock = ref.read(chatLockProvider);
-    _columns.removeWhere((d) => lock.blocks(d.storageKey));
+    _columns.removeWhere((d) => lock.blocks(d.storageKey) || _descHidden(d));
 
     if (_columns.isEmpty) {
       if (!pmOnly) {
-        final nymchat = channels.firstWhere(
+        final open = channels
+            .where((ch) => !_descHidden(_ColumnDesc.channel(ch.channel, ch.geohash)))
+            .toList();
+        final nymchat = open.firstWhere(
           (ch) => ch.key == kDefaultChannel,
-          orElse: () => channels.isNotEmpty
-              ? channels.first
+          orElse: () => open.isNotEmpty
+              ? open.first
               : ChannelEntry(channel: kDefaultChannel),
         );
         _columns.add(_ColumnDesc.channel(nymchat.channel, nymchat.geohash));
       }
-      final openPms =
-          pms.where((p) => !lock.blocks('pm-${p.pubkey.toLowerCase()}')).toList();
+      final openPms = pms
+          .where((p) =>
+              !lock.blocks('pm-${p.pubkey.toLowerCase()}') &&
+              !_descHidden(_ColumnDesc.pm(p.pubkey, nym: p.nym)))
+          .toList();
       if (openPms.isNotEmpty) {
         // Already most-recent-first.
         _columns.add(_ColumnDesc.pm(openPms.first.pubkey, nym: openPms.first.nym));
@@ -422,6 +428,24 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
           .read(nostrControllerProvider)
           .subscribeChannelColumn(desc.channel, geohash: desc.geohash);
     });
+  }
+
+  bool _descHidden(_ColumnDesc d, {bool includeHidden = false}) {
+    final app = ref.read(appStateProvider);
+    switch (d.kind) {
+      case _ColumnKind.channel:
+        final key = d.geohash.isNotEmpty ? d.geohash : d.channel;
+        return includeHidden
+            ? app.isChannelHidden(key)
+            : app.isChannelBlockedKey(key);
+      case _ColumnKind.pm:
+        if (d.pubkey.isEmpty) return false;
+        return includeHidden
+            ? app.isPersonHidden(d.pubkey, d.nym.isEmpty ? null : d.nym)
+            : app.blockedUsers.contains(d.pubkey);
+      case _ColumnKind.group:
+        return false;
+    }
   }
 
   void _removeColumn(_ColumnDesc desc) {
@@ -886,7 +910,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     if (!pmOnly) {
       for (final ch in channels) {
         final d = _ColumnDesc.channel(ch.channel, ch.geohashKey);
-        if (open.contains(d)) continue;
+        if (open.contains(d) || _descHidden(d, includeHidden: true)) continue;
         out.add((
           desc: d,
           label: '#${ch.geohashKey.isNotEmpty ? ch.geohashKey : ch.channel}',
@@ -896,10 +920,12 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     }
     for (final pm in pms) {
       final d = _ColumnDesc.pm(pm.pubkey, nym: pm.nym);
-      if (open.contains(d)) continue;
+      if (open.contains(d) || _descHidden(d)) continue;
       out.add((
         desc: d,
-        label: pm.nym.isNotEmpty ? pm.nym : tr('Private message'),
+        label: pm.nym.isNotEmpty
+            ? '${stripPubkeySuffix(pm.nym)}#${getPubkeySuffix(pm.pubkey)}'
+            : tr('Private message'),
         icon: _pickerRowIcon(context, d),
       ));
     }
@@ -908,7 +934,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       if (open.contains(d)) continue;
       out.add((
         desc: d,
-        label: g.name.isNotEmpty ? g.name : tr('Group chat'),
+        label: ref.read(appStateProvider).groupLabel(g, tr('Group chat')),
         icon: _pickerRowIcon(context, d),
       ));
     }
@@ -932,7 +958,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
         );
       case _ColumnKind.group:
         final g = app.groups.where((g) => g.id == d.groupId).toList();
-        final avatar = g.isNotEmpty ? g.first.avatar : null;
+        final avatar = g.isNotEmpty ? app.groupAvatar(g.first) : null;
         if (avatar != null && avatar.isNotEmpty) {
           return NymAvatar(
             seed: _columnTitle(context, d),
@@ -1055,8 +1081,8 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
                 : (app.users[d.pubkey]?.nym ?? tr('Private message')));
       case _ColumnKind.group:
         final g = app.groups.where((g) => g.id == d.groupId).toList();
-        return (g.isNotEmpty && g.first.name.isNotEmpty)
-            ? g.first.name
+        return g.isNotEmpty
+            ? app.groupLabel(g.first, tr('Group chat'))
             : tr('Group chat');
     }
   }
@@ -1127,7 +1153,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
         );
       case _ColumnKind.group:
         final g = app.groups.where((g) => g.id == d.groupId).toList();
-        final avatar = g.isNotEmpty ? g.first.avatar : null;
+        final avatar = g.isNotEmpty ? app.groupAvatar(g.first) : null;
         if (avatar != null && avatar.isNotEmpty) {
           return NymAvatar(
             seed: _columnTitle(context, d),
@@ -1162,6 +1188,18 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       final lock = ref.read(chatLockProvider);
       for (final d in List.of(_columns)) {
         if (lock.blocks(d.storageKey)) _doRemoveColumn(d);
+      }
+    });
+    ref.listen<int>(contentFilterRevisionProvider, (_, _) {
+      for (final d in List.of(_columns)) {
+        if (_descHidden(d)) _doRemoveColumn(d);
+      }
+    });
+    ref.listen<bool>(settingsProvider.select((s) => s.groupChatPMOnlyMode),
+        (_, on) {
+      if (!on) return;
+      for (final d in List.of(_columns)) {
+        if (d.kind == _ColumnKind.channel) _doRemoveColumn(d);
       }
     });
 
@@ -3047,7 +3085,8 @@ class _ScrollBottomButtonState extends State<_ScrollBottomButton> {
       offset: const Offset(0, 4),
       blurRadius: 16,
     );
-    return MouseRegion(
+    final label = tr('Scroll to bottom');
+    final body = MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
@@ -3071,6 +3110,11 @@ class _ScrollBottomButtonState extends State<_ScrollBottomButton> {
           ),
         ),
       ),
+    );
+    return NymTooltip(
+      message: label,
+      excludeFromSemantics: true,
+      child: Semantics(button: true, label: label, child: body),
     );
   }
 }

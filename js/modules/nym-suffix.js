@@ -74,6 +74,12 @@
         return out;
     }
 
+    function inLink(s, at) {
+        let i = at;
+        while (i > 0 && !/\s/.test(s.charAt(i - 1))) i--;
+        return s.slice(i, at).indexOf('/') >= 0;
+    }
+
     function ranges(text, knownSuffixes) {
         const s = String(text == null ? '' : text);
         const out = [];
@@ -82,12 +88,13 @@
             const end = m.index + m[0].length;
             out.push([end - 5, end]);
         }
-        const k = knownSet(knownSuffixes);
-        if (k.size) {
+        const any = knownSuffixes === '*';
+        const k = any ? null : knownSet(knownSuffixes);
+        if (any || k.size) {
             for (const m of s.matchAll(GLUED)) {
-                if (!k.has(m[1].toLowerCase())) continue;
+                if (!any && !k.has(m[1].toLowerCase())) continue;
                 const at = m.index;
-                if (out.some((r) => r[0] === at)) continue;
+                if (inLink(s, at) || out.some((r) => r[0] === at)) continue;
                 out.push([at, at + 5]);
             }
         }
@@ -118,7 +125,7 @@
                 return part;
             }
             if (skip || part.indexOf('#') < 0) return part;
-            return part.replace(GLUED, (all, hex) => (any || k.has(hex.toLowerCase()) ? '<span class="' + CLASS + '">' + all + '</span>' : all));
+            return part.replace(GLUED, (all, hex, at) => (!inLink(part, at) && (any || k.has(hex.toLowerCase())) ? '<span class="' + CLASS + '">' + all + '</span>' : all));
         }).join('');
     }
 

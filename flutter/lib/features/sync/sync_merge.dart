@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:math';
+
 import '../calls/call_history.dart';
 import '../chat_nav/chat_nav.dart' show markMax, markStoreNorm;
 
@@ -30,6 +33,47 @@ const Map<String, List<String>> kStampedPrefs = {
   'keepCallHistory': ['keepCallHistory'],
   'largeTargets': ['largeTargets'],
   'highContrast': ['highContrast'],
+  'theme': ['theme'],
+  'colorMode': ['colorMode'],
+  'uiLanguage': ['uiLanguage'],
+  'chatLayout': ['chatLayout'],
+  'chatViewMode': ['chatViewMode'],
+  'columnsWallpaper': ['columnsWallpaper'],
+  'wallpaperType': ['wallpaperType', 'wallpaperCustomUrl'],
+  'transparencyEnabled': ['transparencyEnabled'],
+  'textSize': ['textSize'],
+  'showTimestamps': ['showTimestamps'],
+  'timeFormat': ['timeFormat'],
+  'dateFormat': ['dateFormat'],
+  'nickStyle': ['nickStyle'],
+  'sound': ['sound'],
+  'blurOthersImages': ['blurOthersImages'],
+  'autoscroll': ['autoscroll'],
+  'dmForwardSecrecyEnabled': ['dmForwardSecrecyEnabled'],
+  'dmTTLSeconds': ['dmTTLSeconds'],
+  'readReceiptsScope': ['readReceiptsScope', 'readReceiptsEnabled'],
+  'typingIndicatorsScope': ['typingIndicatorsScope', 'typingIndicatorsEnabled'],
+  'acceptPMs': ['acceptPMs'],
+  'acceptCalls': ['acceptCalls'],
+  'showStatus': ['showStatus'],
+  'powDifficulty': ['powDifficulty'],
+  'appVerifiedFilter': ['appVerifiedFilter'],
+  'filterPacks': ['filterPacks'],
+  'remotePanic': ['remotePanic'],
+  'groupChatPMOnlyMode': ['groupChatPMOnlyMode'],
+  'threadsEnabled': ['threadsEnabled'],
+  'translateLanguage': ['translateLanguage'],
+  'gesturesEnabled': ['gesturesEnabled'],
+  'swipeLeftAction': ['swipeLeftAction'],
+  'swipeRightAction': ['swipeRightAction'],
+  'swipeThreshold': ['swipeThreshold'],
+  'sortByProximity': ['sortByProximity'],
+  'pinnedLandingChannel': ['pinnedLandingChannel'],
+  'hideNonPinned': ['hideNonPinned'],
+  'lowDataMode': ['lowDataMode'],
+  'backgroundConnectivity': ['backgroundConnectivity', 'backgroundConnectivityChosen'],
+  'cachePMs': ['cachePMs'],
+  'addedRelays': ['addedRelays'],
 };
 
 final RegExp _event = RegExp(r'^[0-9a-f]{16}$');
@@ -46,6 +90,112 @@ int _cmp(String a, String b) => a.compareTo(b);
 
 bool prefTake(Object? localTs, Object? remoteTs) =>
     _int(remoteTs) >= _int(localTs);
+
+class PrefGateResult {
+  const PrefGateResult(this.payload, this.take, this.skipped);
+
+  final Map<String, dynamic> payload;
+  final Map<String, int> take;
+  final bool skipped;
+}
+
+String _fpCanon(Object? v) {
+  if (v == null) return 'null';
+  if (v is num) {
+    if (!v.isFinite) return 'null';
+    if (v is int) return '$v';
+    return v == v.truncateToDouble() ? '${v.toInt()}' : jsonEncode(v);
+  }
+  if (v is bool) return v ? 'true' : 'false';
+  if (v is String) return jsonEncode(v);
+  if (v is List) return '[${v.map(_fpCanon).join(',')}]';
+  if (v is Map) {
+    final keys = v.keys.map((k) => '$k').toList()..sort();
+    return '{${keys.map((k) => '${jsonEncode(k)}:${_fpCanon(v[k])}').join(',')}}';
+  }
+  return 'null';
+}
+
+String prefFp(Object? payload, List<String> keys) {
+  final src = _obj(payload);
+  var h = 0x811c9dc5;
+  for (final b in utf8.encode(_fpCanon([for (final k in keys) src[k]]))) {
+    h = h ^ b;
+    h = (h * 0x193 + ((h << 24) & 0xFFFFFFFF)) & 0xFFFFFFFF;
+  }
+  return h.toRadixString(16).padLeft(8, '0');
+}
+
+Map<String, dynamic> prefRowStamp(
+  Object? payload,
+  Object? rowTs, [
+  Map<String, List<String>> stamped = kStampedPrefs,
+]) {
+  final out = Map<String, dynamic>.of(_obj(payload));
+  final at = max(0, _int(rowTs));
+  stamped.forEach((name, keys) {
+    if (!keys.any(out.containsKey)) return;
+    final ts = '${name}Ts';
+    final fp = '${name}Fp';
+    if (out.containsKey(ts) &&
+        (!out.containsKey(fp) || out[fp] == prefFp(out, keys))) {
+      return;
+    }
+    if (!out.containsKey(ts) && at <= 0) return;
+    out[ts] = at;
+    out.remove(fp);
+  });
+  return out;
+}
+
+PrefGateResult prefGate(
+  Object? payload,
+  Object? stamps, [
+  Map<String, List<String>> stamped = kStampedPrefs,
+  Object? rowTs,
+]) {
+  final src = prefRowStamp(payload, rowTs, stamped);
+  final local = _obj(stamps);
+  final out = Map<String, dynamic>.of(src);
+  final take = <String, int>{};
+  var skipped = false;
+  stamped.forEach((name, keys) {
+    if (!keys.any(src.containsKey)) return;
+    final remote = src['${name}Ts'];
+    if (prefTake(local[name], remote)) {
+      take[name] = _int(remote);
+      return;
+    }
+    for (final k in keys) {
+      out.remove(k);
+    }
+    out.remove('${name}Ts');
+    out.remove('${name}Fp');
+    skipped = true;
+  });
+  return PrefGateResult(out, take, skipped);
+}
+
+Map<String, dynamic> prefApply(
+  PrefGateResult gate,
+  Iterable<String> queued, [
+  Map<String, List<String>> stamped = kStampedPrefs,
+]) {
+  final hold = queued.toSet();
+  if (hold.isEmpty) return gate.payload;
+  final decided = <String>{};
+  gate.take.forEach((name, ts) {
+    final keys = stamped[name];
+    if (ts <= 0 || keys == null) return;
+    decided
+      ..addAll(keys)
+      ..add('${name}Ts');
+  });
+  return {
+    for (final e in gate.payload.entries)
+      if (!hold.contains(e.key) || decided.contains(e.key)) e.key: e.value,
+  };
+}
 
 Map<String, int> tsMapNorm(Object? raw, [int? cap]) {
   final rows = <MapEntry<String, int>>[];
@@ -155,6 +305,7 @@ Map<String, Object>? reminderNorm(Object? r) {
     return null;
   }
   final t = _int(o['t']);
+  final by = o['by'];
   return {
     'offset': offset,
     'start': start,
@@ -162,6 +313,7 @@ Map<String, Object>? reminderNorm(Object? r) {
     'groupId': o['groupId'] is String ? o['groupId'] as String : '',
     'fired': o['fired'] == true,
     't': t < 0 ? 0 : t,
+    if (by is String && _hex64.hasMatch(by.toLowerCase())) 'by': by.toLowerCase(),
   };
 }
 

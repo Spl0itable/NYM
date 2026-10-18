@@ -43,7 +43,7 @@ Object.assign(NYM.prototype, {
 
     showNotification(title, body, channelInfo = null, timestamp = null) {
         const origBody = typeof body === 'string' ? body : '';
-        const rawBody = this._notifCleanBody(body);
+        const rawBody = this._notifCleanBody(body, this._notifQuoted(channelInfo));
         body = this._notifPreviewText(rawBody);
         if (!this.notificationsEnabled) return;
 
@@ -73,13 +73,6 @@ Object.assign(NYM.prototype, {
         const ts = _clampNotifTs(timestamp, receivedAt);
         const eventId = channelInfo?.eventId || '';
 
-        // Live and replay paths can both call this for the same event.
-        const isDupe = this._notifIsDupe({ eventId, title: titleToShow, body, sender: channelInfo?.pubkey || '', ts, exact: !!lockedChat });
-        if (isDupe) {
-            this._updateNotificationBadge();
-            return;
-        }
-
         const entry = {
             title: titleToShow,
             body: body,
@@ -90,8 +83,14 @@ Object.assign(NYM.prototype, {
             senderPubkey: channelInfo?.pubkey || '',
             eventId: eventId || undefined
         };
+        if (eventId && channelInfo && channelInfo.stableId === true) entry.stableId = true;
         if (lockedChat) entry.locked = true;
         entry.live = true;
+
+        if (this._notifAbsorb(entry)) {
+            this._updateNotificationBadge();
+            return;
+        }
         const previouslySeen = this._isNotificationSeen(entry);
         const seenNow = this._notifSees(channelInfo);
         entry.viewed = previouslySeen
@@ -124,15 +123,19 @@ Object.assign(NYM.prototype, {
                 sender: senderPubkey,
                 body: lockedChat ? '' : origBody,
                 channel: this._notifChannelKey(channelInfo),
-                subject: channelInfo && typeof channelInfo.subject === 'string' ? channelInfo.subject : ''
+                subject: channelInfo && typeof channelInfo.subject === 'string' ? channelInfo.subject : '',
+                quoted: this._notifQuoted(channelInfo)
             };
+            entry.osRef = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+            this._saveNotificationHistorySoon();
+            const posted = entry.osRef;
             this._notifSystemShow(this._notifSystemTitle(entry), {
                 body: this._notifSystemBody(entry),
                 icon: NYM_NOTIFICATION_ICON,
                 tag: this._notifTag(channelInfo),
                 renotify: true,
                 requireInteraction: false,
-                data: route ? { nymRoute: route } : {}
+                data: route ? { nymRoute: route, nymEntry: posted } : { nymEntry: posted }
             }, route, nymFilter);
         }
 
@@ -202,7 +205,8 @@ Object.assign(NYM.prototype, {
             nym,
             body: typeof f.body === 'string' ? f.body : '',
             channel: typeof f.channel === 'string' ? f.channel : '',
-            subject: typeof f.subject === 'string' ? f.subject : ''
+            subject: typeof f.subject === 'string' ? f.subject : '',
+            quoted: this._notifQuoted(f)
         });
     },
 
@@ -212,9 +216,11 @@ Object.assign(NYM.prototype, {
             if (!n) return false;
             const info = n._nymFilter || (byTag && n.tag ? byTag.get(n.tag) : null);
             if (info && this._notifFilterHidden(info)) return true;
+            const kept = !info && n.data && n.data.nymEntry ? this._notifPostedEntry(n.data.nymEntry) : null;
+            if (kept) return this._notifEntryHidden(kept);
             const r = n.data && n.data.nymRoute;
             if (!r || typeof r !== 'object') return false;
-            return this._notifFilterHidden({ sender: r.type === 'pm' ? (r.pubkey || '') : '', channel: this._notifChannelKey(r) });
+            return this._notifFilterHidden({ sender: typeof r.pubkey === 'string' ? r.pubkey : '', channel: this._notifChannelKey(r) });
         };
         if (Array.isArray(this._postedNotifications)) {
             this._postedNotifications = this._postedNotifications.filter((n) => {
@@ -235,6 +241,14 @@ Object.assign(NYM.prototype, {
                 }
             })
             .catch(() => { });
+    },
+
+    _notifPostedEntry(ref) {
+        if (typeof ref !== 'string' || !ref) return null;
+        for (const e of this.notificationHistory || []) {
+            if (e && e.osRef === ref) return e;
+        }
+        return null;
     },
 
     _notifSystemShow(title, opts, route, filterInfo) {
@@ -293,13 +307,26 @@ Object.assign(NYM.prototype, {
             } else if (r.sourceType === 'geohash' && r.sourceGeohash) {
                 this.switchChannel(r.sourceChannel, r.sourceGeohash);
             }
+            const key = this._notificationConvKey(r);
+            if (key) this._markConversationNotificationsSeen(key, Math.floor(Date.now() / 1000));
         }
     },
 
-    _notifCleanBody(body) {
+    _notifCleanBody(body, quoted) {
         const F = window.NymContentFilter;
         if (typeof body !== 'string' || !F || typeof this._cfCtx !== 'function') return body;
-        return F.stripBlockedQuotes(this._cfCtx(), body);
+        return F.stripBlockedQuotes(this._cfCtx(), body, Array.isArray(quoted) ? quoted : []);
+    },
+
+    _notifQuoted(info) {
+        const raw = info && Array.isArray(info.quoted) ? info.quoted : [];
+        const out = [];
+        for (const k of raw) {
+            const pk = typeof k === 'string' ? k.toLowerCase() : '';
+            if (/^[0-9a-f]{64}$/.test(pk) && !out.includes(pk)) out.push(pk);
+            if (out.length >= 4) break;
+        }
+        return out;
     },
 
     _notifChannelKey(info) {
@@ -324,13 +351,14 @@ Object.assign(NYM.prototype, {
             nym,
             body: typeof e.body === 'string' ? e.body : '',
             channel: this._notifChannelKey(info) || (typeof e.channel === 'string' ? e.channel : ''),
-            subject: typeof info.subject === 'string' ? info.subject : (typeof e.subject === 'string' ? e.subject : '')
+            subject: typeof info.subject === 'string' ? info.subject : (typeof e.subject === 'string' ? e.subject : ''),
+            quoted: this._notifQuoted(info).length ? this._notifQuoted(info) : this._notifQuoted(e)
         });
     },
 
     _addNotificationToHistory(title, body, channelInfo, timestamp) {
         const origBody = typeof body === 'string' ? body : '';
-        const rawBody = this._notifCleanBody(body);
+        const rawBody = this._notifCleanBody(body, this._notifQuoted(channelInfo));
         body = this._notifPreviewText(rawBody);
         if (!this.notificationsEnabled) return;
 
@@ -359,8 +387,6 @@ Object.assign(NYM.prototype, {
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         if (ts < cutoff24h) return;
         const eventId = channelInfo?.eventId || '';
-        const isDupe = this._notifIsDupe({ eventId, title: titleToShow, body, sender: channelInfo?.pubkey || '', ts, exact: !!lockedChat });
-        if (isDupe) return;
         const entry = {
             title: titleToShow,
             body: body,
@@ -371,7 +397,12 @@ Object.assign(NYM.prototype, {
             senderPubkey: channelInfo?.pubkey || '',
             eventId: eventId || undefined
         };
+        if (eventId && channelInfo && channelInfo.stableId === true) entry.stableId = true;
         if (lockedChat) entry.locked = true;
+        if (this._notifAbsorb(entry)) {
+            this._updateNotificationBadge();
+            return;
+        }
         entry.viewed = this._isNotificationSeen(entry)
             || receivedAt <= (this.notificationLastReadTime || 0)
             || this._notificationAlreadySeen(channelInfo, ts);
@@ -381,14 +412,201 @@ Object.assign(NYM.prototype, {
         this._saveNotificationHistorySoon();
         this._updateNotificationBadge();
         this._refreshNotificationsModalIfOpen();
-        if (!entry.viewed && typeof this._etConsider === 'function') this._etConsider(entry, true);
+        if (!entry.viewed && !(channelInfo && channelInfo.noBanner === true) && typeof this._etConsider === 'function') this._etConsider(entry, true);
     },
 
-    _notifIsDupe(a) {
+    _notifAlertKey(n) {
         const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
-        return (this.notificationHistory || []).some(n => (V ? V.sameAlert(a, {
-            eventId: n.eventId || '', title: n.title, body: n.body, sender: n.senderPubkey || '', ts: n.timestamp || 0
-        }) : !!(a.eventId && n.eventId === a.eventId)));
+        const e = n && typeof n === 'object' ? n : {};
+        const ci = e.channelInfo && typeof e.channelInfo === 'object' ? e.channelInfo : null;
+        const sender = e.senderPubkey || (ci && ci.pubkey) || '';
+        let type = '';
+        let route = '';
+        if (ci) {
+            type = typeof ci.type === 'string' ? ci.type : '';
+            if (type === 'pm') route = ci.pubkey || '';
+            else if (type === 'group') route = ci.groupId || String(ci.id || '').replace(/^group-/, '');
+            else if (type === 'geohash' || type === 'channel') route = ci.geohash || ci.channel || '';
+        } else {
+            type = typeof e.type === 'string' ? e.type : '';
+            route = typeof e.route === 'string' ? e.route : '';
+        }
+        const eventId = e.eventId || (ci && ci.eventId) || '';
+        return {
+            eventId,
+            stable: !!eventId && (e.stableId === true || !!(ci && ci.stableId === true && ci.eventId === eventId)),
+            title: e.title,
+            body: e.body,
+            sender,
+            ts: e.timestamp || 0,
+            exact: e.locked === true,
+            scope: V && typeof V.alertScope === 'function' ? V.alertScope(type, route, sender) : '',
+            typed: !!type && type !== 'message'
+        };
+    },
+
+    _notifSame(a, b) {
+        const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
+        if (V && typeof V.sameAlert === 'function') return V.sameAlert(a, b);
+        return !!(a.eventId && a.eventId === b.eventId);
+    },
+
+    _notifMergeEntries(a, b) {
+        const ka = this._notifAlertKey(a);
+        const kb = this._notifAlertKey(b);
+        const rank = (n, k) => (n.channelInfo ? 2 : 0) + (k.typed ? 1 : 0);
+        const base = rank(b, kb) > rank(a, ka) ? b : a;
+        const other = base === a ? b : a;
+        const pick = ka.stable ? ka : kb.stable ? kb : ka.eventId ? ka : kb;
+        if (pick.eventId) {
+            base.eventId = pick.eventId;
+            if (base.channelInfo && typeof base.channelInfo === 'object') base.channelInfo.eventId = pick.eventId;
+        }
+        if (pick.stable) base.stableId = true;
+        else delete base.stableId;
+        if (base.channelInfo && typeof base.channelInfo === 'object') {
+            if (pick.stable) base.channelInfo.stableId = true;
+            else delete base.channelInfo.stableId;
+        }
+        base.viewed = a.viewed === true || b.viewed === true;
+        if (!base.channelInfo && !this._notifAlertKey(base).typed && (other.type || other.channelInfo)) {
+            const info = other.channelInfo;
+            if (info) {
+                base.channelInfo = info;
+            } else {
+                for (const k of ['type', 'route', 'threadRoot']) if (typeof other[k] === 'string' && other[k]) base[k] = other[k];
+            }
+        }
+        if (!base.senderPubkey && other.senderPubkey) base.senderPubkey = other.senderPubkey;
+        return base;
+    },
+
+    _notifCollapse(list) {
+        const arr = Array.isArray(list) ? list.filter((n) => n && typeof n === 'object') : [];
+        const order = arr.map((n, i) => ({ n, i }))
+            .sort((p, q) => ((p.n.timestamp || 0) - (q.n.timestamp || 0)) || (p.i - q.i));
+        const kept = [];
+        let changed = arr.length !== (Array.isArray(list) ? list.length : 0);
+        for (const { n } of order) {
+            const k = this._notifAlertKey(n);
+            let j = -1;
+            for (let m = 0; m < kept.length; m++) {
+                if (this._notifSame(kept[m].k, k)) { j = m; break; }
+            }
+            if (j < 0) {
+                kept.push({ n, k });
+                continue;
+            }
+            const merged = this._notifMergeEntries(kept[j].n, n);
+            kept[j] = { n: merged, k: this._notifAlertKey(merged) };
+            changed = true;
+        }
+        return { list: kept.map((x) => x.n).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)), changed };
+    },
+
+    _notifAbsorb(entry) {
+        const list = this.notificationHistory || [];
+        const k = this._notifAlertKey(entry);
+        let i = -1;
+        for (let m = 0; m < list.length; m++) {
+            if (list[m] && this._notifSame(this._notifAlertKey(list[m]), k)) { i = m; break; }
+        }
+        if (i < 0) return false;
+        const cur = list[i];
+        const before = JSON.stringify(cur);
+        const merged = this._notifMergeEntries(cur, entry);
+        list[i] = merged;
+        if (JSON.stringify(merged) !== before) {
+            if (merged.viewed) this._rememberNotificationSeen(merged);
+            this._saveNotificationHistorySoon();
+            this._refreshNotificationsModalIfOpen();
+        }
+        return true;
+    },
+
+    _notifRekey(oldId, newId, body, quoted) {
+        const olds = (Array.isArray(oldId) ? oldId : [oldId]).filter((id) => id && id !== newId);
+        if (!olds.length || !newId || !Array.isArray(this.notificationHistory)) return false;
+        let hit = false;
+        for (const n of this.notificationHistory) {
+            if (!n || n.stableId === true) continue;
+            if (olds.indexOf(n.eventId || n.channelInfo?.eventId || '') < 0) continue;
+            n.eventId = newId;
+            n.stableId = true;
+            if (n.channelInfo && typeof n.channelInfo === 'object') {
+                n.channelInfo.eventId = newId;
+                n.channelInfo.stableId = true;
+            }
+            const keys = this._notifQuoted({ quoted });
+            if (keys.length && n.channelInfo && typeof n.channelInfo === 'object') n.channelInfo.quoted = keys;
+            else if (keys.length && !n.channelInfo) n.quoted = keys;
+            const held = this._notifQuoted(n.channelInfo).length ? this._notifQuoted(n.channelInfo) : this._notifQuoted(n);
+            if (typeof body === 'string' && body && n.locked !== true) n.body = this._notifPreviewText(this._notifCleanBody(body, keys.length ? keys : held));
+            if (n.viewed) this._rememberNotificationSeen(n, false);
+            hit = true;
+        }
+        if (!hit) return false;
+        this.notificationHistory = this._notifCollapse(this.notificationHistory).list;
+        this._saveSeenNotificationKeys();
+        this._saveNotificationHistorySoon();
+        this._updateNotificationBadge();
+        this._refreshNotificationsModalIfOpen();
+        return true;
+    },
+
+    _mergeSyncedNotificationHistory(list) {
+        if (!Array.isArray(list) || list.length === 0) return false;
+        if (!Array.isArray(this.notificationHistory)) this.notificationHistory = [];
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        const lastRead = this.notificationLastReadTime || 0;
+        const incoming = [];
+        for (const n of list) {
+            if (!n || typeof n !== 'object' || typeof n.timestamp !== 'number') continue;
+            let ts = n.timestamp;
+            if (typeof n.receivedAt === 'number' && n.receivedAt > 0 && ts > n.receivedAt) ts = n.receivedAt;
+            if (ts <= cutoff) continue;
+            const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
+            if (pk && this.blockedUsers && this.blockedUsers.has(pk)) continue;
+            const evId = n.eventId || n.channelInfo?.eventId || '';
+            if (evId.indexOf('missed-call-') === 0 && typeof this._callStatus === 'function'
+                && this._callStatus(evId.slice(12)) === 'answered') continue;
+            const observedAt = (typeof n.receivedAt === 'number' && n.receivedAt > 0) ? n.receivedAt : ts;
+            const entry = {
+                title: n.title || '',
+                body: n.body || '',
+                channelInfo: n.channelInfo || null,
+                timestamp: ts,
+                receivedAt: observedAt,
+                senderNym: n.senderNym || '',
+                senderPubkey: pk,
+                eventId: evId || undefined
+            };
+            if (!entry.channelInfo) {
+                for (const k of ['type', 'route', 'threadRoot']) if (typeof n[k] === 'string' && n[k]) entry[k] = n[k];
+                const keys = this._notifQuoted(n);
+                if (keys.length) entry.quoted = keys;
+            }
+            if (evId && n.stableId === true) entry.stableId = true;
+            if (n.locked === true) entry.locked = true;
+            entry.viewed = !!n.viewed || observedAt <= lastRead || this._isNotificationSeen(entry);
+            incoming.push(entry);
+        }
+        if (incoming.length === 0) return false;
+        if (this._notifCollapse(JSON.parse(JSON.stringify(incoming))).changed) this._notifSyncRepairDue = true;
+        const before = JSON.stringify(this.notificationHistory);
+        const merged = this._notifCollapse(this.notificationHistory.concat(incoming)).list
+            .filter((n) => n.timestamp > cutoff);
+        let seenAdded = false;
+        for (const n of merged) {
+            if (n.viewed) seenAdded = this._rememberNotificationSeen(n, false) || seenAdded;
+        }
+        if (seenAdded) this._saveSeenNotificationKeys();
+        if (JSON.stringify(merged) === before) return false;
+        this.notificationHistory = merged;
+        this._saveNotificationHistory();
+        this._updateNotificationBadge();
+        this._refreshNotificationsModalIfOpen();
+        return true;
     },
 
     _notifReadTs(n) {
@@ -484,7 +702,12 @@ Object.assign(NYM.prototype, {
                 if (typeof n.receivedAt !== 'number' || n.receivedAt <= 0) continue;
                 n.timestamp = _clampNotifTs(n.timestamp, n.receivedAt);
             }
-            return parsed.filter(n => n.timestamp > cutoff24h);
+            const recent = parsed.filter(n => n && n.timestamp > cutoff24h);
+            const repaired = this._notifCollapse(recent);
+            if (repaired.changed) {
+                try { localStorage.setItem('nym_notification_history', JSON.stringify(repaired.list)); } catch (_) { }
+            }
+            return repaired.list;
         } catch { return []; }
     },
 
@@ -581,7 +804,20 @@ Object.assign(NYM.prototype, {
         if (channelInfo.type === 'group') {
             return channelInfo.id || (channelInfo.groupId ? `group-${channelInfo.groupId}` : null);
         }
+        if (channelInfo.type === 'reaction') {
+            if (channelInfo.sourceType === 'pm' && channelInfo.sourcePubkey) return this.getPMConversationKey(channelInfo.sourcePubkey);
+            if (channelInfo.sourceType === 'group' && channelInfo.sourceGroupId) return `group-${channelInfo.sourceGroupId}`;
+            if (channelInfo.sourceType === 'geohash') {
+                const g = channelInfo.sourceGeohash || channelInfo.sourceChannel;
+                return g ? `#${g}` : null;
+            }
+        }
         return null;
+    },
+
+    _convHasUnreadNotif(convKey) {
+        if (!convKey) return false;
+        return this._unreadNotifications().some(n => this._notificationConvKey(n.channelInfo) === convKey);
     },
 
     _notifColumnOnScreen(c) {
@@ -783,20 +1019,17 @@ Object.assign(NYM.prototype, {
         }
         const btn = document.getElementById('markAllNotificationsReadBtn');
         if (btn) btn.classList.add('nm-hidden');
+        if (this._notifNewKeys) this._notifNewKeys.clear();
         if (!changed) return;
         this._saveSeenNotificationKeys();
         this._saveNotificationHistory();
         this._updateNotificationBadge();
-        if (this._notifSeenObserver) {
-            this._notifSeenObserver.disconnect();
-            this._notifSeenObserver = null;
-        }
         const body = document.getElementById('notificationsModalBody');
         if (body) {
             body.querySelectorAll('.notification-item-unread')
                 .forEach(el => el.classList.remove('notification-item-unread'));
         }
-        if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
+        if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000, { wanted: true });
     },
 
     _updateNotificationBadge() {
@@ -831,6 +1064,7 @@ Object.assign(NYM.prototype, {
     },
 
     _scheduleAppBadge() {
+        if (this._panicking || this._deletingAccount) return;
         if (typeof document !== 'undefined' && document.hidden) {
             if (this._appBadgeQueued) return;
             this._appBadgeQueued = true;
@@ -848,6 +1082,7 @@ Object.assign(NYM.prototype, {
     },
 
     _applyAppBadge() {
+        if (this._panicking || this._deletingAccount) return;
         if (this._readStateKnown === false) return;
         let count = 0;
         try { count = this._appBadgeCount(); } catch (_) { return; }
@@ -903,6 +1138,8 @@ Object.assign(NYM.prototype, {
         const modal = document.getElementById('notificationsModal');
         const body = document.getElementById('notificationsModalBody');
         if (!modal || !body) return;
+        if (!this._notifNewKeys || !modal.classList.contains('active')) this._notifNewKeys = new Set();
+        const newKeys = this._notifNewKeys;
 
         const checkbox = document.getElementById('enableNotificationsCheckbox');
         if (checkbox) checkbox.checked = this.notificationsEnabled;
@@ -926,9 +1163,9 @@ Object.assign(NYM.prototype, {
             if (this._notifEntryHidden(n)) return false;
             return true;
         }).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-
-        const markAllBtn = document.getElementById('markAllNotificationsReadBtn');
-        if (markAllBtn) markAllBtn.classList.toggle('nm-hidden', !recent.some(n => !n.viewed));
+        for (const n of recent) {
+            if (!n.viewed) newKeys.add(this._notifNewKey(n));
+        }
 
         if (recent.length === 0) {
             body.innerHTML = '<div class="notifications-empty">No notifications in the last 24 hours</div>';
@@ -959,7 +1196,7 @@ Object.assign(NYM.prototype, {
                 const item = document.createElement('div');
                 item.className = 'notification-item';
                 item._notif = n;
-                if (!n.viewed) item.classList.add('notification-item-unread');
+                if (newKeys.has(this._notifNewKey(n))) item.classList.add('notification-item-unread');
                 if (n.channelInfo) item.style.cursor = 'pointer';
                 const dt = new Date(n.timestamp);
                 const time = dt.toLocaleString([], {
@@ -984,9 +1221,9 @@ Object.assign(NYM.prototype, {
                     const suffix = this.getPubkeySuffix(pubkey);
                     const flairHtml = this.getFlairForUser(pubkey);
                     const verifiedBadge = this.isVerifiedDeveloper(pubkey)
-                        ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+                        ? `<span class="verified-badge" data-tip="${this.verifiedDeveloper.title}">✓</span>`
                         : this.isVerifiedBot(pubkey)
-                            ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
+                            ? '<span class="verified-badge" data-tip="Nymchat Bot">✓</span>'
                             : '';
                     authorHtml = `<span class="notification-item-author" data-notif-pubkey="${this.escapeHtml(pubkey)}"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span><span class="nym-bracket">&gt;</span>${flairHtml} ${verifiedBadge}</span>`;
                 } else if (n.title) {
@@ -1062,56 +1299,28 @@ Object.assign(NYM.prototype, {
         }
 
         modal.classList.add('active');
-        this._setupNotificationSeenObserver(body);
+        this._markListedNotificationsSeen(recent);
+        const markAllBtn = document.getElementById('markAllNotificationsReadBtn');
+        if (markAllBtn) markAllBtn.classList.toggle('nm-hidden', !recent.some(n => !n.viewed));
     },
 
-    // Mark viewed as items scroll into view so the badge deducts per item.
-    _setupNotificationSeenObserver(body) {
-        if (this._notifSeenObserver) {
-            this._notifSeenObserver.disconnect();
-            this._notifSeenObserver = null;
-        }
-        if (!body) return;
-        const items = Array.from(body.querySelectorAll('.notification-item'))
-            .filter(el => el._notif && !el._notif.viewed);
-        if (items.length === 0) return;
+    _notifNewKey(n) {
+        return this._notificationSeenKey(n) || n;
+    },
 
-        const markSeen = (els) => {
-            let changed = false;
-            for (const el of els) {
-                const n = el._notif;
-                if (n && !n.viewed) {
-                    n.viewed = true;
-                    this._rememberNotificationSeen(n, false);
-                    changed = true;
-                    el.classList.remove('notification-item-unread');
-                }
-            }
-            if (changed) {
-                this._saveSeenNotificationKeys();
-                if (typeof this._saveNotificationHistory === 'function') this._saveNotificationHistory();
-                this._updateNotificationBadge();
-                const btn = document.getElementById('markAllNotificationsReadBtn');
-                if (btn && !body.querySelector('.notification-item-unread')) btn.classList.add('nm-hidden');
-                if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
-            }
-        };
-
-        if (!('IntersectionObserver' in window)) {
-            markSeen(items);
-            return;
+    _markListedNotificationsSeen(list) {
+        let changed = false;
+        for (const n of list) {
+            if (!n || n.viewed) continue;
+            n.viewed = true;
+            this._rememberNotificationSeen(n, false);
+            changed = true;
         }
-        const obs = new IntersectionObserver((entries) => {
-            const seen = [];
-            for (const entry of entries) {
-                if (!entry.isIntersecting) continue;
-                seen.push(entry.target);
-                obs.unobserve(entry.target);
-            }
-            if (seen.length) markSeen(seen);
-        }, { root: body, threshold: 0.6 });
-        items.forEach(el => obs.observe(el));
-        this._notifSeenObserver = obs;
+        if (!changed) return;
+        this._saveSeenNotificationKeys();
+        if (typeof this._saveNotificationHistory === 'function') this._saveNotificationHistory();
+        this._updateNotificationBadge();
+        if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
     },
 
     updateNotificationModalProfile(pubkey, profileName) {
@@ -1121,9 +1330,9 @@ Object.assign(NYM.prototype, {
         const suffix = this.getPubkeySuffix(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
-            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+            ? `<span class="verified-badge" data-tip="${this.verifiedDeveloper.title}">✓</span>`
             : this.isVerifiedBot(pubkey)
-                ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
+                ? '<span class="verified-badge" data-tip="Nymchat Bot">✓</span>'
                 : '';
         modal.querySelectorAll(`.notification-item-author[data-notif-pubkey="${this.escapeHtml(pubkey)}"]`).forEach(el => {
             el.innerHTML = `<span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span><span class="nym-bracket">&gt;</span>${flairHtml} ${verifiedBadge}`;
@@ -1131,10 +1340,7 @@ Object.assign(NYM.prototype, {
     },
 
     closeNotificationsModal() {
-        if (this._notifSeenObserver) {
-            this._notifSeenObserver.disconnect();
-            this._notifSeenObserver = null;
-        }
+        this._notifNewKeys = null;
         const modal = document.getElementById('notificationsModal');
         if (modal) {
             modal.classList.remove('active');

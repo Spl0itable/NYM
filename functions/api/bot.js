@@ -1,4 +1,5 @@
 import { ledgerCall } from "./_ledger.js";
+import { closestRelayUrls, loadGeoDirectory } from "./_georelays.js";
 import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
 import { translateText } from "./_translate.js";
 import { btcPriceGet, btcPriceSane, BtcPriceUnavailable } from "./_btcprice.js";
@@ -63,6 +64,7 @@ import {
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
+  giftSenderLabel,
   truncateText,
   wellFormedText,
   bytesToHex,
@@ -79,7 +81,7 @@ import {
   CLIENT_CORS_HEADERS,
 } from "./_shared.js";
 import { isNymchatClient, isStandaloneNymbot } from "./_client.js";
-import { hiddenAmong } from "./_spam.js";
+import { hiddenAmong, hiddenSenders } from "./_spam.js";
 import { filterSet, rowHit } from "./_filters.js";
 import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runTurnsRecent, runTurnAdd, runResultPut,
   runResultGet, runGet, runCountLive, runStart, runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent,
@@ -168,6 +170,19 @@ function publishEventToRelay(relayUrl, evt, timeoutMs) {
 
 async function publishEventToRelays(evt) {
   var results = await Promise.all(FETCH_RELAYS.map(function (url) {
+    return publishEventToRelay(url, evt, 4000);
+  }));
+  return results.some(function (ok) { return ok; });
+}
+
+async function botPublishChannelReply(evt, channelKey) {
+  var urls = FETCH_RELAYS.slice();
+  if (isGeohashName(channelKey)) {
+    var near = [];
+    try { near = closestRelayUrls(channelKey, await loadGeoDirectory()); } catch (e) { near = []; }
+    for (var i = 0; i < near.length; i++) if (urls.indexOf(near[i]) === -1) urls.push(near[i]);
+  }
+  var results = await Promise.all(urls.map(function (url) {
     return publishEventToRelay(url, evt, 4000);
   }));
   return results.some(function (ok) { return ok; });
@@ -4160,7 +4175,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var crec = { balance: claimRes.balance };
     var giftEvent = null;
     if (isGift) {
-      var gifterName = typeof body.gifterNym === "string" ? sanitizeInput(body.gifterNym).slice(0, 64) : "";
+      var gifterName = giftSenderLabel(body.gifterNym, userPubkey);
       var msgWord = credits === 1 ? "credit" : "credits";
       var giftMsg;
       if (claimTier === "pro") {
@@ -4174,7 +4189,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       }
       try {
         var giftKem = botPq ? await fetchUserPqRecord(context, creditTo).catch(function () { return null; }) : null;
-        giftEvent = buildPqGiftWrappedDM(giftMsg, botPrivkey, botPubkey, creditTo, giftKem);
+        giftEvent = buildPqGiftWrappedDM(giftMsg, botPrivkey, botPubkey, creditTo, giftKem, gifterName ? { gifter: userPubkey } : null);
       } catch (e) {
         giftEvent = null;
       }
@@ -5218,13 +5233,14 @@ async function onRequest(context) {
   }
 
 
-  const { command, args, geohash, conversation, senderNym, publishedContent, activeUsers, lang, threadRoot } = body;
-  if (typeof geohash === "string" && geohash !== "" && !isValidChannelTag(geohash)) {
-    return new Response(JSON.stringify({ error: "Invalid channel" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
-    });
+  const refusal = await botPublicRefusal(context, body);
+  if (refusal) return refusal;
+
+  if (body.stream === true) {
+    return botChannelStream(context, body, privkey, pubkey);
   }
+
+  const { command, args, geohash, conversation, senderNym, publishedContent, activeUsers, lang, threadRoot } = body;
   const channelMessages = Array.isArray(body.channelMessages)
     ? body.channelMessages.filter(function (m) {
         return !m || typeof m.channel !== "string" || isValidChannelTag(m.channel.replace(/^#/, ""));
@@ -5234,22 +5250,6 @@ async function onRequest(context) {
   const replyThreadRoot = (typeof threadRoot === "string" && /^[0-9a-f]{64}$/.test(threadRoot.trim().toLowerCase()))
     ? threadRoot.trim().toLowerCase()
     : null;
-  if (!command) {
-    return new Response(JSON.stringify({ error: "Missing command" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
-    });
-  }
-
-  if (!(await publicCommandRateOk(request))) {
-    return new Response(JSON.stringify({
-      response: "\u{1F6D1} Whoa, slow down — too many requests. Give me a minute and try again."
-    }), {
-      status: 429,
-      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
-    });
-  }
-
   let response;
   try {
     switch (command.toLowerCase()) {
@@ -5345,6 +5345,10 @@ async function onRequest(context) {
     response = "Sorry, something went wrong processing that command.";
   }
 
+  if (command.toLowerCase() === "ask" || command.toLowerCase() === "summarize") {
+    response = tidyBotReply(response);
+  }
+
   // Handlers that already match the user's wording, and server-graded games, are left untranslated.
   var replyLang = typeof lang === "string" ? lang.trim().toLowerCase().slice(0, 12) : "";
   if (replyLang && replyLang !== "en" && !BOT_LOCALIZE_SKIP.includes(command.toLowerCase())) {
@@ -5406,9 +5410,18 @@ async function onRequest(context) {
   if (quoteTag) {
     eventTags.push(quoteTag);
   }
+  var askerTag = botAskerTag(body.askerPubkey, senderNym);
+  if (askerTag) {
+    eventTags.push(askerTag);
+  }
   if (replyThreadRoot) {
     eventTags.push(["e", replyThreadRoot, "", "root"]);
   }
+  if (typeof context.botRunId === "string") {
+    eventTags.push(["run", context.botRunId]);
+  }
+  var aboutTags = botAboutTags(context);
+  for (var at = 0; at < aboutTags.length; at++) eventTags.push(aboutTags[at]);
   var event = {
     kind: isGeo ? 20000 : 23333,
     created_at: now,
@@ -5419,10 +5432,132 @@ async function onRequest(context) {
   };
 
   var signed = signEvent(event, privkey);
+  var shared = botPublishChannelReply(signed, channelKey).catch(function () { return false; });
+  if (context && typeof context.waitUntil === "function") context.waitUntil(shared);
 
   return new Response(JSON.stringify({ event: signed }), {
     status: 200,
     headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+  });
+}
+
+var BOT_CHANNEL_KEEPALIVE_MS = 10000;
+var BOT_CHANNEL_RUN_MAX_MS = 150000;
+var BOT_CHANNEL_TYPING_TTL_S = 30;
+var BOT_PUBLIC_COMMANDS = ["help", "ask", "summarize", "flip", "8ball", "pick", "time", "math", "about", "nostr", "changelog", "release", "releases", "version", "versions", "top", "last", "seen", "who", "guess", "trivia", "joke", "riddle", "wordplay", "define", "translate", "units", "news", "btc", "bitcoin", "price"];
+var BOT_INSTANT_COMMANDS = ["help", "flip", "8ball", "pick", "time", "math", "about", "nostr", "units", "guess"];
+
+function botJsonResponse(status, payload) {
+  return new Response(JSON.stringify(payload), {
+    status: status,
+    headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+  });
+}
+
+function botAskerTag(askerPubkey, senderNym) {
+  if (typeof askerPubkey !== "string") return null;
+  var pk = askerPubkey.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(pk)) return null;
+  var m = typeof senderNym === "string" ? senderNym.trim().match(/#([0-9a-f]{4})$/i) : null;
+  if (!m || m[1].toLowerCase() !== pk.slice(-4)) return null;
+  return ["asker", pk];
+}
+
+async function botPublicRefusal(context, body) {
+  var geohash = body ? body.geohash : undefined;
+  if (typeof geohash === "string" && geohash !== "" && !isValidChannelTag(geohash)) {
+    return botJsonResponse(400, { error: "Invalid channel" });
+  }
+  var command = body && typeof body.command === "string" ? body.command.toLowerCase() : "";
+  if (!command) return botJsonResponse(400, { error: "Missing command" });
+  if (BOT_PUBLIC_COMMANDS.indexOf(command) === -1) return botJsonResponse(400, { error: "Unknown command" });
+  if (!context.botRateTaken && !(await publicCommandRateOk(context.request))) {
+    return botJsonResponse(429, { response: "\u{1F6D1} Whoa, slow down — too many requests. Give me a minute and try again." });
+  }
+  return null;
+}
+
+function botRunId() {
+  var bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, function (b) { return (b < 16 ? "0" : "") + b.toString(16); }).join("");
+}
+
+function botChannelTyping(privkey, pubkey, channel, status, runId, askerTag) {
+  if (!channel) return null;
+  var tags = [["typing", status], [isGeohashName(channel) ? "g" : "d", channel], ["n", BOT_NYM], ["run", runId]];
+  if (status === "start") tags.push(["ttl", String(BOT_CHANNEL_TYPING_TTL_S)]);
+  if (askerTag) tags.push(askerTag);
+  return signEvent({
+    kind: 24420,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: tags,
+    content: "",
+    pubkey: pubkey
+  }, privkey);
+}
+
+function botChannelStream(context, body, privkey, pubkey) {
+  var raw = typeof body.geohash === "string" ? body.geohash : "";
+  var runId = botRunId();
+  var channel = BOT_INSTANT_COMMANDS.indexOf(body.command.toLowerCase()) !== -1 ? "" : (raw === "" ? "nymchat" : raw);
+  var inner = Object.assign({}, body);
+  delete inner.stream;
+  var headers = new Headers(context.request.headers);
+  headers.delete("content-length");
+  var innerRequest = new Request(context.request.url, { method: "POST", headers: headers, body: JSON.stringify(inner) });
+  var askerTag = botAskerTag(body.askerPubkey, body.senderNym);
+  var pipe = new TransformStream();
+  var writer = pipe.writable.getWriter();
+  var encoder = new TextEncoder();
+  var open = true;
+  function send(line) {
+    if (!open) return Promise.resolve();
+    return writer.write(encoder.encode(JSON.stringify(line) + "\n")).catch(function () { open = false; });
+  }
+  function thinking(extra) {
+    var typing = botChannelTyping(privkey, pubkey, channel, "start", runId, askerTag);
+    return send(Object.assign({ state: "thinking" }, typing ? { typing: typing } : {}, extra || {}));
+  }
+  var deadline = Date.now() + BOT_CHANNEL_RUN_MAX_MS;
+  var work = (async function () {
+    thinking({ deadline: deadline, limitMs: BOT_CHANNEL_RUN_MAX_MS });
+    var beat = setInterval(thinking, BOT_CHANNEL_KEEPALIVE_MS);
+    var limit = null;
+    var outcome;
+    try {
+      outcome = await Promise.race([
+        onRequest(Object.assign({}, context, { request: innerRequest, botRateTaken: true, botRunId: runId })).then(async function (res) {
+          var data = null;
+          try { data = await res.json(); } catch (e) { data = null; }
+          return { status: res.status, data: data };
+        }),
+        new Promise(function (resolve) {
+          limit = setTimeout(function () { resolve({ timedOut: true }); }, BOT_CHANNEL_RUN_MAX_MS);
+        })
+      ]);
+    } catch (e) {
+      console.error("nymbot channel stream failed:", e);
+      outcome = { status: 500, data: null };
+    }
+    clearInterval(beat);
+    clearTimeout(limit);
+    var stop = botChannelTyping(privkey, pubkey, channel, "stop", runId, askerTag);
+    var end = stop ? { typing: stop } : {};
+    if (outcome.timedOut) {
+      await send(Object.assign({ state: "failed", reason: "timeout" }, end));
+    } else if (outcome.status === 200 && outcome.data && outcome.data.event) {
+      await send(Object.assign({ state: "done", event: outcome.data.event }, end));
+    } else {
+      await send(Object.assign({ state: "failed", reason: outcome.status === 429 ? "rate" : "error", status: outcome.status }, end));
+    }
+    open = false;
+    try { await writer.close(); } catch (e) {}
+  })();
+  if (typeof context.waitUntil === "function") context.waitUntil(work);
+  return new Response(pipe.readable, {
+    status: 200,
+    headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store, no-transform", ...CLIENT_CORS_HEADERS }
   });
 }
 
@@ -5942,9 +6077,14 @@ var NYMBOT_SYSTEM_PROMPT = [
   "=== WEB SEARCH ===",
   "You have live web search. Any question that could turn on current information is searched for you automatically before you see it — you never have to ask the user to run a search, and you never have to tell them to go look something up themselves.",
   "When results are in your context, USE them for an accurate, up-to-date answer. Answer naturally in your own voice, without narrating the mechanism ('according to my search', 'the results say').",
-  "Each result ends with its source URL in square brackets. Cite the one you leaned on — name the site in plain words and give the URL. That is the only way the user can check a live claim, so a claim that came from a result should carry its link.",
+  "Each result shows its source URL on a 'Source:' line. Cite the one you leaned on — name the site in plain words and put its URL, bare, on a line of its own at the end of your reply. That is the only way the user can check a live claim, so a claim that came from a result should carry its link.",
   "CRITICAL: NEVER say 'I don't have access to real-time information', 'I can't browse the web', 'I don't have real-time data', 'I can't access current news', or anything similar. You DO have web search.",
   "That is a rule about your abilities, not a rule against admitting a specific lookup failed. When your context says a search ran and found nothing, say exactly that — you looked and came up empty — and then answer from what you know, dated honestly. Never dress training data up as something you just found, and never invent a source or a URL to look like you did.",
+  "",
+  "=== FORMATTING ===",
+  "Your reply is shown in a chat app that renders basic markdown: **bold**, *italic*, `code`, lists and links.",
+  "Lists: put each item on its own line starting with '- ' (or '1. ' for steps). Never run list items together on one line with '\u2022' separators.",
+  "Links: write a bare URL (https://...) or a markdown link [title](https://...). Never wrap a URL in square brackets, angle brackets or parentheses.",
   "",
   "=== NYMCHAT RELEASE NOTES ===",
   "When a user asks about a Nymchat version, changelog, what's new, what changed in a release, or references a version number, live release data from https://github.com/Spl0itable/NYM/releases is automatically pulled into your context (look for a NYMCHAT RELEASE NOTES block). Use those notes to answer accurately — quote or paraphrase the actual changelog entries, never invent features. If the user asks about a version not listed, say it's not in the recent set and point them to the releases page. Users can also run ?changelog (latest) or ?changelog <version> directly to read the notes themselves.",
@@ -6063,6 +6203,106 @@ function sanitizeBotResponse(text, keepThinking) {
     return "<think>\n" + thinking + "\n</think>\n" + text;
   }
   return text;
+}
+
+var BOT_LINK_HOST_RX = /(?<![a-z0-9-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,24}|xn--[a-z0-9-]{1,59}))(?![a-z0-9])/g;
+var BOT_LINK_FILE_EXTS = ["js", "mjs", "cjs", "jsx", "ts", "tsx", "json", "md", "mdx", "py", "ipynb", "rb", "php", "kt", "kts", "swift", "dart", "go", "cpp", "hpp", "cs", "css", "scss", "sass", "less", "html", "htm", "xml", "yml", "yaml", "toml", "ini", "cfg", "conf", "env", "txt", "csv", "tsv", "log", "lock", "sql", "bash", "zsh", "bat", "cmd", "vue", "svelte", "lua", "scala", "exs", "erl", "hs", "clj", "gradle", "pdf", "png", "jpg", "jpeg", "gif", "svg", "webp", "tar", "gz", "tgz", "exe", "dll", "dmg", "apk", "ipa", "wasm", "wav"];
+
+function botLinkHost(url) {
+  try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ""); } catch (e) { return ""; }
+}
+
+function botLinkLabelText(label) {
+  return String(label || "")
+    .replace(/[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0]/g, "")
+    .replace(/[\uFF01-\uFF5E]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+    .replace(/[\u2024\u3002\uFE12\uFE52\uFF61]/g, ".")
+    .replace(/[*_~|`\\\u201C\u201D\u00AB\u00BB]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function botLinkLabelDisguises(label, target) {
+  var host = botLinkHost(target);
+  var text = botLinkLabelText(label);
+  if (!host || !text || /^https?:\/\//.test(text)) return true;
+  var tld = host.slice(host.lastIndexOf(".") + 1);
+  var m;
+  BOT_LINK_HOST_RX.lastIndex = 0;
+  while ((m = BOT_LINK_HOST_RX.exec(text)) !== null) {
+    var named = m[1].replace(/^www\./, "");
+    var ext = named.slice(named.lastIndexOf(".") + 1);
+    if (BOT_LINK_FILE_EXTS.indexOf(ext) !== -1 && ext !== tld) continue;
+    if (host !== named && host.slice(-(named.length + 1)) !== "." + named) return true;
+  }
+  var runs = text.replace(BOT_LINK_HOST_RX, " ").match(/[\p{L}\p{N}\p{M}.-]+/gu) || [];
+  for (var i = 0; i < runs.length; i++) {
+    if (/\p{L}\.\p{L}/u.test(runs[i]) && /[^\x00-\x7F]/.test(runs[i])) return true;
+  }
+  return false;
+}
+
+function botMarkdownLink(label, target, spans) {
+  var text = String(label || "").trim();
+  if (!/^https?:\/\//i.test(target)) return text;
+  if (!text) return target;
+  var plain = text.replace(/\uFDD0(\d+)\uFDD1/g, function (m, i) { return (spans && spans[Number(i)]) || ""; });
+  if (botLinkLabelDisguises(plain, target)) return target;
+  return "[" + text + "](" + target + ")";
+}
+
+function tidyBotLinks(prose, spans) {
+  var s = prose.replace(/(!?)\[([^\[\]\n]*)\]\(\s*<?((?:[^\s()<>]|\([^\s()<>]*\))*)>?\s*\)/g, function (m, bang, label, target) {
+    if (/[\uFDD0\uFDD1]/.test(target)) return m;
+    return botMarkdownLink(label, target, spans);
+  });
+  s = s.split("\n").map(function (line) {
+    var tail = [];
+    var m;
+    while ((m = /^(.*\S)\s*\[(https?:\/\/[^\s\[\]]+)\]\s*$/.exec(line)) !== null && /[^\s\[\]]/.test(m[1].replace(/\[https?:\/\/[^\s\[\]]+\]/g, ""))) {
+      tail.unshift(m[2]);
+      line = m[1];
+    }
+    return tail.length ? [line].concat(tail).join("\n") : line;
+  }).join("\n");
+  s = s.replace(/\[(https?:\/\/[^\s\[\]]+)\](?!\()/g, "$1");
+  s = s.replace(/<(https?:\/\/[^\s<>]+)>/g, "$1");
+  return s;
+}
+
+function tidyBotBullets(prose) {
+  return prose.split("\n").map(function (line) {
+    var m = /^(\s*)(?:•\s+)?(.*)$/.exec(line);
+    var indent = m[1];
+    var lead = /^\s*•\s+/.test(line);
+    var pieces = m[2].split(/\s+•\s+/);
+    if (!lead && pieces.length < 3) return line;
+    var out = [];
+    for (var i = 0; i < pieces.length; i++) {
+      var piece = pieces[i].trim();
+      if (!piece) continue;
+      out.push(indent + (i === 0 && !lead ? "" : "- ") + piece);
+    }
+    return out.join("\n");
+  }).join("\n");
+}
+
+function tidyBotReply(text) {
+  if (typeof text !== "string" || !text) return text;
+  return text.split(/(```[\s\S]*?```|```[\s\S]*$)/).map(function (block, i) {
+    if (i % 2) return block;
+    var spans = [];
+    var masked = tidyBotBullets(block).replace(/[\uFDD0\uFDD1]/g, "").replace(/`[^`\n]*`/g, function (code) {
+      spans.push(code);
+      return "\uFDD0" + (spans.length - 1) + "\uFDD1";
+    });
+    return tidyBotLinks(masked, spans).replace(/\uFDD0(\d+)\uFDD1/g, function (m, i) { return spans[Number(i)]; });
+  }).join("");
+}
+
+function freeSearchResultLine(line) {
+  var m = /^([\s\S]*?)\s*\[(https?:\/\/[^\]\s]+)\]$/.exec(String(line || "").trim());
+  return m ? m[1].trim() + "\n   Source: " + m[2] : String(line || "");
 }
 
 var MAX_CONVERSATION_HISTORY = 20;
@@ -7370,13 +7610,13 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     if (searchResults.length > 0) {
       contextBlock += "--- LIVE WEB SEARCH RESULTS ---\n";
       for (var s = 0; s < searchResults.length; s++) {
-        contextBlock += (s + 1) + ". " + searchResults[s] + "\n";
+        contextBlock += (s + 1) + ". " + freeSearchResultLine(searchResults[s]) + "\n";
       }
       contextBlock += "--- END SEARCH RESULTS ---\n";
       contextBlock += "IMPORTANT: These results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them, so never say 'the search results you provided'. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web, and do NOT call an event they describe 'fictional' or 'speculative' just because it postdates your training.\n" +
         "They are keyword matches, not vetted answers. Read each one and use only those that actually address the question. A result that merely shares a word with it answers nothing: say the search turned up nothing on point rather than building an answer around it. Never state a name, date, place or outcome that is not in a result you are citing, never attach a result's URL to a claim it does not make, cite nothing at all in a reply that says the search found nothing on point, and never present your own recollection as something the search found. Answer naturally in your own voice.\n";
-      contextBlock += "Each result ends with its source URL in square brackets. When you use one, name the source in plain words and include that URL so the user can check it.\n";
-      contextBlock += searchPageBlock(searchResults);
+      contextBlock += "Each result's URL is on its 'Source:' line. When you use one, name the source in plain words and put that URL, bare, on a line of its own so the user can check it.\n";
+      contextBlock += searchPageBlock(searchResults).replace(/^\[(https?:\/\/[^\]\s]+)\]$/gm, "Source: $1");
       contextBlock += searchResultCaveats(question, searchResults);
     } else if (searchAttempted) {
       // Tell the model what actually happened, or it answers from training data as if it had looked.
@@ -8368,6 +8608,8 @@ async function fetchChannelEventsFromD1(context, kinds, since, limit, channel) {
     var hidden = await hiddenAmong(env, channel ? [String(channel).toLowerCase()] : [], since * 1000 - 3600000, rows.map(function (r) { return r.id; }));
     if (!hidden.ok) return null;
     if (hidden.hidden.size) rows = rows.filter(function (r) { return !hidden.hidden.has(r.id); });
+    var flagged = await botFlaggedSenders(context);
+    if (flagged.size) rows = rows.filter(function (r) { return !flagged.has(String(r.pubkey || "").toLowerCase()); });
     var events = [];
     for (var i = 0; i < rows.length; i++) {
       try {
@@ -8379,6 +8621,46 @@ async function fetchChannelEventsFromD1(context, kinds, since, limit, channel) {
     }
     return events.length ? events : null;
   } catch (e) { return null; }
+}
+
+var BOT_ABOUT_MAX = 25;
+
+async function botFlaggedSenders(context) {
+  if (context && context.botFlagged instanceof Set) return context.botFlagged;
+  var set;
+  try { set = await hiddenSenders(context && context.env, Date.now() - 24 * 3600 * 1000); } catch (_) { set = new Set(); }
+  if (!(set instanceof Set)) set = new Set();
+  if (context) context.botFlagged = set;
+  return set;
+}
+
+function botPersonKey(m) {
+  var pk = m && typeof m.pubkey === "string" ? m.pubkey.toLowerCase() : "";
+  return /^[0-9a-f]{64}$/.test(pk) ? pk : "";
+}
+
+async function botDropFlagged(context, list) {
+  if (!Array.isArray(list) || !list.length) return list;
+  var flagged = await botFlaggedSenders(context);
+  if (!flagged.size) return list;
+  return list.filter(function (m) { var pk = botPersonKey(m); return !pk || !flagged.has(pk); });
+}
+
+function botNoteAbout(context, pubkeys) {
+  if (!context) return;
+  var out = Array.isArray(context.botAbout) ? context.botAbout : [];
+  for (var i = 0; i < pubkeys.length; i++) {
+    var pk = typeof pubkeys[i] === "string" ? pubkeys[i].toLowerCase() : "";
+    if (!/^[0-9a-f]{64}$/.test(pk) || out.indexOf(pk) !== -1) continue;
+    if (out.length >= BOT_ABOUT_MAX) break;
+    out.push(pk);
+  }
+  context.botAbout = out;
+}
+
+function botAboutTags(context) {
+  var list = context && Array.isArray(context.botAbout) ? context.botAbout : [];
+  return list.slice(0, BOT_ABOUT_MAX).map(function (pk) { return ["about", pk]; });
 }
 
 function dropSpamFirstMessages(events) {
@@ -8432,9 +8714,10 @@ async function handleTop(channelMessages, context) {
       return m.timestamp >= since;
     });
   }
+  messages = await botDropFlagged(context, messages);
   if (messages.length === 0) {
     var events = await fetchRecentEvents({ kinds: [20000, 23333], since: since, limit: 500 }, 6000);
-    events = dropSpamFirstMessages(events.filter(isHumanMessage));
+    events = await botDropFlagged(context, dropSpamFirstMessages(events.filter(isHumanMessage)));
     messages = events.map(function(evt) {
       return { channel: extractGeohash(evt), timestamp: eventTimeSec(evt) };
     });
@@ -8460,7 +8743,7 @@ async function handleTop(channelMessages, context) {
   }
   var lines = ["Top channels (last 10 min):"];
   for (var k = 0; k < sorted.length; k++) {
-    lines.push((k + 1) + ". #" + sorted[k][0] + " \u2014 " + sorted[k][1].count + " msgs (" + timeAgo(sorted[k][1].lastActive) + ")");
+    lines.push((k + 1) + ". #" + sorted[k][0] + " — " + sorted[k][1].count + " msgs (" + timeAgo(sorted[k][1].lastActive) + ")");
   }
   return lines.join("\n");
 }
@@ -8477,36 +8760,40 @@ async function handleLast(args, channelMessages, context) {
     messages = channelMessages.filter(function(m) {
       if (m.isBot) return false;
       if (!m.channel) return false;
-      return m.timestamp >= since;
+      return m.timestamp >= since && !!botPersonKey(m);
     });
   }
+  messages = await botDropFlagged(context, messages);
   if (messages.length === 0) {
     var events = await fetchRecentEvents({ kinds: [20000, 23333], since: since, limit: 200 }, 6000);
-    events = dropSpamFirstMessages(events.filter(isHumanMessage));
+    events = await botDropFlagged(context, dropSpamFirstMessages(events.filter(isHumanMessage)));
     messages = events.map(function(evt) {
       return {
         channel: extractGeohash(evt),
         nym: extractNym(evt) || "nym",
         content: evt.content || "",
-        timestamp: eventTimeSec(evt)
+        timestamp: eventTimeSec(evt),
+        pubkey: evt.pubkey || ""
       };
-    });
+    }).filter(function (m) { return !!botPersonKey(m); });
   }
   if (messages.length === 0) {
     return "No messages found in the last 10 minutes.";
   }
   messages.sort(function(a, b) { return a.timestamp - b.timestamp; });
-  var recent = messages.slice(-count);
+  var recent = messages.filter(function (m) { return !!(m.channel || "").replace(/^#/, ""); }).slice(-count);
   var lines = ["Last " + recent.length + " messages:"];
+  var named = [];
   for (var i = 0; i < recent.length; i++) {
     var m = recent[i];
     var geo = (m.channel || "").replace(/^#/, "");
-    if (!geo) continue;
     var nym = m.nym || "nym";
     var preview = (m.content || "").trim();
     if (preview.length > 80) preview = truncateText(preview, 80) + "...";
-    lines.push("#" + geo + " \u2014 " + nym + " (" + timeAgo(m.timestamp) + "): " + preview);
+    lines.push("#" + geo + " — " + nym + " (" + timeAgo(m.timestamp) + "): " + preview);
+    named.push(botPersonKey(m));
   }
+  botNoteAbout(context, named);
   return lines.join("\n");
 }
 
@@ -8524,9 +8811,6 @@ async function handleSeen(nickname, channelMessages, context) {
   var isPubkeyQuery = /^[0-9a-f]{64}$/i.test(raw) || /^npub1[0-9a-z]{58}/i.test(raw);
   var targetPubkey = isPubkeyQuery ? raw.toLowerCase() : null;
   var target = isPubkeyQuery ? null : raw.toLowerCase().replace(/#.*$/, "");
-  var channels = {};
-  var foundNym = null;
-  var latestTime = 0;
 
   function matchesSeen(m) {
     if (targetPubkey) {
@@ -8536,27 +8820,16 @@ async function handleSeen(nickname, channelMessages, context) {
     return mNym.toLowerCase().replace(/#.*$/, "").trim() === target;
   }
 
+  var found = [];
   if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
     for (var i = 0; i < channelMessages.length; i++) {
       var m = channelMessages[i];
-      if (m.isBot) continue;
-      if (!matchesSeen(m)) continue;
-      var mNym = m.nym || "nym";
-      if (!foundNym) foundNym = mNym;
-      var chan = (m.channel || "").replace(/^#/, "");
-      if (!chan) continue;
-      if (!channels[chan]) channels[chan] = { count: 0, lastSeen: 0 };
-      channels[chan].count++;
-      if (m.timestamp > channels[chan].lastSeen) {
-        channels[chan].lastSeen = m.timestamp;
-      }
-      if (m.timestamp > latestTime) {
-        latestTime = m.timestamp;
-        foundNym = mNym;
-      }
+      if (m.isBot || !botPersonKey(m) || !matchesSeen(m)) continue;
+      found.push({ pubkey: botPersonKey(m), nym: m.nym || "nym", channel: (m.channel || "").replace(/^#/, ""), timestamp: m.timestamp || 0 });
     }
   }
-  if (!foundNym) {
+  found = await botDropFlagged(context, found);
+  if (!found.length) {
     var since = Math.floor(Date.now() / 1000) - 86400; // Last 24h.
     var filter = { kinds: [20000, 23333], since: since, limit: 500 };
     if (targetPubkey && /^[0-9a-f]{64}$/i.test(targetPubkey)) {
@@ -8570,29 +8843,43 @@ async function handleSeen(nickname, channelMessages, context) {
       var matchesEvent = targetPubkey
         ? eventPubkey === targetPubkey
         : nym && nym.toLowerCase().replace(/#.*$/, "").trim() === target;
-      if (!matchesEvent) continue;
-      if (!foundNym) foundNym = nym || raw;
-      var geo = extractGeohash(events[j]);
-      if (!geo) continue;
-      if (!channels[geo]) channels[geo] = { count: 0, lastSeen: 0 };
-      channels[geo].count++;
-      var seenAt = eventTimeSec(events[j]);
-      if (seenAt > channels[geo].lastSeen) {
-        channels[geo].lastSeen = seenAt;
-      }
-      if (seenAt > latestTime) {
-        latestTime = seenAt;
-        if (nym) foundNym = nym;
-      }
+      if (!matchesEvent || !botPersonKey(events[j])) continue;
+      found.push({ pubkey: eventPubkey, nym: nym || raw, channel: extractGeohash(events[j]) || "", timestamp: eventTimeSec(events[j]) });
     }
+    found = await botDropFlagged(context, found);
   }
-  if (!foundNym) {
+  var latestBy = {};
+  for (var f = 0; f < found.length; f++) {
+    var fp = found[f].pubkey;
+    if (!(fp in latestBy) || found[f].timestamp > latestBy[fp]) latestBy[fp] = found[f].timestamp;
+  }
+  var people = Object.keys(latestBy).sort(function (a, b) { return latestBy[b] - latestBy[a]; }).slice(0, BOT_ABOUT_MAX);
+  found = found.filter(function (x) { return people.indexOf(x.pubkey) !== -1; });
+  if (!found.length) {
     return "Haven't seen \"" + nickname.trim() + "\" in the last 24 hours.";
   }
+  var channels = {};
+  var foundNym = null;
+  var latestTime = 0;
+  for (var q = 0; q < found.length; q++) {
+    var x = found[q];
+    if (!foundNym) foundNym = x.nym;
+    if (x.timestamp > latestTime) {
+      latestTime = x.timestamp;
+      foundNym = x.nym;
+    }
+    if (!x.channel) continue;
+    if (!channels[x.channel]) channels[x.channel] = { count: 0, lastSeen: 0 };
+    channels[x.channel].count++;
+    if (x.timestamp > channels[x.channel].lastSeen) {
+      channels[x.channel].lastSeen = x.timestamp;
+    }
+  }
+  botNoteAbout(context, people);
   var sorted = Object.entries(channels).sort(function(a, b) { return b[1].lastSeen - a[1].lastSeen; });
   var lines = [foundNym + " seen in " + sorted.length + " channel" + (sorted.length !== 1 ? "s" : "") + " (last 24h):"];
   for (var k = 0; k < sorted.length; k++) {
-    lines.push("\u2022 #" + sorted[k][0] + " \u2014 " + sorted[k][1].count + " msgs (last: " + timeAgo(sorted[k][1].lastSeen) + ")");
+    lines.push("• #" + sorted[k][0] + " — " + sorted[k][1].count + " msgs (last: " + timeAgo(sorted[k][1].lastSeen) + ")");
   }
   return lines.join("\n");
 }
@@ -8607,49 +8894,34 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
   // Prefer the D1 archive (full, spam-filtered) over the client's partial view.
   var d1Who = await fetchChannelEventsFromD1(context, isGeohashName(geohash) ? [20000] : [23333], since, 500, geohash);
   if (d1Who) channelMessages = eventsToChannelMsgs(dropSpamFirstMessages(d1Who.filter(isHumanMessage)));
-  if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
-    for (var i = 0; i < channelMessages.length; i++) {
-      var m = channelMessages[i];
-      if (m.isBot) continue;
-      if (m.channel !== channelKey && m.channel !== geohash) continue;
-      if (m.timestamp < since) continue;
-      var mNym = m.nym || "nym";
-      var mKey = m.pubkey || mNym.toLowerCase().replace(/#.*$/, "").trim();
-      if (!nymsByPubkey[mKey]) {
-        nymsByPubkey[mKey] = { nym: mNym, pubkey: m.pubkey || "", lastSeen: m.timestamp, msgCount: 1 };
-      } else {
-        nymsByPubkey[mKey].msgCount++;
-        if (m.timestamp > nymsByPubkey[mKey].lastSeen) {
-          nymsByPubkey[mKey].lastSeen = m.timestamp;
-          nymsByPubkey[mKey].nym = mNym;
-        }
+  function note(pubkey, nym, at) {
+    if (!nymsByPubkey[pubkey]) {
+      nymsByPubkey[pubkey] = { nym: nym, pubkey: pubkey, lastSeen: at, msgCount: 1 };
+    } else {
+      nymsByPubkey[pubkey].msgCount++;
+      if (at > nymsByPubkey[pubkey].lastSeen) {
+        nymsByPubkey[pubkey].lastSeen = at;
+        nymsByPubkey[pubkey].nym = nym;
       }
     }
+  }
+  if (channelMessages && Array.isArray(channelMessages) && channelMessages.length > 0) {
+    var kept = await botDropFlagged(context, channelMessages.filter(function (m) {
+      return !m.isBot && (m.channel === channelKey || m.channel === geohash) && m.timestamp >= since && !!botPersonKey(m);
+    }));
+    for (var i = 0; i < kept.length; i++) note(botPersonKey(kept[i]), kept[i].nym || "nym", kept[i].timestamp);
   }
   if (Object.keys(nymsByPubkey).length === 0) {
     var filter = isGeohashName(geohash)
       ? { kinds: [20000], since: since, limit: 500, "#g": [geohash] }
       : { kinds: [23333], since: since, limit: 500, "#d": [geohash] };
     var events = await fetchRecentEvents(filter, 6000);
-    events = dropSpamFirstMessages(events.filter(isHumanMessage));
-    if (events.length === 0) {
-      return "No active users in #" + geohash + " in the last 10 minutes.";
-    }
+    events = await botDropFlagged(context, dropSpamFirstMessages(events.filter(isHumanMessage)));
     for (var j = 0; j < events.length; j++) {
       var nym = extractNym(events[j]);
-      if (!nym) continue;
-      var pubkey = events[j].pubkey || "";
-      var key = pubkey || nym.toLowerCase().replace(/#.*$/, "").trim();
-      var activeAt = eventTimeSec(events[j]);
-      if (!nymsByPubkey[key]) {
-        nymsByPubkey[key] = { nym: nym, pubkey: pubkey, lastSeen: activeAt, msgCount: 1 };
-      } else {
-        nymsByPubkey[key].msgCount++;
-        if (activeAt > nymsByPubkey[key].lastSeen) {
-          nymsByPubkey[key].lastSeen = activeAt;
-          nymsByPubkey[key].nym = nym;
-        }
-      }
+      var pubkey = botPersonKey(events[j]);
+      if (!nym || !pubkey) continue;
+      note(pubkey, nym, eventTimeSec(events[j]));
     }
   }
   if (Object.keys(nymsByPubkey).length === 0) {
@@ -8659,18 +8931,21 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
   var sorted = Object.values(nymsByPubkey).sort(function(a, b) { return b.lastSeen - a.lastSeen; });
   var lines = ["Active in #" + geohash + " (last 10 min): " + sorted.length + " nym" + (sorted.length !== 1 ? "s" : "")];
   var limit = Math.min(sorted.length, 20);
+  var named = [];
   for (var k = 0; k < limit; k++) {
     var info = sorted[k];
     // Pubkey suffix like /who (last 4 hex chars).
     var displayNym = info.nym;
-    if (info.pubkey && !/#[0-9a-f]{4}$/i.test(displayNym)) {
+    if (!/#[0-9a-f]{4}$/i.test(displayNym)) {
       displayNym += "#" + info.pubkey.slice(-4);
     }
-    lines.push("\u2022 " + displayNym + " \u2014 " + info.msgCount + " msg" + (info.msgCount !== 1 ? "s" : "") + " (" + timeAgo(info.lastSeen) + ")");
+    lines.push("• " + displayNym + " — " + info.msgCount + " msg" + (info.msgCount !== 1 ? "s" : "") + " (" + timeAgo(info.lastSeen) + ")");
+    named.push(info.pubkey);
   }
   if (sorted.length > 20) {
     lines.push("...and " + (sorted.length - 20) + " more");
   }
+  botNoteAbout(context, named);
   return lines.join("\n");
 }
 

@@ -1,5 +1,6 @@
 final RegExp _suffixRe = RegExp(r'#[0-9a-f]{4}$', caseSensitive: false);
 final RegExp _hex4Re = RegExp(r'^[0-9a-f]{4}$', caseSensitive: false);
+final RegExp _pubkeyHexRe = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
 
 final Set<String> _seenSuffixes = <String>{};
 
@@ -15,6 +16,11 @@ String getPubkeySuffix(String pubkey) {
 bool isSeenNymSuffix(String hex) => _seenSuffixes.contains(hex.toLowerCase());
 
 String stripPubkeySuffix(String nym) => nym.replaceAll(_suffixRe, '');
+
+String withOwnNymSuffix(String nym, String pubkey) {
+  if (!_pubkeyHexRe.hasMatch(pubkey)) return nym;
+  return nym.replaceFirst(_suffixRe, '#${pubkey.substring(60).toLowerCase()}');
+}
 
 String getNymFromPubkey(String baseNym, String pubkey) {
   final base = stripPubkeySuffix(baseNym);
@@ -41,6 +47,12 @@ final RegExp _nymSplitRe =
   final m = _nymSplitRe.firstMatch(nym);
   if (m == null) return (base: nym, suffix: '');
   return (base: m.group(1)!, suffix: '#${m.group(2)!}');
+}
+
+String clipNymBase(String nym, int max) {
+  final parts = splitNymSuffix(nym);
+  if (parts.base.length <= max) return nym;
+  return '${parts.base.substring(0, max)}${parts.suffix}';
 }
 
 /// PM conversation key: `pm-<sorted pubkeys>`.

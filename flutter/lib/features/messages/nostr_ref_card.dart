@@ -10,6 +10,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/channel.dart';
+import '../../models/message.dart';
 import '../../models/nostr_event.dart';
 import '../../services/relay/relay_message.dart';
 import '../../state/app_state.dart';
@@ -31,6 +32,8 @@ class NostrRefCardData {
     this.createdAt = 0,
     this.eventKind = 0,
     this.local = false,
+    this.quoted = const <String>[],
+    this.people = const <String>[],
   });
 
   final NostrRefKind kind;
@@ -48,6 +51,10 @@ class NostrRefCardData {
 
   /// True when this client holds the referenced message, so the card can jump to it.
   final bool local;
+
+  final List<String> quoted;
+
+  final List<String> people;
 }
 
 /// Resolves references from the local store, then one bounded relay query; results and misses are cached per session.
@@ -127,6 +134,8 @@ class NostrRefResolver {
           createdAt: m.createdAt,
           eventKind: m.eventKind,
           local: true,
+          quoted: m.quoted,
+          people: m.people,
         );
       }
     }
@@ -185,6 +194,8 @@ class NostrRefResolver {
       channel: isValidChannelTag(channelTag) ? '#$channelTag' : '',
       createdAt: event.createdAt,
       eventKind: event.kind,
+      quoted: Message.quotedFromTags(event.tags),
+      people: botAskerOf(event),
     );
   }
 
@@ -315,6 +326,8 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
           body: data.body,
           channel: data.channel,
           profile: data.kind == NostrRefKind.profile,
+          quoted: data.quoted,
+          people: data.people,
         )));
     if (hidden) return const SizedBox.shrink();
     final c = context.nym;
@@ -432,6 +445,7 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
             // Rendered as a full message body keyed on the event id, with reference cards off to avoid nesting.
             MessageContent(
               content: body,
+              quoted: data.quoted,
               hostMessageId: data.id.isNotEmpty ? 'nostrcard-${data.id}' : null,
               fontSize: 12,
               blurImages: widget.blurImages,

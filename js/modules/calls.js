@@ -29,6 +29,18 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage('Missed call from ' + this._callPeerName(pubkey, hint) + '#' + this.getPubkeySuffix(pubkey));
     },
 
+    _ringTileFace(pubkey) {
+        const mask = typeof this._personMask === 'function' ? this._personMask(pubkey) : '';
+        if (mask) {
+            return { src: typeof this._maskedAvatar === 'function' ? this._maskedAvatar(pubkey) : '', html: this.escapeHtml(mask) };
+        }
+        let src = '';
+        let html = '';
+        try { src = this.getAvatarUrl(pubkey); } catch (_) { src = ''; }
+        try { html = this._callNymHtml(pubkey); } catch (_) { html = ''; }
+        return { src, html };
+    },
+
     // `self` renders a plain "You" with no decorations.
     _callNymHtml(pubkey, opts) {
         opts = opts || {};
@@ -39,7 +51,7 @@ Object.assign(NYM.prototype, {
         const isDev = typeof this.isVerifiedDeveloper === 'function' && this.isVerifiedDeveloper(pubkey);
         const isBot = !isDev && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(pubkey);
         const verifiedBadge = (isDev || isBot)
-            ? `<span class="verified-badge" title="${this.escapeHtml(isDev ? this.verifiedDeveloper.title : 'Nymchat Bot')}">✓</span>`
+            ? `<span class="verified-badge" data-tip="${this.escapeHtml(isDev ? this.verifiedDeveloper.title : 'Nymchat Bot')}">✓</span>`
             : '';
         const shop = typeof this.getUserShopItems === 'function' ? this.getUserShopItems(pubkey) : null;
         const supporterBadge = (shop && shop.supporter)
@@ -113,7 +125,7 @@ Object.assign(NYM.prototype, {
             if (this.canRejoinGroupCall(this.currentGroup)) return this.rejoinGroupCall(this.currentGroup, kind);
             isGroup = true;
             groupId = this.currentGroup;
-            targets = g.members.filter(pk => pk !== this.pubkey);
+            targets = g.members.filter(pk => pk !== this.pubkey && !(this.blockedUsers && this.blockedUsers.has(pk)));
             if (!targets.length) {
                 this.displaySystemMessage('No one to call in this group');
                 return;
@@ -164,6 +176,7 @@ Object.assign(NYM.prototype, {
     },
 
     async _sendCallSignal(targetPubkey, payload) {
+        if (this._callPeerBlocked(targetPubkey)) return;
         if (!this._canSendGiftWraps()) {
             console.error('Call signal error: gift-wrap signing unavailable');
             return;
@@ -234,6 +247,7 @@ Object.assign(NYM.prototype, {
     _ringWakes(targets) {
         if (typeof fetch !== 'function') return;
         targets.forEach(pk => {
+            if (this.blockedUsers && this.blockedUsers.has(pk)) return;
             const wake = this._wakeFor(pk);
             if (!wake) return;
             try {
@@ -272,8 +286,12 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
+    _callPeerBlocked(pubkey) {
+        return !!pubkey && pubkey !== this.pubkey && !!this.blockedUsers && this.blockedUsers.has(pubkey);
+    },
+
     _broadcastCallSignal(targets, payload) {
-        targets.forEach(t => this._sendCallSignal(t, payload));
+        targets.forEach(t => { if (!this._callPeerBlocked(t)) this._sendCallSignal(t, payload); });
     },
 
     handleCallSignalingEvent(event) {
@@ -355,7 +373,7 @@ Object.assign(NYM.prototype, {
         try { localStorage.setItem('nym_seen_calls', JSON.stringify(map)); } catch (_) { }
     },
 
-    _markCallSeen(callId, status) {
+    _markCallSeen(callId, status, wanted) {
         if (!callId) return;
         const map = this._getSeenCalls();
         const rank = this._CALL_STATUS_RANK;
@@ -364,7 +382,7 @@ Object.assign(NYM.prototype, {
         const keep = existing && (rank[existing.s] || 0) > (rank[next] || 0) ? existing.s : next;
         map[callId] = { t: Math.floor(Date.now() / 1000), s: keep };
         this._persistSeenCalls(map);
-        if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave();
+        if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(5000, wanted ? { wanted: true } : undefined);
     },
 
     // Merge seen-call maps from other devices so calls handled elsewhere aren't re-rung or shown as missed.
@@ -410,6 +428,7 @@ Object.assign(NYM.prototype, {
             isGroup: !!isGroup,
             groupId: groupId || null,
             eventId: `missed-call-${callId}`,
+            stableId: true,
             nym: baseTitle
         };
         if (typeof this._addNotificationToHistory === 'function') {
@@ -428,6 +447,7 @@ Object.assign(NYM.prototype, {
         if (pref === 'disabled' && !linkJoin && !glare) return;
         if (pref === 'friends' && !this.isFriend(sender) && !linkJoin && !glare) return;
         if (this.blockedUsers && this.blockedUsers.has(sender)) return;
+        if (this._callerHidden(sender, data.nym)) return;
 
         // Stale invites within the seen-call window are logged as missed calls rather than dropped.
         const createdAt = event && event.created_at ? event.created_at : 0;
@@ -500,6 +520,65 @@ Object.assign(NYM.prototype, {
         }, 45000);
     },
 
+    _callMask(pubkey, nym) {
+        if (!pubkey || pubkey === this.pubkey || typeof this._personMask !== 'function') return '';
+        const mask = this._personMask(pubkey);
+        if (mask) return mask;
+        return typeof nym === 'string' && nym ? this._personMask(pubkey, this.parseNymFromDisplay(nym)) : '';
+    },
+
+    _callerHidden(pubkey, nym) {
+        if (!pubkey || pubkey === this.pubkey || typeof this.isPersonHidden !== 'function') return false;
+        if (this.isPersonHidden(pubkey)) return true;
+        return typeof nym === 'string' && !!nym && this.isPersonHidden(pubkey, nym);
+    },
+
+    _dropIncomingCall(inc) {
+        if (!inc || this.incomingCall !== inc) return;
+        this._stopRingtone();
+        if (inc.timeout) clearTimeout(inc.timeout);
+        this._hideIncomingCallUI();
+        this._markCallSeen(inc.callId, 'declined');
+        this.incomingCall = null;
+        if (typeof this._callStateChanged === 'function') this._callStateChanged();
+    },
+
+    _callsRefreshForFilters() {
+        const inc = this.incomingCall;
+        if (inc && !inc.accepting && this._callerHidden(inc.from, inc.nym)) this._dropIncomingCall(inc);
+        this._refilterCallChat();
+        const live = this.activeCall;
+        const blockedIn = live ? Array.from(new Set(live.members.concat(Array.from(live.peers.keys())))).filter((pk) => this._callPeerBlocked(pk)) : [];
+        for (const pk of blockedIn) if (this.activeCall === live) this._onUserBlockedForCall(pk);
+        const ac = this.activeCall;
+        if (!ac) return;
+        this._renderCallChatTyping();
+        if (ac.chatReaders && typeof ac.chatReaders.forEach === 'function') {
+            ac.chatReaders.forEach((_readers, mid) => this._renderCallChatReceipt(mid));
+        }
+        if (ac.chatReactions) Object.keys(ac.chatReactions).forEach((mid) => this._renderCallChatReactions(mid));
+        if (typeof document !== 'undefined' && document.getElementById('callGrid')) this._renderCallGrid();
+    },
+
+    _callChatHidden(pubkey, text) {
+        const F = window.NymContentFilter;
+        if (!F || typeof this._cfCtx !== 'function' || !pubkey || pubkey === this.pubkey) return false;
+        const nym = typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pubkey) : '';
+        return F.hidden(this._cfCtx(), { pubkey, content: String(text || ''), nym: this._cfNym(nym) });
+    },
+
+    _refilterCallChat() {
+        const list = document.getElementById('callChatMessages');
+        const ac = this.activeCall;
+        if (!list || !ac || !Array.isArray(ac.chatLog)) return;
+        const byMid = new Map(ac.chatLog.map((m) => [m.mid, m]));
+        Array.from(list.children).forEach((r) => {
+            const m = r.dataset ? byMid.get(r.dataset.mid) : null;
+            if (!m || m.isSelf) return;
+            r.classList.toggle('call-chat-filter-hidden', this._callChatHidden(m.pubkey, m.text));
+        });
+    },
+
     _callGlare(sender, data) {
         const ac = this.activeCall;
         if (!ac || ac.isGroup || data.isGroup || ac.status !== 'outgoing' || ac.gtLinkId || data.link) return null;
@@ -521,7 +600,7 @@ Object.assign(NYM.prototype, {
             if (stream) stream.getTracks().forEach(t => { try { t.stop(); } catch (e) { } });
             return;
         }
-        this._markCallSeen(inc.callId, stream ? 'answered' : 'declined');
+        this._markCallSeen(inc.callId, stream ? 'answered' : 'declined', true);
         if (!stream) {
             this._sendCallSignal(inc.from, { type: 'reject', callId: inc.callId, reason: 'media' });
             if (typeof this._chDeclined === 'function') this._chDeclined(inc);
@@ -556,11 +635,11 @@ Object.assign(NYM.prototype, {
         this._setCallStatus('Connecting…');
         this._armCallWatchdog(this.activeCall);
 
-        const others = this.activeCall.members.filter(pk => pk !== this.pubkey);
+        const others = this.activeCall.members.filter(pk => pk !== this.pubkey && !this._callPeerBlocked(pk));
         this._broadcastCallSignal(others, { type: 'accept', callId: this.activeCall.callId });
 
         this._connectToPeer(inc.from);
-        earlyPeers.forEach(pk => { if (pk !== this.pubkey && pk !== inc.from) this._connectToPeer(pk); });
+        earlyPeers.forEach(pk => { if (pk !== this.pubkey && pk !== inc.from && !this._callPeerBlocked(pk)) this._connectToPeer(pk); });
     },
 
     rejectCall() {
@@ -568,7 +647,7 @@ Object.assign(NYM.prototype, {
         if (!inc) return;
         this._stopRingtone();
         if (inc.timeout) clearTimeout(inc.timeout);
-        this._markCallSeen(inc.callId, 'declined');
+        this._markCallSeen(inc.callId, 'declined', true);
         this._hideIncomingCallUI();
         this._sendCallSignal(inc.from, { type: 'reject', callId: inc.callId, reason: 'declined' });
         if (typeof this._chDeclined === 'function') this._chDeclined(inc);
@@ -683,6 +762,7 @@ Object.assign(NYM.prototype, {
 
     _connectToPeer(peerPubkey) {
         if (!this.activeCall || peerPubkey === this.pubkey) return;
+        if (this._callPeerBlocked(peerPubkey)) return;
         if (this.activeCall.peers.has(peerPubkey)) return;
 
         const pc = new RTCPeerConnection({ iceServers: this.p2pIceServers });
@@ -763,6 +843,7 @@ Object.assign(NYM.prototype, {
         if (!entry) return;
         if (opts && opts.iceRestart && entry.pc.signalingState !== 'stable') return;
         try {
+            this._askForVideo(ac, entry);
             const offer = await entry.pc.createOffer(opts || undefined);
             await entry.pc.setLocalDescription(offer);
             if (this.activeCall !== ac) return;
@@ -772,14 +853,28 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _askForVideo(ac, entry) {
+        if (ac.kind !== 'video') return;
+        if (entry.pc.getTransceivers().some(t => t.receiver && t.receiver.track && t.receiver.track.kind === 'video')) return;
+        entry.pc.addTransceiver('video', { direction: 'recvonly' });
+    },
+
     async _onCallOffer(sender, data) {
         if (!this.activeCall || this.activeCall.callId !== data.callId) return;
         if (!this._isCallParticipant(this.activeCall, sender)) return;
         if (!this.activeCall.peers.has(sender)) this._connectToPeer(sender);
         const entry = this.activeCall.peers.get(sender);
         if (!entry) return;
+        const text = data.sdp && data.sdp.sdp;
+        if (this._sdpStale(entry.remoteSdp, text)) return;
         const collision = this._offerCollision(sender, entry.pc.signalingState);
-        if (collision === 'ignore') return;
+        if (collision === 'ignore') {
+            if (entry.pc.signalingState === 'have-local-offer') {
+                const held = entry.heldOffer;
+                if (!held || !this._sdpStale(this._sdpOrigin(held.sdp && held.sdp.sdp), text)) entry.heldOffer = data;
+            }
+            return;
+        }
         try {
             if (collision === 'rollback') {
                 await entry.pc.setLocalDescription({ type: 'rollback' });
@@ -787,6 +882,7 @@ Object.assign(NYM.prototype, {
             }
             await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
             entry.haveRemote = true;
+            this._noteRemoteSdp(entry, text);
             await this._flushCandidates(sender);
             const answer = await entry.pc.createAnswer();
             await entry.pc.setLocalDescription(answer);
@@ -806,18 +902,46 @@ Object.assign(NYM.prototype, {
         return 'ignore';
     },
 
+    _sdpOrigin(sdp) {
+        const m = /^o=\S+ (\S+) (\d+) /m.exec(typeof sdp === 'string' ? sdp : '');
+        return m ? { id: m[1], version: m[2] } : null;
+    },
+
+    _sdpStale(seen, sdp) {
+        const o = this._sdpOrigin(sdp);
+        if (!o || !seen || seen.id !== o.id) return false;
+        try { return BigInt(o.version) <= BigInt(seen.version); } catch (e) { return false; }
+    },
+
+    _noteRemoteSdp(entry, sdp) {
+        const o = this._sdpOrigin(sdp);
+        if (o && !this._sdpStale(entry.remoteSdp, sdp)) entry.remoteSdp = o;
+    },
+
+    _takeHeldOffer(sender, entry) {
+        const held = entry.heldOffer;
+        entry.heldOffer = null;
+        if (!held || !this.activeCall || this.activeCall.peers.get(sender) !== entry) return;
+        if (!entry.remoteSdp || !this._sdpOrigin(held.sdp && held.sdp.sdp)) return;
+        this._onCallOffer(sender, held);
+    },
+
     async _onCallAnswer(sender, data) {
         if (!this._isCallParticipant(this.activeCall, sender)) return;
         const entry = this.activeCall && this.activeCall.peers.get(sender);
         if (!entry) return;
         if (entry.pc.signalingState === 'stable') return;
+        let applied = false;
         try {
             await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
             entry.haveRemote = true;
+            this._noteRemoteSdp(entry, data.sdp && data.sdp.sdp);
+            applied = true;
             await this._flushCandidates(sender);
         } catch (e) {
             console.error('Handle answer error:', e);
         }
+        if (applied) this._takeHeldOffer(sender, entry);
     },
 
     async _onCallIce(sender, data) {
@@ -888,14 +1012,14 @@ Object.assign(NYM.prototype, {
     hangupCall() {
         if (!this.activeCall) return;
         const left = this.activeCall;
-        const live = Array.from(left.peers.entries()).filter(([, e]) => e.pc.connectionState === 'connected').map(([pk]) => pk);
+        const live = Array.from(left.peers.entries()).filter(([pk, e]) => e.pc.connectionState === 'connected' && !this._callPeerBlocked(pk)).map(([pk]) => pk);
         if (left.isGroup && left.groupId && left.status !== 'outgoing' && live.length > 0) {
             this._setLeftGroupCall({
                 callId: left.callId, groupId: left.groupId, kind: left.kind,
                 members: left.members.slice(), remaining: new Set(live), at: Date.now()
             });
         }
-        const targets = this.activeCall.members.filter(pk => pk !== this.pubkey);
+        const targets = this.activeCall.members.filter(pk => pk !== this.pubkey && !this._callPeerBlocked(pk));
         if (this.activeCall.status === 'outgoing') this._broadcastCallSignal(targets, { type: 'cancel', callId: this.activeCall.callId });
         this._broadcastCallSignal(targets, { type: 'hangup', callId: this.activeCall.callId });
         this._endCall();
@@ -947,7 +1071,7 @@ Object.assign(NYM.prototype, {
         if (!r || !groupId || r.groupId !== groupId || this.activeCall || this.incomingCall) return false;
         if (!this.groupConversations || !this.groupConversations.has(groupId)) return false;
         if (!r.remaining.size || Date.now() - r.at > this._REJOIN_WINDOW_MS) return false;
-        return true;
+        return Array.from(r.remaining).some((pk) => !this._callPeerBlocked(pk));
     },
 
     _callGroupRemoved(groupId) {
@@ -1002,9 +1126,10 @@ Object.assign(NYM.prototype, {
         this._watchLocalTracks(ac);
         this._showCallOverlay();
         this._setCallStatus('Connecting…');
-        const others = ac.members.filter(pk => pk !== this.pubkey);
+        const others = ac.members.filter(pk => pk !== this.pubkey && !this._callPeerBlocked(pk));
         this._broadcastCallSignal(others, { type: 'accept', callId: r.callId });
         r.remaining.forEach(pk => {
+            if (this._callPeerBlocked(pk)) return;
             this._connectToPeer(pk);
             if (camera && r.kind !== 'video' && !(this.pubkey < pk)) this._makeOffer(pk);
         });
@@ -1258,11 +1383,13 @@ Object.assign(NYM.prototype, {
             const g = this.activeCall.groupId && this.groupConversations.get(this.activeCall.groupId);
             const name = g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : 'Group call';
             const others = (g && Array.isArray(g.members)) ? g.members.filter(pk => pk !== this.pubkey) : [];
-            const avatars = others.slice(0, 4).map(pk =>
-                `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="avatar-message group-header-avatar" data-avatar-pubkey="${this._safePubkey(pk)}" alt="" decoding="async" loading="lazy">`
+            const avatars = others.slice(0, 4).map(pk => (this._callMask(pk)
+                ? `<img src="${this.escapeHtml(this._maskedAvatar(pk))}" class="avatar-message group-header-avatar" alt="" decoding="async" loading="lazy">`
+                : `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="avatar-message group-header-avatar" data-avatar-pubkey="${this._safePubkey(pk)}" alt="" decoding="async" loading="lazy">`)
             ).join('');
             const groupSvg = `<svg class="group-chat-icon group-header-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
-            if (fetch && typeof this.ensureListProfiles === 'function') this.ensureListProfiles(null, others.slice(0, 4), () => this._refreshCallTitle({ noFetch: true }));
+            const fetchable = others.slice(0, 4).filter(pk => !(this.blockedUsers && this.blockedUsers.has(pk)));
+            if (fetch && fetchable.length && typeof this.ensureListProfiles === 'function') this.ensureListProfiles(null, fetchable, () => this._refreshCallTitle({ noFetch: true }));
             return `${prefix}<span class="group-header-row call-title-id"><span class="group-header-icon">${groupSvg}</span>${avatars}<span class="group-name-text ${others.length ? 'nm-grp-ml8' : ''}">${this.escapeHtml(name)}</span></span>`;
         }
         const peer = this.activeCall.members.find(pk => pk !== this.pubkey);
@@ -1367,12 +1494,22 @@ Object.assign(NYM.prototype, {
         }
         const video = tile.querySelector('video');
         if (video.srcObject !== stream) video.srcObject = stream || null;
+        const mask = !isLocal && pubkey && typeof this._personMask === 'function' ? this._personMask(pubkey) : '';
         const av = tile.querySelector('.call-tile-avatar');
-        if (pubkey) av.dataset.avatarPubkey = this._safePubkey(pubkey);
-        av.src = this.getAvatarUrl(pubkey);
+        if (mask) {
+            delete av.dataset.avatarPubkey;
+            av.src = typeof this._maskedAvatar === 'function' ? this._maskedAvatar(pubkey) : '';
+        } else {
+            if (pubkey) av.dataset.avatarPubkey = this._safePubkey(pubkey);
+            av.src = this.getAvatarUrl(pubkey);
+        }
         const nameEl = tile.querySelector('.call-tile-name');
-        nameEl.innerHTML = isLocal ? 'You' : this._callNymHtml(pubkey);
-        if (!isLocal && pubkey) {
+        nameEl.innerHTML = isLocal ? 'You' : (mask ? this.escapeHtml(mask) : this._callNymHtml(pubkey));
+        if (mask) {
+            nameEl.classList.remove('call-clickable-nym');
+            delete nameEl.dataset.action;
+            delete nameEl.dataset.pubkey;
+        } else if (!isLocal && pubkey) {
             nameEl.classList.add('call-clickable-nym');
             nameEl.dataset.action = 'callNickMenu';
             nameEl.dataset.pubkey = pubkey;
@@ -1575,7 +1712,8 @@ Object.assign(NYM.prototype, {
         const ac = this.activeCall;
         if (!ac || ac.callId !== data.callId || !this._isCallMod() || !this._isCallParticipant(ac, sender)) return;
         ac.presentRequests.add(sender);
-        this.displaySystemMessage((data.nym ? this.parseNymFromDisplay(data.nym) : this._nymForPubkey(sender)) + ' requested to present');
+        const mask = this._callMask(sender, data.nym);
+        this.displaySystemMessage((mask || (data.nym ? this.parseNymFromDisplay(data.nym) : this._nymForPubkey(sender))) + ' requested to present');
         this._renderPresenterMenu();
         this._updateCallControls();
     },
@@ -1693,6 +1831,7 @@ Object.assign(NYM.prototype, {
         const ac = this.activeCall;
         if (!ac || ac.callId !== data.callId || !this.isValidReactionEmoji(data.emoji)) return;
         if (!this._isCallParticipant(ac, sender)) return;
+        if (this._callerHidden(sender)) return;
         if (data.emojiTags && typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(data.emojiTags);
         this._showFlyReaction(String(data.emoji), null, sender);
     },
@@ -1751,12 +1890,10 @@ Object.assign(NYM.prototype, {
         if (!ac || ac.callId !== data.callId || !data.text) return;
         if (!this._isCallParticipant(ac, sender)) return;
         if (this.blockedUsers && this.blockedUsers.has(sender)) return;
-        const F = window.NymContentFilter;
         const chatText = String(data.text).slice(0, 2000);
-        if (F && typeof this._cfCtx === 'function' &&
-            F.hidden(this._cfCtx(), { pubkey: sender, content: chatText, nym: this._cfNym(this.getNymFromPubkey(sender)) })) return;
         this._clearCallChatTyping(sender);
         this._appendCallChat(sender, chatText, false, data.mid);
+        if (this._callChatHidden(sender, chatText)) return;
         const panel = document.getElementById('callChatPanel');
         if (!panel || !panel.classList.contains('active')) {
             ac.chatUnread = (ac.chatUnread || 0) + 1;
@@ -1802,6 +1939,7 @@ Object.assign(NYM.prototype, {
         if (!this.isTypingIndicatorAllowedFor(ac.isGroup ? 'group' : 'pm')) return;
         if (this.blockedUsers && this.blockedUsers.has(sender)) return;
         if (!ac.chatTypers) ac.chatTypers = new Map();
+        if (data.status !== 'stop' && this._callerHidden(sender)) return;
         if (data.status === 'stop') {
             const entry = ac.chatTypers.get(sender);
             if (entry && entry.timeout) clearTimeout(entry.timeout);
@@ -1822,7 +1960,7 @@ Object.assign(NYM.prototype, {
         const el = document.getElementById('callChatTyping');
         const ac = this.activeCall;
         if (!el) return;
-        const typers = ac && ac.chatTypers ? Array.from(ac.chatTypers.keys()) : [];
+        const typers = ac && ac.chatTypers ? Array.from(ac.chatTypers.keys()).filter((pk) => !this._callerHidden(pk)) : [];
         if (!typers.length) {
             el.classList.remove('active');
             el.innerHTML = '';
@@ -1862,7 +2000,8 @@ Object.assign(NYM.prototype, {
         const ac = this.activeCall;
         if (!ac || !Array.isArray(ac.chatLog)) return;
         for (const m of ac.chatLog) {
-            if (!m.isSelf && m.pubkey && m.mid) this._sendCallChatRead(m.pubkey, m.mid);
+            if (m.isSelf || !m.pubkey || !m.mid || this._callChatHidden(m.pubkey, m.text)) continue;
+            this._sendCallChatRead(m.pubkey, m.mid);
         }
     },
 
@@ -1977,6 +2116,7 @@ Object.assign(NYM.prototype, {
         if (pubkey && this.blockedUsers && this.blockedUsers.has(pubkey)) {
             row.classList.add('call-chat-blocked-hidden');
         }
+        if (!isSelf && this._callChatHidden(pubkey, text)) row.classList.add('call-chat-filter-hidden');
         list.appendChild(row);
         list.scrollTop = list.scrollHeight;
     },
@@ -2175,7 +2315,7 @@ Object.assign(NYM.prototype, {
         if (!ac || ac.callId !== data.callId || !data.mid || !this.isValidReactionEmoji(data.emoji)) return;
         if (!this._isCallParticipant(ac, sender)) return;
         if (this.blockedUsers && this.blockedUsers.has(sender)) return;
-        if (data.emojiTags && typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(data.emojiTags);
+        if (data.emojiTags && !this._callerHidden(sender) && typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(data.emojiTags);
         const map = ac.chatReactions[data.mid] || (ac.chatReactions[data.mid] = {});
         const set = map[data.emoji] || (map[data.emoji] = new Set());
         if (data.op === 'remove') {
@@ -2201,6 +2341,8 @@ Object.assign(NYM.prototype, {
         Object.keys(map).forEach(emoji => {
             const set = map[emoji];
             if (!set || !set.size) return;
+            const shown = Array.from(set).filter((pk) => pk === this.pubkey || !this._callerHidden(pk));
+            if (!shown.length) return;
             hasAny = true;
             const badge = document.createElement('button');
             badge.type = 'button';
@@ -2208,7 +2350,7 @@ Object.assign(NYM.prototype, {
             badge.dataset.action = 'callChatReactBadge';
             badge.dataset.mid = mid;
             badge.dataset.emoji = emoji;
-            badge.innerHTML = this.renderReactionEmoji(emoji) + `<span class="call-chat-reaction-count">${set.size}</span>`;
+            badge.innerHTML = this.renderReactionEmoji(emoji) + `<span class="call-chat-reaction-count">${shown.length}</span>`;
             cont.appendChild(badge);
         });
         if (hasAny) {
@@ -2377,7 +2519,7 @@ Object.assign(NYM.prototype, {
         row.className = 'call-presenter-row';
         const name = document.createElement('span');
         name.className = 'call-presenter-name';
-        name.textContent = (pk === this.pubkey ? 'You' : this._nymForPubkey(pk)) + (ac.presenter === pk ? ' · presenter' : '');
+        name.textContent = (pk === this.pubkey ? 'You' : (this._callMask(pk) || this._nymForPubkey(pk))) + (ac.presenter === pk ? ' · presenter' : '');
         row.appendChild(name);
         if (ac.presenter === pk) {
             const btn = document.createElement('button');
@@ -2401,7 +2543,7 @@ Object.assign(NYM.prototype, {
     _callMentionParticipants() {
         const ac = this.activeCall;
         if (!ac) return [];
-        return ac.members.filter(pk => pk !== this.pubkey && !(this.blockedUsers && this.blockedUsers.has(pk)));
+        return ac.members.filter(pk => pk !== this.pubkey && !this._callerHidden(pk));
     },
 
     _callMentionActive() {
@@ -2502,6 +2644,8 @@ Object.assign(NYM.prototype, {
 
     // Invoked from the shared block/unblock paths so blocking updates the live call.
     _onUserBlockedForCall(pubkey) {
+        const inc = this.incomingCall;
+        if (inc && pubkey && inc.from === pubkey && !inc.accepting) this._dropIncomingCall(inc);
         const ac = this.activeCall;
         if (!ac || !pubkey) return;
         this._hideCallChatFrom(pubkey, true);

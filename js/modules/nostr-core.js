@@ -25,6 +25,21 @@ function _getQuoteMentionPattern(author) {
 
 Object.assign(NYM.prototype, {
 
+    _channelDisplayContent(event) {
+        const content = event && typeof event.content === 'string' ? event.content : '';
+        const tags = event && Array.isArray(event.tags) ? event.tags : [];
+        const nymquoteTag = tags.find(t => Array.isArray(t) && t[0] === 'nymquote');
+        if (!nymquoteTag || !nymquoteTag[1] || !nymquoteTag[2]) return content;
+        const qAuthor = nymquoteTag[1];
+        const qText = String(nymquoteTag[2]);
+        const userMessage = content.replace(_getQuoteMentionPattern(qAuthor), '').trim();
+        const strippedQText = qText.split('\n').filter(line => !line.startsWith('>')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+        const textLines = strippedQText.split('\n');
+        const quoteLine = `> @${qAuthor}: ${textLines[0]}` +
+            (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
+        return userMessage ? `${quoteLine}\n\n${userMessage}` : quoteLine;
+    },
+
     _notifPreviewText(text) {
         const MN = window.NymMediaNotes;
         if (MN && typeof text === 'string' && text.indexOf('#nym:') !== -1) {
@@ -277,6 +292,7 @@ Object.assign(NYM.prototype, {
         if (!this._d1ProfileMiss) this._d1ProfileMiss = new Map();
         for (const pk of pubkeys) {
             if (!/^[0-9a-f]{64}$/.test(pk)) continue;
+            if (pk !== this.pubkey && this._ownOtherKey(pk)) continue;
             const cached = this._d1ProfileCache.get(pk);
             if (cached && (now - cached.at) < ttl) {
                 found.add(pk);
@@ -441,6 +457,8 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
+            const senderBlocked = event.pubkey !== this.pubkey && !!(this.blockedUsers && this.blockedUsers.has(event.pubkey));
+
             // Automatic heuristics run only in direct mode; the relay-pool proxy already filters.
             const clientGates = this._clientGatesActive() || !!(this._archiveEvents && this._archiveEvents.has(event));
             if (clientGates && event.pubkey !== this.pubkey && !this.isFriend?.(event.pubkey) &&
@@ -467,7 +485,7 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            if (event.pubkey !== this.pubkey) {
+            if (event.pubkey !== this.pubkey && !senderBlocked) {
                 this._trackPubkeyMessage(event.pubkey, event.id);
                 // NIP-13 PoW meeting the nymchat floor counts as self-attestation of a nymchat client.
                 if (this.nymchatPowFloor > 0 && this.validatePow(event, this.nymchatPowFloor)) {
@@ -506,15 +524,23 @@ Object.assign(NYM.prototype, {
             }
             const alreadyNotified = this.channelNotificationTracking.get(channelKey).has(event.id);
 
+            const displayContent = this._channelDisplayContent(event);
+            const intakeQuoted = typeof this._quotedFromTags === 'function' ? this._quotedFromTags(event.tags) : [];
+            const intakePeople = this._botAskerOf(event);
             const intakeHidden = event.pubkey !== this.pubkey && typeof this.isContentHidden === 'function' &&
-                this.isContentHidden({ id: event.id, pubkey: event.pubkey, author: nym, content: event.content });
+                this.isContentHidden({ id: event.id, pubkey: event.pubkey, author: nym, content: displayContent, quoted: intakeQuoted, people: intakePeople });
 
             const awayNow = !isHistorical && typeof this.awayState === 'function' ? this.awayState() : null;
-            if (awayNow && awayNow.enabled && this._awayReplyAllowed({ geohash, pubkey: event.pubkey, nym, content: event.content, id: event.id })) {
+            if (awayNow && awayNow.enabled && this._awayReplyAllowed({ geohash, pubkey: event.pubkey, nym, content: displayContent, id: event.id, quoted: intakeQuoted, people: intakePeople })) {
                 this._awayMaybeAutoReply({
                     nym, geohash, senderPubkey: event.pubkey,
                     mentioned: this.isMentioned(event.content), historical: isHistorical
                 });
+            }
+
+            if (senderBlocked && geohash && !this.channels.has(geohash)
+                && geohash !== this.currentGeohash && geohash !== this.currentChannel) {
+                return;
             }
 
             if (!intakeHidden && geohash && !this.channels.has(geohash) && !this.isChannelBlocked(geohash, geohash)) {
@@ -523,7 +549,7 @@ Object.assign(NYM.prototype, {
 
             const fileOffer = this.parseFileOfferTag(event.tags, event.pubkey);
 
-            if (event.pubkey !== this.pubkey) {
+            if (event.pubkey !== this.pubkey && !senderBlocked) {
                 // Timestamp only, so avatar-less senders don't queue a profile fetch on every message.
                 const lastFetch = this.profileFetchedAt.get(event.pubkey) || 0;
                 if (Date.now() - lastFetch > 5 * 60 * 1000) {
@@ -532,10 +558,19 @@ Object.assign(NYM.prototype, {
                 }
             }
 
+            const emojiHidden = senderBlocked || intakeHidden || (typeof this._channelEmojiHidden === 'function' && this._channelEmojiHidden(event, nym));
             const editTag = event.tags.find(t => t[0] === 'edit');
             if (editTag && editTag[1]) {
                 const originalId = editTag[1];
+                if (!emojiHidden) {
+                    this.ingestEmojiTags(event.tags);
+                    if (typeof this.ingestImetaTags === 'function') this.ingestImetaTags(event.tags);
+                }
                 this.handleIncomingEdit(originalId, event.content, event.pubkey, event.id, event.created_at);
+                if (emojiHidden) {
+                    const held = (this.messages.get(geohash ? `#${geohash}` : this.currentChannel) || []).find((m) => m && m.id === originalId && m.pubkey === event.pubkey);
+                    if (held) this._holdEmojiTags(held, event.tags);
+                }
                 return;
             }
 
@@ -558,28 +593,10 @@ Object.assign(NYM.prototype, {
                 this._scheduleChannelWindowPrune();
             }
 
-            // Quotes travel as @mention + nymquote tag so other clients see a normal mention; rebuild the blockquote here.
-            let displayContent = event.content;
-            const nymquoteTag = event.tags.find(t => t[0] === 'nymquote');
-            if (nymquoteTag && nymquoteTag[1] && nymquoteTag[2]) {
-                const qAuthor = nymquoteTag[1];
-                const qText = nymquoteTag[2];
-                const mentionPattern = _getQuoteMentionPattern(qAuthor);
-                const userMessage = event.content.replace(mentionPattern, '').trim();
-                // Show only the last quoted message (strip nested quotes).
-                const strippedQText = qText.split('\n').filter(line => !line.startsWith('>')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
-                const textLines = strippedQText.split('\n');
-                const quoteLine = `> @${qAuthor}: ${textLines[0]}` +
-                    (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
-                displayContent = userMessage ? `${quoteLine}\n\n${userMessage}` : quoteLine;
-            }
 
-            // NIP-30 custom emoji.
-            this.ingestEmojiTags(event.tags);
-
-            // NIP-92 Blossom mirror URLs.
-            if (typeof this.ingestImetaTags === 'function') {
-                this.ingestImetaTags(event.tags);
+            if (!emojiHidden) {
+                this.ingestEmojiTags(event.tags);
+                if (typeof this.ingestImetaTags === 'function') this.ingestImetaTags(event.tags);
             }
 
             const message = {
@@ -603,12 +620,15 @@ Object.assign(NYM.prototype, {
                 threadRoot: (typeof this.threadRootFromChannelTags === 'function')
                     ? this.threadRootFromChannelTags(event.tags) : null,
                 // Committed NIP-13 target, or null without a nonce tag; proven work is recomputed from the id.
-                powTarget: this._powTargetFromEvent(event)
+                powTarget: this._powTargetFromEvent(event),
+                quoted: intakeQuoted.length ? intakeQuoted : undefined,
+                people: intakePeople
             };
+            if (emojiHidden) this._holdEmojiTags(message, event.tags);
 
             if (!this.isDuplicateMessage(message)) {
-                if (message.isBot && typeof this._setBotChannelThinking === 'function') {
-                    this._setBotChannelThinking(false);
+                if (message.isBot && typeof this._botReplyLanded === 'function') {
+                    this._botReplyLanded(geohash, event);
                 }
                 this.displayMessage(message);
                 if (!message._spamGated && !(message.pubkey !== this.pubkey && this.isContentHidden(message))) {
@@ -635,8 +655,10 @@ Object.assign(NYM.prototype, {
                     geohash: geohash,
                     id: event.id,
                     eventId: event.id,
+                    stableId: true,
                     pubkey: event.pubkey,
-                    ...(_notifInThread ? { inThread: true, threadRoot: message.threadRoot } : {})
+                    ...(_notifInThread ? { inThread: true, threadRoot: message.threadRoot } : {}),
+                    ...(Array.isArray(message.quoted) && message.quoted.length ? { quoted: message.quoted.slice() } : {})
                 });
 
                 const _msgHidden = !message.isOwn && this.isContentHidden(message);
@@ -808,10 +830,7 @@ Object.assign(NYM.prototype, {
                 const profileName = [profile.name, profile.username, profile.display_name]
                     .find(v => typeof v === 'string' && v.length > 0);
                 if (profileName) {
-                    const ownName = pubkey === this.pubkey && /^[0-9a-f]{64}$/i.test(pubkey);
-                    const truncatedName = ownName
-                        ? profileName.substring(0, 20).replace(/#[0-9a-f]{4}$/i, '#' + pubkey.slice(-4).toLowerCase())
-                        : profileName.substring(0, 20);
+                    const truncatedName = this._kind0Nym(profileName, pubkey);
                     const existingUser = this.users.get(pubkey);
                     // The kind 0 event is authoritative for display names.
                     if (!existingUser) {
@@ -1014,15 +1033,18 @@ Object.assign(NYM.prototype, {
             .trim();
     },
 
-    isSpamMessage(content) {
-        if (this.spamFilterEnabled === false) return false;
+    isSpamMessage(content, flags) {
+        const f = flags && typeof flags === 'object' ? flags : null;
+        const enabled = f && typeof f.enabled === 'boolean' ? f.enabled : this.spamFilterEnabled !== false;
+        const aggressive = f && typeof f.aggressive === 'boolean' ? f.aggressive : this.spamFilterAggressive !== false;
+        if (!enabled) return false;
         if (typeof content !== 'string') return false;
 
         const trimmed = content.trim();
 
         if (trimmed.includes('["client","chorus"]')) return true;
 
-        if (this.spamFilterAggressive === false) return false;
+        if (!aggressive) return false;
 
         if (trimmed.length < 6) return false;
 
@@ -1697,6 +1719,44 @@ Object.assign(NYM.prototype, {
         }).join('');
 
         el.classList.add('active');
+        this._fitTypingLine(textEl);
+    },
+
+    _fitTypingLine(textEl) {
+        textEl._typingHtml = textEl.innerHTML;
+        this._keepTypingSuffixesWhole(textEl);
+        if (textEl._typingFit || typeof ResizeObserver !== 'function') return;
+        let width = textEl.clientWidth;
+        textEl._typingFit = new ResizeObserver(() => {
+            if (textEl.clientWidth === width || textEl._typingHtml == null) return;
+            width = textEl.clientWidth;
+            textEl.innerHTML = textEl._typingHtml;
+            this._keepTypingSuffixesWhole(textEl);
+        });
+        textEl._typingFit.observe(textEl);
+    },
+
+    _keepTypingSuffixesWhole(textEl) {
+        if (!textEl.isConnected || textEl.scrollWidth <= textEl.clientWidth + 1) return;
+        const cs = getComputedStyle(textEl);
+        const box = textEl.getBoundingClientRect();
+        const ctx = document.createElement('canvas').getContext('2d');
+        let ell = 0;
+        if (ctx) { ctx.font = cs.font; ell = ctx.measureText('\u2026').width; }
+        const rtl = cs.direction === 'rtl';
+        const edge = rtl
+            ? box.left + parseFloat(cs.paddingLeft || 0) + parseFloat(cs.borderLeftWidth || 0) + ell
+            : box.right - parseFloat(cs.paddingRight || 0) - parseFloat(cs.borderRightWidth || 0) - ell;
+        for (const sfx of textEl.querySelectorAll('.nym-suffix')) {
+            const r = sfx.getBoundingClientRect();
+            if (!(r.left < edge - 0.5 && r.right > edge + 0.5)) continue;
+            for (let n = sfx; n && n !== textEl; n = n.parentNode) {
+                while (n.nextSibling) n.nextSibling.remove();
+            }
+            sfx.remove();
+            textEl.appendChild(document.createTextNode('\u2026'));
+            return;
+        }
     },
 
     isNymReceipt(rumor) {
@@ -1817,6 +1877,14 @@ Object.assign(NYM.prototype, {
         const displayNym = `${baseNym}#${this.getPubkeySuffix(event.pubkey)}`;
         if (this.blockedUsers.has(event.pubkey)) return;
 
+        if (typeof this._botChannelTypingSignal === 'function' && this.isVerifiedBot(event.pubkey)) {
+            const askers = status !== 'stop' && typeof this._botAskerOf === 'function' ? this._botAskerOf(event) : undefined;
+            if (Array.isArray(askers) && typeof this.isPersonHidden === 'function' && askers.some((pk) => this.isPersonHidden(pk))) return;
+            const ttlMs = UA && decoded && decoded.ttl ? UA.expiryMs(decoded.ttl) : this._typingExpireMs;
+            this._botChannelTypingSignal(geohash, status, this._botChannelRunIdOf(event), ttlMs, askers);
+            return;
+        }
+
         const convKey = `channel-${geohash}`;
         if (!this.typingUsers.has(convKey)) this.typingUsers.set(convKey, new Map());
         const convTypers = this.typingUsers.get(convKey);
@@ -1828,11 +1896,12 @@ Object.assign(NYM.prototype, {
         } else {
             const existing = convTypers.get(event.pubkey);
             if (existing && existing.timeout) clearTimeout(existing.timeout);
+            const ttlMs = UA && decoded && decoded.ttl ? UA.expiryMs(decoded.ttl) : this._typingExpireMs;
             const timeout = setTimeout(() => {
                 convTypers.delete(event.pubkey);
                 this.renderTypingIndicator();
-            }, this._typingExpireMs);
-            convTypers.set(event.pubkey, { nym: displayNym, timeout, timestamp: Date.now(), activity });
+            }, ttlMs);
+            convTypers.set(event.pubkey, { nym: displayNym, timeout, timestamp: Date.now(), ttlMs, activity });
         }
         this.renderTypingIndicator();
     },
@@ -1841,6 +1910,7 @@ Object.assign(NYM.prototype, {
         if (!this.isReadReceiptAllowedFor('channel')) return;
         if (!messageId || !authorPubkey || !geohash) return;
         if (authorPubkey === this.pubkey) return;
+        if (this._ownOtherKey(authorPubkey)) return;
         if (!this._canPublishChannelEvent()) return;
 
         if (!this._sentChannelReadReceipts) this._sentChannelReadReceipts = new Set();
@@ -1881,6 +1951,7 @@ Object.assign(NYM.prototype, {
         for (const m of messages.slice(-this.channelPageSize)) {
             if (!m || m.isOwn || m.isHistorical) continue;
             if (!m.id || !/^[0-9a-f]{64}$/i.test(m.id)) continue;
+            if (typeof this._channelReceiptOk === 'function' && !this._channelReceiptOk(m)) continue;
             this.sendChannelReadReceipt(m.id, m.pubkey, m.geohash || geohash);
         }
     },
@@ -2061,6 +2132,14 @@ Object.assign(NYM.prototype, {
         };
         if (typeof this._oneShotReqAcquire === 'function') this._oneShotReqAcquire(run);
         else run();
+    },
+
+    _kind0Nym(profileName, pubkey) {
+        const m = /^([\s\S]*)#([0-9a-f]{4})$/i.exec(profileName);
+        const base = (m ? m[1] : profileName).substring(0, 20);
+        if (!m) return base;
+        const own = pubkey === this.pubkey && /^[0-9a-f]{64}$/i.test(pubkey);
+        return base + '#' + (own ? pubkey.slice(-4).toLowerCase() : m[2]);
     },
 
     _updateOwnSidebarProfile() {
@@ -2581,6 +2660,12 @@ Object.assign(NYM.prototype, {
         const hidden = this.isContentHidden(msg);
         const el = typeof this.findMessageElementAnywhere === 'function' ? this.findMessageElementAnywhere(domId) : null;
         if (el && el.classList) el.classList.toggle('blocked', hidden);
+        if (hidden !== wasHidden && msg && msg.threadRoot) {
+            this._threadCountCache = null;
+            if (typeof this._refreshThreadIndicators === 'function') {
+                try { this._refreshThreadIndicators(msg.threadRoot, msg); } catch (_) { }
+            }
+        }
         if (hidden === wasHidden || !key || !this.unreadCounts) return;
         if (typeof this._cfRefreshRows === 'function') this._cfRefreshRows();
         if (key.startsWith('pm-') || key.startsWith('group-')) {
@@ -2681,7 +2766,7 @@ Object.assign(NYM.prototype, {
 
                         if (event.pubkey === this.pubkey && (profile.name || profile.username || profile.display_name)) {
                             const profileName = profile.name || profile.username || profile.display_name;
-                            this.nym = profileName.substring(0, 20);
+                            this.nym = this._kind0Nym(profileName, this.pubkey);
                             const ownUser = this.users.get(this.pubkey);
                             if (ownUser) {
                                 ownUser.nym = this.nym;
@@ -2730,7 +2815,7 @@ Object.assign(NYM.prototype, {
                         }
 
                         if (event.pubkey !== this.pubkey && (profile.name || profile.username || profile.display_name)) {
-                            const profileName = (profile.name || profile.username || profile.display_name).substring(0, 20);
+                            const profileName = this._kind0Nym(profile.name || profile.username || profile.display_name, event.pubkey);
                             // Always accept the newer kind 0 as authoritative.
                             const existingUser = this.users.get(event.pubkey);
                             if (!existingUser) {
@@ -2861,6 +2946,7 @@ Object.assign(NYM.prototype, {
         }
 
         tags.push(...sender.emojiTags(wireContent));
+        if (typeof this.quoteTagsForContent === 'function') tags.push(...this.quoteTagsForContent(content));
 
         if (typeof this.imetaTagsForContent === 'function') {
             tags.push(...this.imetaTagsForContent(wireContent));
@@ -2955,14 +3041,18 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async publishMessagePseudonymous(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null, threadRoot = null) {
+    async publishMessagePseudonymous(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null, threadRoot = null, opts = null) {
         try {
             if (!this.connected) {
+                throw new Error('Not connected to relay');
+            }
+            if (typeof this._anonLane !== 'function') {
                 throw new Error('Not connected to relay');
             }
 
             const ephSk = window.NostrTools.generateSecretKey();
             const ephPk = window.NostrTools.getPublicKey(ephSk);
+            this._noteOwnAnonKey(ephPk);
 
             const ephSuffix = ephPk.slice(-4);
             const style = localStorage.getItem('nym_nick_style') || 'fancy';
@@ -3029,6 +3119,7 @@ Object.assign(NYM.prototype, {
 
             // NIP-30 custom emoji.
             tags.push(...this.customEmojiTagsForContent(wireContent));
+            if (typeof this.quoteTagsForContent === 'function') tags.push(...this.quoteTagsForContent(content));
 
             // NIP-92 Blossom mirror URLs.
             if (typeof this.imetaTagsForContent === 'function') {
@@ -3068,20 +3159,29 @@ Object.assign(NYM.prototype, {
             this.displayMessage(optimisticMessage);
             this._scheduleScrollToBottom(true);
 
-            (async () => {
+            const lane = this._anonLane(channelKey);
+            lane.hold();
+            if (opts && opts.keep) lane.hold();
+            const posted = (async () => {
+                let sentId = tempId;
                 try {
                     const psDifficulty = this._effectivePowDifficulty();
                     if (psDifficulty > 0) event = await this._minePow(event, psDifficulty);
                     const signedEvent = window.NostrTools.finalizeEvent(event, ephSk);
                     this._replaceOptimisticMessage(tempId, signedEvent, storageKey, false);
-                    this.sendToRelay(["EVENT", signedEvent]);
-                    if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
+                    sentId = signedEvent.id;
+                    const res = await lane.publish(signedEvent);
+                    if (!res || !res.ok) throw new Error(res && !res.transport && res.reason && res.reason !== 'timeout' ? res.reason : 'Not connected to relay');
+                    return true;
                 } catch (err) {
-                    this._markOptimisticFailed(tempId, storageKey, err);
+                    this._markOptimisticFailed(sentId, storageKey, err);
+                    return false;
+                } finally {
+                    lane.release();
                 }
             })();
 
-            return { nym: anonNym, pubkey: ephPk };
+            return { nym: anonNym, pubkey: ephPk, lane, posted };
         } catch (error) {
             this.displaySystemMessage('Failed to send pseudonymous message: ' + error.message);
             return false;
@@ -3093,12 +3193,30 @@ Object.assign(NYM.prototype, {
         if (!pubkey || pubkey === this.pubkey) return;
         if (!this.nymchatVouches) this.nymchatVouches = new Set();
         if (this.nymchatVouches.has(pubkey)) return;
+        if (this._ownOtherKey(pubkey)) return;
         this.nymchatVouches.add(pubkey);
         if (this.nymchatVouches.size > 5000) {
             this.nymchatVouches = new Set(Array.from(this.nymchatVouches).slice(-4000));
         }
         if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
         this._scheduleVouchPublish();
+    },
+
+    _noteOwnAnonKey(pubkey) {
+        if (!pubkey) return;
+        if (!this._anonOwnKeys) this._anonOwnKeys = new Set();
+        this._anonOwnKeys.add(pubkey);
+        if (this._anonOwnKeys.size > 2000) this._anonOwnKeys = new Set(Array.from(this._anonOwnKeys).slice(-1000));
+    },
+
+    _ownOtherKey(pubkey) {
+        if (this._anonOwnKeys && this._anonOwnKeys.has(pubkey)) return true;
+        try {
+            const A = window.NymAccounts;
+            const idx = A && typeof A.read === 'function' ? A.read() : null;
+            if (idx && Array.isArray(idx.accounts) && idx.accounts.some((a) => a && a.pubkey === pubkey)) return true;
+        } catch (_) { }
+        return false;
     },
 
     _scheduleVouchPublish() {
@@ -3131,6 +3249,7 @@ Object.assign(NYM.prototype, {
 
     handleVouchEvent(event) {
         if (!event || event.pubkey === this.pubkey) return;
+        if (this.blockedUsers && this.blockedUsers.has(event.pubkey)) return;
         // Only accept vouches from trusted peers so the graph stays rooted in the seeded pubkeys.
         if (!this.nymchatPubkeys || !this.nymchatPubkeys.has(event.pubkey)) return;
         let list;
@@ -3201,6 +3320,7 @@ Object.assign(NYM.prototype, {
                 const ev = events[i];
                 // Skip untrusted authors without a signature check; a later pass reconsiders them.
                 if (!ev || !this.nymchatPubkeys || !this.nymchatPubkeys.has(ev.pubkey)) continue;
+                if (this.blockedUsers && this.blockedUsers.has(ev.pubkey)) continue;
                 const cached = this._verifiedIdCheck(ev);
                 const ok = (cached !== undefined) ? cached : await this._verifyRelayEventAsync(ev);
                 applied.add(i);

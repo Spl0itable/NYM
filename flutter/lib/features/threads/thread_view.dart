@@ -126,8 +126,7 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
         return '#${view.id}';
       case ViewKind.group:
         final g = ref.read(appStateProvider.notifier).groupById(view.id);
-        final name = g?.name ?? '';
-        return name.isNotEmpty ? name : tr('Group chat');
+        return g == null ? tr('Group chat') : app.groupLabel(g, tr('Group chat'));
       case ViewKind.pm:
         final root =
             threadRootMessage(app, view.storageKey, widget.thread.rootId);

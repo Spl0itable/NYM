@@ -1,3 +1,7 @@
+const BOT_CHANNEL_RUN_MAX_MS = 150000;
+const BOT_CHANNEL_RUN_GRACE_MS = 15000;
+const BOT_CHANNEL_RUNS_KEY = 'nym_bot_channel_runs';
+
 Object.assign(NYM.prototype, {
 
     _botContextKeeps(m) {
@@ -6,10 +10,10 @@ Object.assign(NYM.prototype, {
         return !m._spamGated && !(this.blockedUsers && this.blockedUsers.has(m.pubkey));
     },
 
-    _botContextText(text) {
+    _botContextText(text, quoted) {
         const F = window.NymContentFilter;
         const s = typeof text === 'string' ? text : '';
-        return F && typeof this._cfCtx === 'function' ? F.stripBlockedQuotes(this._cfCtx(), s) : s;
+        return F && typeof this._cfCtx === 'function' ? F.stripBlockedQuotes(this._cfCtx(), s, Array.isArray(quoted) ? quoted : []) : s;
     },
 
     _botChannelExcluded(key, includeHidden) {
@@ -114,7 +118,7 @@ Object.assign(NYM.prototype, {
                             referencedChannels.add(`#${name}`);
                         }
                     }
-                    if (channelsToFetch.length > 0 && !as) {
+                    if (channelsToFetch.length > 0 && !as && !anon) {
                         for (const ch of channelsToFetch) {
                             this.channelLoadedFromRelays.delete(ch.name);
                             this.subscribeToChannelTargeted(ch.name, ch.type);
@@ -133,7 +137,7 @@ Object.assign(NYM.prototype, {
                 const mapped = msgs.slice(-msgLimit).map(m => ({
                     nym: this.resolveDisplayNym(m.pubkey, m.author || ''),
                     pubkey: m.pubkey || '',
-                    content: this.truncateText(this._botContextText(m.content), 300),
+                    content: this.truncateText(this._botContextText(m.content, m.quoted), 300),
                     timestamp: m.created_at || 0,
                     isBot: !!m.isBot,
                     channel: chanKey,
@@ -186,7 +190,7 @@ Object.assign(NYM.prototype, {
                 const mapped = msgs.filter(m => this._botContextKeeps(m)).map(m => ({
                     nym: this.resolveDisplayNym(m.pubkey, m.author || ''),
                     pubkey: m.pubkey || '',
-                    content: this.truncateText(this._botContextText(m.content), 300),
+                    content: this.truncateText(this._botContextText(m.content, m.quoted), 300),
                     timestamp: m.created_at || 0,
                     isBot: !!m.isBot,
                     channel: chanKey,
@@ -219,66 +223,354 @@ Object.assign(NYM.prototype, {
         const senderNym = anon
             ? anonModel.senderNym(anon.nym, anon.pubkey)
             : (as ? as.nym + '#' + as.pubkey.slice(-4) : String(this.nym || 'nym').replace(/#[0-9a-f]{4}$/i, '') + '#' + this.getPubkeySuffix(this.pubkey));
-        this._setBotChannelThinking(true);
+        const askerPubkey = anon ? undefined : (as ? as.pubkey : this.pubkey);
+        const relay = as && typeof as.publish === 'function' ? as : (anon ? this._anonBotRelay(anon) : null);
+        if (anon && !relay) return 'failed';
+        const run = this._botChannelRunBegin(geohash, !!anon);
+        let outcome;
         try {
             const apiHost = this._getApiHost();
-            if (!apiHost) { this._setBotChannelThinking(false); return anon ? 'unavailable' : undefined; }
+            if (!apiHost) { this._botChannelRunEnd(run); return anon ? 'unavailable' : undefined; }
             const resp = await this._edgeFetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command, args, geohash, conversation, senderNym, publishedContent, channelMessages, activeUsers, threadRoot: threadRoot || null, lang: (this.getUiLanguage && this.getUiLanguage()) || '' })
+                body: JSON.stringify({ command, args, geohash, conversation, senderNym, askerPubkey, publishedContent, channelMessages, activeUsers, threadRoot: threadRoot || null, lang: (this.getUiLanguage && this.getUiLanguage()) || '', stream: true }),
+                signal: run && run.ctrl ? run.ctrl.signal : undefined
             });
-            if (!resp.ok) { this._setBotChannelThinking(false); return anon ? anonModel.outcome(resp.status, false) : undefined; }
+            outcome = resp.ok ? await this._botChannelRead(resp, run, geohash, relay) : { status: resp.status, reason: resp.status === 429 ? 'rate' : 'error' };
+        } catch (e) {
+            console.error('[nymbot] Command failed:', e);
+            outcome = { status: 0, reason: run && run.timedOut ? 'timeout' : 'lost' };
+        }
+        const ev = outcome && outcome.event;
+        if (ev && this.isValidBotChannelEvent(ev)) {
+            await this._botChannelPublishReply(ev, relay, !!(run && run.landed));
+            if (outcome.typing) this._botChannelRelayTyping(outcome.typing, geohash, relay);
+            this._botChannelRunEnd(run);
+            return null;
+        }
+        this._botChannelRunEnd(run);
+        if (run && run.landed) return null;
+        const failure = ev ? { status: 200, reason: 'error' } : (outcome || { status: 0, reason: 'lost' });
+        if (anon) {
+            return failure.reason === 'timeout' || failure.reason === 'lost' ? 'failed' : anonModel.outcome(failure.status || 0, false) || (failure.status === 200 ? 'failed' : null);
+        }
+        this._botChannelFailureNotice(failure);
+        return undefined;
+    },
+
+    _botChannelRunBegin(geohash, anon) {
+        if (!geohash) return null;
+        if (!this._botChannelRuns) this._botChannelRuns = new Map();
+        const now = Date.now();
+        const run = {
+            channel: geohash, anon: !!anon, startedAt: now, deadline: now + BOT_CHANNEL_RUN_MAX_MS,
+            ctrl: typeof AbortController === 'function' ? new AbortController() : null, timer: null, ended: false, timedOut: false
+        };
+        let set = this._botChannelRuns.get(geohash);
+        if (!set) { set = new Set(); this._botChannelRuns.set(geohash, set); }
+        set.add(run);
+        this._botChannelRunArm(run);
+        this._botChannelRunsSave();
+        this._botThinkingPaint(geohash);
+        return run;
+    },
+
+    _botChannelRunArm(run) {
+        if (!run || run.ended) return;
+        if (run.timer) clearTimeout(run.timer);
+        run.timer = setTimeout(() => {
+            run.timedOut = true;
+            if (run.ctrl) { try { run.ctrl.abort(); } catch (_) { } }
+            else {
+                this._botChannelRunEnd(run);
+                if (run.recovered) this._botChannelFailureNotice({ status: 0, reason: 'timeout' });
+            }
+        }, Math.max(0, run.deadline + BOT_CHANNEL_RUN_GRACE_MS - Date.now()));
+    },
+
+    _botChannelRunEnd(run) {
+        if (!run || run.ended) return;
+        run.ended = true;
+        if (run.timer) clearTimeout(run.timer);
+        if (run.remoteId) this._botChannelRemoteEnd(run.channel, run.remoteId);
+        const set = this._botChannelRuns && this._botChannelRuns.get(run.channel);
+        if (set) {
+            set.delete(run);
+            if (!set.size) this._botChannelRuns.delete(run.channel);
+        }
+        this._botChannelRunsSave();
+        this._botThinkingPaint(run.channel);
+    },
+
+    _botChannelRunsSave() {
+        const out = [];
+        if (this._botChannelRuns) {
+            for (const set of this._botChannelRuns.values()) {
+                for (const r of set) if (!r.anon) out.push(r.remoteId ? { channel: r.channel, startedAt: r.startedAt, deadline: r.deadline, runId: r.remoteId } : { channel: r.channel, startedAt: r.startedAt, deadline: r.deadline });
+            }
+        }
+        try {
+            if (out.length) sessionStorage.setItem(BOT_CHANNEL_RUNS_KEY, JSON.stringify(out));
+            else sessionStorage.removeItem(BOT_CHANNEL_RUNS_KEY);
+        } catch (_) { }
+    },
+
+    _botChannelRunsRecover() {
+        if (this._botChannelRunsRecovered || (this._botChannelRuns && this._botChannelRuns.size)) return;
+        this._botChannelRunsRecovered = true;
+        let saved = null;
+        try {
+            saved = JSON.parse(sessionStorage.getItem(BOT_CHANNEL_RUNS_KEY) || 'null');
+            sessionStorage.removeItem(BOT_CHANNEL_RUNS_KEY);
+        } catch (_) { saved = null; }
+        if (!Array.isArray(saved) || !saved.length) return;
+        const now = Date.now();
+        let lost = false;
+        for (const r of saved) {
+            if (!r || typeof r.channel !== 'string' || !r.channel) continue;
+            const deadline = Number(r.deadline);
+            const runId = this._botChannelRunIdOf({ tags: [['run', r.runId]] });
+            if (runId && Number.isFinite(deadline) && deadline + BOT_CHANNEL_RUN_GRACE_MS > now && deadline <= now + BOT_CHANNEL_RUN_MAX_MS) {
+                this._botChannelRunRestore(r.channel, Number(r.startedAt) || now, deadline, runId);
+            } else if (Number(r.startedAt) > now - 30 * 60 * 1000) {
+                lost = true;
+            }
+        }
+        this._botChannelRunsSave();
+        if (lost) this._botChannelFailureNotice({ status: 0, reason: 'lost' });
+    },
+
+    _botChannelRunRestore(channel, startedAt, deadline, runId) {
+        if (!this._botChannelRuns) this._botChannelRuns = new Map();
+        const run = {
+            channel, anon: false, startedAt, deadline, ctrl: null, timer: null,
+            ended: false, timedOut: false, remoteId: runId, recovered: true
+        };
+        let set = this._botChannelRuns.get(channel);
+        if (!set) { set = new Set(); this._botChannelRuns.set(channel, set); }
+        set.add(run);
+        this._botChannelRunArm(run);
+        this._botThinkingPaint(channel);
+    },
+
+    _botChannelFailureNotice(failure) {
+        const f = failure || {};
+        let text = null;
+        if (f.reason === 'rate' || f.status === 429) text = 'Too many requests to Nymbot right now. Try again in a minute.';
+        else if (f.reason === 'timeout' || f.reason === 'lost' || !f.status || f.status >= 500 || f.status === 200) text = "Nymbot couldn't answer that one. Try again.";
+        if (!text) return;
+        const shown = typeof this.uiText === 'function' ? this.uiText(text) : text;
+        if (typeof this.showToast === 'function') this.showToast(shown);
+        else if (typeof this.displaySystemMessage === 'function') this.displaySystemMessage(shown);
+    },
+
+    async _botChannelRead(resp, run, geohash, as) {
+        const type = (resp.headers && typeof resp.headers.get === 'function' && resp.headers.get('content-type')) || '';
+        if (!/ndjson/i.test(type)) {
             const data = await resp.json();
-            if (data.event && !this.isValidBotChannelEvent(data.event)) {
-                this._setBotChannelThinking(false);
-                return anon ? 'failed' : undefined;
+            return data && data.event ? { status: resp.status, event: data.event } : { status: resp.status, reason: 'error' };
+        }
+        const handle = (line) => {
+            if (!line || typeof line !== 'object') return null;
+            const runId = this._botChannelRunIdOf(line.typing);
+            if (run && runId && run.remoteId !== runId) {
+                run.remoteId = runId;
+                if (!run.ended) this._botChannelRunsSave();
             }
-            if (anon && !data.event) {
-                this._setBotChannelThinking(false);
-                return anonModel.outcome(resp.status, false);
+            if (line.state === 'done') return { status: 200, event: line.event || null, typing: line.typing || null };
+            if (line.typing) this._botChannelRelayTyping(line.typing, geohash, as);
+            if (line.state === 'thinking') {
+                const limit = Number(line.limitMs);
+                if (run && !run.ended && Number.isFinite(limit) && limit > 0 && limit <= 600000) {
+                    run.deadline = Math.min(run.deadline, Date.now() + limit);
+                    this._botChannelRunArm(run);
+                }
+                this._botThinkingPaint(geohash);
+                return null;
             }
-            if (data.event && as && typeof as.publish === 'function') {
-                as.publish(data.event);
-            } else if (data.event) {
-                const msg = JSON.stringify(['EVENT', data.event]);
-                if (this.useRelayProxy && this.poolSockets.length > 0) {
-                    for (const pool of this.poolSockets) {
-                        if (pool.ws && pool.ws.readyState === WebSocket.OPEN) {
-                            try { pool.ws.send(msg); } catch { }
-                        }
-                    }
-                } else {
-                    for (const [, ws] of this.relayPool) {
-                        if (ws.readyState === WebSocket.OPEN) {
-                            try { ws.send(msg); } catch { }
-                        }
-                    }
+            if (line.state === 'failed') return { status: Number(line.status) || 0, reason: line.reason === 'rate' || line.reason === 'timeout' ? line.reason : 'error' };
+            return null;
+        };
+        const parse = (raw) => { try { return JSON.parse(raw); } catch (_) { return null; } };
+        if (!resp.body || typeof resp.body.getReader !== 'function') {
+            const text = await resp.text();
+            for (const raw of text.split('\n')) {
+                const out = raw.trim() ? handle(parse(raw)) : null;
+                if (out) return out;
+            }
+            return { status: 0, reason: 'lost' };
+        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let at;
+            while ((at = buf.indexOf('\n')) !== -1) {
+                const raw = buf.slice(0, at);
+                buf = buf.slice(at + 1);
+                const out = raw.trim() ? handle(parse(raw)) : null;
+                if (out) {
+                    try { reader.cancel(); } catch (_) { }
+                    return out;
                 }
             }
-            return null;
-        } catch (e) {
-            this._setBotChannelThinking(false);
-            console.error('[nymbot] Command failed:', e);
-            return anon ? 'failed' : undefined;
+        }
+        const tail = buf.trim() ? handle(parse(buf)) : null;
+        return tail || { status: 0, reason: run && run.timedOut ? 'timeout' : 'lost' };
+    },
+
+    _botChannelRelayTyping(ev, geohash, as) {
+        const bot = this.verifiedBot;
+        if (!bot || !ev || ev.kind !== 24420 || ev.pubkey !== bot.pubkey || !Array.isArray(ev.tags)) return;
+        const status = (ev.tags.find((t) => Array.isArray(t) && t[0] === 'typing') || [])[1];
+        const chan = (ev.tags.find((t) => Array.isArray(t) && (t[0] === 'g' || t[0] === 'd')) || [])[1];
+        if ((status !== 'start' && status !== 'stop') || !chan || String(chan).toLowerCase() !== String(geohash || 'nymchat').toLowerCase()) return;
+        if (as && typeof as.publish === 'function') {
+            try { as.publish(ev); } catch (_) { }
+            return;
+        }
+        this.sendToRelay(['EVENT', ev]);
+        if (typeof this.channelWire === 'function' && this.channelWire(chan).isGeohash && typeof this.ensureGeoRelayDelivery === 'function') {
+            this.ensureGeoRelayDelivery(ev, chan);
         }
     },
 
-    _setBotChannelThinking(on) {
-        if (!this.verifiedBot || !this.currentGeohash) return;
-        const convKey = `channel-${this.currentGeohash}`;
+    _anonBotRelay(anon) {
+        const lane = anon && anon.lane;
+        if (!lane) return null;
+        if (!Array.isArray(anon.sends)) anon.sends = [];
+        return {
+            publish: (ev) => {
+                const sent = Promise.resolve(anon.posted).catch(() => false).then(() => lane.publish(ev)).catch(() => null);
+                anon.sends.push(sent);
+                return sent;
+            },
+        };
+    },
+
+    async _botChannelPublishReply(ev, as, landed) {
+        if (as && typeof as.publish === 'function') {
+            as.publish(ev);
+        } else if (typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) {
+            if (typeof this._noteQueuedSend === 'function') this._noteQueuedSend(ev.id);
+            this.broadcastEvent(['EVENT', ev]);
+        } else {
+            const msg = JSON.stringify(['EVENT', ev]);
+            if (this.useRelayProxy && this.poolSockets.length > 0) {
+                for (const pool of this.poolSockets) {
+                    if (pool.ws && pool.ws.readyState === WebSocket.OPEN) {
+                        try { pool.ws.send(msg); } catch { }
+                    }
+                }
+            } else {
+                for (const [, ws] of this.relayPool) {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        try { ws.send(msg); } catch { }
+                    }
+                }
+            }
+        }
+        if (!landed && typeof this.handleEvent === 'function' && typeof this._verifyRelayEventAsync === 'function') {
+            try {
+                if (await this._verifyRelayEventAsync(ev)) await this.handleEvent(ev);
+            } catch (_) { }
+        }
+    },
+
+    _botChannelRunIdOf(ev) {
+        const tag = ev && Array.isArray(ev.tags) ? ev.tags.find((t) => Array.isArray(t) && t[0] === 'run') : null;
+        const id = tag && typeof tag[1] === 'string' ? tag[1].toLowerCase() : '';
+        return /^[0-9a-f]{8,64}$/.test(id) ? id : '';
+    },
+
+    _botChannelRemoteEnd(geohash, runId) {
+        if (!this._botChannelRunsEnded) this._botChannelRunsEnded = new Set();
+        if (runId) {
+            this._botChannelRunsEnded.add(runId);
+            if (this._botChannelRunsEnded.size > 400) this._botChannelRunsEnded = new Set([...this._botChannelRunsEnded].slice(-200));
+        }
+        const runs = this._botChannelTypingRuns && this._botChannelTypingRuns.get(geohash);
+        if (runs) {
+            runs.delete(runId);
+            if (!runs.size) this._botChannelTypingRuns.delete(geohash);
+        }
+    },
+
+    _botChannelTypingSignal(geohash, status, runId, ttlMs, askers) {
+        if (!geohash) return;
+        if (status === 'stop') {
+            this._botChannelRemoteEnd(geohash, runId);
+        } else if (!(runId && this._botChannelRunsEnded && this._botChannelRunsEnded.has(runId))) {
+            if (!this._botChannelTypingRuns) this._botChannelTypingRuns = new Map();
+            let runs = this._botChannelTypingRuns.get(geohash);
+            if (!runs) { runs = new Map(); this._botChannelTypingRuns.set(geohash, runs); }
+            runs.set(runId, { expires: Date.now() + ttlMs, askers: Array.isArray(askers) ? askers.slice(0, 4) : [] });
+        }
+        this._botThinkingPaint(geohash);
+    },
+
+    _botRunAskerHidden(run) {
+        const askers = run && Array.isArray(run.askers) ? run.askers : [];
+        return askers.length > 0 && typeof this.isPersonHidden === 'function' && askers.some((pk) => this.isPersonHidden(pk));
+    },
+
+    _botThinkingRefreshForFilters() {
+        if (!this._botChannelTypingRuns) return;
+        for (const geohash of Array.from(this._botChannelTypingRuns.keys())) this._botThinkingPaint(geohash);
+    },
+
+    _botThinkingPaint(geohash) {
+        if (!this.verifiedBot || !geohash) return;
+        if (!this.typingUsers) this.typingUsers = new Map();
+        const convKey = `channel-${geohash}`;
         if (!this.typingUsers.has(convKey)) this.typingUsers.set(convKey, new Map());
         const typers = this.typingUsers.get(convKey);
         const botPk = this.verifiedBot.pubkey;
-        const existing = typers.get(botPk);
-        if (existing && existing.timeout) clearTimeout(existing.timeout);
-        if (on) {
-            const timeout = setTimeout(() => { typers.delete(botPk); this.renderTypingIndicator(); }, 45000);
-            typers.set(botPk, { nym: 'Nymbot', timeout, timestamp: Date.now() });
-        } else {
+        const prev = typers.get(botPk);
+        if (prev && prev.timeout) clearTimeout(prev.timeout);
+        const now = Date.now();
+        let until = 0;
+        let next = Infinity;
+        const set = this._botChannelRuns && this._botChannelRuns.get(geohash);
+        if (set) for (const r of set) until = Math.max(until, r.deadline + BOT_CHANNEL_RUN_GRACE_MS);
+        const runs = this._botChannelTypingRuns && this._botChannelTypingRuns.get(geohash);
+        if (runs) {
+            for (const [id, run] of runs) {
+                const expires = typeof run === 'number' ? run : (run && run.expires) || 0;
+                if (expires <= now) { runs.delete(id); continue; }
+                if (this._botRunAskerHidden(run)) continue;
+                until = Math.max(until, expires);
+                next = Math.min(next, expires);
+            }
+            if (!runs.size) this._botChannelTypingRuns.delete(geohash);
+        }
+        if (until > now) {
+            const wait = Math.max(1000, Math.min(next, until) - now);
+            const timeout = setTimeout(() => this._botThinkingPaint(geohash), wait);
+            typers.set(botPk, { nym: 'Nymbot', timeout, timestamp: now, ttlMs: until - now, run: true });
+        } else if (prev) {
             typers.delete(botPk);
         }
-        this.renderTypingIndicator();
+        if (typeof this.renderTypingIndicator === 'function') this.renderTypingIndicator();
+    },
+
+    _botReplyLanded(geohash, ev) {
+        if (!this.verifiedBot || !geohash) return;
+        const runId = this._botChannelRunIdOf(ev);
+        this._botChannelRemoteEnd(geohash, runId);
+        const mine = runId && this._botChannelRuns && this._botChannelRuns.get(geohash);
+        if (mine) {
+            for (const r of Array.from(mine)) {
+                if (r.remoteId !== runId) continue;
+                r.landed = true;
+                this._botChannelRunEnd(r);
+            }
+        }
+        this._botThinkingPaint(geohash);
     },
 
     setupCommands() {

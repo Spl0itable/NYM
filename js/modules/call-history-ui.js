@@ -42,17 +42,17 @@
             return this._chStore;
         },
 
-        _chSave(store, fromSync) {
+        _chSave(store, fromSync, wanted) {
             this._chStore = store;
             if (!store.items.length && !store.seen) lsSet(KEY, null);
             else lsSet(KEY, H().encode(store));
             this._chRenderBadges();
             this._chRefreshIfOpen();
-            if (!fromSync) this._chChanged();
+            if (!fromSync) this._chChanged(wanted);
         },
 
-        _chChanged() {
-            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(3000);
+        _chChanged(wanted) {
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(3000, wanted ? { wanted: true } : undefined);
         },
 
         _chClearedAt() {
@@ -84,21 +84,21 @@
             if (H().encode(next) !== H().encode(s)) this._chSave(next, true);
         },
 
-        _chRecord(rec) {
+        _chRecord(rec, wanted) {
             if (!this.pubkey || !this._chKeep() || !H()) return;
-            this._chSave(H().upsert(this._chLoad(), rec));
+            this._chSave(H().upsert(this._chLoad(), rec), false, wanted);
         },
 
         _chBegin(ac, dir, peer, at) {
             if (!ac) return;
             ac._ch = { id: ac.callId, peer: peer || '', group: (ac.isGroup && ac.groupId) || '', kind: ac.kind, dir, at: at || Date.now(), dur: 0, missed: false };
-            this._chRecord(ac._ch);
+            this._chRecord(ac._ch, true);
         },
 
         _chFinish(ac) {
             if (!ac || !ac._ch) return;
             const dur = ac.startedAt ? Math.floor((Date.now() - ac.startedAt) / 1000) : 0;
-            this._chRecord(Object.assign({}, ac._ch, { dur }));
+            this._chRecord(Object.assign({}, ac._ch, { dur }), true);
             ac._ch = null;
         },
 
@@ -108,7 +108,7 @@
 
         _chDeclined(inc) {
             if (!inc) return;
-            this._chRecord({ id: inc.callId, peer: inc.from || '', group: (inc.isGroup && inc.groupId) || '', kind: inc.kind, dir: 'in', at: inc.chAt || Date.now(), dur: 0, missed: false });
+            this._chRecord({ id: inc.callId, peer: inc.from || '', group: (inc.isGroup && inc.groupId) || '', kind: inc.kind, dir: 'in', at: inc.chAt || Date.now(), dur: 0, missed: false }, true);
         },
 
         _chAnsweredElsewhere(callId) {
@@ -117,13 +117,13 @@
             if (r) this._chSave(H().upsert(this._chLoad(), Object.assign({}, r, { missed: false })));
         },
 
-        _chClear(fromSync) {
+        _chClear(fromSync, wanted) {
             this._chSetClearedAt(Date.now());
             this._chStore = H().empty(this.pubkey || '');
             lsSet(KEY, null);
             this._chRenderBadges();
             this._chRefreshIfOpen();
-            if (!fromSync) this._chChanged();
+            if (!fromSync) this._chChanged(wanted);
         },
 
         setKeepCallHistory(on, opts) {
@@ -242,7 +242,7 @@
             const g = r.group && this.groupConversations && this.groupConversations.get(r.group);
             if (r.group) {
                 const members = g && Array.isArray(g.members) ? g.members : (r.peer ? [this.pubkey, r.peer] : [this.pubkey]);
-                return { avatar: this._groupAvatarHtml(r.group, members), name: esc(g && g.name ? g.name : this._chText('Group call')) };
+                return { avatar: this._groupAvatarHtml(r.group, members), name: esc(g && typeof this._groupLabel === 'function' ? this._groupLabel(g, 'Group call') : this._chText('Group call')) };
             }
             const sk = this._safePubkey(r.peer);
             return {
@@ -353,9 +353,31 @@
             if (this.activeCall && ov && !ov.classList.contains('active')) this._showCallOverlay();
         },
 
+        async confirmKeepCallHistory(on, el) {
+            if (on) { this.setKeepCallHistory(true); return true; }
+            if (!this._chKeep()) { this.setKeepCallHistory(false); return true; }
+            if (this._chKeepAsking) { if (el) el.checked = true; return false; }
+            this._chKeepAsking = true;
+            let ok = false;
+            try {
+                ok = await window.showAppConfirm(this._chText("This deletes your list of recent calls on this device and on your other devices signed in with this identity, and new calls aren't kept. This can't be undone."), {
+                    title: this._chText('Turn off call history?'),
+                    okLabel: this._chText('Turn off'),
+                    danger: true,
+                });
+            } catch (_) { ok = false; }
+            this._chKeepAsking = false;
+            if (!ok) {
+                if (el) el.checked = true;
+                return false;
+            }
+            this.setKeepCallHistory(false);
+            return true;
+        },
+
         async chClearHistory() {
             const ok = await window.showAppConfirm(this._chText("Remove every call from this list on all your devices? This can't be undone."), { title: this._chText('Clear call history'), okLabel: this._chText('Clear'), danger: true });
-            if (ok) this._chClear();
+            if (ok) this._chClear(false, true);
         },
     });
 
@@ -368,7 +390,7 @@
             chRejoin: function (_e, t) { nym().chRejoin(t.dataset.callId); },
             chReturnToCall: function () { nym().chReturnToCall(); },
             chClearHistory: function () { nym().chClearHistory(); },
-            onKeepCallHistoryChange: function (_e, t) { nym().setKeepCallHistory(!!(t && t.checked)); },
+            onKeepCallHistoryChange: function (_e, t) { nym().confirmKeepCallHistory(!!(t && t.checked), t); },
         });
     }
 

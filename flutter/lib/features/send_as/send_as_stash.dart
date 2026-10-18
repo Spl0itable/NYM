@@ -131,7 +131,7 @@ class SendAsStash {
     final pk = entry.pubkey;
     if (durable) {
       var name = _profile['name'];
-      var base = name is String ? name : '';
+      var base = name is String ? stripPubkeySuffix(name) : '';
       if (base.isEmpty) base = stripPubkeySuffix(entry.nym);
       if (base.isEmpty) base = 'nym';
       if (base.length > 20) base = base.substring(0, 20);

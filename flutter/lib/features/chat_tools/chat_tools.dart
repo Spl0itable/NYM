@@ -282,6 +282,7 @@ class ChatToolsMessage {
     this.system = false,
     this.fileOfferName,
     this.fileOfferSize,
+    this.quoted = const <String>[],
   });
 
   factory ChatToolsMessage.fromJson(Map<String, dynamic> j) {
@@ -299,6 +300,7 @@ class ChatToolsMessage {
       fileOfferSize: fo is Map && fo['size'] is num
           ? (fo['size'] as num).toInt()
           : null,
+      quoted: savedQuotedKeys(j['quoted']),
     );
   }
 
@@ -312,6 +314,7 @@ class ChatToolsMessage {
   final bool system;
   final String? fileOfferName;
   final int? fileOfferSize;
+  final List<String> quoted;
 }
 
 class GalleryItem {
@@ -738,7 +741,22 @@ SavedEntryResult savedEntry(
     'text': text,
     'at': m.at,
     'sv': nowMs,
+    if (savedQuotedKeys(m.quoted).isNotEmpty) 'q': savedQuotedKeys(m.quoted),
   });
+}
+
+final RegExp _quotedKeyRe = RegExp(r'^[0-9a-f]{64}$');
+
+List<String> savedQuotedKeys(Object? raw) {
+  if (raw is! List) return const <String>[];
+  final out = <String>[];
+  for (final k in raw) {
+    if (k is! String) continue;
+    final pk = k.toLowerCase();
+    if (_quotedKeyRe.hasMatch(pk) && !out.contains(pk)) out.add(pk);
+    if (out.length >= 4) break;
+  }
+  return out;
 }
 
 bool _validEntry(dynamic e) {

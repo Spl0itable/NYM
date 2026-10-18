@@ -269,6 +269,21 @@ class AnonBotManager {
 
   bool isAnonPubkey(String pk) => pubkeys.contains(pk);
 
+  final Set<String> _lane = <String>{};
+
+  Set<String> get laneIds => Set.unmodifiable(_lane);
+
+  bool isLane(String id) => _lane.contains(id);
+
+  void markLane(String id) {
+    if (id.isEmpty) return;
+    _lane.remove(id);
+    _lane.add(id);
+    while (_lane.length > 4000) {
+      _lane.remove(_lane.first);
+    }
+  }
+
   bool suppressSendTo(String pubkey, {required bool isBot}) =>
       _enabled && isBot;
 

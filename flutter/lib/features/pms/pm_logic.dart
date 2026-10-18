@@ -151,6 +151,7 @@ class PmLogic {
       isFileOffer: fileOffer != null,
       fileOffer: fileOffer?.toJson(),
       deliveryStatus: isOwn ? DeliveryStatus.sent : DeliveryStatus.delivered,
+      quoted: Message.quotedFromTags(tags),
     );
   }
 

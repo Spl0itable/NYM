@@ -424,15 +424,6 @@ class NymIcons {
       '<path d="M 10 11 L 13 8 L 10 5" stroke-linecap="round" stroke-linejoin="round"/>'
       '<line x1="13" y1="8" x2="6" y2="8" stroke-linecap="round"/></svg>';
 
-  static const String checkboxChecked =
-      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
-      '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/>'
-      '<path d="M 5 8 L 7 10 L 11 5.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
-  static const String checkboxUnchecked =
-      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
-      '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/></svg>';
-
   /// 24x24 no-entry glyph for the sidebar row menus, distinct from the 16px [ctxBlock].
   static const String sidebarBlock =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'

@@ -69,15 +69,136 @@
         return live === true && r > t ? r : t;
     }
 
+    const PUBKEY_RE = /^[0-9a-f]{64}$/i;
+    const NEAR_MS = 1000;
+
+    function alertId(input) {
+        const i = input && typeof input === 'object' ? input : {};
+        const x = str(i.x);
+        if (x) return { eventId: x, stable: true };
+        const id = str(i.id);
+        return { eventId: id, stable: !!id && i.stable === true };
+    }
+
+    function reactionId(wrapId, messageId) {
+        const w = str(wrapId);
+        const m = str(messageId);
+        if (!w) return { eventId: '', stable: false };
+        return m ? { eventId: w + ':' + m, stable: true } : { eventId: w, stable: false };
+    }
+
+    function sec(v) {
+        const n = Math.floor(num(v));
+        return n > 0 ? n : 0;
+    }
+
+    function knockId(linkId, sender, createdAt) {
+        return 'call-link-' + str(linkId) + '-' + str(sender) + '-' + sec(createdAt);
+    }
+
+    function joinRequestId(groupId, joiner, ts) {
+        return 'join-req-' + str(groupId) + '-' + str(joiner) + '-' + sec(ts);
+    }
+
+    function joinDeclinedId(groupId, createdAt) {
+        return 'join-declined-' + str(groupId) + '-' + sec(createdAt);
+    }
+
+    function collapseWs(s) {
+        return s.replace(/\s+/g, ' ').trim();
+    }
+
+    function bodyKey(body) {
+        const s = str(body);
+        const kept = collapseWs(s.split('\n').filter((l) => !/^\s*>/.test(l)).join(' '));
+        return (kept || collapseWs(s)).slice(0, 40);
+    }
+
+    function alertScope(type, route, sender) {
+        const t = str(type);
+        const r = str(route);
+        if (t === 'pm') {
+            const peer = r || str(sender);
+            return peer ? 'pm:' + peer.toLowerCase() : '';
+        }
+        if (t === 'group') return r ? 'group:' + r : '';
+        if (t === 'channel' || t === 'geohash') return r ? 'channel:' + r.toLowerCase() : '';
+        if (t === 'mention') return r && !PUBKEY_RE.test(r) ? 'channel:' + r.toLowerCase() : '';
+        return '';
+    }
+
     function sameAlert(a, b) {
         const x = a && typeof a === 'object' ? a : {};
         const y = b && typeof b === 'object' ? b : {};
         const xi = str(x.eventId);
         const yi = str(y.eventId);
-        if (xi && yi) return xi === yi;
+        if (xi && yi && xi === yi) return true;
         if ((x.exact === true && xi) || (y.exact === true && yi)) return false;
-        return str(x.title) === str(y.title) && str(x.body) === str(y.body) &&
-            str(x.sender) === str(y.sender) && Math.abs(num(x.ts) - num(y.ts)) < 60000;
+        const xs = str(x.scope);
+        const ys = str(y.scope);
+        if (xs && ys && xs !== ys) return false;
+        const sender = str(x.sender);
+        const dt = Math.abs(num(x.ts) - num(y.ts));
+        const near = () => {
+            if (!sender || sender !== str(y.sender) || dt >= NEAR_MS) return false;
+            const k = bodyKey(x.body);
+            return !!k && k === bodyKey(y.body);
+        };
+        if (xi && yi) return !(x.stable === true && y.stable === true) && near();
+        return near() || (str(x.title) === str(y.title) && str(x.body) === str(y.body) &&
+            sender === str(y.sender) && dt < 60000);
+    }
+
+    const PIECE_MAX_BYTES = 255;
+    const PIECE_OPEN_BYTES = 252;
+    const PIECE_HOLD_MS = 3000;
+
+    function charBytes(ch) {
+        const cp = ch.codePointAt(0);
+        return cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    }
+
+    function utf8Length(text) {
+        let n = 0;
+        for (const ch of str(text)) n += charBytes(ch);
+        return n;
+    }
+
+    function pmChunks(content) {
+        const s = str(content);
+        const out = [];
+        let cur = '';
+        let bytes = 0;
+        for (const ch of s) {
+            const b = charBytes(ch);
+            if (cur && bytes + b > PIECE_MAX_BYTES) {
+                out.push(cur);
+                cur = '';
+                bytes = 0;
+            }
+            cur += ch;
+            bytes += b;
+        }
+        if (cur || !out.length) out.push(cur);
+        return out;
+    }
+
+    function pmOpenPiece(content) {
+        const n = utf8Length(content);
+        return n >= PIECE_OPEN_BYTES && n <= PIECE_MAX_BYTES;
+    }
+
+    function pmPiece(a, b) {
+        const x = a && typeof a === 'object' ? a : {};
+        const y = b && typeof b === 'object' ? b : {};
+        if (!str(x.pubkey) || str(x.pubkey) !== str(y.pubkey)) return false;
+        if (str(x.nymId) || !str(y.nymId)) return false;
+        const piece = str(x.content);
+        const whole = str(y.content);
+        if (!piece || piece.length >= whole.length) return false;
+        if (Math.abs(num(x.createdAt) - num(y.createdAt)) >= 5) return false;
+        if (str(x.replyTo) && str(x.replyTo) !== str(y.replyTo)) return false;
+        return pmChunks(whole).indexOf(piece) >= 0;
     }
 
     function samePm(a, b) {
@@ -92,5 +213,5 @@
         return !str(x.replyTo) || str(x.replyTo) === str(y.replyTo);
     }
 
-    G.NymNotifyView = Object.freeze({ threadOpen, onScreen, sees, outcome, addressed, readTs, sameAlert, samePm });
+    G.NymNotifyView = Object.freeze({ threadOpen, onScreen, sees, outcome, addressed, readTs, sameAlert, samePm, pmChunks, pmOpenPiece, pmPiece, PIECE_HOLD_MS, alertId, reactionId, knockId, joinRequestId, joinDeclinedId, bodyKey, alertScope });
 })();

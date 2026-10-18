@@ -443,18 +443,29 @@
         let text = String(m.content || '');
         if (text.length > LIMITS.savedTextMax) text = text.slice(0, LIMITS.savedTextMax);
         const c = chat || {};
-        return {
-            entry: {
-                id,
-                mid,
-                nid,
-                chat: { t: c.t === 'dm' || c.t === 'group' ? c.t : 'channel', k: String(c.k || ''), n: String(c.n || '') },
-                a: { pk: String(m.pubkey || ''), n: String(m.author || '') },
-                text,
-                at: Number(m.at) || 0,
-                sv: Number(nowMs) || 0,
-            },
+        const entry = {
+            id,
+            mid,
+            nid,
+            chat: { t: c.t === 'dm' || c.t === 'group' ? c.t : 'channel', k: String(c.k || ''), n: String(c.n || '') },
+            a: { pk: String(m.pubkey || ''), n: String(m.author || '') },
+            text,
+            at: Number(m.at) || 0,
+            sv: Number(nowMs) || 0,
         };
+        const q = quotedKeys(m.quoted);
+        if (q.length) entry.q = q;
+        return { entry };
+    }
+
+    function quotedKeys(raw) {
+        const out = [];
+        for (const k of Array.isArray(raw) ? raw : []) {
+            const pk = typeof k === 'string' ? k.toLowerCase() : '';
+            if (/^[0-9a-f]{64}$/.test(pk) && out.indexOf(pk) === -1) out.push(pk);
+            if (out.length >= 4) break;
+        }
+        return out;
     }
 
     function validEntry(e) {

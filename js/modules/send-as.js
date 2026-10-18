@@ -757,6 +757,7 @@
         _sendAsMark(job, state) {
             if (typeof document === 'undefined' || !job.tempId) return;
             const label = job.label;
+            const known = job.acct && job.acct.pubkey ? [job.acct.pubkey] : [label];
             document.querySelectorAll(`.message[data-message-id="${job.tempId}"]`).forEach((el) => {
                 el.classList.toggle('sendas-pending', state === 'pending');
                 el.classList.toggle('sendas-failed', state === 'failed');
@@ -769,8 +770,8 @@
                     const host = el.querySelector(':scope > .message-content') || el;
                     host.appendChild(note);
                 }
-                note.textContent = state === 'pending' ? this._sa('sending', label)
-                    : (state === 'failed' ? this._sa('failedShort', label) : '');
+                this.renderNymText(note, state === 'pending' ? this._sa('sending', label)
+                    : (state === 'failed' ? this._sa('failedShort', label) : ''), known);
                 note.hidden = !note.textContent;
                 if (state === 'failed') note.appendChild(this._sendAsActions(job));
             });
@@ -1206,7 +1207,50 @@
             this._sendAsShutdown();
         },
 
+        _anonLane(channelKey) {
+            const blocked = typeof this._blockedRelaySet === 'function' ? this._blockedRelaySet() : new Set();
+            const cfg = this._sendAsRelays(channelKey, blocked);
+            const lane = { cfg, t: null, dead: false, holds: 0, timer: null };
+            const open = () => {
+                if (lane.t && !lane.t.dead) return lane.t;
+                const who = { id: 'anon', pubkey: '' };
+                const pool = !!this.useRelayProxy && typeof this._getRelayPoolUrl === 'function' && !!this._getRelayPoolUrl();
+                lane.t = pool ? this._sendAsPoolTransport(who, cfg) : this._sendAsDirectTransport(who, cfg);
+                lane.t.hold();
+                return lane.t;
+            };
+            lane.publish = async (ev) => {
+                let last = { ok: false, reason: 'closed' };
+                for (let i = 0; i < ATTEMPTS && !lane.dead; i++) {
+                    const t = open();
+                    last = await this._sendAsPublishOnce(t, ev, cfg.geo, null);
+                    if (last.ok || !last.transport || last.abort) return last;
+                    if (!t.dead) t.close();
+                }
+                return last;
+            };
+            lane.hold = () => { lane.holds++; };
+            lane.kill = () => {
+                lane.dead = true;
+                if (lane.timer) { clearTimeout(lane.timer); lane.timer = null; }
+                if (this._anonLanes) this._anonLanes.delete(lane);
+                const t = lane.t;
+                lane.t = null;
+                if (t && !t.dead) t.close();
+            };
+            lane.release = () => {
+                lane.holds = Math.max(0, lane.holds - 1);
+                if (lane.holds > 0 || lane.dead) return;
+                lane.dead = true;
+                lane.timer = setTimeout(lane.kill, REPLAY_MS);
+            };
+            if (!this._anonLanes) this._anonLanes = new Set();
+            this._anonLanes.add(lane);
+            return lane;
+        },
+
         _sendAsShutdown() {
+            for (const lane of [...(this._anonLanes || [])]) { try { lane.kill(); } catch (_) { } }
             for (const t of [...((this._sendAsTransports && this._sendAsTransports.values()) || [])]) { try { t.close(); } catch (_) { } }
             if (this._sendAsTransports) this._sendAsTransports.clear();
             for (const e of [...(this._sendAsTimers || [])]) {

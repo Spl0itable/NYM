@@ -265,6 +265,7 @@ class MeshBridge {
     _subs.add(_service.peersStream.listen(_onPeers));
     _subs.add(_service.onPublicMessage.listen(_onPublic));
     _subs.add(_service.onPrivateMessage.listen(_onPrivate));
+    _service.acksPrivateMessage = _acksPrivate;
     _subs.add(_service.onReceipt.listen(_onReceipt));
     _subs.add(_service.onFile.listen(_onFile));
     _subs.add(_service.onTyping.listen(_onTyping));
@@ -301,8 +302,9 @@ class MeshBridge {
     if (peerId == null) return;
     final list = _appState.messages['pm-${pubkey.toLowerCase()}'];
     if (list == null) return;
+    final st = _appState;
     for (final m in list) {
-      if (m.isOwn) continue;
+      if (m.isOwn || st.isMessageFiltered(m)) continue;
       final id = m.nymMessageId ?? m.id;
       if (id.isEmpty || !_readAcked.add(id)) continue;
       unawaited(_service.sendReadReceipt(peerId, id));
@@ -442,6 +444,21 @@ class MeshBridge {
     if (landed && !isOwn) _maybeNotifyChannelMention(m, channelName);
   }
 
+  bool _acksPrivate(MeshPrivateMessage msg) {
+    final pubkey = _pubkeyForPeerId(msg.senderPeerID);
+    if (_pmRefused(pubkey)) return false;
+    final nym = _nymByPubkey[pubkey] ?? 'nym';
+    final m = _pmMessage(
+      id: msg.messageId,
+      pubkey: pubkey,
+      author: nym,
+      content: msg.content,
+      timestampMs: msg.timestampMs,
+      isOwn: false,
+    );
+    return !_appState.isMessageFiltered(m);
+  }
+
   bool _pmRefused(String pubkey) {
     final st = _appState;
     if (pubkey == st.selfPubkey) return false;
@@ -466,7 +483,6 @@ class MeshBridge {
     if (_meshPmPubkeys.add(pubkey)) _refreshMarkers();
     final nym = _nymByPubkey[pubkey] ?? 'nym';
     if (nym.isNotEmpty && nym != 'nym') _app.upsertUserNym(pubkey, nym);
-    _app.ensurePMConversation(pubkey, nym: nym);
     final m = _pmMessage(
       id: msg.messageId,
       pubkey: pubkey,
@@ -477,7 +493,7 @@ class MeshBridge {
     );
     final storeKey = 'pm-$pubkey';
     final before = _appState.messages[storeKey]?.length ?? 0;
-    _app.ingestPMMessage(m);
+    _app.ingestMeshPm(m, nym: nym);
     final after = _appState.messages[storeKey]?.length ?? 0;
     final vis = visibleMessagesFor(_appState, storeKey).length;
     MeshDiagnostics.instance
@@ -485,7 +501,12 @@ class MeshBridge {
             'key=$storeKey store=$before→$after vis=$vis '
             'view=${_appState.view.storageKey} '
             '${after > before ? 'LANDED' : 'DROPPED'}');
-    _notifyPm(pubkey: pubkey, nym: nym, body: msg.content, ts: msg.timestampMs);
+    _notifyPm(
+        pubkey: pubkey,
+        nym: nym,
+        body: msg.content,
+        ts: msg.timestampMs,
+        messageId: msg.messageId);
     // Ack immediately if this thread is on screen.
     final view = _appState.view;
     if (view.kind == ViewKind.pm && view.id.toLowerCase() == pubkey) {
@@ -603,7 +624,6 @@ class MeshBridge {
       final pubkey = _pubkeyForPeerId(event.fromPeerID);
       _meshPmPubkeys.add(pubkey);
       final nym = _nymByPubkey[pubkey] ?? 'nym';
-      _app.ensurePMConversation(pubkey, nym: nym);
       final m = _pmMessage(
         id: 'file-${DateTime.now().microsecondsSinceEpoch}',
         pubkey: pubkey,
@@ -615,7 +635,7 @@ class MeshBridge {
         ..localMediaPath = path
         ..localMediaMime = event.mimeType
         ..localMediaName = event.fileName;
-      _app.ingestPMMessage(m);
+      _app.ingestMeshPm(m, nym: nym);
       final note = parseMeshFileName(event.fileName, event.mimeType);
       _notifyPm(
           pubkey: pubkey,
@@ -992,6 +1012,7 @@ class MeshBridge {
     required String nym,
     required String body,
     required int ts,
+    String messageId = '',
   }) {
     _ref.read(nostrControllerProvider).dispatchMeshNotification(
           title: nym,
@@ -1001,7 +1022,8 @@ class MeshBridge {
           historyType: 'pm',
           route: pubkey,
           tsMs: ts,
-          eventId: 'mesh-pm-$ts-$pubkey',
+          eventId:
+              messageId.isNotEmpty ? messageId : 'mesh-pm-$ts-$pubkey',
         );
   }
 

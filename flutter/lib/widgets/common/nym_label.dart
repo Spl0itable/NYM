@@ -6,6 +6,7 @@ import 'package:intl/intl.dart' show Bidi;
 
 import '../../core/theme/nym_a11y.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/layout/layout_model.dart' show mentionSuffixRanges;
 
 TextStyle nymSuffixStyle(TextStyle base,
     {bool contrast = false, bool genesis = false}) {
@@ -42,9 +43,10 @@ String nymTail(String value) {
   return (m.group(1) ?? m.group(2) ?? m.group(3)!).toLowerCase();
 }
 
-bool Function(String hex) knownNymSuffix({String sender = ''}) {
-  final own = nymTail(sender);
-  return (hex) => hex == own || isSeenNymSuffix(hex);
+bool Function(String hex) knownNymSuffix(
+    {String sender = '', Iterable<String> also = const []}) {
+  final own = {nymTail(sender), for (final v in also) nymTail(v)}..remove('');
+  return (hex) => own.contains(hex) || isSeenNymSuffix(hex);
 }
 
 ({String base, String suffix}) splitNymLabel(String label) {
@@ -74,6 +76,11 @@ List<List<int>> nymSuffixRanges(String text,
   return out;
 }
 
+List<List<int>> composedNymRanges(String text,
+        {bool Function(String hex)? known}) =>
+    mergeNymRanges(mentionSuffixRanges(text),
+        nymSuffixRanges(text, known: known ?? knownNymSuffix()));
+
 List<List<int>> mergeNymRanges(List<List<int>> a, List<List<int>> b) {
   final all = [...a, ...b]..sort((x, y) => x[0].compareTo(y[0]));
   final out = <List<int>>[];
@@ -102,9 +109,15 @@ List<InlineSpan> nymRangeSpans(
 }
 
 TextSpan nymTextSpan(BuildContext context, String text,
-    {TextStyle? style, List<List<int>> extra = const [], bool bare = true}) {
-  final ranges =
-      mergeNymRanges(bare ? nymSuffixRanges(text) : const [], extra);
+    {TextStyle? style,
+    List<List<int>> extra = const [],
+    bool bare = true,
+    Iterable<String> known = const []}) {
+  final ranges = mergeNymRanges(
+      bare
+          ? composedNymRanges(text, known: knownNymSuffix(also: known))
+          : const [],
+      extra);
   if (ranges.isEmpty) return TextSpan(text: text, style: style);
   return TextSpan(
       style: style,
@@ -132,6 +145,7 @@ class NymText extends StatelessWidget {
     this.overflow,
     this.textAlign,
     this.softWrap,
+    this.known = const [],
   });
 
   final String text;
@@ -140,10 +154,11 @@ class NymText extends StatelessWidget {
   final TextOverflow? overflow;
   final TextAlign? textAlign;
   final bool? softWrap;
+  final List<String> known;
 
   @override
   Widget build(BuildContext context) => Text.rich(
-        nymTextSpan(context, text, style: style),
+        nymTextSpan(context, text, style: style, known: known),
         maxLines: maxLines,
         overflow: overflow,
         textAlign: textAlign,
@@ -220,6 +235,11 @@ class NymLabel extends StatelessWidget {
           maxLines: 1,
           softWrap: false,
           overflow: TextOverflow.ellipsis),
+      lead: Text('${p.base.characters.take(1)}\u2026',
+          style: style,
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.clip),
       suffix: Text(p.suffix, style: dim, maxLines: 1, softWrap: false),
     );
   }
@@ -230,8 +250,9 @@ class _NymLabelRow extends MultiChildRenderObjectWidget {
       {required this.label,
       required Widget full,
       required Widget base,
+      required Widget lead,
       required Widget suffix})
-      : super(children: <Widget>[full, base, suffix]);
+      : super(children: <Widget>[full, base, lead, suffix]);
 
   final String label;
 
@@ -252,6 +273,7 @@ class _NymLabelParentData extends ContainerBoxParentData<RenderBox> {}
 
 typedef _Placement = ({
   bool whole,
+  bool cut,
   Size size,
   Offset base,
   Offset suffix,
@@ -280,6 +302,7 @@ class _RenderNymLabelRow extends RenderBox
   }
 
   bool _whole = true;
+  bool _cut = false;
 
   @override
   void setupParentData(RenderBox child) {
@@ -290,6 +313,7 @@ class _RenderNymLabelRow extends RenderBox
 
   RenderBox get _full => firstChild!;
   RenderBox get _base => childAfter(firstChild!)!;
+  RenderBox get _lead => childAfter(_base)!;
   RenderBox get _suffix => lastChild!;
 
   _NymLabelParentData _pd(RenderBox child) =>
@@ -325,7 +349,13 @@ class _RenderNymLabelRow extends RenderBox
             ? math.max(0.0, c.maxWidth - s.width)
             : double.infinity,
         maxHeight: c.maxHeight);
-    final b = sizeOf(_base, bc);
+    final b0 = sizeOf(_base, bc);
+    final l = sizeOf(_lead, bc);
+    final cut = bc.maxWidth.isFinite &&
+        bc.maxWidth + 0.01 <
+            math.min(_base.getMaxIntrinsicWidth(double.infinity),
+                _lead.getMaxIntrinsicWidth(double.infinity));
+    final b = cut ? l : b0;
     final whole = !c.maxWidth.isFinite ||
         _full.getMaxIntrinsicWidth(double.infinity) <= c.maxWidth + 0.01;
     final rtl = _textDirection == TextDirection.rtl;
@@ -333,13 +363,14 @@ class _RenderNymLabelRow extends RenderBox
       final size = c.constrain(f);
       return (
         whole: true,
+        cut: false,
         size: size,
         base: Offset(rtl ? math.max(0.0, size.width - f.width) : 0, 0),
         suffix: Offset.zero,
         baseline: baselineOf(_full, fc) ?? f.height,
       );
     }
-    final ba = baselineOf(_base, bc) ?? b.height;
+    final ba = baselineOf(cut ? _lead : _base, bc) ?? b.height;
     final sa = baselineOf(_suffix, sc) ?? s.height;
     final top = math.max(ba, sa);
     final bTop = top - ba;
@@ -350,6 +381,7 @@ class _RenderNymLabelRow extends RenderBox
     final shift = rtl ? math.max(0.0, size.width - w) : 0.0;
     return (
       whole: false,
+      cut: cut,
       size: size,
       base: Offset(rtl ? shift + s.width : 0, bTop),
       suffix: Offset(rtl ? shift : b.width, sTop),
@@ -384,17 +416,24 @@ class _RenderNymLabelRow extends RenderBox
       (child, c) => child.getDistanceToBaseline(TextBaseline.alphabetic),
     );
     _whole = p.whole;
+    _cut = p.cut;
     _pd(_full).offset = p.whole ? p.base : Offset.zero;
     _pd(_base).offset = p.whole ? Offset.zero : p.base;
+    _pd(_lead).offset = p.whole ? Offset.zero : p.base;
     _pd(_suffix).offset = p.whole ? Offset.zero : p.suffix;
     size = p.size;
   }
 
-  List<RenderBox> get _shown => _whole ? [_full] : [_base, _suffix];
+  RenderBox get _name => _cut ? _lead : _base;
+
+  List<RenderBox> get _shown => _whole ? [_full] : [_name, _suffix];
+
+  @override
+  bool paintsChild(RenderBox child) => _shown.contains(child);
 
   @override
   double? computeDistanceToActualBaseline(TextBaseline baseline) {
-    final child = _whole ? _full : _base;
+    final child = _whole ? _full : _name;
     final d = child.getDistanceToActualBaseline(baseline);
     if (d == null) return null;
     return d + _pd(child).offset.dy;

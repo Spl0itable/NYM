@@ -33,6 +33,65 @@
         return /^https?:\/\//i.test(trimmed) ? url : '';
     }
 
+    const RX_LINK_HOST = /(?<![a-z0-9-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,24}|xn--[a-z0-9-]{1,59}))(?![a-z0-9])/g;
+    const RX_LINK_IGNORABLE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0]/g;
+    const RX_LINK_DOTS = /[\u2024\u3002\uFE12\uFE52\uFF61]/g;
+    const RX_LINK_MARKERS = /[*_~|`\\\u201C\u201D\u00AB\u00BB]/g;
+    const RX_LINK_RUN = /[\p{L}\p{N}\p{M}.-]+/gu;
+    const LINK_FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'py', 'ipynb', 'rb', 'php', 'kt', 'kts', 'swift', 'dart', 'go', 'cpp', 'hpp', 'cs', 'css', 'scss', 'sass', 'less', 'html', 'htm', 'xml', 'yml', 'yaml', 'toml', 'ini', 'cfg', 'conf', 'env', 'txt', 'csv', 'tsv', 'log', 'lock', 'sql', 'bash', 'zsh', 'bat', 'cmd', 'vue', 'svelte', 'lua', 'scala', 'exs', 'erl', 'hs', 'clj', 'gradle', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'tar', 'gz', 'tgz', 'exe', 'dll', 'dmg', 'apk', 'ipa', 'wasm', 'wav']);
+    const RX_MD_LINK = /!?\[([^\[\]\n]*)\]\((?:&lt;((?:(?!&gt;)[^\s])+)&gt;|((?:[^\s()]|\([^\s()]*\))+))\)/g;
+    const RX_URL_CANDIDATE = /(<[^>]+>)|(https?:\/\/(?:(?!&(?:lt|gt|quot);)[^\s<>"\uFDD0-\uFDD5\u3001\u3002\u3008-\u3011\uFF01\uFF08\uFF09\uFF0C\uFF0E\uFF1A\uFF1B\uFF1F\u2018\u2019\u201C\u201D\u00AB\u00BB\u2026])+)(?!__)/g;
+
+    function unescapeHtml(text) {
+        return String(text).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
+    }
+
+    function linkHost(url) {
+        try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch (_) { return ''; }
+    }
+
+    function linkLabelText(label) {
+        return String(label)
+            .replace(RX_LINK_IGNORABLE, '')
+            .replace(/[\uFF01-\uFF5E]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+            .replace(RX_LINK_DOTS, '.')
+            .replace(RX_LINK_MARKERS, '')
+            .trim()
+            .toLowerCase();
+    }
+
+    function linkLabelDisguises(label, target) {
+        const host = linkHost(target);
+        const text = linkLabelText(label);
+        if (!host || !text || /^https?:\/\//.test(text)) return true;
+        const tld = host.slice(host.lastIndexOf('.') + 1);
+        RX_LINK_HOST.lastIndex = 0;
+        let m;
+        while ((m = RX_LINK_HOST.exec(text)) !== null) {
+            const named = m[1].replace(/^www\./, '');
+            const ext = named.slice(named.lastIndexOf('.') + 1);
+            if (LINK_FILE_EXTS.has(ext) && ext !== tld) continue;
+            if (host !== named && !host.endsWith('.' + named)) return true;
+        }
+        const runs = text.replace(RX_LINK_HOST, ' ').match(RX_LINK_RUN) || [];
+        return runs.some((run) => /\p{L}\.\p{L}/u.test(run) && /[^\x00-\x7F]/.test(run));
+    }
+
+    function trimLinkEnd(url) {
+        let u = url;
+        const count = (s, ch) => s.split(ch).length - 1;
+        for (;;) {
+            const last = u.charAt(u.length - 1);
+            if (last === ';' && /&(?:[a-z]+|#[0-9]+|#x[0-9a-f]+);$/i.test(u)) break;
+            if ('.,;:!?\''.indexOf(last) !== -1) { u = u.slice(0, -1); continue; }
+            if (last === ')' && count(u, '(') < count(u, ')')) { u = u.slice(0, -1); continue; }
+            if (last === ']' && count(u, '[') < count(u, ']')) { u = u.slice(0, -1); continue; }
+            if (last === '}' && count(u, '{') < count(u, '}')) { u = u.slice(0, -1); continue; }
+            break;
+        }
+        return u;
+    }
+
     function proxied(url, base) {
         if (!base) return url;
         return `${base}?url=${encodeURIComponent(url)}`;
@@ -302,9 +361,9 @@
             `<span class="spoiler" role="button" tabindex="0" aria-label="${label}">${inner}</span>`);
         s = replaceBalanced(s, /\*\*(.+?)\*\*/g, (inner) => `<strong>${inner}</strong>`);
         const under = ctx && ctx.commonMark ? 'strong' : 'u';
-        s = replaceBalanced(s, /(?<!\w)__(.+?)__(?!\w)/g, (inner) => `<${under}>${inner}</${under}>`);
+        s = replaceBalanced(s, /(?<![\p{L}\p{N}_])__(.+?)__(?![\p{L}\p{N}_])/gu, (inner) => `<${under}>${inner}</${under}>`);
         s = replaceBalanced(s, /(?<![:/])\*([^*\s][^*]*)\*/g, (inner) => `<em>${inner}</em>`);
-        s = replaceBalanced(s, /(?<![:/\w])_([^_\s][^_]*)_(?!\w)/g, (inner) => `<em>${inner}</em>`);
+        s = replaceBalanced(s, /(?<![:/\p{L}\p{N}_])_([^_\s][^_]*)_(?![\p{L}\p{N}_])/gu, (inner) => `<em>${inner}</em>`);
         s = replaceBalanced(s, /~~(.+?)~~/g, (inner) => `<del>${inner}</del>`);
         return s;
     }
@@ -520,8 +579,10 @@
         };
         formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => pushCodeBlock(code));
         formatted = formatted.replace(/```([\s\S]+)$/, (match, code) => pushCodeBlock(code));
+        const inlineSlots = new Set();
         formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
             const idx = codePlaceholders.length;
+            inlineSlots.add(idx);
             codePlaceholders.push(`<code>${code}</code>`);
             return `﷐${idx}﷑`;
         });
@@ -539,9 +600,32 @@
         formatted = formatted.replace(RX_TIMESTAMP_ESC, (match, sec, style) => {
             if (!tsValid(sec)) return match;
             const idx = codePlaceholders.length;
+            inlineSlots.add(idx);
             codePlaceholders.push(renderTimestamp(sec, style, ctx));
             return `\uFDD0${idx}\uFDD1`;
         });
+
+        if (ctx.commonMark) {
+            formatted = formatted.replace(RX_MD_LINK, (match, label, angled, plain) => {
+                const target = angled || plain;
+                if (/[\uFDD0-\uFDD5]/.test(target)) return match;
+                const raw = unescapeHtml(target);
+                if (!/^https?:\/\/./i.test(raw) || !safeUrl(raw)) return label;
+                let inlineOnly = true;
+                const labelHtml = applyInlineMarkup(label, ctx).replace(/\uFDD0(\d+)\uFDD1/g, (m, i) => {
+                    if (!inlineSlots.has(Number(i))) { inlineOnly = false; return m; }
+                    return codePlaceholders[Number(i)];
+                });
+                if (!inlineOnly) return match;
+                const shown = unescapeHtml(labelHtml.replace(/<[^>]*>/g, ''));
+                const text = linkLabelDisguises(shown, raw) ? target : labelHtml;
+                const idx = codePlaceholders.length;
+                codePlaceholders.push(`<a href="${target}" target="_blank" rel="noopener">${text}</a>`);
+                return `\uFDD0${idx}\uFDD1`;
+            });
+            formatted = formatted.replace(/\[(https?:\/\/[^\s\[\]<>"\uFDD0-\uFDD5]+)\](?!\()/g, '$1');
+            formatted = formatted.replace(/&lt;(https?:\/\/(?:(?!&(?:lt|gt);)[^\s<>"\uFDD0-\uFDD5])+)&gt;/g, '$1');
+        }
 
         formatted = applyBlocks(formatted, !!inQuote);
         formatted = applyInlineMarkup(formatted, ctx);
@@ -663,11 +747,12 @@
         );
 
         formatted = formatted.replace(
-            /(<[^>]+>)|(https?:\/\/[^\s<>"\uFDD0-\uFDD5]+)(?!__)/g,
+            RX_URL_CANDIDATE,
             (match, tag, url) => {
                 if (tag) return tag;
-                const safe = safeUrl(url);
-                return safe ? `<a href="${safe}" target="_blank" rel="noopener">${url}</a>` : match;
+                const link = trimLinkEnd(url);
+                const safe = /^https?:\/\/./i.test(link) ? safeUrl(link) : '';
+                return safe ? `<a href="${safe}" target="_blank" rel="noopener">${link}</a>${url.slice(link.length)}` : match;
             }
         );
 

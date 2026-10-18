@@ -1259,6 +1259,12 @@ body.chat-bubbles .read-more-btn {
     color: var(--text);
 }
 
+.message-content a strong,
+.message-content a em,
+.message-content a del {
+    color: inherit;
+}
+
 .message-content code {
     background: rgba(255, 255, 255, 0.06);
     padding: 2px 6px;
@@ -5676,6 +5682,14 @@ body.cl-shielded > *:not(#clShield) {
     box-shadow: var(--shadow-lg);
 }
 
+.composer-menu-list {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
 .composer-menu[hidden],
 .composer-menu-backdrop[hidden],
 .composer-menu-item[hidden],
@@ -6271,4 +6285,8 @@ body:has(#gtCallLinksModal.active):has(.call-overlay.active) #appDialogModal.act
 .header-more-item .ch-more-badge {
     position: static;
     margin-left: auto;
+}
+
+.system-message.cf-hidden-row {
+    display: none;
 }

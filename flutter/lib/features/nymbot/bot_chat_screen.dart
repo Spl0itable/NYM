@@ -560,6 +560,7 @@ class _BotControlBar extends StatelessWidget {
           _CtrlButton(
             svg: _kSvgSparkle,
             label: modelLabel,
+            tooltip: tr('Choose Pro model'),
             active: isPro,
             labelMaxWidth: labelMax,
             colors: c,
@@ -570,6 +571,9 @@ class _BotControlBar extends StatelessWidget {
           _CtrlButton(
             svg: _kSvgAnon,
             label: tr('Anon'),
+            tooltip: anonOn
+                ? tr('Anonymous: Nymbot sees a throwaway key, not your nym')
+                : tr('Chat from a throwaway key Nymbot cannot link to your nym'),
             active: anonOn,
             labelMaxWidth: labelMax,
             colors: c,
@@ -627,6 +631,7 @@ class _BotControlBar extends StatelessWidget {
           _CtrlButton(
             svg: _kSvgBolt,
             label: tr('Buy'),
+            tooltip: tr('Buy Nymbot credits'),
             active: false,
             buy: true,
             labelMaxWidth: labelMax,
@@ -700,8 +705,10 @@ class _CtrlButton extends StatefulWidget {
     required this.onTap,
     this.buy = false,
     this.badge,
+    this.tooltip,
   });
 
+  final String? tooltip;
   final int? badge;
   final String svg;
   final String label;
@@ -740,7 +747,8 @@ class _CtrlButtonState extends State<_CtrlButton> {
       fg = _hover ? c.text : c.textDim;
     }
 
-    return MouseRegion(
+    final tip = widget.tooltip;
+    final body = MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -799,6 +807,8 @@ class _CtrlButtonState extends State<_CtrlButton> {
         ),
       ),
     );
+    if (tip == null || tip.isEmpty) return body;
+    return NymTooltip(message: tip, child: body);
   }
 }
 

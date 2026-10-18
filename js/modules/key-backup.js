@@ -1042,8 +1042,13 @@
     async function finishSignIn(handoff) {
         const restored = handoff.restored || {};
         presetPq(handoff.hex, restored);
-        await window.nostrLoginImportKey(handoff.hex, { fresh: !!restored.fresh });
-        if (restored.fresh) return;
+        const outcome = await window.nostrLoginImportKey(handoff.hex, { fresh: !!restored.fresh, pq: restored.pq || null, pqBad: !!restored.pqBad });
+        if (outcome === 'restart') return;
+        afterSignIn(restored);
+    }
+
+    function afterSignIn(restored) {
+        if (!restored || restored.fresh) return;
         if (restored.pq && typeof window.restorePqRootFromBackup === 'function') {
             Promise.resolve(window.restorePqRootFromBackup(restored.pq)).then((status) => {
                 if (status === 'mismatch' || status === 'invalid') note(S.pqMismatch);
@@ -1178,7 +1183,7 @@
         backupSalt, deriveBackupKey, bundleText, parseBundle, validPq, checkPq, currentPq, newPqCode,
         encryptBundle, decryptBundle, decryptSecret,
         newFileName, createGoogleAuth, createDrive, loadBackups, matchBackups, createLimiter,
-        continueWithGoogle, backUpKey, removeBackups, finishSignIn,
+        continueWithGoogle, backUpKey, removeBackups, finishSignIn, afterSignIn,
         CLOUDKIT, newRecordName, appleFirst, orderButtons, createCloudKitAuth, createCloudKitStore,
         continueWithApple, appleBackUpKey, appleRemoveBackups, appleEnabled, errorText, appleStrings: SA,
         enabled, hasLocalKey, refresh, strings: S,

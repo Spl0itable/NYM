@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../../core/constants/relays.dart';
+import '../../features/relays/relay_add.dart';
 import '../../features/relays/relay_block.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
@@ -296,6 +297,77 @@ class RelayPool implements PoolTransport {
     }
   }
 
+  List<String> _added = const [];
+
+  final Set<String> _geoUrls = {};
+
+  List<String> get addedRelays => List.unmodifiable(_added);
+
+  bool isConnecting(String url) {
+    final c = _connections[url];
+    if (c == null) return false;
+    return c.status == RelayStatus.connecting || c.reconnectPending;
+  }
+
+  Set<String> Function()? anonKeys;
+
+  Set<String> Function()? anonLane;
+
+  bool _anonEventFor(String url, NostrEvent event) {
+    if (!_added.contains(url)) return false;
+    return RelayAdd.anonEvent(event.toJson(), anonKeys?.call() ?? const <String>{},
+        anonLane?.call() ?? const <String>{});
+  }
+
+  void setAddedRelays(Iterable<String> urls) {
+    final next = [
+      for (final u in urls)
+        if (u != RelayConfig.appRelay) u
+    ];
+    final gone = [
+      for (final u in _added)
+        if (!next.contains(u)) u
+    ];
+    final fresh = [
+      for (final u in next)
+        if (!_added.contains(u)) u
+    ];
+    _added = next;
+    for (final u in gone) {
+      if (RelayConfig.defaultRelays.contains(u) || _geoUrls.contains(u)) continue;
+      _wanted.remove(u);
+      unawaited(removeRelay(u));
+    }
+    for (final u in fresh) {
+      if (_started) {
+        addRelay(u);
+      } else {
+        _wanted.add(u);
+        _addRelayInternal(u);
+      }
+    }
+  }
+
+  List<NostrFilter>? _filtersFor(String url, List<NostrFilter> filters) {
+    if (!_added.contains(url)) return filters;
+    final keys = anonKeys?.call() ?? const <String>{};
+    if (keys.isEmpty) return filters;
+    final frame = <dynamic>['REQ', '', for (final f in filters) f.toJson()];
+    final out = RelayAdd.stripKeys(frame, keys);
+    if (identical(out, frame)) return filters;
+    if (out == null) return null;
+    return [
+      for (final f in out.skip(2))
+        NostrFilter.fromJson(Map<String, dynamic>.from(f as Map))
+    ];
+  }
+
+  void _subscribeOn(String url, RelayConnection conn, String subId,
+      List<NostrFilter> filters) {
+    final f = _filtersFor(url, filters);
+    if (f != null) conn.subscribe(subId, f);
+  }
+
   static const int heldMax = 16;
 
   final EventVerifier _verify;
@@ -396,7 +468,20 @@ class RelayPool implements PoolTransport {
     _msgSubs[url] = conn.messages.listen((msg) => _onRelayMessage(url, msg));
     _statusSubs[url] = conn.statusStream.listen((status) {
       if (status == RelayStatus.connected) _held.flush(this);
+      _noteCount();
     });
+  }
+
+  void Function()? onConnectedChanged;
+
+  int _notedCount = 0;
+
+  void _noteCount() {
+    if (_disposed) return;
+    final n = connectedCount;
+    if (n == _notedCount) return;
+    _notedCount = n;
+    onConnectedChanged?.call();
   }
 
   final Set<String> _bannedRelays = {};
@@ -415,7 +500,7 @@ class RelayPool implements PoolTransport {
     conn.connect();
     if (_isReadable(url)) {
       for (final sub in _subscriptions.values) {
-        conn.subscribe(sub.subId, _activeFilters[sub.subId] ?? const []);
+        _subscribeOn(url, conn, sub.subId, _activeFilters[sub.subId] ?? const []);
       }
     }
   }
@@ -443,6 +528,7 @@ class RelayPool implements PoolTransport {
   void updateGeoRelays(List<String> geoRelayUrls) {
     for (final url in geoRelayUrls) {
       if (!url.startsWith('wss://')) continue;
+      _geoUrls.add(url);
       if (_connections.containsKey(url)) continue;
       addRelay(url);
     }
@@ -494,7 +580,7 @@ class RelayPool implements PoolTransport {
     sub._start();
     for (final entry in _connections.entries) {
       if (_isReadable(entry.key)) {
-        entry.value.subscribe(id, filters);
+        _subscribeOn(entry.key, entry.value, id, filters);
       }
     }
     return sub;
@@ -530,7 +616,7 @@ class RelayPool implements PoolTransport {
     _activeFilters[id] = filters;
     for (final entry in _connections.entries) {
       if (_isReadable(entry.key)) {
-        entry.value.subscribe(id, filters);
+        _subscribeOn(entry.key, entry.value, id, filters);
       }
     }
   }
@@ -567,6 +653,7 @@ class RelayPool implements PoolTransport {
     }
     final futures = <Future<OkMessage>>[];
     for (final entry in _connections.entries) {
+      if (_anonEventFor(entry.key, event)) continue;
       // Write-only relays still receive EVENTs.
       if (_isWritable) {
         futures.add(entry.value.publish(event));
@@ -628,6 +715,7 @@ class RelayPool implements PoolTransport {
     if (!isRelayWideRejection(reason)) return;
     if (relayUrl == RelayConfig.appRelay) return;
     if (RelayConfig.defaultRelays.contains(relayUrl)) return;
+    if (_added.contains(relayUrl)) return;
     if (!_bannedRelays.add(relayUrl)) return;
     debugPrint('[RelayPool] dropping $relayUrl for the session: $reason');
     unawaited(removeRelay(relayUrl));

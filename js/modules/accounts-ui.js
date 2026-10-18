@@ -6,6 +6,7 @@
     const MEDIA_CACHE = 'nym-media-v1';
     const WATCH_RELAY = 'wss://relay.damus.io';
     const DRAFTS_KEY = 'nym_switch_drafts';
+    const ORPHAN_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -209,7 +210,8 @@
             try { legacy = JSON.parse(localStorage.getItem(DRAFTS_KEY) || 'null'); } catch (_) { legacy = null; }
             try { localStorage.removeItem(DRAFTS_KEY); } catch (_) { }
             if (carry && carry.pubkey && carry.pubkey !== this.pubkey) {
-                await A.carryPut(A.pageId, carry);
+                const at = Number(carry.at) || 0;
+                if (at > 0 && Date.now() - at < ORPHAN_KEEP_MS) await A.carryPut(A.pageId, carry);
                 carry = null;
             }
             const drafts = [].concat(Array.isArray(legacy) ? legacy : [], carry && Array.isArray(carry.drafts) ? carry.drafts : []);
@@ -225,12 +227,33 @@
                 } catch (_) { }
                 for (const w of p.wraps) { try { this.sendDMToRelays(w); } catch (_) { } }
             }
+            const strays = new Map();
             for (const e of Array.isArray(carry.events) ? carry.events : []) {
                 if (!e || !Array.isArray(e.m)) continue;
+                const ev = e.m[1];
+                if (!e.dm && ev && typeof ev.pubkey === 'string' && ev.pubkey !== this.pubkey && (ev.kind === 20000 || ev.kind === 23333)) {
+                    if (!strays.has(ev.pubkey)) strays.set(ev.pubkey, []);
+                    strays.get(ev.pubkey).push(ev);
+                    continue;
+                }
                 try {
                     if (e.dm) this.sendDMToRelays(e.m);
                     else this.broadcastEvent(e.m);
                 } catch (_) { }
+            }
+            for (const list of strays.values()) this._acctResendStrays(list);
+        },
+
+        async _acctResendStrays(list) {
+            if (typeof this._anonLane !== 'function' || !list.length) return;
+            if (typeof this._noteOwnAnonKey === 'function') this._noteOwnAnonKey(list[0].pubkey);
+            const where = (list[0].tags || []).find((t) => Array.isArray(t) && (t[0] === 'g' || t[0] === 'd'));
+            const lane = this._anonLane(where ? String(where[1] || '') : '');
+            lane.hold();
+            try {
+                for (const ev of list) await lane.publish(ev);
+            } catch (_) { } finally {
+                lane.release();
             }
         },
 
@@ -246,6 +269,9 @@
 
         async _acctPrepareLeave() {
             this._acctSnapshotAvatar();
+            try {
+                if (typeof this.flushSettingsSave === 'function') await Promise.race([this.flushSettingsSave(), new Promise((r) => setTimeout(r, 4000))]);
+            } catch (_) { }
             await this._acctDrain(3000);
             try { if (typeof this.flushPendingGroupReactions === 'function') this.flushPendingGroupReactions(); } catch (_) { }
             try { if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true); } catch (_) { }
@@ -420,13 +446,16 @@
             return land ? this._ac('You will switch to {nym}.', { nym: this._acctName(land) }) : this._ac('You will return to the welcome screen.');
         },
 
-        _acctRemoveMessage(a, landing) {
-            const local = a.method === 'nsec' || a.method === 'ephemeral' || a.method === 'anonymous';
-            const head = this._ac('Remove {nym} from this device? Its messages, settings and caches on this device are deleted.', { nym: this._acctName(a) });
-            const keys = local
+        _acctKeyLine(method) {
+            const local = method === 'nsec' || method === 'ephemeral' || method === 'anonymous';
+            return local
                 ? this._ac('Its key is stored only on this device: back up the nsec first or you lose this identity.')
                 : this._ac('Its key stays in your signer; you can add it again later.');
-            return [head, keys, landing].filter(Boolean).join('\n\n');
+        },
+
+        _acctRemoveMessage(a, landing) {
+            const head = this._ac('Remove {nym} from this device? Its messages, settings and caches on this device are deleted.', { nym: this._acctName(a) });
+            return [head, this._acctKeyLine(a.method), landing].filter(Boolean).join('\n\n');
         },
 
         async acctRemove(id) {
@@ -543,7 +572,10 @@
                 const sub = 'n' + M().randomId();
                 let live = false;
                 ws.onopen = () => {
-                    try { ws.send(JSON.stringify(['REQ', sub, { kinds: [1059], '#p': [a.pubkey], since: Math.floor(Date.now() / 1000) - 3 * 86400 }])); } catch (_) { }
+                    const filter = { kinds: [1059], '#p': [a.pubkey] };
+                    if (typeof this._d1Backed === 'function' && this._d1Backed()) filter.limit = 1;
+                    else filter.since = Math.floor(Date.now() / 1000) - 3 * 86400;
+                    try { ws.send(JSON.stringify(['REQ', sub, filter])); } catch (_) { }
                 };
                 ws.onmessage = (ev) => {
                     let m;
@@ -555,7 +587,8 @@
                     if (m[2].kind !== 1059 || !ptag || ptag[1] !== a.pubkey) return;
                     if (w.seen.has(m[2].id)) return;
                     w.seen.add(m[2].id);
-                    if (live) this._acctBump(a.id);
+                    if (!live) return;
+                    Promise.resolve(this._acctWrapHidden(a, m[2])).then((hidden) => { if (hidden === 'locked') this._acctBump(a.id, true); else if (!hidden) this._acctBump(a.id); }, () => this._acctBump(a.id));
                 };
                 ws.onclose = () => { w.ws = null; if (!w.stopped) w.timer = setTimeout(open, this._acctWatchDelay(false)); };
                 ws.onerror = () => { };
@@ -569,11 +602,144 @@
             return w;
         },
 
+        async _acctWrapHidden(a, wrap) {
+            const A = M();
+            const SA = window.NymSendAs;
+            const F = window.NymContentFilter;
+            const C = window.NymCrypto;
+            if (!a || !wrap || !A || typeof A.stashKeys !== 'function' || !SA || !F || !C) return false;
+            const names = SA.secretNames(a.method);
+            const keys = ['nym_blocked', 'nym_blocked_keywords', 'nym_friends', 'nym_notify_friends_only', 'nym_accept_pms',
+                'nym_filter_packs', 'nym_blocked_channels', 'nym_spam_filter_enabled', 'nym_spam_filter_aggressive', 'nym_pq_root', 'nym_pq_epoch'];
+            let vals = null;
+            try { vals = await A.stashKeys(a.id, keys.concat(names)); } catch (_) { vals = null; }
+            if (!vals) return false;
+            const list = (k) => {
+                try { const v = JSON.parse(String(vals[k] == null ? '[]' : vals[k])); return Array.isArray(v) ? v.map(String) : []; } catch (_) { return []; }
+            };
+            const blocked = list('nym_blocked');
+            const keywords = list('nym_blocked_keywords');
+            const friends = new Set(list('nym_friends'));
+            const blockedChannels = list('nym_blocked_channels');
+            const packIds = typeof this.FILTER_PACK_IDS === 'object' && Array.isArray(this.FILTER_PACK_IDS)
+                ? list('nym_filter_packs').filter((id) => this.FILTER_PACK_IDS.includes(id)) : [];
+            const friendsOnly = String(vals.nym_notify_friends_only) === 'true';
+            const accept = vals.nym_accept_pms == null ? 'enabled' : String(vals.nym_accept_pms);
+            const spamOn = String(vals.nym_spam_filter_enabled) !== 'false';
+            const spamAggressive = String(vals.nym_spam_filter_aggressive) !== 'false';
+            const gates = typeof this._clientGatesActive === 'function' && this._clientGatesActive();
+            const anyMuted = gates && !!this.autoMutedPubkeys && this.autoMutedPubkeys.size > 0;
+            const userFilters = blocked.length > 0 || keywords.some((k) => k.trim()) || friendsOnly || accept !== 'enabled'
+                || packIds.length > 0 || blockedChannels.length > 0;
+            if (!userFilters && !spamOn && !anyMuted) return false;
+            const sk = names.length && typeof this._sendAsKeyFor === 'function'
+                ? this._sendAsKeyFor(a, (k) => (vals[k] == null ? null : String(vals[k]))) : null;
+            if (!sk) return userFilters ? 'locked' : false;
+            const content0 = typeof wrap.content === 'string' ? wrap.content : '';
+            const wantPq = (typeof C.isPq2Payload === 'function' && C.isPq2Payload(content0))
+                || (typeof C.isPqPayload === 'function' && C.isPqPayload(content0));
+            const cands = this._acctUnwrapCandidates(a, sk, wantPq ? vals : null);
+            try {
+                const res = C.unwrapGiftWrap(wrap, cands);
+                if (!res || !res.seal || !res.rumor) return userFilters;
+                const sender = String(res.seal.pubkey || '');
+                if (!sender || sender === a.pubkey) return false;
+                const content = typeof res.rumor.content === 'string' ? res.rumor.content : '';
+                const tags = Array.isArray(res.rumor.tags) ? res.rumor.tags : [];
+                const tag = (k) => {
+                    const t = tags.find((x) => Array.isArray(x) && x[0] === k && typeof x[1] === 'string' && x[1]);
+                    return t ? t[1] : '';
+                };
+                const gid = tag('g');
+                const knownGroup = !!gid && accept !== 'enabled' && await this._acctKnowsGroup(a, gid);
+                if (packIds.length && typeof this.loadFilterPack === 'function') {
+                    await Promise.all(packIds.map((id) => Promise.resolve(this.loadFilterPack(id)).catch(() => null)));
+                }
+                const ctx = {
+                    self: a.pubkey,
+                    blockedUsers: new Set(blocked),
+                    keywords,
+                    blockedChannels,
+                    friendsOnly,
+                    packs: packIds.length > 0,
+                    friend: (pk) => friends.has(pk),
+                    pack: packIds.length && typeof this.filterPackMatchIn === 'function'
+                        ? (text, nym) => this.filterPackMatchIn(packIds, text, nym) !== '' : undefined,
+                    muted: (pk) => gates && typeof this.isAutoMuted === 'function' && this.isAutoMuted(pk),
+                    spam: (e) => typeof this.isSpamMessage === 'function'
+                        && this.isSpamMessage(e && typeof e.body === 'string' ? e.body : '', { enabled: spamOn, aggressive: spamAggressive })
+                };
+                return F.inboxHidden(ctx, {
+                    sender,
+                    body: content,
+                    nym: '',
+                    channel: gid ? '' : F.inviteChannel(content),
+                    subject: tag('type') === 'group-invite' ? tag('subject') : '',
+                    knownGroup,
+                    quoted: typeof this._quotedFromTags === 'function' ? this._quotedFromTags(tags) : []
+                }, accept);
+            } catch (_) {
+                return userFilters;
+            } finally {
+                for (const c of cands) {
+                    if (c.kemSk && typeof c.kemSk.fill === 'function') c.kemSk.fill(0);
+                }
+                if (typeof sk.fill === 'function') sk.fill(0);
+            }
+        },
+
+        async _acctKnowsGroup(a, gid) {
+            const A = M();
+            const groupsKey = 'nym_groups_' + a.pubkey;
+            const pendingKey = 'nym_gt_pending_joins_' + a.pubkey;
+            let vals = null;
+            try { vals = await A.stashKeys(a.id, [groupsKey, pendingKey]); } catch (_) { vals = null; }
+            if (!vals) return false;
+            const has = (k) => {
+                try {
+                    const o = JSON.parse(String(vals[k] == null ? '{}' : vals[k]));
+                    return !!o && typeof o === 'object' && !Array.isArray(o) && Object.prototype.hasOwnProperty.call(o, gid);
+                } catch (_) { return false; }
+            };
+            return has(groupsKey) || has(pendingKey);
+        },
+
+        _acctUnwrapCandidates(a, sk, vals) {
+            const C = window.NymCrypto;
+            const out = [];
+            if (vals && C && typeof C.pqAvailable === 'function' && C.pqAvailable()) {
+                const epoch = Math.max(0, parseInt(String(vals.nym_pq_epoch == null ? '0' : vals.nym_pq_epoch), 10) || 0);
+                const floor = Math.max(0, epoch - 3);
+                let root = null;
+                try {
+                    const raw = String(vals.nym_pq_root == null ? '' : vals.nym_pq_root).trim();
+                    if (raw.startsWith('{')) {
+                        const map = JSON.parse(raw);
+                        const code = map && typeof map[a.pubkey] === 'string' ? map[a.pubkey] : '';
+                        if (code) root = C.pqRootDecode(code);
+                    }
+                } catch (_) { root = null; }
+                const add = (derive) => {
+                    for (let e = epoch; e >= floor; e--) {
+                        try {
+                            const k = derive(e);
+                            out.push({ sk, bitchat: false, kemSk: k.secretKey, kemPk: k.publicKey });
+                        } catch (_) { }
+                    }
+                };
+                if (root) add((e) => C.pqKeypairFromRoot(root, e));
+                add((e) => C.pqKeypairFromPrivkey(sk, e));
+                if (root && typeof root.fill === 'function') root.fill(0);
+            }
+            out.push({ sk, bitchat: true });
+            return out;
+        },
+
         _acctWatchDelay(first) {
             return first ? 1000 + Math.floor(Math.random() * 11000) : 30000 + Math.floor(Math.random() * 30000);
         },
 
-        async _acctBump(id) {
+        async _acctBump(id, quiet) {
             const A = M();
             const next = A.update((idx) => {
                 const a = idx.accounts.find((x) => x.id === id);
@@ -585,14 +751,15 @@
             const a = next.accounts.find((x) => x.id === id);
             this._acctRenderButton();
             if (document.getElementById('accountSwitcherModal')?.classList.contains('active')) this.openAccountSwitcher();
+            if (quiet) return;
             try {
                 if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
                 let active = null;
                 try { active = localStorage.getItem('nym_hide_previews'); } catch (_) { }
-                let target = null;
+                let target = '1';
                 try {
                     const vals = typeof A.stashKeys === 'function' ? await A.stashKeys(id, ['nym_hide_previews']) : null;
-                    target = vals && vals.nym_hide_previews != null ? String(vals.nym_hide_previews) : null;
+                    if (vals && typeof vals === 'object') target = vals.nym_hide_previews != null ? String(vals.nym_hide_previews) : null;
                 } catch (_) { }
                 const notice = A.inactiveNotice(id, this._acctLabel(a), active, target);
                 const body = notice.nym == null ? this._ac(notice.text) : this._ac(notice.text, { nym: notice.nym });

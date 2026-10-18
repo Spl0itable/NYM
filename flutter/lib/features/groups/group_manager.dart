@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import '../../models/group.dart';
 import '../../models/nostr_event.dart';
 import '../../services/nostr/nostr_service.dart';
+import 'control_answers.dart';
 import 'group_logic.dart';
 
 /// Owns per-group rotating ephemeral keys and drives gift-wrapped group sends; crypto is delegated to the service.
@@ -88,6 +89,7 @@ class GroupManager {
 
   /// Deletes a left group's keys and re-arms unwrap candidates so they stop riding subscriptions and sync.
   void removeGroup(String groupId) {
+    answerMinted.remove(groupId);
     if (_keys.remove(groupId) == null) return;
     _refreshServiceKeys();
   }
@@ -103,8 +105,54 @@ class GroupManager {
   bool mergeEphemeralKeys(String groupId, Map<String, dynamic> entry) {
     final ek = keysFor(groupId);
     final before = _selfPkCount(ek);
-    ek.mergeSyncJson(entry);
+    final minted = answerMinted[groupId];
+    final settle = minted != null && minted == ek.selfCurrent?.pk;
+    ek.mergeSyncJson(entry, settle: settle);
+    if (settle && ek.selfCurrent != null) {
+      answerMinted[groupId] = ek.selfCurrent!.pk;
+    }
     return _selfPkCount(ek) > before;
+  }
+
+  final Map<String, String> answerMinted = {};
+
+  final Map<String, ({String current, Set<String> pks})> d1Self = {};
+
+  void noteD1Self(String groupId, Map<String, dynamic> entry) {
+    final self = entry['self'];
+    if (self is! Map) return;
+    final cur = self['current'];
+    final pk = cur is Map ? cur['pk'] : null;
+    if (pk is! String) return;
+    final prev = self['prev'];
+    d1Self[groupId] = (
+      current: pk,
+      pks: {
+        pk,
+        if (prev is List)
+          for (final k in prev)
+            if (k is Map && k['pk'] is String) k['pk'] as String,
+      },
+    );
+  }
+
+  Set<String> heldSelfKeys(String groupId) {
+    final ek = keysFor(groupId);
+    return {
+      if (ek.selfCurrent != null) ek.selfCurrent!.pk,
+      for (final k in ek.selfPrev) k.pk,
+    };
+  }
+
+  bool wasAnswered(String groupId, String x) =>
+      _keys[groupId]?.answered.containsKey(x) ?? false;
+
+  void noteAnswered(String groupId, String x, int ts, int nowSec) {
+    final ek = keysFor(groupId);
+    final next = ControlAnswers.noteAnswered(ek.answered, x, ts, nowSec);
+    ek.answered
+      ..clear()
+      ..addAll(next);
   }
 
   int _selfPkCount(GroupEphemeralKeys ek) =>
@@ -287,6 +335,7 @@ class GroupManager {
     MessagingSettings settings = const MessagingSettings(),
     int? nowSec,
     List<String> newMembers = const [],
+    String? nymMessageId,
   }) async {
     if (!_service.canSign) return false;
     final ek = keysFor(group.id);
@@ -295,7 +344,7 @@ class GroupManager {
     final rumor = GroupLogic.buildAddMemberRumor(
       group: group,
       selfPubkey: selfPubkey,
-      nymMessageId: GroupLogic.generateGroupId(),
+      nymMessageId: nymMessageId ?? GroupLogic.generateGroupId(),
       ephemeralPk: eph.pk,
       content: content,
       nowSec: nowSec,

@@ -20,9 +20,13 @@ import '../../widgets/common/nym_switch.dart';
 import '../i18n/i18n.dart';
 import '../settings/settings_widgets.dart';
 import '../../widgets/common/nym_focusable.dart';
+import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import 'added_relays.dart';
 import 'blocked_relays.dart';
+import 'relay_add.dart';
+import 'relay_add_check.dart';
 import 'relay_block.dart';
 
 /// At or below this width: 3-column cards, no latency column, tighter padding.
@@ -153,12 +157,219 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     final res = nostr.blockRelay(url, confirmed: why == 'signer');
     setState(() {
       if (res == 'blocked' && _expandedRow == url) _expandedRow = null;
+      if (res == 'blocked' &&
+          _addUrl == url &&
+          (_addMode == 'added' || _addMode == 'restored')) {
+        _addMode = '';
+        _addText = '';
+        _addTone = '';
+        _addUrl = '';
+      }
     });
   }
 
   void _unblock(String url) {
     ref.read(nostrControllerProvider).unblockRelay(url);
-    setState(() {});
+    if (!_noteRestored(url)) setState(() {});
+  }
+
+  bool _noteRestored(String url) {
+    final added = ref.read(addedRelaysProvider.notifier);
+    if (!ref.read(addedRelaysProvider).contains(url)) return false;
+    final over = added.overCap(url);
+    _setAdd('restored', _addMsg(over ? 'restoredCap' : 'restored', _addVars(url)),
+        over ? 'warn' : 'ok', url);
+    return true;
+  }
+
+  final TextEditingController _addInput = TextEditingController();
+  final FocusNode _addFocus = FocusNode();
+  String _addMode = '';
+  String _addText = '';
+  String _addTone = '';
+  String _addUrl = '';
+  int _addSeq = 0;
+
+  String _addMsg(String code, Map<String, Object?> vars) =>
+      tr(RelayAdd.messages[code] ?? '', vars);
+
+  Map<String, Object?> _addVars(String url, [Map<String, Object?>? extra]) => {
+        'relay': url.isEmpty ? '' : RelayBlock.shown(url),
+        'cap': RelayAdd.cap(RelayConfig.defaultRelays),
+        'defaults': RelayConfig.defaultRelays.length,
+        ...?extra,
+      };
+
+  void _setAdd(String mode, String text, String tone, String url) {
+    if (!mounted) return;
+    setState(() {
+      _addMode = mode;
+      _addText = text;
+      _addTone = tone;
+      _addUrl = url;
+    });
+  }
+
+  void _clearAdd() => _setAdd('', '', '', '');
+
+  void _onAddInput(String _) {
+    if (_addMode.isNotEmpty && _addMode != 'checking') _clearAdd();
+  }
+
+  Future<void> _submitAdd() async {
+    if (_addMode == 'checking') return;
+    final nostr = ref.read(nostrControllerProvider);
+    final r = nostr.addedRelayCheck(_addInput.text);
+    final checked = r.url ?? '';
+    if (r.status == 'blocked') {
+      _setAdd('blocked', _addMsg('blocked', _addVars(checked)), 'warn',
+          checked);
+      return;
+    }
+    if (r.status != 'ok') {
+      _setAdd(
+          'refused',
+          _addMsg(r.status, _addVars(checked, {'host': r.host ?? ''})),
+          'error',
+          checked);
+      return;
+    }
+    final seq = ++_addSeq;
+    final viaPool = nostr.relayChecksViaPool;
+    _setAdd(
+        'checking',
+        _addMsg(viaPool ? 'checkingPool' : 'checkingDirect',
+            _addVars(checked)),
+        '',
+        checked);
+    RelayCheckResult res;
+    try {
+      res = await nostr.checkAddedRelay(checked);
+    } catch (_) {
+      res = RelayCheckResult(false, viaPool ? 'poolDown' : 'unreachable');
+    }
+    if (!mounted || seq != _addSeq) return;
+    final vars = _addVars(
+        checked, {'ms': res.ms, 's': res.s, 'reason': res.reason ?? ''});
+    if (res.ok) {
+      _addNow(checked, _addMsg('reachable', vars));
+      return;
+    }
+    _setAdd('failed', _addMsg(res.code, vars), 'error', checked);
+  }
+
+  void _addNow(String url, String? lead) {
+    final nostr = ref.read(nostrControllerProvider);
+    _addSeq++;
+    final got = nostr.addRelay(url);
+    if (got != 'ok') {
+      final blocked = got == 'blocked';
+      _setAdd(blocked ? 'blocked' : 'refused', _addMsg(got, _addVars(url)),
+          blocked ? 'warn' : 'error', url);
+      return;
+    }
+    _addInput.clear();
+    final done = _addMsg('done', _addVars(url));
+    _setAdd('added', lead == null ? done : '$lead $done', 'ok', url);
+  }
+
+  void _unblockForAdd(String url) {
+    final nostr = ref.read(nostrControllerProvider);
+    nostr.unblockRelay(url);
+    final isDefault =
+        RelayConfig.defaultRelays.any((u) => RelayBlock.canon(u) == url);
+    if (isDefault) {
+      _setAdd('unblocked', _addMsg('unblocked', _addVars(url)), 'ok', url);
+      return;
+    }
+    if (_noteRestored(url)) {
+      _addInput.clear();
+      return;
+    }
+    _clearAdd();
+    _addInput.text = url;
+    _submitAdd();
+  }
+
+  void _removeAdded(String url) {
+    ref.read(nostrControllerProvider).removeAddedRelay(url);
+    if (_addUrl == url && (_addMode == 'added' || _addMode == 'restored')) {
+      _clearAdd();
+    } else {
+      setState(() {});
+    }
+  }
+
+  Widget _addedSection(BuildContext context, bool proxyMode) {
+    final nostr = ref.read(nostrControllerProvider);
+    final added = ref.watch(addedRelaysProvider);
+    final off = nostr.addedRelaysOff;
+    final atCap = off || added.length >= nostr.addedRelayCap;
+    final capped = atCap && _addMode != 'checking';
+    var text = _addText;
+    var tone = _addTone;
+    if (off) {
+      text = _addMsg('keypair', _addVars(''));
+      tone = 'warn';
+    } else if (capped) {
+      final capText = _addMsg('cap', _addVars(''));
+      text = _addMode == 'added' || _addMode == 'restored'
+          ? '$text $capText'
+          : capText;
+      tone = 'warn';
+    }
+    final actions = <Widget>[
+      if (!capped && _addMode == 'failed') ...[
+        _SmallButton(
+          key: const ValueKey('relay-add-anyway'),
+          label: tr('Add anyway'),
+          accent: true,
+          onTap: () => _addNow(_addUrl, null),
+        ),
+        _SmallButton(
+          key: const ValueKey('relay-add-cancel'),
+          label: tr('Cancel'),
+          onTap: _clearAdd,
+        ),
+      ],
+      if (!capped && _addMode == 'blocked') ...[
+        _SmallButton(
+          key: const ValueKey('relay-add-unblock'),
+          label: tr('Unblock'),
+          onTap: () => _unblockForAdd(_addUrl),
+        ),
+        _SmallButton(
+          key: const ValueKey('relay-add-cancel'),
+          label: tr('Cancel'),
+          onTap: _clearAdd,
+        ),
+      ],
+    ];
+    return _AddedSection(
+      added: added,
+      query: _query,
+      statusFor: nostr.addedRelayStatus,
+      onRemove: _removeAdded,
+      proxyMode: proxyMode,
+      waitingForPool: !proxyMode && nostr.addedRelaysWaitForPool,
+      field: _AddRelayField(
+        controller: _addInput,
+        focusNode: _addFocus,
+        enabled: !capped,
+        onChanged: _onAddInput,
+        onSubmitted: (_) => _submitAdd(),
+      ),
+      button: _SmallButton(
+        key: const ValueKey('relay-add'),
+        label: tr('Add relay'),
+        accent: true,
+        large: true,
+        onTap: _addMode == 'checking' || atCap ? null : _submitAdd,
+      ),
+      status: text,
+      tone: tone,
+      actions: actions,
+    );
   }
 
   @override
@@ -174,6 +385,8 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     _ticker?.cancel();
     _search.dispose();
     _searchFocus.dispose();
+    _addInput.dispose();
+    _addFocus.dispose();
     super.dispose();
   }
 
@@ -271,7 +484,16 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                         guardFor: nostr.relayBlockGuard,
                         onBlock: _confirmBlock,
                         blocked: blocked.toSet(),
+                        added: {
+                          if (ref.watch(addedRelaysProvider).isNotEmpty)
+                            for (final u in ref
+                                .read(addedRelaysProvider.notifier)
+                                .active)
+                              RelayBlock.canon(u)
+                        },
                       ),
+                      const SizedBox(height: 12),
+                      _addedSection(context, proxyMode),
                       const SizedBox(height: 12),
                       _BlockedSection(
                         blocked: blocked,
@@ -844,9 +1066,11 @@ class _RelayListSection extends StatelessWidget {
     this.guardFor,
     this.onBlock,
     this.blocked = const {},
+    this.added = const {},
   });
 
   final Set<String> blocked;
+  final Set<String> added;
   final String query;
   final Widget? search;
   final VoidCallback? onClearSearch;
@@ -950,6 +1174,7 @@ class _RelayListSection extends StatelessWidget {
             onTap: () => onToggleRow(e.url),
             guard: guardFor?.call(e.url) ?? 'invalid',
             onBlock: onBlock == null ? null : () => onBlock!(e.url),
+            added: added.contains(RelayBlock.canon(e.url)),
           ));
         }
       }
@@ -1057,8 +1282,10 @@ class _StatsRow extends StatelessWidget {
     required this.expanded,
     required this.onTap,
     this.detail,
+    this.tag,
   });
 
+  final Widget? tag;
   final bool open;
   final String label;
   final String tooltip;
@@ -1121,6 +1348,10 @@ class _StatsRow extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (tag != null) ...[
+                  const SizedBox(width: 8),
+                  tag!,
+                ],
                 // Latency column hidden at ≤480px, along with its gap.
                 if (MediaQuery.sizeOf(context).width > _kMobileMaxWidth) ...[
                   const SizedBox(width: 10),
@@ -1174,7 +1405,9 @@ class _RelayRow extends StatelessWidget {
     required this.onTap,
     this.guard = 'invalid',
     this.onBlock,
+    this.added = false,
   });
+  final bool added;
   final _RelayRowData data;
   final RelayStats? stats;
   final bool expanded;
@@ -1195,6 +1428,9 @@ class _RelayRow extends StatelessWidget {
       metricColor: context.nym.textBright,
       expanded: expanded,
       onTap: onTap,
+      tag: added
+          ? _AddedTag(key: ValueKey('relay-added-tag-${data.url}'))
+          : null,
       detail: expanded
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1281,11 +1517,15 @@ class _SmallButton extends StatefulWidget {
     required this.onTap,
     this.danger = false,
     this.semanticsLabel,
+    this.accent = false,
+    this.large = false,
   });
 
   final String label;
   final VoidCallback? onTap;
   final bool danger;
+  final bool accent;
+  final bool large;
   final String? semanticsLabel;
 
   @override
@@ -1301,7 +1541,9 @@ class _SmallButtonState extends State<_SmallButton> {
     final enabled = widget.onTap != null;
     final hovered = _hover && enabled;
     final accent = widget.danger ? c.danger : c.primary;
-    final fg = widget.danger ? c.danger : (hovered ? c.primary : c.text);
+    final fg = widget.danger
+        ? c.danger
+        : (widget.accent || hovered ? c.primary : c.text);
     return Semantics(
       button: true,
       enabled: enabled,
@@ -1321,19 +1563,23 @@ class _SmallButtonState extends State<_SmallButton> {
             child: Opacity(
               opacity: enabled ? 1 : 0.5,
               child: Container(
-                constraints: const BoxConstraints(minHeight: 28),
+                constraints: BoxConstraints(minHeight: widget.large ? 32 : 28),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
                 decoration: BoxDecoration(
                   borderRadius: NymRadius.rsm,
                   color: widget.danger
                       ? c.danger.withValues(alpha: hovered ? 0.18 : 0.08)
-                      : (c.isLight ? Colors.black : Colors.white)
-                          .withValues(alpha: hovered ? 0.08 : 0.05),
+                      : widget.accent
+                          ? c.primary.withValues(alpha: hovered ? 0.18 : 0.08)
+                          : (c.isLight ? Colors.black : Colors.white)
+                              .withValues(alpha: hovered ? 0.08 : 0.05),
                   border: Border.all(
                     color: widget.danger
                         ? c.danger.withValues(alpha: 0.4)
-                        : (hovered ? accent : c.glassBorder),
+                        : widget.accent
+                            ? c.primary.withValues(alpha: 0.5)
+                            : (hovered ? accent : c.glassBorder),
                   ),
                 ),
                 child: Align(
@@ -1343,7 +1589,7 @@ class _SmallButtonState extends State<_SmallButton> {
                     widget.label,
                     style: TextStyle(
                       color: fg,
-                      fontSize: 11,
+                      fontSize: widget.large ? 12 : 11,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1353,6 +1599,327 @@ class _SmallButtonState extends State<_SmallButton> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _AddedTag extends StatelessWidget {
+  const _AddedTag({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return NymTooltip(
+      message: tr('Added by you'),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        decoration: BoxDecoration(
+          borderRadius: NymRadius.rsm,
+          border: Border.all(color: c.glassBorder),
+        ),
+        child: Text(
+          tr('Added'),
+          style: TextStyle(
+            color: c.text,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AddRelayField extends StatefulWidget {
+  const _AddRelayField({
+    required this.controller,
+    required this.focusNode,
+    required this.enabled,
+    required this.onChanged,
+    required this.onSubmitted,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+  final ValueChanged<String> onSubmitted;
+
+  @override
+  State<_AddRelayField> createState() => _AddRelayFieldState();
+}
+
+class _AddRelayFieldState extends State<_AddRelayField> {
+  bool _focused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.focusNode.addListener(_onFocus);
+  }
+
+  @override
+  void dispose() {
+    widget.focusNode.removeListener(_onFocus);
+    super.dispose();
+  }
+
+  void _onFocus() {
+    final f = widget.focusNode.hasFocus;
+    if (f != _focused) setState(() => _focused = f);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return Semantics(
+      label: tr('Relay address'),
+      textField: true,
+      child: Opacity(
+        opacity: widget.enabled ? 1 : 0.5,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: NymRadius.rsm,
+            boxShadow: NymField.ring(c, _focused),
+          ),
+          child: TextField(
+            key: const ValueKey('relay-add-input'),
+            controller: widget.controller,
+            focusNode: widget.focusNode,
+            enabled: widget.enabled,
+            onChanged: widget.onChanged,
+            onSubmitted: widget.onSubmitted,
+            keyboardType: TextInputType.url,
+            textInputAction: TextInputAction.done,
+            autocorrect: false,
+            enableSuggestions: false,
+            style: TextStyle(
+              color: c.isLight ? Colors.black : Colors.white,
+              fontSize: 13,
+              fontFamily: 'monospace',
+            ),
+            cursorColor: c.isLight ? Colors.black : Colors.white,
+            decoration: NymField.decoration(
+              c,
+              hint: 'wss://relay.example.com',
+              fontSize: 13,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AddedSection extends StatelessWidget {
+  const _AddedSection({
+    required this.added,
+    required this.query,
+    required this.statusFor,
+    required this.onRemove,
+    required this.proxyMode,
+    this.waitingForPool = false,
+    required this.field,
+    required this.button,
+    required this.status,
+    required this.tone,
+    required this.actions,
+  });
+
+  final List<String> added;
+  final String query;
+  final String Function(String url) statusFor;
+  final ValueChanged<String> onRemove;
+  final bool proxyMode;
+  final bool waitingForPool;
+  final Widget field;
+  final Widget button;
+  final String status;
+  final String tone;
+  final List<Widget> actions;
+
+  static const Map<String, String> _states = {
+    'connected': 'Connected',
+    'connecting': 'Connecting…',
+    'offline': 'Not connected',
+    'unused': 'Over the limit',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final list = query.isEmpty
+        ? added
+        : [
+            for (final u in added)
+              if (RelayBlock.searchMatch(u, query)) u
+          ];
+    final divider = c.isLight
+        ? const Color(0x0F000000)
+        : Colors.white.withValues(alpha: 0.04);
+    final rows = <Widget>[];
+    if (added.isNotEmpty && list.isEmpty) {
+      rows.add(Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+        child: Text(
+          tr("No added relays match '{query}'", {'query': query}),
+          style: TextStyle(color: c.textDim, fontSize: 12),
+        ),
+      ));
+    }
+    for (var i = 0; i < list.length; i++) {
+      final url = list[i];
+      final shown = RelayBlock.shown(url);
+      final state = statusFor(url);
+      final dot = state == 'connected'
+          ? c.primary
+          : state == 'connecting'
+              ? c.textDim
+              : c.danger;
+      rows.add(Container(
+        key: ValueKey('added-relay-$url'),
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+        decoration: BoxDecoration(
+          border: i == list.length - 1
+              ? null
+              : Border(bottom: BorderSide(color: divider)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: dot,
+                boxShadow: state == 'connecting'
+                    ? null
+                    : [
+                        BoxShadow(
+                          color: dot.withValues(
+                              alpha: state == 'connected' ? 0.5 : 0.4),
+                          blurRadius: 6,
+                        ),
+                      ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: NymTooltip(
+                message: url,
+                child: Text(
+                  shown,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: c.textDim,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              tr(_states[state] ?? _states['offline']!),
+              key: ValueKey('added-relay-state-$url'),
+              style: TextStyle(color: c.textDim, fontSize: 11),
+            ),
+            const SizedBox(width: 10),
+            _SmallButton(
+              key: ValueKey('relay-remove-$url'),
+              label: tr('Remove'),
+              semanticsLabel: tr('Remove {relay}', {'relay': shown}),
+              onTap: () => onRemove(url),
+            ),
+          ],
+        ),
+      ));
+    }
+    final toneColor = switch (tone) {
+      'error' => c.danger,
+      'ok' => c.primary,
+      'warn' => c.text,
+      _ => c.textDim,
+    };
+    final message = Text(
+      status,
+      key: const ValueKey('relay-add-status'),
+      style: TextStyle(color: toneColor, fontSize: 12, height: 1.35),
+    );
+    final actionRow = Wrap(spacing: 6, runSpacing: 6, children: actions);
+    return Column(
+      key: const ValueKey('relay-added-section'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SectionTitle(tr('Added by you ({n})', {'n': added.length})),
+        if (added.isNotEmpty) ...[
+          Container(
+            constraints: const BoxConstraints(maxHeight: 240),
+            decoration: BoxDecoration(
+              color: c.isLight
+                  ? const Color(0x05000000)
+                  : Colors.white.withValues(alpha: 0.02),
+              borderRadius: NymRadius.rsm,
+              border: Border.all(color: c.glassBorder),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: rows,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+        Row(
+          children: [
+            Expanded(child: field),
+            const SizedBox(width: 8),
+            button,
+          ],
+        ),
+        if (status.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Semantics(
+            liveRegion: true,
+            child: LayoutBuilder(builder: (context, cons) {
+              if (actions.isEmpty) return message;
+              if (cons.maxWidth >= 420) {
+                return Row(
+                  children: [
+                    Expanded(child: message),
+                    const SizedBox(width: 10),
+                    actionRow,
+                  ],
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [message, const SizedBox(height: 6), actionRow],
+              );
+            }),
+          ),
+        ],
+        const SizedBox(height: 6),
+        Text(
+          waitingForPool
+              ? tr("The relay pool can't be reached, so relays you added wait "
+                  "until it's back: your device never connects to them itself.")
+              : proxyMode
+              ? tr('Relays you add are used like the default relays, by this '
+                  'identity only: the relay pool connects to them for you. '
+                  'Anonymous posts and Send as never use them.')
+              : tr('Relays you add are used like the default relays, by this '
+                  'identity only: your device connects to them directly. '
+                  'Anonymous posts and Send as never use them.'),
+          key: const ValueKey('relay-added-hint'),
+          style: TextStyle(color: c.textDim, fontSize: 11, height: 1.35),
+        ),
+      ],
     );
   }
 }

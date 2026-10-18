@@ -6,7 +6,8 @@ import '../../core/utils/nym_utils.dart';
 import '../../models/group.dart';
 import '../../models/message.dart';
 import '../chat_tools/chat_tools_service.dart' show ChatToolsPrefs;
-import '../groups/group_logic.dart' show kMaxGroupMembers;
+import '../groups/group_logic.dart' show GroupLogic, kMaxGroupMembers;
+import '../notifications/notify_view.dart';
 import '../sync/sync_merge.dart';
 import 'group_tools.dart';
 
@@ -140,6 +141,7 @@ class EventReminder {
     required this.groupId,
     this.fired = false,
     this.t = 0,
+    this.by,
   });
   final int offset;
   final int start;
@@ -147,6 +149,7 @@ class EventReminder {
   final String groupId;
   bool fired;
   final int t;
+  final String? by;
 
   Map<String, dynamic> toJson() => {
     'offset': offset,
@@ -155,6 +158,7 @@ class EventReminder {
     'groupId': groupId,
     'fired': fired,
     't': t,
+    if (by != null && by!.isNotEmpty) 'by': by,
   };
 
   static EventReminder? fromJson(Object? j) {
@@ -169,6 +173,9 @@ class EventReminder {
       groupId: (j['groupId'] ?? '').toString(),
       fired: j['fired'] == true,
       t: j['t'] is num ? (j['t'] as num).floor() : 0,
+      by: j['by'] is String && RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(j['by'] as String)
+          ? (j['by'] as String).toLowerCase()
+          : null,
     );
   }
 }
@@ -179,6 +186,7 @@ class GroupToolsHooks {
     required this.online,
     required this.group,
     this.saveGroup,
+    this.saveGroupLocal,
     this.messages,
     this.sendGroupControl,
     this.sendDirect,
@@ -190,6 +198,7 @@ class GroupToolsHooks {
     this.sendMeshPm,
     this.notice,
     this.notify,
+    this.quietNotify,
     this.nymOf,
     this.sign,
     this.verify,
@@ -203,12 +212,18 @@ class GroupToolsHooks {
     this.now,
     this.translate,
     this.personHidden,
+    this.userBlocked,
+    this.personMask,
+    this.groupLabel,
+    this.messageHidden,
+    this.fetchProfile,
   });
 
   final String Function() selfPubkey;
   final bool Function() online;
   final Group? Function(String groupId) group;
   final void Function(Group g)? saveGroup;
+  final void Function(Group g)? saveGroupLocal;
   final List<Message> Function(String storageKey)? messages;
   final Future<bool> Function(
     Group g,
@@ -237,10 +252,24 @@ class GroupToolsHooks {
     String route,
     String type, [
     String? eventId,
+    String? subject,
   ])?
   notify;
+  final void Function(
+    String title,
+    String body,
+    String route,
+    String type, [
+    String? eventId,
+  ])?
+  quietNotify;
   final String Function(String pubkey)? nymOf;
   final bool Function(String pubkey)? personHidden;
+  final bool Function(String pubkey)? userBlocked;
+  final String Function(String pubkey)? personMask;
+  final String Function(Group g)? groupLabel;
+  final bool Function(Message m)? messageHidden;
+  final Future<void> Function(String pubkey)? fetchProfile;
   final Future<Map<String, dynamic>?> Function(Map<String, dynamic> template)?
   sign;
   final bool Function(Map<String, dynamic> event)? verify;
@@ -284,9 +313,24 @@ class GroupToolsService {
 
   void _notice(String text, [Map<String, String>? vars]) =>
       hooks.notice?.call(_t(text, vars));
+
+  String _pendingName(PendingJoin p) {
+    final blocked = p.inviter.isNotEmpty &&
+        p.inviter != _self &&
+        hooks.userBlocked?.call(p.inviter) == true;
+    final name = blocked ? '' : p.name;
+    final label = hooks.groupLabel?.call(Group(id: '', name: name));
+    if (label != null) return label;
+    return name.trim().isEmpty ? _t('Group') : name;
+  }
   String _nym(String pk) => hooks.nymOf?.call(pk) ?? pk.substring(0, 8);
 
   String _tag(String pk) => '${_nym(pk)}#${getPubkeySuffix(pk)}';
+
+  String _shownTag(String pk) {
+    final mask = hooks.personMask?.call(pk) ?? '';
+    return mask.isEmpty ? _tag(pk) : '$mask#${getPubkeySuffix(pk)}';
+  }
 
   String randomHex(int bytes) {
     final sb = StringBuffer();
@@ -474,8 +518,7 @@ class GroupToolsService {
     final ts = _nowSec;
     g.slowmode = next;
     g.slowmodeSince = ts;
-    g.metaUpdatedAt = ts;
-    g.metaUpdatedBy = _self;
+    GroupLogic.stampMeta(g, _self, ts);
     hooks.saveGroup?.call(g);
     await hooks.broadcastMetadata?.call(g);
     if (next > 0) {
@@ -500,8 +543,7 @@ class GroupToolsService {
     if (!gate('approval', 'group').ok) return;
     if (on == g.joinApproval) return;
     g.joinApproval = on;
-    g.metaUpdatedAt = _nowSec;
-    g.metaUpdatedBy = _self;
+    GroupLogic.stampMeta(g, _self, _nowSec);
     hooks.saveGroup?.call(g);
     await hooks.broadcastMetadata?.call(g);
     _notice(
@@ -533,7 +575,12 @@ class GroupToolsService {
       JoinRequest(pubkey: joiner, ts: ts, via: via),
       _nowSec,
     );
-    hooks.saveGroup?.call(g);
+    final local = hooks.saveGroupLocal;
+    if (hooks.userBlocked?.call(joiner) == true && local != null) {
+      local(g);
+    } else {
+      hooks.saveGroup?.call(g);
+    }
     final grew = g.joinRequests.length > before;
     if (forward) {
       final deciders = _deciders(g);
@@ -543,30 +590,42 @@ class GroupToolsService {
           ['joiner_ts', '$ts'],
         ], deciders);
       }
-      await hooks.sendDirect?.call(joiner, [
-        ['g', groupId],
-        ['subject', g.name],
-        ['type', GroupToolsTypes.joinWaiting],
-        for (final pk in [
-          if (g.createdBy != null) g.createdBy!,
-          ...g.admins,
-        ].where((pk) => g.members.contains(pk)))
-          ['decider', pk],
-        ['x', randomHex(32)],
-      ], '');
+      if (hooks.userBlocked?.call(joiner) != true) {
+        await hooks.sendDirect?.call(joiner, [
+          ['g', groupId],
+          ['subject', g.name],
+          ['type', GroupToolsTypes.joinWaiting],
+          for (final pk in [
+            if (g.createdBy != null) g.createdBy!,
+            ...g.admins,
+          ].where((pk) => g.members.contains(pk)))
+            ['decider', pk],
+          ['x', randomHex(32)],
+        ], '');
+      }
     }
-    if (grew &&
+    var notifyJoin = grew &&
         GroupTools.mayApproveJoins(role(groupId, _self)) &&
-        hooks.personHidden?.call(joiner) != true) {
+        (via == _self || hooks.userBlocked?.call(via) != true) &&
+        hooks.personHidden?.call(joiner) != true;
+    final fetch = hooks.fetchProfile;
+    if (notifyJoin && fetch != null) {
+      try {
+        await fetch(joiner);
+      } catch (_) {}
+      notifyJoin = hooks.personHidden?.call(joiner) != true;
+    }
+    if (notifyJoin) {
       hooks.notify?.call(
         _t('Join request in {group}', {
-          'group': g.name.isEmpty ? 'Group' : g.name,
+          'group': _groupLabel(g),
         }),
         _t('{nym} wants to join. Open the group menu to approve or decline.', {
           'nym': _tag(joiner),
         }),
         groupId,
         'group',
+        NotifyView.joinRequestId(groupId, joiner, ts),
       );
     }
     _changed();
@@ -612,8 +671,8 @@ class GroupToolsService {
     if (approve && !banned && !g.members.contains(joiner)) {
       if (isFullFor(g, joiner)) {
         _notice('{group} is full. Remove someone to approve {nym}.', {
-          'group': g.name.isEmpty ? 'Group' : g.name,
-          'nym': _tag(joiner),
+          'group': _groupLabel(g),
+          'nym': _shownTag(joiner),
         });
         _changed();
         return;
@@ -635,7 +694,8 @@ class GroupToolsService {
     }
     if (approve) {
       if (banned) return;
-      _notice('Approved. {nym} was added to the group.', {'nym': _tag(joiner)});
+      _notice('Approved. {nym} was added to the group.',
+          {'nym': _shownTag(joiner)});
     } else {
       await hooks.sendDirect?.call(joiner, [
         ['g', groupId],
@@ -643,7 +703,8 @@ class GroupToolsService {
         ['type', GroupToolsTypes.joinDeclined],
         ['x', randomHex(32)],
       ], '');
-      _notice('Declined the join request from {nym}.', {'nym': _tag(joiner)});
+      _notice('Declined the join request from {nym}.',
+          {'nym': _shownTag(joiner)});
     }
     _changed();
   }
@@ -770,7 +831,8 @@ class GroupToolsService {
         if (!p.waiting) {
           p.waiting = true;
           _savePending();
-          _notice('Waiting for approval to join "{name}".', {'name': p.name});
+          _notice('Waiting for approval to join "{name}".',
+              {'name': _pendingName(p)});
           _changed();
         }
         return true;
@@ -778,15 +840,25 @@ class GroupToolsService {
       if (sender != p.inviter && !p.deciders.contains(sender)) return true;
       clearPendingJoin(groupId);
       if (tv('reason') == 'full') {
-        _notice('{group} is full, so you couldn\'t join.', {'group': p.name});
+        _notice('{group} is full, so you couldn\'t join.',
+            {'group': _pendingName(p)});
         _changed();
         return true;
       }
       final body = _t('Your request to join "{name}" was declined.', {
-        'name': p.name,
+        'name': _pendingName(p),
       });
       hooks.notice?.call(body);
-      hooks.notify?.call(_t('Join request declined'), body, groupId, 'group');
+      final declinedId =
+          NotifyView.joinDeclinedId(groupId, createdAt > 0 ? createdAt : _nowSec);
+      if (hooks.personHidden?.call(sender) == true ||
+          hooks.userBlocked?.call(sender) == true) {
+        hooks.quietNotify?.call(
+            _t('Join request declined'), body, groupId, 'group', declinedId);
+      } else {
+        hooks.notify?.call(
+            _t('Join request declined'), body, groupId, 'group', declinedId);
+      }
       _changed();
       return true;
     }
@@ -978,6 +1050,15 @@ class GroupToolsService {
   Map<String, RsvpEntry> rsvpEntries(String eventId) =>
       rsvpStore()[eventId] ?? const {};
 
+  RsvpTally visibleRsvps(String eventId, List<String>? members) {
+    final entries = rsvpEntries(eventId);
+    final pool = members ?? entries.keys.toList();
+    return GroupTools.rsvpTally(entries, [
+      for (final pk in pool)
+        if (pk == _self || hooks.personHidden?.call(pk) != true) pk,
+    ]);
+  }
+
   void applyRsvpRumor(
     List<List<String>> tags,
     String groupId,
@@ -1003,13 +1084,21 @@ class GroupToolsService {
   }
 
   GroupEventInfo? findEvent(String groupId, String eventId) {
+    final m = eventMessage(groupId, eventId);
+    return m == null ? null : GroupTools.parseEvent(m.content);
+  }
+
+  Message? eventMessage(String groupId, String eventId) {
     final list = hooks.messages?.call('group-$groupId') ?? const <Message>[];
     for (final m in list) {
       final ev = GroupTools.parseEvent(m.content);
-      if (ev != null && ev.id == eventId) return ev;
+      if (ev != null && ev.id == eventId) return m;
     }
     return null;
   }
+
+  String _groupLabel(Group g) =>
+      hooks.groupLabel?.call(g) ?? (g.name.isEmpty ? 'Group' : g.name);
 
   Future<void> rsvp(String groupId, String eventId, String status) async {
     final g = hooks.group(groupId);
@@ -1068,12 +1157,16 @@ class GroupToolsService {
       if (!GroupTools.reminderOffsetsMin.contains(offset)) return;
       final gone = remindersRemoved().remove(eventId);
       if (gone != null) _saveRemindersRemoved();
+      final creator = eventMessage(groupId, eventId)?.pubkey ?? '';
       reminders()[eventId] = EventReminder(
         offset: offset,
         start: ev.start,
         title: ev.title,
         groupId: groupId,
         t: max(_nowMs, (gone ?? 0) + 1),
+        by: RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(creator)
+            ? creator.toLowerCase()
+            : null,
       );
       final at = GroupTools.reminderAt(ev.start, offset);
       if (at <= _nowSec) {
@@ -1113,14 +1206,23 @@ class GroupToolsService {
     _remTimer?.cancel();
     for (final id in dueReminders()) {
       final r = reminders()[id]!;
+      final source = eventMessage(r.groupId, id);
+      if (source != null && hooks.messageHidden?.call(source) == true) continue;
+      final by = source?.pubkey ?? r.by ?? '';
+      if (by.isNotEmpty &&
+          by != _self &&
+          hooks.personHidden?.call(by) == true) {
+        continue;
+      }
       final g = hooks.group(r.groupId);
       hooks.notify?.call(
         _t('Reminder: {title}', {'title': r.title}),
         _t('Starts {when}', {'when': '<t:${r.start}:R>'}) +
-            (g != null ? ' · ${g.name}' : ''),
+            (g != null ? ' · ${_groupLabel(g)}' : ''),
         r.groupId,
         'group',
         'event-reminder-$id',
+        r.title,
       );
     }
     var next = 0;
@@ -1217,7 +1319,9 @@ class GroupToolsService {
     String sender,
     Map<String, dynamic> data, {
     bool Function(String kind)? busyFor,
+    int createdAt = 0,
   }) async {
+    if (sender != _self && hooks.userBlocked?.call(sender) == true) return;
     final type = data['type'];
     if (type == GroupToolsCallSignals.refused) {
       final j = _linkJoin;
@@ -1246,6 +1350,17 @@ class GroupToolsService {
       return;
     }
     final link = callLinks().firstWhere((l) => l.id == linkId);
+    Future<bool> declineHidden() async {
+      if (hooks.personHidden?.call(sender) != true) return false;
+      await hooks.sendCallSignal?.call(sender, {
+        'type': GroupToolsCallSignals.refused,
+        'linkId': linkId,
+        'reason': 'declined',
+      });
+      return true;
+    }
+
+    if (await declineHidden()) return;
     if (busyFor?.call(link.kind) == true) {
       await hooks.sendCallSignal?.call(sender, {
         'type': GroupToolsCallSignals.refused,
@@ -1254,13 +1369,20 @@ class GroupToolsService {
       });
       return;
     }
+    final fetch = hooks.fetchProfile;
+    if (fetch != null) {
+      try {
+        await fetch(sender);
+      } catch (_) {}
+      if (await declineHidden()) return;
+    }
     final who = '${_nym(sender)}#${sender.substring(sender.length - 4)}';
     hooks.notify?.call(
       _t('Call link: {name}', {'name': link.name}),
       _t('{nym} wants to join', {'nym': who}),
       sender,
       'call',
-      'call-link-${link.id}-$sender-$_nowSec',
+      NotifyView.knockId(link.id, sender, createdAt > 0 ? createdAt : _nowSec),
     );
     final admit =
         await (hooks.confirm?.call(

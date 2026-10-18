@@ -96,6 +96,7 @@
             this.nostrLink = opts.nostrLink || (() => null);
             this.onPublicMessage = opts.onPublicMessage || (() => { });
             this.onPrivateMessage = opts.onPrivateMessage || (() => { });
+            this.acksPrivateMessage = opts.acksPrivateMessage || null;
             this.onReceipt = opts.onReceipt || (() => { });
             this.onFile = opts.onFile || (() => { });
             this.onPeersChanged = opts.onPeersChanged || (() => { });
@@ -1082,16 +1083,23 @@
                 const pm = P().decodePrivateMessage(envelope.data);
                 if (!pm) return;
                 const peer = this._touchPeer(senderPeerID);
-                this.onPrivateMessage({
+                const msg = {
                     senderPeerID,
                     senderNickname: (peer && peer.nickname) || senderPeerID,
                     senderNostrPubkey: peer && peer.nostrPubkey,
                     messageId: pm.messageID,
                     content: pm.content,
                     timestampMs: Date.now(),
-                });
-                await this._sendOrQueueEncrypted(senderPeerID,
-                    P().encodeNoisePayload(NP.delivered, P().utf8.encode(pm.messageID)));
+                };
+                this.onPrivateMessage(msg);
+                let ack = true;
+                if (typeof this.acksPrivateMessage === 'function') {
+                    try { ack = this.acksPrivateMessage(msg) !== false; } catch (_) { ack = true; }
+                }
+                if (ack) {
+                    await this._sendOrQueueEncrypted(senderPeerID,
+                        P().encodeNoisePayload(NP.delivered, P().utf8.encode(pm.messageID)));
+                }
             } else if (envelope.type === NP.fileTransfer) {
                 const file = P().decodeFilePacket(envelope.data);
                 if (!file) return;

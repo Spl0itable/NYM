@@ -2258,8 +2258,25 @@ Object.assign(NYM.prototype, {
         const nym = tag && typeof tag[1] === 'string' ? tag[1] : '';
         const content = typeof ev.content === 'string' ? ev.content : '';
         const ref = { id: ev.id, pubkey: ev.pubkey, content };
-        if (F.hidden(this._cfCtx(), { pubkey: ev.pubkey || '', content, nym: this._cfNym(nym) }, ref)) return true;
+        const view = {
+            pubkey: ev.pubkey || '', content: this._channelDisplayContent(ev), nym: this._cfNym(nym),
+            quoted: this._quotedFromTags(ev.tags), people: this._botAskerOf(ev) || []
+        };
+        if (F.hidden(this._cfCtx(), view, ref)) return true;
         return ev.pubkey !== this.pubkey && typeof this.isSpamMessage === 'function' && this.isSpamMessage(content);
+    },
+
+    _gxPeekContent(ev, cf) {
+        const F = window.NymContentFilter;
+        const content = typeof ev.content === 'string' ? ev.content : '';
+        if (!F || !cf) return content;
+        const quoted = this._quotedFromTags(ev.tags);
+        const display = this._channelDisplayContent(ev);
+        if (display !== content) {
+            const shown = F.stripBlockedQuotes(cf, display, quoted);
+            if (shown !== display) return shown;
+        }
+        return F.stripBlockedQuotes(cf, content, quoted);
     },
 
     async _gxStartPeek(gh) {
@@ -2285,11 +2302,15 @@ Object.assign(NYM.prototype, {
             if (run.cancelled) return;
             const ok = [];
             const roomBlocked = this._gxRoomBlocked(gh);
+            const F = window.NymContentFilter;
+            const cf = F && typeof this._cfCtx === 'function' ? this._cfCtx() : null;
             for (const ev of events) {
                 if (run.cancelled) return;
                 if (roomBlocked || this._gxPeekHidden(ev)) continue;
                 if (typeof this._quietHit === 'function' && this._quietHit(ev)) continue;
-                if (await this._verifyRelayEventAsync(ev)) ok.push(ev);
+                if (!(await this._verifyRelayEventAsync(ev))) continue;
+                const clean = cf && typeof ev.content === 'string' ? this._gxPeekContent(ev, cf) : ev.content;
+                ok.push(clean === ev.content ? ev : Object.assign({}, ev, { content: clean }));
             }
             if (run.cancelled) return;
             const now = Date.now();
@@ -2469,7 +2490,7 @@ Object.assign(NYM.prototype, {
 
                 this.userJoinedChannels.add(geohash);
                 this.saveUserChannels();
-                this._debouncedNostrSettingsSave();
+                this._debouncedNostrSettingsSave(5000, { wanted: true });
 
                 this.displaySystemMessage(`Joined geohash channel #${geohash}`);
             }, 100);

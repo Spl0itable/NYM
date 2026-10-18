@@ -65,6 +65,7 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
       storeRaw: (key) =>
           ref.read(appStateProvider).messages[key] ?? const <Message>[],
       plainlyVisible: (m) => plainlyVisible(ref.read(appStateProvider), m),
+      messageHidden: (m) => ref.read(appStateProvider).isMessageFiltered(m),
       lastRead: (key) =>
           ref.read(appStateProvider.notifier).channelLastRead[key] ?? 0,
       badge: (key) {
@@ -103,7 +104,7 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
           return '$base#${getPubkeySuffix(id)}';
         }
         for (final g in app.groups) {
-          if (g.id == id) return g.name;
+          if (g.id == id) return app.groupLabel(g);
         }
         return id.substring(0, 8);
       },

@@ -457,7 +457,7 @@ window.nymHaptic = function (kind) {
         'handleWallpaperUpload':      function (e) { window.handleWallpaperUpload(e); },
         'selectMessageLayout':        function (_e, t) { window.selectMessageLayout(t.dataset.layout); },
         'selectChatView':             function (_e, t) { window.selectChatView(t.dataset.view); },
-        'resetColumnView':            function () { nym().cvResetColumns(); },
+        'resetColumnView':            function () { window.resetColumnView(); },
         'previewTextSize':            function (_e, t) { window.previewTextSize(t.value); },
         'commitTextSize':             function (_e, t) { window.commitTextSize(t.value); },
         'resetTextSize':              function () { window.resetTextSize(); },
@@ -470,11 +470,9 @@ window.nymHaptic = function (kind) {
         'clearLocalStorageCache':     function () { window.clearLocalStorageCache(); },
         'resetSettings':              function () { window.resetSettings(); },
         'deleteAccountAndWipe':       function () { window.deleteAccountAndWipe(); },
-        'saveSettings':               function () { window.saveSettings(); },
-        'onRandomKeypairChange':      function (_e, t) {
-            var w = byId('hardcoreKeypairWarning');
-            if (w) w.style.display = t.value === 'hardcore' ? 'block' : 'none';
-        },
+        'onRandomKeypairChange':      function (_e, t) { window.onRandomKeypairChange(t); },
+        'onSettingFieldChange':       function (_e, t) { window.onSettingFieldChange(t); },
+        'onAutoEphemeralChange':      function (_e, t) { window.onAutoEphemeralChange(t); },
 
         'restorePurchasesFromInput':  function () {
             var i = byId('recoveryCodeInput');

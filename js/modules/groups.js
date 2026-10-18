@@ -21,6 +21,17 @@ const GROUP_ROLE_EVENTS = {
     }
 };
 
+const CONTROL_ANSWERS = {
+    resyncMaxAgeSec: 3600,
+    joinMaxAgeSec: 86400,
+    answeredKeepSec: 86400,
+    answeredMax: 64,
+    jitterMs: 3000,
+    settleMs: 2500,
+    settleJitterMs: 1000,
+    settleRounds: 5
+};
+
 Object.assign(NYM.prototype, {
 
     _skToHex(sk) {
@@ -213,12 +224,18 @@ Object.assign(NYM.prototype, {
                 prev: ek.self.prev.map(k => ({ sk: this._skToHex(k.sk), pk: k.pk }))
             };
         }
+        if (ek.answered && Object.keys(ek.answered).length) {
+            const answered = {};
+            for (const k of Object.keys(ek.answered).sort()) answered[k] = ek.answered[k];
+            entry.answered = answered;
+        }
         return entry;
     },
 
     _deserializeEphemeralEntry(entry) {
         const ek = { members: entry.members || {} };
         if (entry.memberKeyTs) ek._memberKeyTs = entry.memberKeyTs;
+        if (entry.answered && typeof entry.answered === 'object') ek.answered = this._ctrlMergeAnswered({}, entry.answered);
         if (entry.self) {
             ek.self = {
                 current: { sk: this._hexToSk(entry.self.current.sk), pk: entry.self.current.pk },
@@ -231,7 +248,8 @@ Object.assign(NYM.prototype, {
     },
 
     // Both devices accumulate all keys so either can decrypt messages sent to any device's ephemeral key.
-    _mergeEphemeralKeys(groupId, syncedEntry) {
+    _mergeEphemeralKeys(groupId, syncedEntry, opts) {
+        if (typeof this._noteD1Self === 'function') this._noteD1Self(groupId, syncedEntry);
         const synced = this._deserializeEphemeralEntry(syncedEntry);
         const local = this.groupEphemeralKeys.get(groupId);
 
@@ -240,6 +258,8 @@ Object.assign(NYM.prototype, {
             this._invalidateEphPkCache();
             return;
         }
+
+        if (synced.answered) local.answered = this._ctrlMergeAnswered(local.answered, synced.answered);
 
         // Keep whichever device saw the more recent message from each member.
         if (!local._memberKeyTs) local._memberKeyTs = {};
@@ -259,14 +279,22 @@ Object.assign(NYM.prototype, {
             if (!local.self) {
                 local.self = synced.self;
             } else {
+                const minted = this._answerMinted && this._answerMinted.get(groupId);
+                const settle = !!(opts && opts.settle) || (!!minted && minted === local.self.current.pk);
                 const knownPks = new Set();
                 knownPks.add(local.self.current.pk);
                 for (const k of local.self.prev) knownPks.add(k.pk);
 
                 if (!knownPks.has(synced.self.current.pk)) {
-                    local.self.prev.push(synced.self.current);
+                    if (settle && this._ctrlPickSelf(local.self.current.pk, synced.self.current.pk) === synced.self.current.pk) {
+                        local.self.prev.unshift(local.self.current);
+                        local.self.current = synced.self.current;
+                    } else {
+                        local.self.prev.push(synced.self.current);
+                    }
                     knownPks.add(synced.self.current.pk);
                 }
+                if (settle && minted) this._answerMinted.set(groupId, local.self.current.pk);
 
                 for (const k of synced.self.prev) {
                     if (!knownPks.has(k.pk)) {
@@ -382,6 +410,8 @@ Object.assign(NYM.prototype, {
                     inviteEpoch: group.inviteEpoch || 0,
                     metaUpdatedAt: group.metaUpdatedAt || 0,
                     metaUpdatedBy: group.metaUpdatedBy || null,
+                    metaBy: this._cleanGroupMetaBy(group.metaBy),
+                    metaAdmins: this._groupMetaAdminList(group),
                     lastModTs: group.lastModTs || 0,
                     lastModEventId: group.lastModEventId || null,
                     modTsByTarget: group.modTsByTarget || {},
@@ -535,8 +565,10 @@ Object.assign(NYM.prototype, {
         this._gcLeaving.add(groupId);
         setTimeout(() => {
             this._gcLeaving.delete(groupId);
-            if (!this.groupConversations.has(groupId)) return;
-            this.displaySystemMessage(this._gx("{group} is full, so you couldn't join.", { group: name || 'Group' }));
+            const left = this.groupConversations.get(groupId);
+            if (!left) return;
+            const shown = typeof this._groupLabel === 'function' ? this._groupLabel(left) : (name || 'Group');
+            this.displaySystemMessage(this._gx("{group} is full, so you couldn't join.", { group: shown }));
             this.leaveGroup(groupId, { quiet: true }).catch(() => { });
         }, 0);
     },
@@ -544,7 +576,7 @@ Object.assign(NYM.prototype, {
     async _gcRefuseFullJoin(groupId, joinerPubkey) {
         const group = this.groupConversations.get(groupId);
         const name = (group && group.name) || 'Group';
-        this.displaySystemMessage(this._gx("{group} is full, so {nym} couldn't join.", { group: group ? (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) : name, nym: this.getNymFromPubkey(joinerPubkey) }));
+        this.displaySystemMessage(this._gx("{group} is full, so {nym} couldn't join.", { group: group ? (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) : name, nym: this.getNymFromPubkey(joinerPubkey) }), 'system', { people: [joinerPubkey] });
         await this._gcSendFullDecline(groupId, joinerPubkey, name);
     },
 
@@ -661,27 +693,46 @@ Object.assign(NYM.prototype, {
         this.updateGroupConversationUI(groupId);
         if (isOwn) return;
 
-        if (!this.users.has(targetPubkey)) await this.fetchProfileDirect(targetPubkey);
-        if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+        await this._fetchShownProfile(targetPubkey, senderPubkey);
+        await this._fetchShownProfile(senderPubkey);
         const targetName = this.getNymFromPubkey(targetPubkey);
         const actorName = this.getNymFromPubkey(senderPubkey);
         if (this.inPMMode && this.currentGroup === groupId) {
             const line = spec.grant
                 ? `${targetName} was ${spec.verb} by ${actorName}.`
                 : `${targetName}${spec.verb} by ${actorName}.`;
-            this.displaySystemMessage(line, 'system', { feed: true });
+            this.displaySystemMessage(line, 'system', { feed: true, people: [targetPubkey, senderPubkey] });
             this.openGroup(groupId);
         }
         if (targetPubkey !== this.pubkey) return;
         const tsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
-        const shownName = grp && grp.name ? grp.name : ctx.groupName;
-        const title = `${spec.title} ${typeof this._groupLabel === 'function' ? this._groupLabel({ name: shownName }) : shownName}`;
-        const body = `${actorName} ${spec.body}`;
+        const shownName = grp && grp.name ? grp : { name: this._actorMask(senderPubkey) ? '' : ctx.groupName };
+        const title = `${spec.title} ${typeof this._groupLabel === 'function' ? this._groupLabel(shownName) : shownName.name}`;
+        const actorMask = this._actorMask(senderPubkey);
+        const body = `${actorMask || actorName} ${spec.body}`;
         const info = { type: 'group', groupId, id: ctx.groupConvKey, pubkey: senderPubkey, eventId: ctx.eventId };
-        if ((Math.floor(Date.now() / 1000) - tsSec) > 10) {
-            this._addNotificationToHistory(title, body, info, tsSec * 1000);
+        this._selfNotice(title, body, info, tsSec, actorMask);
+    },
+
+    _actorMask(pubkey) {
+        if (!pubkey || pubkey === this.pubkey) return '';
+        return typeof this._personMask === 'function' ? this._personMask(pubkey) : '';
+    },
+
+    _selfNotice(title, body, info, tsSec, masked) {
+        const ts = (Number(tsSec) || Math.floor(Date.now() / 1000)) * 1000;
+        const actor = info && info.pubkey;
+        const stranger = !!actor && !!this.notifyFriendsOnly && !(typeof this.isFriend === 'function' && this.isFriend(actor));
+        if (masked || stranger) {
+            const quiet = Object.assign({}, info || {}, { noBanner: true });
+            delete quiet.pubkey;
+            this._addNotificationToHistory(title, body, quiet, ts);
+            return;
+        }
+        if ((Math.floor(Date.now() / 1000) - Math.floor(ts / 1000)) > 10) {
+            this._addNotificationToHistory(title, body, info, ts);
         } else {
-            this.showNotification(title, body, info, tsSec * 1000);
+            this.showNotification(title, body, info, ts);
         }
     },
     // Groups created before this setting existed default to allowing member invites.
@@ -865,6 +916,7 @@ Object.assign(NYM.prototype, {
     async _replyGroupRoster(groupId, requesterPubkey) {
         const group = this.groupConversations.get(groupId);
         if (!group || !this._canSendGiftWraps()) return;
+        if (this.blockedUsers && this.blockedUsers.has(requesterPubkey)) return;
         if (!this._canModerate(groupId, this.pubkey)) return;
         if (!group.members.includes(requesterPubkey)) return;
         if (!this._rosterReplyTs) this._rosterReplyTs = new Map();
@@ -917,7 +969,7 @@ Object.assign(NYM.prototype, {
         this._gcHandleDropped(groupId, rosterDropped);
     },
 
-    async _handleGroupJoinRequest(rumor, groupId, joinerPubkey) {
+    async _handleGroupJoinRequest(rumor, groupId, joinerPubkey, opts) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
         if (!group.inviteEnabled) return;
@@ -928,6 +980,7 @@ Object.assign(NYM.prototype, {
         if (reqEpoch !== (group.inviteEpoch || 0)) return;
         if (group.members.includes(joinerPubkey)) return;
         if (Array.isArray(group.banned) && group.banned.includes(joinerPubkey)) return;
+        if (group.joinApproval !== true && this.blockedUsers && this.blockedUsers.has(joinerPubkey)) return;
         if (group.joinApproval !== true && this._gcIsFull(groupId)) {
             await this._gcRefuseFullJoin(groupId, joinerPubkey);
             return;
@@ -938,21 +991,46 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        const reqTs = Math.floor(rumor.created_at || 0);
+        if (!this._ctrlFresh('join', Math.floor(Date.now() / 1000), reqTs)) return;
+        const xTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'x' && t[1]);
+        const x = xTag ? xTag[1] : null;
+        if (x && this._wasAnswered(groupId, x)) return;
         let rank = -1;
         try { rank = this._joinAdmitRank(groupId, joinerPubkey); } catch (_) { rank = 0; }
         if (rank < 0) rank = 0;
         if (rank > 0) {
             await new Promise(res => setTimeout(res, Math.min(rank, 6) * this.GROUP_ADMIT_BACKOFF_MS));
-            const now = this.groupConversations.get(groupId);
-            if (!now || now.members.includes(joinerPubkey)) return;
-            if (Array.isArray(now.banned) && now.banned.includes(joinerPubkey)) return;
-            if (!this._canAddMembers(groupId, this.pubkey)) return;
-            if (this._gcIsFull(groupId)) {
-                await this._gcRefuseFullJoin(groupId, joinerPubkey);
-                return;
-            }
         }
-        await this.addMemberToGroup(groupId, joinerPubkey);
+        const pubkey = this.pubkey;
+        await this._settleBeforeAnswer(groupId);
+        if (this.pubkey !== pubkey || (x && this._wasAnswered(groupId, x))) return;
+        const now = this.groupConversations.get(groupId);
+        if (!now || now.members.includes(joinerPubkey)) return;
+        if (this.leftGroups && this.leftGroups.has(groupId)) return;
+        if (Array.isArray(now.banned) && now.banned.includes(joinerPubkey)) return;
+        if (!this._canAddMembers(groupId, this.pubkey)) return;
+        if (this._gcIsFull(groupId)) {
+            await this._gcRefuseFullJoin(groupId, joinerPubkey);
+            return;
+        }
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (x) {
+            const ek = this._getGroupEphemeralKeys(groupId);
+            ek.answered = this._ctrlNoteAnswered(ek.answered, x, reqTs > 0 ? reqTs : nowSec, nowSec);
+        }
+        const minted = !this._holdsGroupKey(groupId);
+        const ok = await this.addMemberToGroup(groupId, joinerPubkey,
+            { ...(opts || {}), nymMessageId: x ? this._ctrlAdmitId(groupId, joinerPubkey, x) : null });
+        if (!ok || this.pubkey !== pubkey) return;
+        const self = this.groupEphemeralKeys && this.groupEphemeralKeys.get(groupId)?.self;
+        if (minted && self && self.current) {
+            if (!this._answerMinted) this._answerMinted = new Map();
+            this._answerMinted.set(groupId, self.current.pk);
+            this._settleMintedKey(groupId).catch(() => { });
+        } else if (x && opts && opts.replay) {
+            this._syncMintedGroupKey(groupId);
+        }
     },
     _appendModLog(group, entry) {
         if (!group) return;
@@ -995,7 +1073,9 @@ Object.assign(NYM.prototype, {
             const raw = localStorage.getItem(`nym_groups_${this.pubkey}`);
             if (!raw) return;
             const data = JSON.parse(raw);
+            let held = false;
             for (const [groupId, group] of Object.entries(data)) {
+                if (group && Object.prototype.hasOwnProperty.call(group, 'syncHold')) held = true;
                 if (group.memberProfiles) {
                     for (const [pk, profile] of Object.entries(group.memberProfiles)) {
                         if (profile.name && !this.users.has(pk)) {
@@ -1019,6 +1099,7 @@ Object.assign(NYM.prototype, {
                     if (g) {
                         if (group.createdBy) g.createdBy = group.createdBy;
                         g.mods = Array.isArray(group.mods) ? [...group.mods] : [];
+                        g.admins = Array.isArray(group.admins) ? group.admins.filter(pk => typeof pk === 'string' && pk) : [];
                         g.banned = Array.isArray(group.banned) ? [...group.banned] : [];
                         if (group.banner) g.banner = group.banner;
                         if (group.avatar) g.avatar = group.avatar;
@@ -1027,6 +1108,10 @@ Object.assign(NYM.prototype, {
                         if (group.inviteEnabled === true) g.inviteEnabled = true;
                         if (group.inviteEpoch) g.inviteEpoch = group.inviteEpoch;
                         if (group.metaUpdatedAt) g.metaUpdatedAt = group.metaUpdatedAt;
+                        if (typeof group.metaUpdatedBy === 'string' && group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
+                        const metaBy = this._cleanGroupMetaBy(group.metaBy);
+                        if (metaBy) g.metaBy = metaBy;
+                        this._mergeSyncedMetaAdmins(g, group);
                         if (group.lastModTs) g.lastModTs = group.lastModTs;
                         if (group.lastModEventId) g.lastModEventId = group.lastModEventId;
                         if (group.modTsByTarget && typeof group.modTsByTarget === 'object') g.modTsByTarget = { ...group.modTsByTarget };
@@ -1041,10 +1126,14 @@ Object.assign(NYM.prototype, {
                     }
                 }
             }
+            if (held) {
+                this._saveGroupConversations();
+                if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(5000, { wanted: true });
+            }
         } catch (_) { }
     },
 
-    handleGroupReaction(rumor, senderPubkey) {
+    handleGroupReaction(rumor, senderPubkey, wrapId) {
         const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
         if (!eTag) return;
         const actionTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'action');
@@ -1056,15 +1145,15 @@ Object.assign(NYM.prototype, {
                 for (const it of extra.slice(0, 64)) {
                     if (!it || typeof it !== 'object') continue;
                     if (!/^[0-9a-f]{64}$/i.test(it.e || '') || !this.isValidReactionEmoji(it.c)) continue;
-                    this._applyGroupReaction(rumor, senderPubkey, it.e, it.c, it.a === 'remove');
+                    this._applyGroupReaction(rumor, senderPubkey, it.e, it.c, it.a === 'remove', wrapId);
                 }
             }
         }
         this._applyGroupReaction(rumor, senderPubkey, eTag[1], rumor.content,
-            !!(actionTag && actionTag[1] === 'remove'));
+            !!(actionTag && actionTag[1] === 'remove'), wrapId);
     },
 
-    _applyGroupReaction(rumor, senderPubkey, messageId, emoji, isRemoval) {
+    _applyGroupReaction(rumor, senderPubkey, messageId, emoji, isRemoval, wrapId) {
         if (!this.isValidReactionEmoji(emoji)) return;
 
         const actionKey = `${messageId}:${emoji}:${senderPubkey}`;
@@ -1095,12 +1184,12 @@ Object.assign(NYM.prototype, {
             const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && t[1]);
             const groupId = groupTag ? groupTag[1] : null;
             if (groupId && typeof this._notifyGroupReactionToOurMessage === 'function') {
-                this._notifyGroupReactionToOurMessage(messageId, emoji, senderPubkey, groupId, rumor);
+                this._notifyGroupReactionToOurMessage(messageId, emoji, senderPubkey, groupId, rumor, wrapId);
             }
         }
     },
 
-    handleGroupZap(rumor, senderPubkey) {
+    handleGroupZap(rumor, senderPubkey, wrapId) {
         const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
         const boltTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'bolt11' && t[1]);
         if (!eTag || !boltTag) return;
@@ -1117,8 +1206,36 @@ Object.assign(NYM.prototype, {
 
         const pTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
         if (senderPubkey !== this.pubkey && pTag && pTag[1] === this.pubkey) {
-            this._notifyZapToOurMessage(messageId, amount, senderPubkey, { id: '', created_at: rumor.created_at });
+            this._notifyZapToOurMessage(messageId, amount, senderPubkey, { id: wrapId || '', created_at: rumor.created_at, wrapped: true });
         }
+    },
+
+    _groupSyncEntryOf(group) {
+        return {
+            name: group.name,
+            members: group.members,
+            lastMessageTime: group.lastMessageTime,
+            createdBy: group.createdBy,
+            admins: Array.isArray(group.admins) ? group.admins : [],
+            genesisOwner: group.genesisOwner || null,
+            genesisNonce: group.genesisNonce || null,
+            mods: Array.isArray(group.mods) ? group.mods : [],
+            banned: Array.isArray(group.banned) ? group.banned : [],
+            banner: group.banner || null,
+            avatar: group.avatar || null,
+            description: group.description || null,
+            allowMemberInvites: group.allowMemberInvites !== false,
+            inviteEnabled: group.inviteEnabled === true,
+            inviteEpoch: group.inviteEpoch || 0,
+            shareHistory: group.shareHistory === true,
+            metaUpdatedAt: group.metaUpdatedAt || 0,
+            metaUpdatedBy: group.metaUpdatedBy || null,
+            metaBy: typeof this._cleanGroupMetaBy === 'function' ? this._cleanGroupMetaBy(group.metaBy) : null,
+            metaAdmins: typeof this._groupMetaAdminList === 'function' ? this._groupMetaAdminList(group) : [],
+            modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
+            memberAt: this._gcMemberAtSnapshot(group),
+            memberRemovedAt: this._gcRemovedSnapshot(group)
+        };
     },
 
     async handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified, isPqWrap = false, gap = null, fromD1 = false) {
@@ -1130,10 +1247,10 @@ Object.assign(NYM.prototype, {
 
         const gateTypeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type' && t[1]);
         if (!isOwn && !this._groupSenderAdmitted(groupId, senderPubkey, gateTypeTag ? gateTypeTag[1] : null)) return;
-
-        if (typeof this.ingestImetaTags === 'function') {
-            this.ingestImetaTags(rumor.tags);
-        }
+        const unbansSelf = !!gateTypeTag && gateTypeTag[1] === 'group-unban' && !!this.leftGroups && this.leftGroups.has(groupId)
+            && (rumor.tags || []).some(t => Array.isArray(t) && t[0] === 'unban' && t[1] === this.pubkey);
+        if (!isOwn && this.blockedUsers.has(senderPubkey) && !this.groupConversations.has(groupId)
+            && !(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId)) && !unbansSelf) return;
 
         // Sender's next ephemeral pubkey (timing-attack mitigation); future messages to them use it.
         if (!isOwn) {
@@ -1141,7 +1258,7 @@ Object.assign(NYM.prototype, {
             if (ephTag) {
                 this._updateMemberEphemeralKey(groupId, senderPubkey, ephTag[1], rumor.created_at || 0);
                 this._saveEphemeralKeys();
-                this._debouncedNostrSettingsSave(15000);
+                if (!(this.blockedUsers && this.blockedUsers.has(senderPubkey))) this._debouncedNostrSettingsSave(15000);
             }
         }
 
@@ -1155,15 +1272,22 @@ Object.assign(NYM.prototype, {
         const typeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type' && t[1]);
         const msgType = typeTag ? typeTag[1] : null;
 
-        if (!isOwn && this.blockedUsers.has(senderPubkey)
-            && !(typeof this._keepsBlockedGroupControl === 'function' && this._keepsBlockedGroupControl(msgType))) {
+        const blockedMember = !isOwn && this.blockedUsers.has(senderPubkey);
+        if (blockedMember
+            && !(typeof this._keepsBlockedGroupControl === 'function' && this._keepsBlockedGroupControl(msgType))
+            && !(typeof this._keepsBlockedChatRumor === 'function' && this._keepsBlockedChatRumor(rumor))) {
             return;
         }
 
         const subjectTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'subject' && t[1]);
         const groupName = subjectTag ? subjectTag[1] : 'Group';
-        const shownGroupName = () => (typeof this._groupLabel === 'function'
-            ? this._groupLabel(this.groupConversations.get(groupId) || { name: groupName }) : groupName);
+        const shownGroupName = () => {
+            if (typeof this._groupLabel !== 'function') return groupName;
+            const known = this.groupConversations.get(groupId);
+            if (known) return this._groupLabel(known);
+            const masked = !isOwn && typeof this._actorMask === 'function' && !!this._actorMask(senderPubkey);
+            return this._groupLabel({ name: masked ? '' : groupName });
+        };
 
         // Drop messages for left groups unless it's a newer reinvite or unban.
         if (this.leftGroups.has(groupId)) {
@@ -1196,43 +1320,41 @@ Object.assign(NYM.prototype, {
                     this._debouncedNostrSettingsSave();
                     this.updateGroupConversationUI(groupId);
                     if (unbannedPubkey !== this.pubkey && this.inPMMode && this.currentGroup === groupId) {
-                        if (!this.users.has(unbannedPubkey)) await this.fetchProfileDirect(unbannedPubkey);
-                        if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
-                        this.displaySystemMessage(`${this.getNymFromPubkey(unbannedPubkey)} was unbanned by ${this.getNymFromPubkey(senderPubkey)}.`, 'system', { feed: true });
+                        await this._fetchShownProfile(unbannedPubkey, senderPubkey);
+                        await this._fetchShownProfile(senderPubkey);
+                        this.displaySystemMessage(`${this.getNymFromPubkey(unbannedPubkey)} was unbanned by ${this.getNymFromPubkey(senderPubkey)}.`, 'system', { feed: true, people: [unbannedPubkey, senderPubkey] });
                     }
                 }
             }
             if (unbannedPubkey && unbannedPubkey !== this.pubkey) return;
-            if (this.blockedUsers.has(senderPubkey)) return;
-            if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
-            const actorName = this.getNymFromPubkey(senderPubkey);
+            await this._fetchShownProfile(senderPubkey);
+            const unbanMask = this._actorMask(senderPubkey);
+            const actorName = unbanMask || this.getNymFromPubkey(senderPubkey);
             const unbanTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
-            const unbanIsHistorical = (Math.floor(Date.now() / 1000) - unbanTsSec) > 10;
             const unbanTitle = `Unbanned from ${shownGroupName()}`;
             const unbanBody = `${actorName} unbanned you from "${shownGroupName()}". You may be re-invited.`;
             const unbanChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
-            if (!unbanIsHistorical) {
-                this.showNotification(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
-            } else {
-                this._addNotificationToHistory(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
-            }
+            this._selfNotice(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec, unbanMask);
             return;
         }
 
         if (rumor.kind === 7) {
-            this.handleGroupReaction(rumor, senderPubkey);
+            this.handleGroupReaction(rumor, senderPubkey, event && event.id);
             return;
         }
 
         if (rumor.kind === 9735) {
-            this.handleGroupZap(rumor, senderPubkey);
+            this.handleGroupZap(rumor, senderPubkey, event && event.id);
             return;
         }
 
         // A resync request gets a rate-limited reply carrying our current key; never displayed.
         if (typeTag && typeTag[1] === 'key-resync') {
             const reqTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'resync_req' && t[1] === '1');
-            if (reqTag && !isOwn) this._maybeReplyKeyResync(groupId, senderPubkey);
+            if (reqTag && !isOwn) {
+                const reqX = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'x' && t[1]);
+                this._maybeReplyKeyResync(groupId, senderPubkey, { replay: fromD1, ts: Math.floor(rumor.created_at || 0), x: reqX ? reqX[1] : null });
+            }
             return;
         }
 
@@ -1265,20 +1387,20 @@ Object.assign(NYM.prototype, {
                 this._debouncedNostrSettingsSave();
                 if (this.inPMMode && this.currentGroup === groupId) {
                     this.openGroup(groupId);
-                    if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
-                    this.displaySystemMessage(`${this.getNymHtmlFromPubkey(senderPubkey)} left the group.`, 'system', { html: true, feed: true });
+                    await this._fetchShownProfile(senderPubkey);
+                    this.displaySystemMessage(`${this.getNymHtmlFromPubkey(senderPubkey)} left the group.`, 'system', { html: true, feed: true, people: [senderPubkey] });
                 }
             }
             return;
         }
 
         if (typeTag && typeTag[1] === 'group-metadata') {
-            this._applyGroupMetadataTags(rumor, groupId, senderPubkey, rumor.created_at || 0);
+            this._applyGroupMetadataTags(rumor, groupId, senderPubkey, rumor.created_at || 0, true);
             return;
         }
 
         if (typeTag && typeTag[1] === 'group-join-request') {
-            if (!isOwn) await this._handleGroupJoinRequest(rumor, groupId, senderPubkey);
+            if (!isOwn) await this._handleGroupJoinRequest(rumor, groupId, senderPubkey, { replay: fromD1 });
             return;
         }
 
@@ -1306,6 +1428,10 @@ Object.assign(NYM.prototype, {
             if (inviteGenesis === false) return;
             if (inviteGenesis === true && senderPubkey !== inviteGOwner) return;
             const existingInviteGroup = this.groupConversations.get(groupId);
+            if (!existingInviteGroup && !isOwn && !(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId))) {
+                await this._fetchShownProfile(senderPubkey);
+                if (typeof this.isPersonHidden === 'function' && this.isPersonHidden(senderPubkey)) return;
+            }
             if (existingInviteGroup) {
                 if (existingInviteGroup.genesisOwner && inviteGenesis === true
                     && inviteGOwner !== existingInviteGroup.genesisOwner) return;
@@ -1333,6 +1459,7 @@ Object.assign(NYM.prototype, {
             const inviteEpoch = inviteEpochTag ? (parseInt(inviteEpochTag[1], 10) || 0) : undefined;
             const inviteShareHistTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'share_history');
             const inviteShareHistory = inviteShareHistTag ? inviteShareHistTag[1] === '1' : undefined;
+            const inviteMetaBefore = this._groupMetaSnapshot(this.groupConversations.get(groupId));
             if (!this.groupConversations.has(groupId)) {
                 this.addGroupConversation(
                     groupId,
@@ -1359,6 +1486,7 @@ Object.assign(NYM.prototype, {
             if (grp && inviteAvatar && !grp.avatar) grp.avatar = inviteAvatar;
             if (grp && inviteBanner && !grp.banner) grp.banner = inviteBanner;
             if (grp && inviteDesc && !grp.description) grp.description = inviteDesc;
+            if (grp) this._noteGroupMetaBy(grp, inviteMetaBefore, senderPubkey);
             const inviteNotStale = !!grp && !(isOwn && existingInviteGroup) && !((grp.metaUpdatedAt || 0) > Math.floor(rumor.created_at || 0));
             if (inviteNotStale && inviteAllowInvites !== undefined) grp.allowMemberInvites = inviteAllowInvites;
             if (inviteNotStale && inviteEnabled !== undefined) grp.inviteEnabled = inviteEnabled;
@@ -1373,14 +1501,16 @@ Object.assign(NYM.prototype, {
                 this._processPendingGroupHistory(groupId);
                 const invitePk = ((rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'ephemeral_pk') || [])[1] || null;
                 if (!(isOwn && this._isOwnGroupEphemeralPk(groupId, invitePk))) {
-                    this._announceGroupEphemeralKey(groupId).catch(() => { });
+                    const inviteX = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'x' && t[1]);
+                    this._announceGroupEphemeralKey(groupId, { replay: fromD1, ts: Math.floor(rumor.created_at || 0), x: inviteX ? inviteX[1] : null }).catch(() => { });
                 }
             }
 
-            if (!isOwn && !this.blockedUsers.has(senderPubkey)) {
-                if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+            if (!isOwn && !existingInviteGroup && !this.blockedUsers.has(senderPubkey)) {
+                await this._fetchShownProfile(senderPubkey);
                 const inviterName = this.getNymFromPubkey(senderPubkey);
-                const inviteBody = rumor.content || `You've been added to group "${groupName}"`;
+                const inviteShownName = shownGroupName();
+                const inviteBody = rumor.content || `You've been added to group "${inviteShownName}"`;
                 const inviteTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
                 const inviteAgeMs = Date.now() - (inviteTsSec * 1000);
                 const isHistorical = this._isGiftWrapBacklog(inviteTsSec) || inviteAgeMs > 30000;
@@ -1394,14 +1524,18 @@ Object.assign(NYM.prototype, {
                     subject: groupName
                 };
                 if (!isHistorical) {
-                    this.showNotification(`Group invite: ${groupName}`, inviteBody, inviteChannelInfo, inviteTsSec * 1000);
+                    this.showNotification(`Group invite: ${inviteShownName}`, inviteBody, inviteChannelInfo, inviteTsSec * 1000);
                 } else {
-                    this._addNotificationToHistory(`Group invite: ${groupName}`, inviteBody, inviteChannelInfo, inviteTsSec * 1000);
+                    this._addNotificationToHistory(`Group invite: ${inviteShownName}`, inviteBody, inviteChannelInfo, inviteTsSec * 1000);
                 }
             }
         }
 
         if (typeTag && typeTag[1] === 'group-add-member') {
+            if (!isOwn && !this.groupConversations.has(groupId) && !(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId))) {
+                await this._fetchShownProfile(senderPubkey);
+                if (typeof this.isPersonHidden === 'function' && this.isPersonHidden(senderPubkey)) return;
+            }
             if (this.leftGroups.has(groupId)) {
                 this.leftGroups.delete(groupId);
                 if (this.leftGroupTimes) this.leftGroupTimes.delete(groupId);
@@ -1460,6 +1594,7 @@ Object.assign(NYM.prototype, {
                 for (const pk of newMembers) this._bumpModTargetTs(existingGroup, pk, addTs);
             }
             const addAt = Math.min(Math.floor(rumor.created_at || 0), Math.floor(Date.now() / 1000));
+            const addMetaBefore = this._groupMetaSnapshot(existingGroup);
             this.addGroupConversation(
                 groupId,
                 groupName,
@@ -1494,6 +1629,7 @@ Object.assign(NYM.prototype, {
             if (trustBootstrap && grpAdd && addAvatar && !grpAdd.avatar) grpAdd.avatar = addAvatar;
             if (trustBootstrap && grpAdd && addBanner && !grpAdd.banner) grpAdd.banner = addBanner;
             if (trustBootstrap && grpAdd && addDesc && !grpAdd.description) grpAdd.description = addDesc;
+            if (grpAdd) this._noteGroupMetaBy(grpAdd, addMetaBefore, senderPubkey);
             if (trustBootstrap && grpAdd && addAllowInvTag) grpAdd.allowMemberInvites = addAllowInvTag[1] !== '0';
             if (trustBootstrap && grpAdd && addInviteEnabledTag) grpAdd.inviteEnabled = addInviteEnabledTag[1] === '1';
             if (trustBootstrap && grpAdd && addInviteEpochTag) grpAdd.inviteEpoch = parseInt(addInviteEpochTag[1], 10) || 0;
@@ -1516,16 +1652,22 @@ Object.assign(NYM.prototype, {
                 // Rebuild the system message locally, since rumor.content may have stale names.
                 const fetchPromises = [];
                 for (const pk of newMembers) {
-                    if (!this.users.has(pk)) fetchPromises.push(this.fetchProfileDirect(pk));
+                    fetchPromises.push(this._fetchShownProfile(pk, senderPubkey));
                 }
-                if (!this.users.has(senderPubkey)) fetchPromises.push(this.fetchProfileDirect(senderPubkey));
+                fetchPromises.push(this._fetchShownProfile(senderPubkey));
                 if (fetchPromises.length > 0) await Promise.all(fetchPromises);
                 const inviterName = this.getNymFromPubkey(senderPubkey);
-                if (newMembers.length > 0) {
-                    const addedNames = newMembers.map(pk => this.getNymFromPubkey(pk)).join(', ');
-                    this.displaySystemMessage(`${addedNames} was added by ${inviterName}.`, 'system', { feed: true });
-                } else {
-                    this.displaySystemMessage(rumor.content, 'system', { feed: true });
+                const shownNew = newMembers.slice();
+                if (shownNew.length > 0) {
+                    const addedNames = shownNew.map(pk => this.getNymFromPubkey(pk)).join(', ');
+                    this.displaySystemMessage(`${addedNames} was added by ${inviterName}.`, 'system', { feed: true, people: [senderPubkey, ...shownNew] });
+                } else if (newMembers.length === 0) {
+                    const named = this._gcNamedInLine(String(rumor.content || ''), memberPubkeys.filter(pk => pk !== senderPubkey));
+                    if (named.length > 0) {
+                        await Promise.all(named.map(pk => this._fetchShownProfile(pk, senderPubkey)));
+                        const addedNames = named.map(pk => this.getNymFromPubkey(pk)).join(', ');
+                        this.displaySystemMessage(`${addedNames} was added by ${inviterName}.`, 'system', { feed: true, people: [senderPubkey, ...named] });
+                    }
                 }
             }
             return;
@@ -1545,12 +1687,14 @@ Object.assign(NYM.prototype, {
                 this._recordModEvent(grpForCheck, rumor, removedPubkey);
             }
             const profileFetches = [];
-            if (!this.users.has(removedPubkey)) profileFetches.push(this.fetchProfileDirect(removedPubkey));
-            if (!this.users.has(senderPubkey)) profileFetches.push(this.fetchProfileDirect(senderPubkey));
+            profileFetches.push(this._fetchShownProfile(removedPubkey, senderPubkey));
+            profileFetches.push(this._fetchShownProfile(senderPubkey));
             if (profileFetches.length > 0) await Promise.all(profileFetches);
             const removedName = this.getNymFromPubkey(removedPubkey);
-            const removerName = this.getNymFromPubkey(senderPubkey);
+            const removerMask = this._actorMask(senderPubkey);
+            const removerName = removerMask || this.getNymFromPubkey(senderPubkey);
             if (removedPubkey === this.pubkey) {
+                const removedFrom = shownGroupName();
                 this.leftGroups.add(groupId);
                 this._saveLeftGroups();
                 this.groupConversations.delete(groupId);
@@ -1567,20 +1711,15 @@ Object.assign(NYM.prototype, {
                     this.currentGroup = null;
                     this.inPMMode = false;
                     this.switchChannel(this.currentChannel || 'nymchat', this.currentChannel || 'nymchat');
-                    this.displaySystemMessage(`You were removed from "${shownGroupName()}" by ${removerName}.`, 'system', { kind: 'info' });
+                    this.displaySystemMessage(`You were removed from "${removedFrom}" by ${removerName}.`, 'system', removerMask ? { kind: 'info' } : { kind: 'info', people: [senderPubkey] });
                 }
-                const titleSelf = banTag ? `Banned from ${shownGroupName()}` : `Removed from ${shownGroupName()}`;
+                const titleSelf = banTag ? `Banned from ${removedFrom}` : `Removed from ${removedFrom}`;
                 const bodySelf = banTag
                     ? `${removerName} banned you. You can be re-invited only by the group owner or a moderator.`
                     : `${removerName} removed you from the group.`;
                 const removeSelfChannelInfo = { type: 'group', groupId, id: gck, pubkey: senderPubkey, eventId: event.id };
                 const removeSelfTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
-                const removeSelfIsHistorical = (Math.floor(Date.now() / 1000) - removeSelfTsSec) > 10;
-                if (!removeSelfIsHistorical) {
-                    this.showNotification(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
-                } else {
-                    this._addNotificationToHistory(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
-                }
+                this._selfNotice(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec, removerMask);
             } else {
                 const grp = this.groupConversations.get(groupId);
                 if (grp) {
@@ -1599,7 +1738,7 @@ Object.assign(NYM.prototype, {
                     this.updateGroupConversationUI(groupId);
                     if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
                         this.openGroup(groupId);
-                        this.displaySystemMessage(`${removedName} was removed by ${removerName}.`, 'system', { feed: true });
+                        this.displaySystemMessage(`${removedName} was removed by ${removerName}.`, 'system', { feed: true, people: [removedPubkey, senderPubkey] });
                     }
                 }
             }
@@ -1637,24 +1776,21 @@ Object.assign(NYM.prototype, {
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
             if (!isOwn) {
-                if (!this.users.has(newOwner)) await this.fetchProfileDirect(newOwner);
-                if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+                await this._fetchShownProfile(newOwner, senderPubkey);
+                await this._fetchShownProfile(senderPubkey);
                 const targetName = this.getNymFromPubkey(newOwner);
                 const actorName = this.getNymFromPubkey(senderPubkey);
                 if (this.inPMMode && this.currentGroup === groupId) {
-                    this.displaySystemMessage(`${actorName} transferred group ownership to ${targetName}.`, 'system', { feed: true });
+                    this.displaySystemMessage(`${actorName} transferred group ownership to ${targetName}.`, 'system', { feed: true, people: [senderPubkey, newOwner] });
                     this.openGroup(groupId);
                 }
                 if (newOwner === this.pubkey) {
+                    const transferMask = this._actorMask(senderPubkey);
                     const transferTitle = `Owner of ${shownGroupName()}`;
-                    const transferBody = `${actorName} transferred group ownership to you.`;
+                    const transferBody = `${transferMask || actorName} transferred group ownership to you.`;
                     const transferChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
                     const transferTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
-                    if ((Math.floor(Date.now() / 1000) - transferTsSec) > 10) {
-                        this._addNotificationToHistory(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
-                    } else {
-                        this.showNotification(transferTitle, transferBody, transferChannelInfo, transferTsSec * 1000);
-                    }
+                    this._selfNotice(transferTitle, transferBody, transferChannelInfo, transferTsSec, transferMask);
                 }
             }
             return;
@@ -1677,11 +1813,11 @@ Object.assign(NYM.prototype, {
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
             if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
-                if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
+                await this._fetchShownProfile(senderPubkey);
                 const actorName = this.getNymFromPubkey(senderPubkey);
-                if (targetAuthor && !this.users.has(targetAuthor)) await this.fetchProfileDirect(targetAuthor);
+                if (targetAuthor) await this._fetchShownProfile(targetAuthor, senderPubkey);
                 const authorName = targetAuthor ? this.getNymFromPubkey(targetAuthor) : 'a member';
-                this.displaySystemMessage(`${actorName} deleted a message from ${authorName}.`, 'system', { feed: true });
+                this.displaySystemMessage(`${actorName} deleted a message from ${authorName}.`, 'system', { feed: true, people: [senderPubkey, targetAuthor] });
             }
             return;
         }
@@ -1746,12 +1882,12 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const senderName = this.getNymFromPubkey(senderPubkey);
-
-        if (!isOwn && !this.users.has(senderPubkey)) {
+        if (!isOwn && !blockedMember && !this.users.has(senderPubkey)) {
             const profileFetch = Promise.resolve(this.fetchProfileDirect(senderPubkey)).catch(() => { });
-            if (!fromD1) await profileFetch;
+            if (!fromD1 || !this.groupConversations.has(groupId)) await profileFetch;
         }
+
+        const senderName = this.getNymFromPubkey(senderPubkey);
 
         const groupFileOffer = this.parseFileOfferTag(rumor.tags, senderPubkey);
 
@@ -1783,11 +1919,19 @@ Object.assign(NYM.prototype, {
             isFileOffer: !!groupFileOffer,
             fileOffer: groupFileOffer,
             deliveryStatus: isOwn ? 'sent' : undefined,
-            expiresAt: (window.NymChatTools && event && window.NymChatTools.wrapExpiration(event.tags)) || undefined
+            expiresAt: (window.NymChatTools && event && window.NymChatTools.wrapExpiration(event.tags)) || undefined,
+            quoted: typeof this._quotedFromTags === 'function' && this._quotedFromTags(rumor.tags).length ? this._quotedFromTags(rumor.tags) : undefined
         };
-        if (isPqWrap) {
+        if (!isOwn && (blockedMember || (typeof this._emojiSourceHidden === 'function' && this._emojiSourceHidden(senderPubkey, '', messageContent, { pm: true, msg })))) {
+            this._holdEmojiTags(msg, rumor.tags);
+        } else if (typeof this.ingestImetaTags === 'function') {
+            this.ingestImetaTags(rumor.tags);
+        }
+        if (isPqWrap && !blockedMember) {
             this.pqResolveRootVerdict(senderPubkey, nymMsgId || msg.id,
                 (v) => { msg.pqRoot = v; });
+        } else if (isPqWrap && !isOwn && this.pqSealRootVerdict(senderPubkey) === null) {
+            msg.pqPending = true;
         }
         this._recordMsgVerification(nymMsgId, senderVerified);
 
@@ -1796,7 +1940,7 @@ Object.assign(NYM.prototype, {
         list.sort((a, b) => {
             return this._compareMessages(a, b);
         });
-        if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
+        if (list.length > this.pmStorageLimit || (blockedMember && this._blockedOverCap(list))) list = this._storeTrim(list, this.pmStorageLimit);
         this.pmMessages.set(groupConvKey, list);
         if (typeof this._gtSlowmodeIngest === 'function') this._gtSlowmodeIngest(groupId, list, senderPubkey);
         this.persistPMMessages(groupConvKey);
@@ -1806,20 +1950,26 @@ Object.assign(NYM.prototype, {
         const rosterFromSender = isOwn || !grpForRoster
             || (!grpForRoster.createdBy && grpForRoster.members.filter(pk => pk !== this.pubkey).length === 0)
             || grpForRoster.members.includes(senderPubkey);
-        this.addGroupConversation(groupId, groupName, rosterFromSender ? memberPubkeys : [], groupHidden ? 0 : tsSec * 1000, {
-            memberAt: tsSec,
-            nameAuthoritative: !!grpForRoster && grpForRoster.createdBy === senderPubkey
-        });
+        const touchesGroup = !blockedMember && !(groupHidden && !grpForRoster);
+        if (touchesGroup) {
+            this.addGroupConversation(groupId, groupName, rosterFromSender ? memberPubkeys : [], groupHidden ? 0 : tsSec * 1000, {
+                memberAt: tsSec,
+                nameAuthoritative: !!grpForRoster && grpForRoster.createdBy === senderPubkey,
+                nameBy: senderPubkey
+            });
+        }
         const rhTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'rh' && t[1]);
-        if (rhTag && !isOwn) {
+        if (rhTag && !isOwn && touchesGroup) {
             this._maybeRepairRoster(groupId, rhTag[1], senderPubkey).catch(() => { });
         }
         const metaTsTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'meta_ts' && t[1]);
-        if (metaTsTag) {
+        if (metaTsTag && touchesGroup) {
             this._applyGroupMetadataTags(rumor, groupId, senderPubkey, parseInt(metaTsTag[1], 10) || 0);
         }
-        this._saveGroupConversations();
-        this._debouncedNostrSettingsSave(15000);
+        if (touchesGroup) {
+            this._saveGroupConversations();
+            this._debouncedNostrSettingsSave(15000);
+        }
         if (!groupHidden) this.moveGroupToTop(groupId, tsSec * 1000);
 
         if (!isOwn) {
@@ -1851,15 +2001,18 @@ Object.assign(NYM.prototype, {
             }
             const ageMs = Date.now() - (tsSec * 1000);
             const treatAsHistorical = gap ? tsSec < gap.floorSec : (msg.isHistorical || ageMs > 30000);
+            const groupAlert = window.NymNotifyView.alertId({ x: nymMsgId, id: event.id });
             const groupMsgChannelInfo = {
                 type: 'group',
                 groupId,
                 id: groupConvKey,
                 pubkey: senderPubkey,
-                eventId: event.id,
+                eventId: groupAlert.eventId,
+                ...(groupAlert.stable ? { stableId: true } : {}),
                 // Names the thread in the bell footer ("in a thread in <group>").
                 ...(msg.threadRoot && this.threadsEnabled()
-                    ? { inThread: true, threadRoot: msg.threadRoot } : {})
+                    ? { inThread: true, threadRoot: msg.threadRoot } : {}),
+                ...(Array.isArray(msg.quoted) && msg.quoted.length ? { quoted: msg.quoted.slice() } : {})
             };
             if (!treatAsHistorical) {
                 this.showNotification(`${shownGroupName()}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
@@ -1876,12 +2029,12 @@ Object.assign(NYM.prototype, {
         } else if (this.inPMMode && this.currentGroup === groupId) {
             this.displayMessage(msg);
             this._scheduleScrollToBottom();
-            if (typeof this._markChannelRead === 'function' && !groupThreadHidden) {
+            if (typeof this._markChannelRead === 'function' && !groupThreadHidden && !groupHidden) {
                 this._markChannelRead(groupConvKey, msg.created_at);
             }
             // A reply kept collapsed in the open group notifies as if the group were not open.
             if (!isOwn && groupThreadHidden) notifyForGroup();
-            if (!isOwn && !msg.isHistorical && !document.hidden && !this.userScrolledUp &&
+            if (!isOwn && !groupHidden && !msg.isHistorical && !document.hidden && !this.userScrolledUp &&
                 this._canSendGiftWraps() && nymMsgId) {
                 this.sendNymReceipt(nymMsgId, 'read', senderPubkey, 'group', groupId);
                 msg.readReceiptSent = true;
@@ -1960,7 +2113,7 @@ Object.assign(NYM.prototype, {
         return groupId;
     },
 
-    async addMemberToGroup(groupId, newMemberPubkey) {
+    async addMemberToGroup(groupId, newMemberPubkey, opts) {
         if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Adding members requires a logged-in account');
             return false;
@@ -2006,7 +2159,7 @@ Object.assign(NYM.prototype, {
         }
 
         const now = addAt;
-        const nymMessageId = this._generateSharedEventId();
+        const nymMessageId = (opts && opts.nymMessageId) || this._generateSharedEventId();
         const newMemberName = this.getNymFromPubkey(newMemberPubkey);
         const inviterName = this.getNymFromPubkey(this.pubkey);
         const addContent = `${newMemberName} was added by ${inviterName}.`;
@@ -2034,6 +2187,7 @@ Object.assign(NYM.prototype, {
         if (typeof this._gtMetaTags === 'function') tags.push(...this._gtMetaTags(group));
         tags.push(['x', nymMessageId]);
 
+        const minted = !this._holdsGroupKey(groupId);
         const eph = this._ensureSelfEphemeralKey(groupId);
         tags.push(['ephemeral_pk', eph.pk]);
 
@@ -2044,6 +2198,7 @@ Object.assign(NYM.prototype, {
         // The new member has no ephemeral key yet, so their wrap uses the real pubkey.
         await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { newMember: newMemberPubkey });
         this._saveEphemeralKeys();
+        if (minted && opts && opts.replay) this._syncMintedGroupKey(groupId);
 
         if (group.shareHistory === true) {
             try { await this._sendGroupHistoryTo(groupId, newMemberPubkey); } catch (_) { }
@@ -2054,7 +2209,7 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         if (this.inPMMode && this.currentGroup === groupId) {
             this.openGroup(groupId);
-            this.displaySystemMessage(addContent, 'system', { feed: true });
+            this.displaySystemMessage(addContent, 'system', { feed: true, people: [newMemberPubkey] });
         }
 
         return true;
@@ -2087,7 +2242,7 @@ Object.assign(NYM.prototype, {
         }
         if (skipped.length) {
             const g = this.groupConversations.get(groupId);
-            const names = skipped.map(pk => this.getNymFromPubkey(pk)).join(', ');
+            const names = skipped.map(pk => (typeof this._personMask === 'function' && this._personMask(pk)) || this.getNymFromPubkey(pk)).join(', ');
             this.displaySystemMessage(this._gx("{group} is full, so these weren't added: {names}.", { group: g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : 'Group', names }));
         }
         return added;
@@ -2106,6 +2261,7 @@ Object.assign(NYM.prototype, {
             const m = list[i];
             if (!m || !m.content || m.isFileOffer) continue;
             if (!m.pubkey || !m.nymMessageId) continue;
+            if (typeof this.isContentHidden === 'function' && this.isContentHidden(m)) continue;
             picked.push({
                 p: m.pubkey,
                 c: String(m.content).slice(0, 2000),
@@ -2165,6 +2321,7 @@ Object.assign(NYM.prototype, {
         const existingIds = new Set(list.map(m => m.nymMessageId).filter(Boolean));
         const unknownPks = new Set();
         let added = 0;
+        let shown = 0;
         for (const e of entries) {
             if (!e || typeof e !== 'object') continue;
             if (!/^[0-9a-f]{64}$/i.test(e.p || '')) continue;
@@ -2178,8 +2335,8 @@ Object.assign(NYM.prototype, {
             if (ts <= 0) continue;
             existingIds.add(e.x);
             const senderPk = e.p.toLowerCase();
-            if (!this.users.has(senderPk)) unknownPks.add(senderPk);
-            list.push({
+            if (!this.users.has(senderPk) && !(this.blockedUsers && this.blockedUsers.has(senderPk))) unknownPks.add(senderPk);
+            const entry = {
                 id: e.x,
                 author: this.getNymFromPubkey(senderPk),
                 pubkey: senderPk,
@@ -2197,8 +2354,10 @@ Object.assign(NYM.prototype, {
                 isHistorical: true,
                 senderVerified: false,
                 nymMessageId: e.x
-            });
+            };
+            list.push(entry);
             added++;
+            if (entry.isOwn || !(typeof this.isContentHidden === 'function' && this.isContentHidden(entry))) shown++;
         }
         if (!added) return;
         list.sort((a, b) => this._compareMessages(a, b));
@@ -2213,8 +2372,10 @@ Object.assign(NYM.prototype, {
         }
         if (this.inPMMode && this.currentGroup === groupId) {
             this.openGroup(groupId);
-            const sharerName = this.getNymFromPubkey(senderPubkey);
-            this.displaySystemMessage(`${added} earlier message${added === 1 ? '' : 's'} shared by ${sharerName}.`, 'system', { feed: true });
+            if (shown > 0) {
+                const sharerName = this.getNymFromPubkey(senderPubkey);
+                this.displaySystemMessage(`${shown} earlier message${shown === 1 ? '' : 's'} shared by ${sharerName}.`, 'system', { feed: true, people: [senderPubkey] });
+            }
         }
     },
 
@@ -2237,16 +2398,29 @@ Object.assign(NYM.prototype, {
     },
 
     // Called after DM catch-up; at most once per group per cooldown window.
-    async _announceGroupEphemeralKey(groupId) {
+    async _announceGroupEphemeralKey(groupId, opts) {
         if (!this._canSendGiftWraps()) return;
-        const group = this.groupConversations.get(groupId);
+        let group = this.groupConversations.get(groupId);
         if (!group) return;
-        const others = (group.members || []).filter(pk => pk !== this.pubkey);
+        let others = (group.members || []).filter(pk => pk !== this.pubkey);
         if (!others.length) return;
         if (!this._ephAnnounceTs) this._ephAnnounceTs = new Map();
         const nowMs = Date.now();
         if ((this._ephAnnounceTs.get(groupId) || 0) > nowMs - this.GROUP_RESYNC_COOLDOWN_SEC * 1000) return;
+        const x = opts && opts.x;
+        const wanted = () => this._ctrlWanted('invite', Math.floor(Date.now() / 1000), (opts && opts.ts) || 0, this._holdsGroupKey(groupId));
+        if (x && (this._wasAnswered(groupId, x) || !wanted())) return;
         this._ephAnnounceTs.set(groupId, nowMs);
+        if (x) {
+            const pubkey = this.pubkey;
+            await this._settleBeforeAnswer(groupId);
+            if (this.pubkey !== pubkey || this._wasAnswered(groupId, x) || !wanted()) return;
+            group = this.groupConversations.get(groupId);
+            if (!group || (this.leftGroups && this.leftGroups.has(groupId))) return;
+            others = (group.members || []).filter(pk => pk !== this.pubkey);
+            if (!others.length) return;
+        }
+        const minted = !this._holdsGroupKey(groupId);
         const eph = this._ensureSelfEphemeralKey(groupId);
         const tags = others.map(pk => ['p', pk]);
         tags.push(['g', groupId]);
@@ -2259,7 +2433,17 @@ Object.assign(NYM.prototype, {
             kind: 14, created_at: Math.floor(nowMs / 1000), tags, content: '', pubkey: this.pubkey
         };
         await this._sendGiftWrapsAsync(others, rumor, null, groupId, { forceRealPk: true });
+        if (x) {
+            this._noteControlAnswered(groupId, x, (opts && opts.ts) || 0, minted, rumor.pubkey);
+            return;
+        }
         this._saveEphemeralKeys();
+        if (minted) this._syncMintedGroupKey(groupId);
+    },
+
+    _holdsGroupKey(groupId) {
+        const ek = this.groupEphemeralKeys && this.groupEphemeralKeys.get(groupId);
+        return !!(ek && ek.self && ek.self.current);
     },
 
     async _maybeSendGroupKeyResyncs() {
@@ -2272,6 +2456,7 @@ Object.assign(NYM.prototype, {
             try { cooldowns = JSON.parse(localStorage.getItem('nym_group_resync_ts') || '{}') || {}; } catch (_) { }
             const nowSec = Math.floor(Date.now() / 1000);
             let sentAny = false;
+            const minted = [];
             for (const [groupId, group] of this.groupConversations) {
                 if (this.leftGroups && this.leftGroups.has(groupId)) continue;
                 const others = (group.members || []).filter(pk => pk !== this.pubkey);
@@ -2284,6 +2469,7 @@ Object.assign(NYM.prototype, {
                     const still = this.groupConversations.get(groupId);
                     if (!still || (this.leftGroups && this.leftGroups.has(groupId))) continue;
                 }
+                if (!this._holdsGroupKey(groupId)) minted.push(groupId);
                 const eph = this._ensureSelfEphemeralKey(groupId);
                 const tags = others.map(pk => ['p', pk]);
                 tags.push(['g', groupId]);
@@ -2298,26 +2484,43 @@ Object.assign(NYM.prototype, {
             }
             try { localStorage.setItem('nym_group_resync_ts', JSON.stringify(cooldowns)); } catch (_) { }
             if (sentAny) this._saveEphemeralKeys();
+            for (const groupId of minted) this._syncMintedGroupKey(groupId);
         } catch (_) { }
     },
 
     // Wrapped to the key they just advertised; rate-limited per group+requester.
-    async _maybeReplyKeyResync(groupId, senderPubkey) {
+    async _maybeReplyKeyResync(groupId, senderPubkey, opts) {
         try {
-            const group = this.groupConversations.get(groupId);
-            if (!group || !this._canSendGiftWraps()) return;
-            if (this.leftGroups && this.leftGroups.has(groupId)) return;
-            const isMemberSender = group.createdBy === senderPubkey
-                || (Array.isArray(group.members) && group.members.includes(senderPubkey));
-            if (!isMemberSender) return;
-            if (!Array.isArray(group.members) || !group.members.includes(this.pubkey)) return;
+            const ts = (opts && opts.ts) || 0;
+            const x = (opts && opts.x) || null;
+            const nowMs = Date.now();
+            if (!this._ctrlFresh('resync', Math.floor(nowMs / 1000), ts)) return;
+            if (x && this._wasAnswered(groupId, x)) return;
+            const answerable = () => {
+                const group = this.groupConversations.get(groupId);
+                if (!group || !this._canSendGiftWraps()) return null;
+                if (this.blockedUsers && this.blockedUsers.has(senderPubkey)) return null;
+                if (this.leftGroups && this.leftGroups.has(groupId)) return null;
+                const isMemberSender = group.createdBy === senderPubkey
+                    || (Array.isArray(group.members) && group.members.includes(senderPubkey));
+                if (!isMemberSender) return null;
+                if (!Array.isArray(group.members) || !group.members.includes(this.pubkey)) return null;
+                return group;
+            };
+            if (!answerable()) return;
             if (!this._keyResyncReplyTs) this._keyResyncReplyTs = new Map();
             const rlKey = `${groupId}:${senderPubkey}`;
-            const nowMs = Date.now();
             if ((this._keyResyncReplyTs.get(rlKey) || 0) > nowMs - 3600000) return;
             this._keyResyncReplyTs.set(rlKey, nowMs);
+            const pubkey = this.pubkey;
+            await this._settleBeforeAnswer(groupId);
+            if (this.pubkey !== pubkey) return;
+            if (x && this._wasAnswered(groupId, x)) return;
+            const group = answerable();
+            if (!group) return;
+            const minted = !this._holdsGroupKey(groupId);
             const eph = this._ensureSelfEphemeralKey(groupId);
-            const nowSec = Math.floor(nowMs / 1000);
+            const nowSec = Math.floor(Date.now() / 1000);
             const tags = [
                 ['p', senderPubkey],
                 ['g', groupId],
@@ -2328,8 +2531,151 @@ Object.assign(NYM.prototype, {
             ];
             const rumor = { kind: 14, created_at: nowSec, tags, content: '', pubkey: this.pubkey };
             await this._sendGiftWrapsAsync([senderPubkey], rumor, null, groupId);
-            this._saveEphemeralKeys();
+            this._noteControlAnswered(groupId, x, ts, minted, pubkey);
         } catch (_) { }
+    },
+
+    _ctrlFresh(kind, nowSec, ts) {
+        const limit = kind === 'join' ? CONTROL_ANSWERS.joinMaxAgeSec : CONTROL_ANSWERS.resyncMaxAgeSec;
+        if (!(ts > 0)) return false;
+        return nowSec - ts <= limit;
+    },
+
+    _ctrlWanted(kind, nowSec, ts, held) {
+        if (kind === 'invite' && !held) return true;
+        return this._ctrlFresh(kind, nowSec, ts);
+    },
+
+    _ctrlPickSelf(a, b) {
+        return a <= b ? a : b;
+    },
+
+    _ctrlAdmitId(groupId, joiner, requestX) {
+        const NT = window.NostrTools;
+        const h = NT._sha256(new TextEncoder().encode(`nym-join-admit-v1:${groupId}:${joiner}:${requestX}`));
+        return Array.from(h).map(b => b.toString(16).padStart(2, '0')).join('');
+    },
+
+    _ctrlCapped(m) {
+        const byId = (p, q) => (p[0] < q[0] ? -1 : (p[0] > q[0] ? 1 : 0));
+        const kept = Object.entries(m)
+            .sort((p, q) => (q[1] - p[1]) || byId(p, q))
+            .slice(0, CONTROL_ANSWERS.answeredMax)
+            .sort(byId);
+        const out = {};
+        for (const [k, v] of kept) out[k] = v;
+        return out;
+    },
+
+    _ctrlNoteAnswered(map, x, ts, nowSec) {
+        const out = {};
+        for (const [k, v] of Object.entries(map || {})) {
+            if (typeof v === 'number' && nowSec - v <= CONTROL_ANSWERS.answeredKeepSec) out[k] = v;
+        }
+        out[x] = Math.max(out[x] || 0, ts);
+        return this._ctrlCapped(out);
+    },
+
+    _ctrlMergeAnswered(a, b) {
+        const out = {};
+        for (const src of [a || {}, b || {}]) {
+            for (const [k, v] of Object.entries(src)) {
+                if (typeof v === 'number') out[k] = Math.max(out[k] || 0, v);
+            }
+        }
+        return this._ctrlCapped(out);
+    },
+
+    _wasAnswered(groupId, x) {
+        const ek = this.groupEphemeralKeys && this.groupEphemeralKeys.get(groupId);
+        return !!(ek && ek.answered && Object.prototype.hasOwnProperty.call(ek.answered, x));
+    },
+
+    _answerDelayMs() {
+        return Math.floor(Math.random() * CONTROL_ANSWERS.jitterMs);
+    },
+
+    _answerSyncAllowed() {
+        if (!this.pubkey || this._settingsRestoreUnreadable) return false;
+        if (typeof isNostrLoggedIn === 'function' && !isNostrLoggedIn()) return false;
+        if (!this._getApiHost || !this._getApiHost()) return false;
+        return typeof this.settingsLoadFromD1 === 'function';
+    },
+
+    async _settleBeforeAnswer(groupId) {
+        if (!this._answerSyncAllowed() || !this._settingsHydrated) return;
+        const pubkey = this.pubkey;
+        const wait = this._answerDelayMs(groupId);
+        if (wait > 0) await new Promise(res => setTimeout(res, wait));
+        if (this.pubkey !== pubkey) return;
+        await this._readBeforeAnswer();
+    },
+
+    async _readBeforeAnswer() {
+        if (!this._answerSyncAllowed() || !this._settingsHydrated) return;
+        if (this._answerRead) {
+            await this._answerRead;
+            return;
+        }
+        const now = Date.now();
+        if (now - (this._answerReadAt || 0) < 1000) return;
+        this._answerReadAt = now;
+        const run = Promise.resolve().then(() => this.settingsLoadFromD1({ delta: true })).catch(() => { });
+        this._answerRead = run;
+        try { await run; } finally { if (this._answerRead === run) this._answerRead = null; }
+    },
+
+    _noteControlAnswered(groupId, x, ts, minted, pubkey) {
+        if (pubkey && this.pubkey !== pubkey) return;
+        const ek = this._getGroupEphemeralKeys(groupId);
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (minted && ek.self && ek.self.current) {
+            if (!this._answerMinted) this._answerMinted = new Map();
+            this._answerMinted.set(groupId, ek.self.current.pk);
+        }
+        if (x) ek.answered = this._ctrlNoteAnswered(ek.answered, x, ts > 0 ? ts : nowSec, nowSec);
+        this._saveEphemeralKeys();
+        if (minted || x) this._syncMintedGroupKey(groupId);
+        if (minted) this._settleMintedKey(groupId).catch(() => { });
+    },
+
+    _settleDelayMs() {
+        return CONTROL_ANSWERS.settleMs + Math.floor(Math.random() * CONTROL_ANSWERS.settleJitterMs);
+    },
+
+    _heldSelfKeys(groupId) {
+        const self = this.groupEphemeralKeys && this.groupEphemeralKeys.get(groupId)?.self;
+        if (!self || !self.current) return [];
+        return [self.current.pk, ...(self.prev || []).map((k) => k.pk)];
+    },
+
+    _noteD1Self(groupId, entry) {
+        const self = entry && entry.self;
+        const pk = self && self.current && self.current.pk;
+        if (typeof pk !== 'string') return;
+        if (!this._d1Self) this._d1Self = new Map();
+        const pks = [pk, ...(Array.isArray(self.prev) ? self.prev : []).map((k) => k && k.pk).filter((x) => typeof x === 'string')];
+        this._d1Self.set(groupId, { current: pk, pks });
+    },
+
+    async _settleMintedKey(groupId) {
+        const pubkey = this.pubkey;
+        let wrote = true;
+        for (let i = 0; i < CONTROL_ANSWERS.settleRounds; i++) {
+            await new Promise(res => setTimeout(res, this._settleDelayMs()));
+            if (this.pubkey !== pubkey || !this._settingsHydrated || !this._answerSyncAllowed()) return;
+            const before = this._heldSelfKeys(groupId);
+            try { await this.settingsLoadFromD1({ delta: true }); } catch (_) { }
+            if (this.pubkey !== pubkey) return;
+            const held = this._heldSelfKeys(groupId);
+            const d1 = this._d1Self && this._d1Self.get(groupId);
+            const settled = held.every((pk) => before.includes(pk))
+                && !!d1 && d1.current === held[0]
+                && held.every((pk) => d1.pks.includes(pk));
+            if (settled && !wrote) return;
+            wrote = !settled;
+            if (!settled) this._syncMintedGroupKey(groupId);
+        }
     },
 
     _processPendingGroupHistory(groupId) {
@@ -2592,6 +2938,7 @@ Object.assign(NYM.prototype, {
 
         // NIP-30: declare any custom emoji shortcodes used in the message.
         tags.push(...this.customEmojiTagsForContent(content));
+        if (typeof this.quoteTagsForContent === 'function') tags.push(...this.quoteTagsForContent(content));
 
         // NIP-92: imeta tags listing Blossom mirror URLs for any media in the message.
         if (typeof this.imetaTagsForContent === 'function') {
@@ -2643,7 +2990,7 @@ Object.assign(NYM.prototype, {
         groupList.sort((a, b) => {
             return this._compareMessages(a, b);
         });
-        if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, groupList.slice(-this.pmStorageLimit));
+        if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, this._storeTrim(groupList, this.pmStorageLimit));
         this.channelDOMCache.delete(groupConvKey);
         this.persistPMMessages(groupConvKey);
         this.moveGroupToTop(groupId);
@@ -2664,7 +3011,7 @@ Object.assign(NYM.prototype, {
             }
         }
         this._saveEphemeralKeys();
-        this._debouncedNostrSettingsSave(2000);
+        this._debouncedNostrSettingsSave(2000, { wanted: true });
 
         // Coalesced so rapid sends don't churn or drop refreshes.
         this._scheduleEphemeralSubRefresh();
@@ -2784,9 +3131,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        if (!this.users.has(pubkey)) {
-            await this.fetchProfileDirect(pubkey);
-        }
+        await this._fetchShownProfile(pubkey);
 
         const kickedName = this.getNymFromPubkey(pubkey);
         const kickerName = this.getNymFromPubkey(this.pubkey);
@@ -2823,7 +3168,7 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.updateGroupConversationUI(groupId);
         this.openGroup(groupId);
-        this.displaySystemMessage(content, 'system', { feed: true });
+        this.displaySystemMessage(content, 'system', { feed: true, people: [pubkey] });
     },
 
     // Owner-only; does not re-invite the user.
@@ -2845,7 +3190,7 @@ Object.assign(NYM.prototype, {
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-        if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
+        await this._fetchShownProfile(pubkey);
         const targetName = this.getNymFromPubkey(pubkey);
         const actorName = this.getNymFromPubkey(this.pubkey);
         if (this._canSendGiftWraps()) {
@@ -2870,7 +3215,7 @@ Object.assign(NYM.prototype, {
             }
         }
         this.updateGroupConversationUI(groupId);
-        this.displaySystemMessage(`@${targetName} was unbanned. They can be re-invited.`, 'system', { feed: true });
+        this.displaySystemMessage(`@${targetName} was unbanned. They can be re-invited.`, 'system', { feed: true, people: [pubkey] });
     },
 
     async promoteModerator(pubkey) { return this._sendGroupRoleChange('group-promote-mod', pubkey); },
@@ -2916,7 +3261,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
+        await this._fetchShownProfile(pubkey);
         const targetName = this.getNymFromPubkey(pubkey);
         const actorName = this.getNymFromPubkey(this.pubkey);
         const content = spec.grant
@@ -2948,7 +3293,7 @@ Object.assign(NYM.prototype, {
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.updateGroupConversationUI(groupId);
-        this.displaySystemMessage(content, 'system', { feed: true });
+        this.displaySystemMessage(content, 'system', { feed: true, people: [pubkey] });
     },
 
 
@@ -2968,7 +3313,7 @@ Object.assign(NYM.prototype, {
         }
         if (pubkey === this.pubkey) return;
 
-        if (!this.users.has(pubkey)) await this.fetchProfileDirect(pubkey);
+        await this._fetchShownProfile(pubkey);
         const targetName = this.getNymFromPubkey(pubkey);
         const actorName = this.getNymFromPubkey(this.pubkey);
         const content = `${actorName} transferred group ownership to ${targetName}.`;
@@ -2996,7 +3341,7 @@ Object.assign(NYM.prototype, {
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-        this.displaySystemMessage(content, 'system', { feed: true });
+        this.displaySystemMessage(content, 'system', { feed: true, people: [pubkey] });
     },
 
     async _broadcastGroupMetadata(groupId) {
@@ -3104,7 +3449,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _applyGroupMetadataTags(rumor, groupId, senderPubkey, metaTs) {
+    _applyGroupMetadataTags(rumor, groupId, senderPubkey, metaTs, deliberate) {
         const grp = this.groupConversations.get(groupId);
         if (!grp) return false;
         const senderIsOwner = grp.createdBy === senderPubkey;
@@ -3123,6 +3468,7 @@ Object.assign(NYM.prototype, {
         const inviteEnabledTag = tag('invite_enabled');
         const inviteEpochTag = tag('invite_epoch');
         const shareHistTag = tag('share_history');
+        const metaBefore = this._groupMetaSnapshot(grp);
         let changed = false;
         if (subjectTag && subjectTag[1] && subjectTag[1] !== grp.name) { grp.name = subjectTag[1]; changed = true; }
         if (bannerTag) {
@@ -3154,9 +3500,18 @@ Object.assign(NYM.prototype, {
             if (newShare !== (grp.shareHistory === true)) { grp.shareHistory = newShare; changed = true; }
         }
         if (typeof this._gtApplyMetaTags === 'function' && this._gtApplyMetaTags(grp, rumor, metaTs)) changed = true;
+        let confirmed = false;
+        for (const [f, t] of [['name', subjectTag], ['avatar', avatarTag], ['banner', bannerTag], ['description', descTag]]) {
+            if (deliberate === true && t && t[1] && metaBefore[f] && t[1] === metaBefore[f] && this._confirmGroupMetaBy(grp, f, senderPubkey)) confirmed = true;
+        }
+        if (confirmed && !changed) {
+            this.groupConversations.set(groupId, grp);
+            this.updateGroupConversationUI(groupId);
+            this._saveGroupConversations();
+            this._debouncedNostrSettingsSave();
+        }
         if (changed) {
-            grp.metaUpdatedAt = metaTs;
-            grp.metaUpdatedBy = senderPubkey;
+            this._stampGroupMeta(grp, senderPubkey, metaTs, metaBefore);
             this.groupConversations.set(groupId, grp);
             this.updateGroupConversationUI(groupId);
             this._saveGroupConversations();
@@ -3185,9 +3540,9 @@ Object.assign(NYM.prototype, {
         }
         const trimmed = this.sanitizeGroupName(name);
         if (!trimmed || trimmed === group.name) return;
+        const before = this._groupMetaSnapshot(group);
         group.name = trimmed;
-        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
-        group.metaUpdatedBy = this.pubkey;
+        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000), before);
         this.groupConversations.set(groupId, group);
         this.updateGroupConversationUI(groupId);
         this._saveGroupConversations();
@@ -3206,9 +3561,9 @@ Object.assign(NYM.prototype, {
         }
         const trimmed = this.sanitizeGroupDescription(description) || null;
         if (trimmed === (group.description || null)) return;
+        const before = this._groupMetaSnapshot(group);
         group.description = trimmed;
-        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
-        group.metaUpdatedBy = this.pubkey;
+        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000), before);
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3226,8 +3581,7 @@ Object.assign(NYM.prototype, {
         const next = !!allow;
         if (next === (group.allowMemberInvites !== false)) return;
         group.allowMemberInvites = next;
-        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
-        group.metaUpdatedBy = this.pubkey;
+        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000));
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3248,8 +3602,7 @@ Object.assign(NYM.prototype, {
         const next = !!enabled;
         if (next === (group.shareHistory === true)) return;
         group.shareHistory = next;
-        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
-        group.metaUpdatedBy = this.pubkey;
+        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000));
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3269,8 +3622,7 @@ Object.assign(NYM.prototype, {
         const next = !!enabled;
         if (next === !!group.inviteEnabled) return;
         group.inviteEnabled = next;
-        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
-        group.metaUpdatedBy = this.pubkey;
+        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000));
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3289,8 +3641,7 @@ Object.assign(NYM.prototype, {
             return;
         }
         group.inviteEpoch = (group.inviteEpoch || 0) + 1;
-        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
-        group.metaUpdatedBy = this.pubkey;
+        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000));
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3301,9 +3652,9 @@ Object.assign(NYM.prototype, {
     async _applyGroupImage(groupId, kind, url) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
+        const before = this._groupMetaSnapshot(group);
         group[kind] = url;
-        group.metaUpdatedAt = Math.floor(Date.now() / 1000);
-        group.metaUpdatedBy = this.pubkey;
+        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000), before);
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3382,7 +3733,7 @@ Object.assign(NYM.prototype, {
         this._appendModLog(group, { type: 'delete-message', actor: this.pubkey, target: authorPubkey || null, messageId: sharedId });
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-        this.displaySystemMessage(content, 'system', { feed: true });
+        this.displaySystemMessage(content, 'system', { feed: true, people: authorPubkey ? [authorPubkey] : [] });
     },
 
     _findGroupMessage(groupId, messageId, authorPubkey = null) {
@@ -3476,7 +3827,8 @@ Object.assign(NYM.prototype, {
                 inviteEnabled: opts.inviteEnabled === true,
                 inviteEpoch: opts.inviteEpoch || 0,
                 shareHistory: opts.shareHistory === true,
-                modLog: []
+                modLog: [],
+                ...(opts.nameBy && name ? { metaBy: { name: opts.nameBy } } : {})
             });
             const pmList = document.getElementById('pmList');
             const item = document.createElement('div');
@@ -3526,6 +3878,7 @@ Object.assign(NYM.prototype, {
                 banned: Array.isArray(existing.banned) ? existing.banned : [],
                 modLog: Array.isArray(existing.modLog) ? existing.modLog : []
             };
+            if (opts.nameBy && next.name !== existing.name && typeof this._adoptGroupMetaBy === 'function') this._adoptGroupMetaBy(next, 'name', opts.nameBy);
             if (!next.createdBy && opts.createdBy) next.createdBy = opts.createdBy;
             if (!next.genesisOwner && opts.genesisOwner) next.genesisOwner = opts.genesisOwner;
             if (!next.genesisNonce && opts.genesisNonce) next.genesisNonce = opts.genesisNonce;
@@ -3549,9 +3902,134 @@ Object.assign(NYM.prototype, {
     },
 
     // Proxied URL of a group's custom avatar, or null when none is set.
+    _groupMetaFields() {
+        return ['name', 'avatar', 'banner', 'description'];
+    },
+
+    _cleanGroupMetaBy(raw) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const out = {};
+        for (const f of this._groupMetaFields()) {
+            if (typeof raw[f] === 'string' && /^[0-9a-f]{64}$/i.test(raw[f])) out[f] = raw[f];
+        }
+        return out;
+    },
+
+    _groupMetaBy(group) {
+        if (!group) return {};
+        if (!group.metaBy || typeof group.metaBy !== 'object' || Array.isArray(group.metaBy)) {
+            const legacy = typeof group.metaUpdatedBy === 'string' ? group.metaUpdatedBy : '';
+            group.metaBy = {};
+            if (legacy) for (const f of this._groupMetaFields()) if (group[f]) group.metaBy[f] = legacy;
+            if (legacy && Object.keys(group.metaBy).length) this._noteMetaAdmin(group, legacy, true);
+        }
+        return group.metaBy;
+    },
+
+    _groupMetaAdminList(group) {
+        if (!group || !Array.isArray(group.metaAdmins)) return [];
+        const map = group.metaBy && typeof group.metaBy === 'object' && !Array.isArray(group.metaBy) ? group.metaBy : null;
+        const held = map ? Object.values(map) : (typeof group.metaUpdatedBy === 'string' ? [group.metaUpdatedBy] : []);
+        const out = [];
+        for (const pk of group.metaAdmins) {
+            if (typeof pk === 'string' && /^[0-9a-f]{64}$/i.test(pk) && held.includes(pk) && !out.includes(pk)) out.push(pk);
+        }
+        return out.slice(0, 20);
+    },
+
+    _noteMetaAdmin(group, pubkey, known) {
+        if (!group || typeof pubkey !== 'string' || !/^[0-9a-f]{64}$/i.test(pubkey)) return;
+        const role = known === true || group.createdBy === pubkey || (Array.isArray(group.admins) && group.admins.includes(pubkey));
+        if (!role) return;
+        const list = Array.isArray(group.metaAdmins) ? group.metaAdmins.slice() : [];
+        if (!list.includes(pubkey)) list.push(pubkey);
+        group.metaAdmins = list;
+        group.metaAdmins = this._groupMetaAdminList(group);
+    },
+
+    _mergeSyncedMetaAdmins(group, data) {
+        if (!group || !data || !Array.isArray(data.metaAdmins)) return;
+        const list = Array.isArray(group.metaAdmins) ? group.metaAdmins.slice() : [];
+        for (const pk of data.metaAdmins) if (typeof pk === 'string' && /^[0-9a-f]{64}$/i.test(pk) && !list.includes(pk)) list.push(pk);
+        group.metaAdmins = list;
+        group.metaAdmins = this._groupMetaAdminList(group);
+    },
+
+    _groupMetaSnapshot(group) {
+        const out = {};
+        for (const f of this._groupMetaFields()) out[f] = (group && group[f]) || null;
+        return out;
+    },
+
+    _noteGroupMetaBy(group, before, pubkey) {
+        if (!group) return;
+        const by = this._groupMetaBy(group);
+        for (const f of this._groupMetaFields()) {
+            if (((before && before[f]) || null) === (group[f] || null)) continue;
+            if (group[f] && pubkey) by[f] = pubkey;
+            else delete by[f];
+        }
+    },
+
+    _adoptGroupMetaBy(group, field, pubkey) {
+        if (!group || this._groupMetaFields().indexOf(field) === -1) return;
+        const by = this._groupMetaBy(group);
+        if (group[field] && typeof pubkey === 'string' && pubkey) by[field] = pubkey;
+        else delete by[field];
+        if (group[field] && typeof pubkey === 'string' && pubkey) this._noteMetaAdmin(group, pubkey);
+    },
+
+    _syncedGroupMetaBy(data, field) {
+        const by = data ? this._cleanGroupMetaBy(data.metaBy) : null;
+        if (by) return by[field] || '';
+        return data && typeof data.metaUpdatedBy === 'string' ? data.metaUpdatedBy : '';
+    },
+
+    _stampGroupMeta(group, pubkey, ts, before) {
+        if (!group) return;
+        this._noteGroupMetaBy(group, before || this._groupMetaSnapshot(group), pubkey);
+        group.metaUpdatedAt = ts;
+        group.metaUpdatedBy = pubkey;
+        this._noteMetaAdmin(group, pubkey);
+    },
+
+    _groupMetaAdmins(group) {
+        if (!group) return [];
+        const legacy = !group.metaBy || typeof group.metaBy !== 'object' || Array.isArray(group.metaBy);
+        const held = legacy && typeof group.metaUpdatedBy === 'string' && group.metaUpdatedBy ? [group.metaUpdatedBy] : [];
+        return [group.createdBy].concat(Array.isArray(group.admins) ? group.admins : [], this._groupMetaAdminList(group), held)
+            .filter((pk) => typeof pk === 'string' && pk);
+    },
+
+    _groupMetaHidden(group, field) {
+        if (!group) return false;
+        const map = group.metaBy && typeof group.metaBy === 'object' && !Array.isArray(group.metaBy) ? group.metaBy : null;
+        const raw = map ? map[field || 'avatar'] : group.metaUpdatedBy;
+        const by = typeof raw === 'string' ? raw : '';
+        const admins = this._groupMetaAdmins(group);
+        const F = window.NymContentFilter;
+        if (F && typeof F.metaHidden === 'function' && typeof this._cfCtx === 'function') return F.metaHidden(this._cfCtx(), by, admins);
+        return !!by && by !== this.pubkey && !!this.blockedUsers && this.blockedUsers.has(by) && admins.includes(by);
+    },
+
+    _confirmGroupMetaBy(group, field, pubkey) {
+        if (!group || !pubkey || this._groupMetaFields().indexOf(field) === -1 || !group[field]) return false;
+        const roles = [group.createdBy].concat(Array.isArray(group.admins) ? group.admins : []);
+        if (!roles.includes(pubkey)) return false;
+        const legacy = !group.metaBy || typeof group.metaBy !== 'object' || Array.isArray(group.metaBy);
+        const admins = this._groupMetaAdmins(group);
+        const by = this._groupMetaBy(group);
+        const cur = typeof by[field] === 'string' ? by[field] : '';
+        if (cur === pubkey) return legacy;
+        if (!legacy && cur && admins.includes(cur)) return false;
+        by[field] = pubkey;
+        this._noteMetaAdmin(group, pubkey);
+        return true;
+    },
+
     getGroupAvatarUrl(groupId) {
         const g = this.groupConversations.get(groupId);
-        if (!g || !g.avatar) return null;
+        if (!g || !g.avatar || this._groupMetaHidden(g, 'avatar')) return null;
         return this.getProxiedMediaUrl(g.avatar);
     },
 
@@ -3569,6 +4047,9 @@ Object.assign(NYM.prototype, {
             ? `<div class="group-avatar-wrap"><img src="${this.escapeHtml(customAvatar)}" class="group-custom-avatar" alt="" decoding="async" loading="lazy" data-error-action="groupImgError"></div>`
             : displayMembers.length > 0
                 ? `<div class="group-avatar-stack">${displayMembers.map((pk) => {
+                    if (this._maskOf(pk)) {
+                        return `<img src="${this.escapeHtml(this._maskedAvatar(pk))}" class="group-avatar-stack-img" alt="" decoding="async" loading="lazy">`;
+                    }
                     const sk = this._safePubkey(pk);
                     return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
                 }).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
@@ -3943,8 +4424,8 @@ Object.assign(NYM.prototype, {
     _groupItemSignature(group) {
         if (!group) return '';
         const otherMembers = (group.members || []).filter(pk => pk !== this.pubkey);
-        const displayPks = otherMembers.slice(0, 3).map(pk => this._safePubkey(pk)).join(',');
-        return `${displayPks}|${group.members ? group.members.length : 0}|${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}|${group.avatar || ''}`;
+        const displayPks = otherMembers.slice(0, 3).map(pk => this._safePubkey(pk) + (this._maskOf(pk) ? '!' : '')).join(',');
+        return `${displayPks}|${group.members ? group.members.length : 0}|${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}|${this._groupMetaHidden(group, 'avatar') ? '' : (group.avatar || '')}`;
     },
 
     // Signature for the in-chat group header; changes force a header re-render.
@@ -3952,8 +4433,8 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group) return '';
         const displayPks = group.members.filter(pk => pk !== this.pubkey)
-            .slice(0, 4).map(pk => this._safePubkey(pk));
-        return `${displayPks.join(',')}|${group.members.length}|${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}|${group.avatar || ''}|${(typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''))}`;
+            .slice(0, 4).map(pk => this._safePubkey(pk) + (this._maskOf(pk) ? '!' : ''));
+        return `${displayPks.join(',')}|${group.members.length}|${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}|${this._groupMetaHidden(group, 'avatar') ? '' : (group.avatar || '')}|${(typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''))}`;
     },
 
     _buildGroupHeaderHtml(groupId) {
@@ -3969,11 +4450,14 @@ Object.assign(NYM.prototype, {
             const displayPks = otherMembers.slice(0, 4).map(pk => this._safePubkey(pk));
             const headerAvatars = displayPks.map((sk, i) => {
                 const pk = otherMembers[i];
+                if (this._maskOf(pk)) {
+                    return `<img src="${this.escapeHtml(this._maskedAvatar(pk))}" class="avatar-message group-header-avatar" alt="" decoding="async" loading="lazy">`;
+                }
                 return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="avatar-message group-header-avatar" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
             }).join('');
             iconPart = `<span class="group-header-icon">${groupSvg}</span>${headerAvatars}`;
             if (typeof this.ensureListProfiles === 'function') {
-                this.ensureListProfiles(null, otherMembers.slice(0, 4));
+                this.ensureListProfiles(null, otherMembers.slice(0, 4).filter((pk) => !this._maskOf(pk)));
             }
         }
         const nameCls = (!customAvatar && otherMembers.length > 0) ? 'nm-grp-ml8' : '';
@@ -3983,6 +4467,32 @@ Object.assign(NYM.prototype, {
             ? `<div class="gt-desc-line" role="button" tabindex="0" data-action="gtShowDescription" data-group-id="${this.escapeHtml(groupId)}" title="${this.escapeHtml(descLine)}">${this.escapeHtml(descLine)}</div>`
             : '';
         return `<span class="group-header-row">${iconPart}<span class="group-name-text ${nameCls}">${this.escapeHtml((typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')))}</span></span>${descHtml}${memberLabel}`;
+    },
+
+    _gcNamedInLine(text, roster) {
+        const out = [];
+        const s = String(text || '').toLowerCase();
+        for (const pk of Array.isArray(roster) ? roster : []) {
+            if (typeof pk !== 'string' || !/^[0-9a-f]{64}$/i.test(pk) || out.includes(pk)) continue;
+            const sfx = '#' + pk.slice(-4).toLowerCase();
+            let at = s.indexOf(sfx);
+            while (at !== -1) {
+                const next = s.charAt(at + sfx.length);
+                if (!/[0-9a-f]/.test(next)) {
+                    out.push(pk);
+                    break;
+                }
+                at = s.indexOf(sfx, at + 1);
+            }
+        }
+        return out;
+    },
+
+    _fetchShownProfile(pubkey, actor) {
+        if (!pubkey || (this.users && this.users.has(pubkey))) return Promise.resolve();
+        if (this.blockedUsers && this.blockedUsers.has(pubkey)) return Promise.resolve();
+        if (actor && actor !== this.pubkey && this.blockedUsers && this.blockedUsers.has(actor)) return Promise.resolve();
+        return Promise.resolve(this.fetchProfileDirect(pubkey));
     },
 
     _recordBlockedMemberKey(rumor, senderPubkey, senderVerified) {
@@ -3995,17 +4505,28 @@ Object.assign(NYM.prototype, {
         if (!group || !Array.isArray(group.members) || !group.members.includes(senderPubkey)) return;
         this._updateMemberEphemeralKey(g[1], senderPubkey, eph[1], rumor.created_at || 0);
         this._saveEphemeralKeys();
-        this._debouncedNostrSettingsSave(15000);
     },
 
-    _groupLabel(group) {
+    _maskOf(pubkey) {
+        return typeof this._personMask === 'function' ? this._personMask(pubkey) : '';
+    },
+
+    _groupVisibleMembers(group, list) {
+        const members = Array.isArray(list) ? list : (group && Array.isArray(group.members) ? group.members : []);
+        if (typeof this.isPersonHidden !== 'function') return members.slice();
+        return members.filter((pk) => pk === this.pubkey || !this.isPersonHidden(pk));
+    },
+
+    _groupLabel(group, fallbackText) {
         const name = group && typeof group.name === 'string' ? group.name.trim() : '';
-        const fallback = typeof this.uiText === 'function' ? this.uiText('Group') : 'Group';
-        if (!name) return fallback;
+        const label = typeof fallbackText === 'string' && fallbackText ? fallbackText : 'Group';
+        const fallback = typeof this.uiText === 'function' ? this.uiText(label) : label;
+        if (!name || (typeof this._groupMetaHidden === 'function' && this._groupMetaHidden(group, 'name'))) return fallback;
         return typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword(name, '', '') ? fallback : name;
     },
 
     _groupDescription(group) {
+        if (this._groupMetaHidden(group, 'description')) return '';
         const d = group && typeof group.description === 'string' ? group.description : '';
         return d && typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword(d, '', '') ? '' : d;
     },
@@ -4075,8 +4596,6 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         this._groupCtxGroupId = groupId;
         this._groupCtxTransferMode = false;
-        const iAmOwner = this._isGroupOwner(groupId, this.pubkey);
-        const iCanAdminister = this._canAdminister(groupId, this.pubkey);
         const iCanModerate = this._canModerate(groupId, this.pubkey);
 
         const menu = document.getElementById('groupContextMenu');
@@ -4086,7 +4605,7 @@ Object.assign(NYM.prototype, {
         const bannerImg = document.getElementById('grpCtxBannerImg');
         const defaultBanner = document.getElementById('grpCtxDefaultBanner');
         menu.classList.add('has-banner');
-        if (group.banner) {
+        if (group.banner && !this._groupMetaHidden(group, 'banner')) {
             bannerImg.src = this.getProxiedMediaUrl(group.banner);
             bannerImg.classList.remove('nm-hidden');
             if (defaultBanner) defaultBanner.classList.add('nm-hidden');
@@ -4121,6 +4640,30 @@ Object.assign(NYM.prototype, {
         capEl.classList.toggle('group-full', capFull);
         document.getElementById('grpCtxBio').textContent = (typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''));
 
+        this._renderGroupCtxActions(groupId);
+
+        const shownMembers = iCanModerate ? group.members.slice() : this._groupVisibleMembers(group);
+        document.getElementById('grpCtxMembersTitle').textContent = `Members · ${shownMembers.length}`;
+        const sorted = [...shownMembers].sort((a, b) => this._roleRank(groupId, a) - this._roleRank(groupId, b));
+        document.getElementById('grpCtxMembers').innerHTML = sorted.map(pk => this._groupCtxMemberRowHtml(groupId, pk)).join('');
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(document.getElementById('grpCtxMembers'), sorted.filter((pk) => !this._maskOf(pk)));
+        }
+
+        this._renderGroupBannedList(groupId, iCanModerate);
+
+        menu.scrollTop = 0;
+        overlay.classList.add('active');
+        menu.classList.add('active');
+    },
+
+    _renderGroupCtxActions(groupId) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) return;
+        const iAmOwner = this._isGroupOwner(groupId, this.pubkey);
+        const iCanAdminister = this._canAdminister(groupId, this.pubkey);
+        const capText = (x) => (typeof this.uiText === 'function' ? this.uiText(x) : x);
+        const capFull = group.members.length >= (this.MAX_GROUP_MEMBERS || 100);
         const inviteLink = this._canAddMembers(groupId, this.pubkey) ? this.buildGroupInviteLink(groupId) : null;
         const grpCtxInviteLink = document.getElementById('grpCtxInviteLink');
         const grpCtxCopyInvite = document.getElementById('grpCtxCopyInvite');
@@ -4156,18 +4699,15 @@ Object.assign(NYM.prototype, {
         if (iAmOwner && group.members.length > 1) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxTransferOwner">${icon('<circle cx="8" cy="5" r="2.5"/><path d="M 2 14 C 2 10 4 9 8 9 C 12 9 14 10 14 14" stroke-linecap="round"/><path d="M 12 4 L 15 4 L 13.5 2 M 15 4 L 13.5 6" stroke-linecap="round" stroke-linejoin="round"/>')}Transfer Ownership</div>`);
         }
-        const checkbox = (on) => on
-            ? '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M 5 8 L 7 10 L 11 5.5" stroke-linecap="round" stroke-linejoin="round"/>'
-            : '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/>';
         if (iCanAdminister) {
-            actions.push(`<div class="context-menu-item" data-action="groupCtxToggleInviteJoin">${icon(checkbox(!!group.inviteEnabled))}Allow joining via invite link</div>`);
+            actions.push(this._groupCtxSwitchHtml('inviteEnabled', 'groupCtxToggleInviteJoin', 'Allow joining via invite link', !!group.inviteEnabled));
             if (group.inviteEnabled) {
                 actions.push(`<div class="context-menu-item" data-action="groupCtxResetInviteLink">${icon('<path d="M 13 8 A 5 5 0 1 1 11.5 4.5" stroke-linecap="round"/><path d="M 11.5 2 L 11.5 5 L 8.5 5" stroke-linecap="round" stroke-linejoin="round"/>')}Reset Invite Link</div>`);
             }
         }
         if (iCanAdminister) {
-            actions.push(`<div class="context-menu-item" data-action="groupCtxToggleInvites">${icon(checkbox(group.allowMemberInvites !== false))}Allow members to add others</div>`);
-            actions.push(`<div class="context-menu-item" data-action="groupCtxToggleShareHistory">${icon(checkbox(group.shareHistory === true))}Share history with new members</div>`);
+            actions.push(this._groupCtxSwitchHtml('allowMemberInvites', 'groupCtxToggleInvites', 'Allow members to add others', group.allowMemberInvites !== false));
+            actions.push(this._groupCtxSwitchHtml('shareHistory', 'groupCtxToggleShareHistory', 'Share history with new members', group.shareHistory === true));
         }
         if (this._canAddMembers(groupId, this.pubkey)) {
             actions.push(`<div class="context-menu-item" data-action="groupCtxAddMembers">${icon('<circle cx="6" cy="5.5" r="2.5"/><path d="M 2 14 C 2 11 4 9.5 6 9.5 C 7 9.5 8 9.8 8.7 10.4" stroke-linecap="round"/><line x1="12" y1="6" x2="12" y2="12" stroke-linecap="round"/><line x1="9" y1="9" x2="15" y2="9" stroke-linecap="round"/>')}Add Members</div>`);
@@ -4176,19 +4716,27 @@ Object.assign(NYM.prototype, {
         if (typeof this._ctGroupMenuHtml === 'function') actions.push(this._ctGroupMenuHtml(groupId));
         actions.push(`<div class="context-menu-item danger" data-action="groupCtxLeave">${icon('<path d="M 6 2 L 3 2 C 2.5 2 2 2.5 2 3 L 2 13 C 2 13.5 2.5 14 3 14 L 6 14" stroke-linecap="round" stroke-linejoin="round"/><path d="M 10 11 L 13 8 L 10 5" stroke-linecap="round" stroke-linejoin="round"/><line x1="13" y1="8" x2="6" y2="8" stroke-linecap="round"/>')}Leave Group</div>`);
         document.getElementById('grpCtxActions').innerHTML = actions.join('');
+    },
 
-        document.getElementById('grpCtxMembersTitle').textContent = `Members · ${group.members.length}`;
-        const sorted = [...group.members].sort((a, b) => this._roleRank(groupId, a) - this._roleRank(groupId, b));
-        document.getElementById('grpCtxMembers').innerHTML = sorted.map(pk => this._groupCtxMemberRowHtml(groupId, pk)).join('');
-        if (typeof this.ensureListProfiles === 'function') {
-            this.ensureListProfiles(document.getElementById('grpCtxMembers'), sorted);
-        }
+    _groupCtxSwitchHtml(key, action, label, on, opts) {
+        const o = opts || {};
+        const esc = (v) => this.escapeHtml(String(v));
+        const id = esc(key);
+        const title = o.title ? ` title="${esc(o.title)}"` : '';
+        const extra = o.groupId ? ` data-group-id="${esc(o.groupId)}"` : '';
+        return `<label class="setting-toggle-row group-ctx-toggle"${title}><span class="form-label" id="grpCtxSwitchLabel-${id}">${esc(label)}</span><span class="nym-switch"><input type="checkbox" role="switch" id="grpCtxSwitch-${id}" data-action="${action}" data-panel-toggle="group.${key}" aria-labelledby="grpCtxSwitchLabel-${id}"${extra}${on ? ' checked' : ''}${o.disabled ? ' disabled' : ''}><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span></label>`;
+    },
 
-        this._renderGroupBannedList(groupId, iCanModerate);
-
-        menu.scrollTop = 0;
-        overlay.classList.add('active');
-        menu.classList.add('active');
+    _groupCtxRedraw() {
+        const menu = document.getElementById('groupContextMenu');
+        const groupId = this._groupCtxGroupId;
+        if (!menu || !menu.classList.contains('active') || !groupId || !this.groupConversations.has(groupId)) return;
+        const box = document.getElementById('grpCtxActions');
+        const active = document.activeElement;
+        const refocus = active && box && box.contains(active) && active.id ? active.id : null;
+        this._renderGroupCtxActions(groupId);
+        const el = refocus ? document.getElementById(refocus) : null;
+        if (el) el.focus();
     },
 
 
@@ -4207,15 +4755,18 @@ Object.assign(NYM.prototype, {
         titleEl.textContent = `Banned · ${banned.length}`;
         listEl.innerHTML = banned.map(pk => this._groupCtxBannedRowHtml(pk)).join('');
         if (typeof this.ensureListProfiles === 'function') {
-            this.ensureListProfiles(listEl, banned);
+            this.ensureListProfiles(listEl, banned.filter((pk) => !this._maskOf(pk)));
         }
     },
 
     _groupCtxBannedRowHtml(pubkey) {
         const safePk = this._safePubkey(pubkey);
-        const baseNym = this.escapeHtml(this.stripPubkeySuffix(this.getNymFromPubkey(pubkey)));
+        const mask = this._maskOf(pubkey);
+        const baseNym = this.escapeHtml(mask || this.stripPubkeySuffix(this.getNymFromPubkey(pubkey)));
         const suffix = this.getPubkeySuffix(pubkey);
-        const avatar = `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="group-ctx-member-avatar" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
+        const avatar = mask
+            ? `<img src="${this.escapeHtml((typeof this._maskedAvatar === 'function' ? this._maskedAvatar(pubkey) : ''))}" class="group-ctx-member-avatar" alt="" decoding="async" loading="lazy">`
+            : `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="group-ctx-member-avatar" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
         const unban = `<button type="button" class="group-ctx-unban" data-action="groupCtxUnban" data-pubkey="${safePk}">Unban</button>`;
         return `<div class="group-ctx-member banned">${avatar}<span class="group-ctx-member-name">${baseNym}<span class="nym-suffix">#${suffix}</span></span>${unban}</div>`;
     },
@@ -4232,7 +4783,8 @@ Object.assign(NYM.prototype, {
 
     _groupCtxMemberRowHtml(groupId, pubkey) {
         const safePk = this._safePubkey(pubkey);
-        const baseNym = this.escapeHtml(this.stripPubkeySuffix(this.getNymFromPubkey(pubkey)));
+        const mask = this._maskOf(pubkey);
+        const baseNym = this.escapeHtml(mask || this.stripPubkeySuffix(this.getNymFromPubkey(pubkey)));
         const suffix = this.getPubkeySuffix(pubkey);
         const isSelf = pubkey === this.pubkey;
         const roleBadge = this._isGroupOwner(groupId, pubkey)
@@ -4242,7 +4794,9 @@ Object.assign(NYM.prototype, {
                 : this._isGroupMod(groupId, pubkey)
                     ? '<span class="group-ctx-role mod">Mod</span>'
                     : '';
-        const avatar = `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="group-ctx-member-avatar" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
+        const avatar = mask
+            ? `<img src="${this.escapeHtml((typeof this._maskedAvatar === 'function' ? this._maskedAvatar(pubkey) : ''))}" class="group-ctx-member-avatar" alt="" decoding="async" loading="lazy">`
+            : `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="group-ctx-member-avatar" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
         const youTag = isSelf ? '<span class="group-ctx-you">you</span>' : '';
         return `<div class="group-ctx-member" data-action="groupCtxMemberClick" data-pubkey="${safePk}" data-nym="${baseNym}">${avatar}<span class="group-ctx-member-name">${baseNym}<span class="nym-suffix">#${suffix}</span>${youTag}</span>${roleBadge}</div>`;
     },
@@ -4307,7 +4861,7 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         this.closeGroupContextMenu();
         const desc = await window.showAppPrompt('Enter a group description:', {
-            title: 'Group Description', okLabel: 'Save', defaultValue: group.description || '', maxLength: 150, multiline: true
+            title: 'Group Description', okLabel: 'Save', defaultValue: typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''), maxLength: 150, multiline: true
         });
         if (desc === null) return;
         await this.setGroupDescription(groupId, desc);
@@ -4353,24 +4907,24 @@ Object.assign(NYM.prototype, {
         const groupId = this._groupCtxGroupId;
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        this.closeGroupContextMenu();
         this.setGroupAllowMemberInvites(groupId, group.allowMemberInvites === false);
+        this._groupCtxRedraw();
     },
 
     groupCtxToggleShareHistory() {
         const groupId = this._groupCtxGroupId;
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        this.closeGroupContextMenu();
         this.setGroupShareHistory(groupId, group.shareHistory !== true);
+        this._groupCtxRedraw();
     },
 
     groupCtxToggleInviteJoin() {
         const groupId = this._groupCtxGroupId;
         const group = this.groupConversations.get(groupId);
         if (!group) return;
-        this.closeGroupContextMenu();
         this.setGroupInviteEnabled(groupId, !group.inviteEnabled);
+        this._groupCtxRedraw();
     },
 
     async groupCtxResetInviteLink() {
@@ -4471,6 +5025,7 @@ Object.assign(NYM.prototype, {
         const byAuthor = new Map();
         for (const m of messages) {
             if (m.isOwn || m.readReceiptSent || m.isHistorical || !m.nymMessageId) continue;
+            if (typeof this.isContentHidden === 'function' && this.isContentHidden(m)) continue;
             if (!byAuthor.has(m.pubkey)) byAuthor.set(m.pubkey, []);
             byAuthor.get(m.pubkey).push(m.nymMessageId);
             m.readReceiptSent = true;
@@ -4615,13 +5170,13 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const groupName = nameWords.join(' ').trim() ||
-            [this.getNymFromPubkey(this.pubkey), ...resolvedMembers.slice(0, 2).map(pk => this.getNymFromPubkey(pk))].join(', ');
+        const groupName = nameWords.join(' ').trim();
+        const shownName = this._groupLabel({ name: groupName });
 
-        this.displaySystemMessage(`Creating group "${groupName}"...`);
+        this.displaySystemMessage(`Creating group "${shownName}"...`);
         const groupId = await this.createGroup(groupName, resolvedMembers);
         if (groupId) {
-            this.displaySystemMessage(`Group "${groupName}" created with ${resolvedMembers.length + 1} members`);
+            this.displaySystemMessage(`Group "${shownName}" created with ${resolvedMembers.length + 1} members`);
         }
     },
 
@@ -4632,12 +5187,41 @@ Object.assign(NYM.prototype, {
         }
         const group = this.groupConversations.get(this.currentGroup);
         if (!group) return;
+        const groupId = this.currentGroup;
+        const members = Array.isArray(group.members) ? group.members.slice() : [];
+        const infoId = `group-info-${Date.now().toString(36)}`;
+        const view = this._groupInfoView(groupId, members);
+        const html = `<div class="group-info" id="${infoId}" data-group-id="${this.escapeHtml(groupId)}">${view.html}</div>`;
+        this.displaySystemMessage(html, 'system', { html: true, feed: true });
+        const el = document.getElementById(infoId);
+        if (el) el._groupInfoMembers = members;
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(el, view.fetch);
+        }
+    },
+
+    _refreshGroupInfoForFilters() {
+        if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+        for (const el of Array.from(document.querySelectorAll('.group-info[data-group-id]'))) {
+            const groupId = el && el.dataset ? el.dataset.groupId : '';
+            const group = groupId ? this.groupConversations.get(groupId) : null;
+            if (!group) continue;
+            const members = Array.isArray(el._groupInfoMembers) ? el._groupInfoMembers : (Array.isArray(group.members) ? group.members : []);
+            const view = this._groupInfoView(groupId, members);
+            el.innerHTML = view.html;
+            if (typeof this.ensureListProfiles === 'function' && view.fetch.length) this.ensureListProfiles(el, view.fetch);
+        }
+    },
+
+    _groupInfoView(groupId, members) {
+        const group = this.groupConversations.get(groupId) || {};
         const mods = Array.isArray(group.mods) ? group.mods : [];
         const admins = Array.isArray(group.admins) ? group.admins : [];
-        // Owner first, then admins, then mods, then everyone else, each alphabetized.
         const ownerPk = group.createdBy;
-        const sorted = [...group.members].sort((a, b) => {
-            const rank = (pk) => this._roleRank(this.currentGroup, pk);
+        const iCanModerate = typeof this._canModerate === 'function' && this._canModerate(groupId, this.pubkey);
+        const shownMembers = iCanModerate ? members.slice() : this._groupVisibleMembers(group, members);
+        const sorted = [...shownMembers].sort((a, b) => {
+            const rank = (pk) => this._roleRank(groupId, pk);
             const ra = rank(a), rb = rank(b);
             if (ra !== rb) return ra - rb;
             const na = (this.getNymFromPubkey(a) || '').toLowerCase();
@@ -4645,11 +5229,13 @@ Object.assign(NYM.prototype, {
             return na.localeCompare(nb);
         });
         const memberRow = (pk) => {
-            const baseNym = this.parseNymFromDisplay(this.getNymFromPubkey(pk) || '');
+            const mask = this._maskOf(pk);
+            const baseNym = mask || this.parseNymFromDisplay(this.getNymFromPubkey(pk) || '');
             const suffix = this.getPubkeySuffix(pk);
             const safePk = this._safePubkey(pk);
-            const avatarSrc = this.getAvatarUrl(pk);
-            const flairHtml = this.getFlairForUser(pk) || '';
+            const avatarSrc = mask ? this._maskedAvatar(pk) : this.getAvatarUrl(pk);
+            const avatarKey = mask ? '' : ` data-avatar-pubkey="${safePk}"`;
+            const flairHtml = mask ? '' : (this.getFlairForUser(pk) || '');
             const labels = [];
             if (pk === ownerPk) labels.push('owner');
             else if (admins.includes(pk)) labels.push('admin');
@@ -4658,15 +5244,11 @@ Object.assign(NYM.prototype, {
             const labelHtml = labels.length
                 ? `<span class="group-info-label">${labels.join(', ')}</span>`
                 : '';
-            return `<div class="group-info-member" data-pubkey="${safePk}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="group-info-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}</span>${labelHtml}</div>`;
+            return `<div class="group-info-member" data-pubkey="${safePk}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message"${avatarKey} alt="" decoding="async" loading="lazy"><span class="group-info-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}</span>${labelHtml}</div>`;
         };
         const membersHtml = sorted.map(memberRow).join('');
-        const infoId = `group-info-${Date.now().toString(36)}`;
-        const html = `<div class="group-info" id="${infoId}"><div class="group-info-title">Group: "${this.escapeHtml((typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')))}"</div><div class="group-info-count">Members (${group.members.length})</div><div class="group-info-members">${membersHtml}</div></div>`;
-        this.displaySystemMessage(html, 'system', { html: true, feed: true });
-        if (typeof this.ensureListProfiles === 'function') {
-            this.ensureListProfiles(document.getElementById(infoId), sorted);
-        }
+        const html = `<div class="group-info-title">Group: "${this.escapeHtml((typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')))}"</div><div class="group-info-count">Members (${sorted.length})</div><div class="group-info-members">${membersHtml}</div>`;
+        return { html, fetch: sorted.filter((pk) => !this._maskOf(pk)) };
     },
 
     toggleGroupMentionsOnly(enabled) {

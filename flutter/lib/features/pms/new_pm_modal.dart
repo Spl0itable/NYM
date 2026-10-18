@@ -143,7 +143,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     final picked = _recipients.map((r) => r.pubkey).toSet();
     final controller = ref.read(nostrControllerProvider);
     final out = <User>[];
-    for (final u in ref.read(usersProvider).values) {
+    for (final u in ref.read(nymsListUsersProvider).values) {
       if (u.pubkey == self || picked.contains(u.pubkey)) continue;
       // Nymbot is never suggested; it's reachable via its sidebar row or a direct paste.
       if (controller.isVerifiedBot(u.pubkey)) continue;

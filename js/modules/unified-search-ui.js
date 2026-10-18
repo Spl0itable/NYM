@@ -26,7 +26,7 @@
             let it = this._usItems.get(m);
             const at = (m.created_at || 0) * 1000;
             const F = window.NymContentFilter;
-            const text = F && typeof this._cfCtx === 'function' ? F.stripBlockedQuotes(this._cfCtx(), m.content || '') : (m.content || '');
+            const text = F && typeof this._cfCtx === 'function' ? F.stripBlockedQuotes(this._cfCtx(), m.content || '', Array.isArray(m.quoted) ? m.quoted : []) : (m.content || '');
             if (it && it.text === text && it.key === key && it.at === at) return it;
             it = { id: m.id, key, at, text, msg: m, folded: null };
             this._usItems.set(m, it);
@@ -38,7 +38,7 @@
             const packs = typeof this.activeFilterPacks === 'function' ? this.activeFilterPacks().join(',') : '';
             const gates = typeof this._clientGatesActive === 'function' && this._clientGatesActive() ? 1 : 0;
             const minute = Math.floor(Date.now() / 60000);
-            return [size(this.deletedEventIds), size(this.blockedUsers), size(this.blockedKeywords), [...(this.blockedKeywords || [])].join('\u0001'), size(this._quiet), size(this.friends), packs, gates, minute].join('|');
+            return [size(this.deletedEventIds), size(this.blockedUsers), size(this.blockedKeywords), [...(this.blockedKeywords || [])].join('\u0001'), size(this._quiet), size(this.friends), size(this.autoMutedPubkeys), this._cfVersion || 0, packs, gates, minute].join('|');
         },
 
         _usVisible(it) {
@@ -55,12 +55,23 @@
             return true;
         },
 
+        _usPeerHidden(key) {
+            const k = String(key || '');
+            if (!k.startsWith('pm-')) return false;
+            const peer = k.slice(3).split('-').find((p) => p && p !== this.pubkey) || '';
+            if (!peer) return false;
+            if (typeof this._pmPeerHidden === 'function') return this._pmPeerHidden(peer);
+            return !!(this.blockedUsers && this.blockedUsers.has(peer));
+        },
+
         _usCorpus() {
             const channels = [];
             const seen = new Set();
             const blocked = new Set([...(this.blockedChannels || [])].concat([...(this.hiddenChannels || [])]).map((k) => String(k || '').toLowerCase()));
             const activity = this.channelLastActivity || new Map();
-            const nymHidden = (pk, nym) => typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword('', nym || '', pk);
+            const nymHidden = (pk, nym) => (typeof this.isPersonHidden === 'function'
+                ? this.isPersonHidden(pk, nym || '')
+                : typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword('', nym || '', pk));
             for (const [key, ch] of (this.channels || new Map())) {
                 const k = String(key || '').toLowerCase();
                 if (!k || blocked.has(k) || seen.has(k)) continue;
@@ -112,6 +123,7 @@
                     for (const [key, list] of store) {
                         if (!Array.isArray(list) || !list.length) continue;
                         if (blockedRooms.has(key) || this._usLocked(key)) continue;
+                        if (this._usPeerHidden(key)) continue;
                         for (const m of list) {
                             if (!m || !m.content) continue;
                             each(this._usItem(key, m));

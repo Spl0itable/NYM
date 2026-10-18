@@ -51,11 +51,15 @@ class MeshOutboxEntry {
   /// Publish attempts spent, bounded so a dead relay set can't retry forever.
   int attempts;
 
-  bool belongsTo(String pubkey) {
+  String? get _who {
     final signed = signedEvent?['pubkey'];
     final who = owner ?? (signed is String ? signed : null);
-    return who == null || who.isEmpty || who == pubkey;
+    return who == null || who.isEmpty ? null : who;
   }
+
+  bool get ownerless => _who == null;
+
+  bool belongsTo(String pubkey) => _who == pubkey;
 
   MeshOutboxEntry ownedBy(String pubkey) => MeshOutboxEntry(
         kind: kind,

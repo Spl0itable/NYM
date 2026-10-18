@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:uuid/uuid.dart';
 
 import 'dedup.dart';
@@ -67,6 +68,17 @@ class MeshService {
 
   /// Plaintext owed to a peer, queued until the Noise session establishes.
   final Map<String, List<Uint8List>> _pendingPlaintext = {};
+
+  bool Function(MeshPrivateMessage msg)? acksPrivateMessage;
+
+  @visibleForTesting
+  Future<void> dispatchNoisePayloadForTest(
+          String senderPeerID, Uint8List plaintext) =>
+      _dispatchNoisePayload(senderPeerID, plaintext);
+
+  @visibleForTesting
+  List<Uint8List> pendingPlaintextForTest(String peerID) =>
+      List.of(_pendingPlaintext[peerID] ?? const <Uint8List>[]);
 
   /// Encrypted frames that beat our own handshake completion; drained on establish.
   final Map<String, List<Uint8List>> _pendingEncrypted = {};
@@ -770,15 +782,26 @@ class MeshService {
         final pm = PrivateMessagePacket.decode(noisePayload.data);
         if (pm == null) return;
         _touchPeer(senderPeerID);
-        _privateMessages.add(MeshPrivateMessage(
+        final msg = MeshPrivateMessage(
           senderPeerID: senderPeerID,
           messageId: pm.messageID,
           content: pm.content,
           timestampMs: DateTime.now().millisecondsSinceEpoch,
-        ));
-        // Auto-acknowledge delivery.
-        await _sendOrQueueEncrypted(
-            senderPeerID, NoisePayload.delivered(pm.messageID).encode());
+        );
+        _privateMessages.add(msg);
+        var ack = true;
+        final acks = acksPrivateMessage;
+        if (acks != null) {
+          try {
+            ack = acks(msg);
+          } catch (_) {
+            ack = true;
+          }
+        }
+        if (ack) {
+          await _sendOrQueueEncrypted(
+              senderPeerID, NoisePayload.delivered(pm.messageID).encode());
+        }
         break;
       case NoisePayloadType.delivered:
         _receipts.add(MeshReceipt(

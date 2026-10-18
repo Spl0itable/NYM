@@ -29,6 +29,7 @@ class DmPollsHooks {
     this.onChanged,
     this.now,
     this.translate,
+    this.personHidden,
   });
 
   final String Function() selfPubkey;
@@ -47,6 +48,7 @@ class DmPollsHooks {
   final void Function()? onChanged;
   final int Function()? now;
   final String Function(String text, [Map<String, String>? vars])? translate;
+  final bool Function(String pubkey)? personHidden;
 
   DmPollsHooks copyWith({
     Future<bool> Function(String pubkey, String content)? sendPm,
@@ -72,6 +74,7 @@ class DmPollsHooks {
         onChanged: onChanged,
         now: now ?? this.now,
         translate: translate,
+        personHidden: personHidden,
       );
 }
 
@@ -211,7 +214,10 @@ class DmPollsService {
         store()[m.nymMessageId],
         options: poll.options.length,
         author: m.pubkey,
-        allowed: allowed(m),
+        allowed: [
+          for (final pk in allowed(m))
+            if (pk == _self || hooks.personHidden?.call(pk) != true) pk,
+        ],
       );
 
   DmPollView? viewFor(Message m) {

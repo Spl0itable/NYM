@@ -4,21 +4,27 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
-import 'package:flutter/foundation.dart' show compute, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show compute, kIsWeb, visibleForTesting;
 
+import '../../core/constants/relays.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../core/crypto/keys.dart' as keys;
 import '../../core/crypto/nym_sync_builder.dart';
+import '../../models/channel.dart' show kDefaultChannel;
 import '../../models/settings.dart';
 import '../../features/chat_tools/chat_tools.dart'
     show ChatToolsKeys, trimSavedPayload;
 import '../../features/chat_nav/chat_nav.dart'
     show ChatNavKeys, markStoreNorm, trimPinnedPayload;
-import '../../features/sync/sync_merge.dart' show SyncMergeCaps, tsMapNorm;
+import '../../features/sync/sync_merge.dart'
+    show SyncMergeCaps, kStampedPrefs, prefFp, prefRowStamp, tsMapNorm;
 import '../../features/away/away_sync.dart';
 import '../../features/toasts/event_toast_settings_store.dart';
 import '../../features/media_notes/media_notes.dart' show parseSpeed, speedWire;
 import '../../features/sync/pref_stamps.dart';
+import '../../features/sync/sync_rows.dart';
+import '../../features/relays/relay_add.dart';
 import '../../features/relays/relay_block.dart';
 import '../attest/attest_badge.dart' show normalizeAppVerifiedFilter;
 import '../filter/filter_packs.dart' show kFilterPackIds;
@@ -186,6 +192,7 @@ class StorageSync {
       'blockedKeywords',
       'blockedChannels',
       'blockedRelays',
+      'addedRelays',
       'hiddenChannels',
       'lightningAddress',
       'dmForwardSecrecyEnabled',
@@ -257,6 +264,34 @@ class StorageSync {
       'botMaxRuns',
     ],
   };
+
+  static final Map<String, String> sectionLookup = () {
+    final out = <String, String>{};
+    syncedSectionKeys.forEach((section, keys) {
+      for (final k in keys) {
+        out[k] = section;
+      }
+    });
+    kStampedPrefs.forEach((name, keys) {
+      final section = out[keys.first];
+      if (section == null) return;
+      out.putIfAbsent('${name}Ts', () => section);
+      out.putIfAbsent('${name}Fp', () => section);
+    });
+    return out;
+  }();
+
+  void forgetPublishedPrefs(Iterable<String> names) {
+    for (final name in names) {
+      final keys = kStampedPrefs[name];
+      final section = keys == null ? null : sectionLookup[keys.first];
+      if (section == null) continue;
+      final dTag = sectionCategory(section);
+      _publishedSectionJson.remove(dTag);
+      _rows.forgetSynced(d1Category(dTag));
+      _repairRows.add(dTag);
+    }
+  }
 
   /// Only identity key material stays device-local; no key, salt or credential leaves the device.
   static const Set<String> deviceLocalKeys = {
@@ -344,6 +379,7 @@ class StorageSync {
       flat['blockedKeywords'] = _kvJsonList(kv, StorageKeys.blockedKeywords);
       flat['blockedChannels'] = _kvJsonList(kv, StorageKeys.blockedChannels);
       flat['blockedRelays'] = _blockedRelaysForSync(kv);
+      flat['addedRelays'] = _addedRelaysForSync(kv);
       flat['hiddenChannels'] = _kvJsonList(kv, StorageKeys.hiddenChannels);
       flat['pinnedChannels'] = _kvJsonList(kv, StorageKeys.pinnedChannels);
       flat['userJoinedChannels'] =
@@ -451,12 +487,16 @@ class StorageSync {
       extras.forEach((k, v) => flat[k] = v);
     }
 
-    final lookup = <String, String>{};
-    syncedSectionKeys.forEach((section, keys) {
-      for (final k in keys) {
-        lookup[k] = section;
-      }
-    });
+    if (kv != null) {
+      final stamps = PrefStamps.read(kv);
+      kStampedPrefs.forEach((name, keys) {
+        if (!keys.any(flat.containsKey)) return;
+        flat['${name}Ts'] = stamps[name] ?? 0;
+        flat['${name}Fp'] = prefFp(flat, keys);
+      });
+    }
+
+    final lookup = sectionLookup;
 
     final out = <String, Map<String, dynamic>>{};
     flat.forEach((key, value) {
@@ -483,6 +523,17 @@ class StorageSync {
       raw = null;
     }
     return RelayBlock.norm(raw, DateTime.now().millisecondsSinceEpoch);
+  }
+
+  static List<String> _addedRelaysForSync(KeyValueStore kv) {
+    Object? raw;
+    try {
+      final s = kv.getString(StorageKeys.addedRelays);
+      if (s != null && s.isNotEmpty) raw = jsonDecode(s);
+    } catch (_) {
+      raw = null;
+    }
+    return RelayAdd.norm(raw, defaults: RelayConfig.defaultRelays);
   }
 
   /// Decodes a KV JSON array; anything else is empty.
@@ -572,6 +623,7 @@ class StorageSync {
     Map<String, int>? channelActivity,
   }) async {
     final sent = <String>{};
+    settingsFailed = <String>{};
     final sections = buildSectionPayloads(
       settings,
       pinnedLandingChannelJson: pinnedLandingChannelJson,
@@ -592,16 +644,31 @@ class StorageSync {
         },
       );
       if (ok) sent.add(entry.key);
+      if (_lastRowResult == _rowFailed) settingsFailed.add(entry.key);
     }
     await publishSettingsChangedPing(sent.toList());
     return sent;
   }
 
+  Set<String> settingsFailed = <String>{};
+
   /// Stable id for this client, so a device ignores its own ping echo.
   String? _syncInstanceIdCache;
   String get syncInstanceId =>
-      _syncInstanceIdCache ??= '${Random().nextInt(1 << 32).toRadixString(36)}'
+      _syncInstanceIdCache ??= '$syncDeviceId.${Random().nextInt(1 << 32).toRadixString(36)}'
           '${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+
+  String _syncDeviceId = '';
+
+  String get syncDeviceId => _syncDeviceId.isNotEmpty
+      ? _syncDeviceId
+      : (_syncDeviceId = '${Random().nextInt(1 << 32).toRadixString(36)}'
+          '${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}');
+
+  void setSyncDeviceId(String id) {
+    if (_syncInstanceIdCache != null || id.isEmpty) return;
+    _syncDeviceId = id;
+  }
 
   /// Content-free "settings changed" ping to our other devices over the open self gift-wrap sub; they re-read D1.
   Future<void> publishSettingsChangedPing(List<String> sections) async {
@@ -826,6 +893,7 @@ class StorageSync {
     String dTag, {
     bool Function(Map<String, dynamic> p)? trim,
   }) async {
+    _lastRowResult = _rowSame;
     if (trim != null) {
       var guard = 0;
       while (_rumorByteSize(payload) > _maxRumorBytes && guard++ < 500) {
@@ -838,13 +906,13 @@ class StorageSync {
     final json = jsonEncode(payload);
     if (_publishedSectionJson[dTag] == json) return false; // unchanged
 
-    final ok = await _setSettingsCategory(
-      d1Category(dTag),
-      jsonEncode(_withCat(payload, dTag)),
-    );
+    final r = await _putRow(dTag, jsonEncode(_withCat(payload, dTag)),
+        payload: payload);
+    _lastRowResult = r;
+    if (r == _rowSame) _publishedSectionJson[dTag] = json;
     // Mark published only after success, or a failed write is never retried.
-    if (!ok) {
-      _publishedSectionJson.remove(dTag);
+    if (r != _rowSent) {
+      if (r != _rowSame) _publishedSectionJson.remove(dTag);
       return false;
     }
     _publishedSectionJson[dTag] = json;
@@ -858,10 +926,12 @@ class StorageSync {
         // Best-effort relay push.
       }
     }
-    return ok;
+    return true;
   }
 
   final Map<String, Map<String, dynamic>> _lastInboundSections = {};
+
+  int _lastRowResult = _rowSame;
 
   /// Carries forward keys from the last inbound payload that we don't write, so the other client's settings survive.
   Map<String, dynamic> _mergeUnknownSectionKeys(
@@ -950,7 +1020,7 @@ class StorageSync {
   /// Publishes the root record, forced classical to avoid a circular lock.
   Future<bool> pqRootRecordSet(PqRootRecord record) async {
     final ok = await _setSettingsCategory(
-      d1Category(pqRootCategory),
+      pqRootCategory,
       jsonEncode(_withCat(record.toJson(), pqRootCategory)),
       allowPq: false,
     );
@@ -1018,14 +1088,14 @@ class StorageSync {
     });
     final json = jsonEncode(_withCat(payload, dTag));
     if (json == _readStateJson) return false;
-    final ok = await _setSettingsCategory(d1Category(dTag), json);
-    if (ok) {
-      _readStateJson = json;
-      try {
-        await publishSettingsChangedPing(const ['readstate']);
-      } catch (_) {}
-    }
-    return ok;
+    final r = await _putRow(dTag, json, payload: payload);
+    if (r == _rowSame) _readStateJson = json;
+    if (r != _rowSent) return false;
+    _readStateJson = json;
+    try {
+      await publishSettingsChangedPing(const ['readstate']);
+    } catch (_) {}
+    return true;
   }
 
   String? _readStateJson;
@@ -1039,10 +1109,8 @@ class StorageSync {
   /// Overwrites a left group's `nymchat-keys-<gid>` with `{}` so a fresh device can't restore its keys; history is kept.
   Future<void> clearGroupSyncData(String groupId) async {
     final dTag = _groupSyncDTag('nymchat-keys', groupId);
-    await _setSettingsCategory(
-      d1Category(dTag),
-      jsonEncode(_withCat(<String, dynamic>{}, dTag)),
-    );
+    await _putRow(dTag, jsonEncode(_withCat(<String, dynamic>{}, dTag)),
+        payload: <String, dynamic>{}, exact: true);
   }
 
   /// `YYYYMM` bucket for a unix-seconds timestamp, one month of history per wrap.
@@ -1146,7 +1214,7 @@ class StorageSync {
   bool callsDeletePending = false;
 
   Future<bool> settingsDelete(String dTag) async {
-    if (_pubkey.isEmpty) return false;
+    if (_pubkey.isEmpty || _rowMode == SyncRowMode.snapshot) return false;
     final category = d1Category(dTag);
     try {
       final res = await _signedWrite(<String, dynamic>{
@@ -1158,7 +1226,7 @@ class StorageSync {
     } catch (_) {
       return false;
     }
-    _lastSettingsHash.remove('${_pubkey}_$category');
+    _rows.forgetRow(category);
     _lastInboundSections.remove(dTag);
     _publishedSectionJson.remove(dTag);
     return true;
@@ -1167,6 +1235,7 @@ class StorageSync {
   Future<bool> callsSyncSet(Map<String, dynamic>? calls) async {
     if (calls == null) return false;
     if (calls['on'] != true) {
+      if (_rowMode == SyncRowMode.snapshot) return false;
       if (!callsDeletePending && !_hasSyncRow(kCallsDTag)) return false;
       final gone = await settingsDelete(kCallsDTag);
       if (!gone) return false;
@@ -1432,24 +1501,135 @@ class StorageSync {
     return {...payload, '__cat': category};
   }
 
-  /// In-memory content hashes so unchanged sections skip the write.
-  final Map<String, String> _lastSettingsHash = {};
+  static const int _rowSent = 1;
+  static const int _rowSame = 0;
+  static const int _rowHeld = 2;
+  static const int _rowFailed = -1;
 
-  /// [allowPq] false forces the classical seal; only [pqRootCategory] needs it.
-  Future<bool> _setSettingsCategory(String category, String plaintext,
-      {bool allowPq = true}) async {
+  static final Object _rowModeKey = Object();
+
+  static SyncRowMode? get _rowMode {
+    final v = Zone.current[_rowModeKey];
+    return v is SyncRowMode ? v : null;
+  }
+
+  Future<T> runRows<T>(SyncRowMode mode, Future<T> Function() body) =>
+      runZoned(body, zoneValues: {_rowModeKey: mode});
+
+  SyncRowLedger? _ledger;
+
+  SyncRowLedger get _rows {
+    final held = _ledger;
+    if (held != null) return held;
+    final kv = _kv;
+    return _ledger = SyncRowLedger(
+      _pubkey,
+      read: kv == null ? null : () => kv.getString(SyncRowLedger.kvKey),
+      write: kv == null
+          ? null
+          : (v) => unawaited(kv.setString(SyncRowLedger.kvKey, v)),
+    );
+  }
+
+  final Set<String> _remoteChanged = {};
+  final Set<String> _repairRows = {};
+
+  void markUnsent() => _rows.markUnsent(_nowMs());
+
+  void markKeysRowUnsent(String groupId) =>
+      _rows.markUnsentRow(_groupSyncDTag('nymchat-keys', groupId));
+
+  void markReadStateUnsent() => _rows.markUnsentRow('nymchat-readstate');
+
+  int get unsentGen => _rows.unsentGen;
+
+  void flushDone(int gen) => _rows.flushDone(gen);
+
+  bool get needsReconcile =>
+      _repairRows.isNotEmpty ||
+      _rows.unsentAt > 0 ||
+      _rows.unsentRows.isNotEmpty;
+
+  @visibleForTesting
+  SyncRowLedger get rowsForTest => _rows;
+
+  @visibleForTesting
+  Set<String> get repairRowsForTest => _repairRows;
+
+  static String _short(String hex) => hex.length > 32 ? hex.substring(0, 32) : hex;
+
+  void _noteRowRead(String key, String realCat, String blob, String plain) {
+    if (key != d1Category(realCat)) return;
+    final mode = pq.isPqPayload(blob) || pq.isPq2Payload(blob) ? 'pq' : 'c';
+    if (!_rows.noteRead(key, mode, _short(_sha256Hex(plain)))) return;
+    _remoteChanged.add(realCat);
+    _publishedSectionJson.remove(realCat);
+    if (realCat == 'nymchat-readstate') _readStateJson = null;
+  }
+
+  static Map<String, dynamic>? _coverView(
+      String dTag, Map<String, dynamic>? payload) {
+    if (payload == null || dTag != sectionCategory('channels')) return payload;
+    final joined = payload['userJoinedChannels'];
+    if (joined is! List) return payload;
+    return {
+      ...payload,
+      'userJoinedChannels': [
+        for (final c in joined)
+          if (c != kDefaultChannel && c != 'nym') c,
+      ],
+    };
+  }
+
+  void _snapshotRow(String dTag, String category, String hash,
+      Map<String, dynamic>? local, bool exact) {
+    if (!_remoteChanged.remove(dTag)) return;
+    final inbound = _coverView(dTag, _lastInboundSections[dTag]);
+    final payload = _coverView(dTag, local);
+    var covered =
+        inbound != null && payload != null && syncCovers(inbound, payload);
+    if (covered && (exact || _rows.unsent(dTag))) {
+      covered = syncCovers(payload, inbound);
+    }
+    if (covered) {
+      _rows.noteSynced(category, _short(hash));
+      _repairRows.remove(dTag);
+    } else {
+      _repairRows.add(dTag);
+    }
+  }
+
+  Future<int> _putRow(String dTag, String plaintext,
+      {Map<String, dynamic>? payload,
+      bool allowPq = true,
+      bool exact = false}) async {
+    final category = d1Category(dTag);
     try {
-      // The seal mode is part of the hash basis so a policy flip republishes; never write over rows we could not read.
-      if (_settingsRestoreUnreadable) return false;
+      if (_settingsRestoreUnreadable) return _rowHeld;
+      final rows = _rows;
       final selfKem = allowPq ? await _pqSelfKeyCandidates() : const [];
       final mode = (allowPq && _pqSealToSelf && selfKem.isNotEmpty) ? 'pq' : 'c';
       final hash = _sha256Hex('$_pubkey|$mode|$plaintext');
-      final hashKey = '${_pubkey}_$category';
-      if (_lastSettingsHash[hashKey] == hash) return false; // unchanged
-
+      final short = _short(hash);
+      final rowMode = _rowMode;
+      if (rowMode == SyncRowMode.snapshot) {
+        _snapshotRow(dTag, category, hash, payload, exact);
+        return _rowHeld;
+      }
+      final inSync = rows.synced(category) == short;
+      final sealed = rows.d1Mode(category);
+      final reseal = sealed != null && sealed != mode && !inSync;
+      if (!_repairRows.contains(dTag) && !reseal) {
+        if (inSync) return _rowSame;
+        if (rowMode == SyncRowMode.gated && !rows.unsent(dTag)) {
+          return _rowHeld;
+        }
+      }
       final blob = await _encryptToSelf(plaintext, allowPq: allowPq);
-      if (blob == null) return false;
-
+      if (blob == null) {
+        rows.markUnsentRow(dTag);
+        return _rowFailed;
+      }
       final res = await _signedWrite(<String, dynamic>{
         'action': 'settings-set',
         'pubkey': _pubkey,
@@ -1457,13 +1637,26 @@ class StorageSync {
         'blob': blob,
         'contentHash': hash,
       });
-      _lastSettingsHash[hashKey] = hash;
+      rows.noteWritten(
+          category, short, mode, _short(_sha256Hex(plaintext)), dTag);
+      _repairRows.remove(dTag);
+      _remoteChanged.remove(dTag);
+      if (payload != null) {
+        _lastInboundSections[dTag] = Map<String, dynamic>.of(payload);
+      }
       final at = res['updatedAt'];
       if (at is num) _settingsNoteOwnWrite(category, at.toInt(), plaintext);
-      return true;
+      return _rowSent;
     } catch (_) {
-      return false;
+      _rows.markUnsentRow(dTag);
+      return _rowFailed;
     }
+  }
+
+  Future<bool> _setSettingsCategory(String dTag, String plaintext,
+      {bool allowPq = true}) async {
+    final r = await _putRow(dTag, plaintext, allowPq: allowPq);
+    return r == _rowSent || r == _rowSame;
   }
 
   /// Deletes this account's server rows on wipe, signed while the key is still here.
@@ -1528,6 +1721,11 @@ class StorageSync {
   Map<String, int>? _settingsHave;
 
   int? get settingsCursor => _settingsCursor;
+
+  int _settingsReqAt = 0;
+  int _settingsFullAt = 0;
+
+  int get settingsFullAt => _settingsFullAt;
 
   bool get settingsFullOk => _settingsFullOk;
 
@@ -1595,10 +1793,12 @@ class StorageSync {
     if (cursor == null) {
       _settingsFullOk = false;
       _settingsCursor = null;
+      _settingsFullAt = 0;
       return;
     }
     _settingsFullOk = true;
     _settingsCursor = cursor;
+    _settingsFullAt = _settingsReqAt;
     _settingsNoteKnown(cats);
     final have = <String, int>{...stubbed};
     for (final d in decoded) {
@@ -1645,6 +1845,7 @@ class StorageSync {
       };
       if (near.isNotEmpty) req['have'] = near;
     } else if (mode == 'full') {
+      _settingsReqAt = _nowMs();
       req['app'] = 'nymchat';
       final have = await _settingsHaveLoad();
       if (have.isNotEmpty) {
@@ -1711,6 +1912,7 @@ class StorageSync {
         payload.remove('__cat');
         // Keep the raw payload for [_mergeUnknownSectionKeys].
         _lastInboundSections[realCat] = Map<String, dynamic>.from(payload);
+        _noteRowRead(key, realCat, blob, plain);
         if (realCat == pqRootCategory) {
           _lastInboundPqRoot = Map<String, dynamic>.of(payload);
           _pqRootRowPresent = true;
@@ -1777,6 +1979,7 @@ class StorageSync {
         payload.remove('__cat');
         if (realCat != pqRootCategory) continue;
         _lastInboundSections[realCat] = Map<String, dynamic>.from(payload);
+        _noteRowRead(key, realCat, blob, plain);
         _lastInboundPqRoot = Map<String, dynamic>.of(payload);
       } catch (_) {}
     }
@@ -1798,19 +2001,21 @@ class StorageSync {
         return _settingsRead('full');
       }
       Map<String, dynamic>? payload;
+      String? plain;
       try {
-        final plain = await _decryptFromSelf(blob);
+        plain = await _decryptFromSelf(blob);
         final parsed = plain == null ? null : jsonDecode(plain);
         if (parsed is Map<String, dynamic>) payload = parsed;
       } catch (_) {
         payload = null;
       }
-      if (payload == null) return _settingsRead('full');
+      if (payload == null || plain == null) return _settingsRead('full');
       final realCat =
           payload['__cat'] is String ? payload['__cat'] as String : key;
       payload.remove('__cat');
       if (realCat == pqRootCategory) return _settingsRead('full');
       _lastInboundSections[realCat] = Map<String, dynamic>.from(payload);
+      _noteRowRead(key, realCat, blob, plain);
       decoded.add(_DecodedCategory(
         category: realCat,
         payload: payload,
@@ -1958,7 +2163,7 @@ class StorageSync {
     final merged = <String, dynamic>{};
     var newestTs = 0;
     for (final d in toApply) {
-      merged.addAll(d.payload);
+      merged.addAll(prefRowStamp(d.payload, d.updatedAt));
       if (d.updatedAt > newestTs) newestTs = d.updatedAt;
     }
     return SettingsLoadResult(
@@ -2018,6 +2223,7 @@ class StorageSync {
         payload.remove('__cat');
         // Keep the raw payload for [_mergeUnknownSectionKeys].
         _lastInboundSections[realCat] = Map<String, dynamic>.from(payload);
+        _noteRowRead(e.key.toString(), realCat, blob, plain);
         if (realCat == 'nymchat-notifications') {
           // Cache for carry-forward in [notificationsWrapSet], as [settingsGet] does.
           _lastInboundNotifications = Map<String, dynamic>.of(payload);
@@ -2227,10 +2433,8 @@ class StorageSync {
     }
   }
 
-  /// Deposits a wrap into the recipient's D1 inbox (`pm-deposit`); skips self and ephemeral. Returns the count sent.
   Future<int> pmDeposit(List<Map<String, dynamic>> wraps,
       {int tier = WrapTier.critical}) async {
-    if (!_durable) return 0;
     final batch = <_Deposit>[];
     for (final w in wraps) {
       final id = w['id'];
@@ -2268,7 +2472,6 @@ class StorageSync {
   int _nowMs() => _now().millisecondsSinceEpoch;
 
   void enqueueDeposit(Map<String, dynamic> wrap, {int tier = WrapTier.critical}) {
-    if (!_durable) return;
     final id = wrap['id'];
     if (id is! String || id.isEmpty) return;
     final recipient = _recipientOf(wrap);
@@ -2330,7 +2533,7 @@ class StorageSync {
 
   Future<int> restoreDeposits() async {
     final load = _depositLoad;
-    if (!_durable || load == null) return 0;
+    if (load == null) return 0;
     Map<String, dynamic> state;
     try {
       state = await load();
@@ -2590,6 +2793,41 @@ class StorageSync {
     }
   }
 
+  Future<List<Map<String, dynamic>>> pmGapWindow({
+    required int floorSec,
+    required int sinceSec,
+  }) async {
+    final events = <Map<String, dynamic>>[];
+    var after = D1Cursor.startAfter('${floorSec < 0 ? 0 : floorSec * 1000}');
+    if (after == null) return events;
+    for (var page = 0; page < D1Cursor.catchupPages; page++) {
+      final stream = await _api.storageStream({
+        'action': 'pm-get',
+        'pubkey': _pubkey,
+        'after': after,
+        'since': sinceSec < 0 ? 0 : sinceSec,
+        'limit': D1Cursor.pageLimit,
+        'auth': await _auth('pm-get'),
+      });
+      for (final item in stream.items) {
+        if (item is! Map) continue;
+        final id = item['id'];
+        if (id is! String || id.isEmpty) continue;
+        if (_archivedIds.contains(id)) continue;
+        _archivedIds.add(id);
+        events.add(Map<String, dynamic>.from(item));
+      }
+      final step = D1Cursor.step(page, after, stream.headers['x-cursor'],
+          stream.headers['x-has-more']);
+      final next = step.next;
+      if (!step.serverOk || next == null) break;
+      after = next;
+    }
+    _trim(_archivedIds);
+    events.sort((a, b) => _createdAt(a).compareTo(_createdAt(b)));
+    return events;
+  }
+
   Future<List<Map<String, dynamic>>> pmScanForward({
     required int since,
     int limit = 500,
@@ -2649,6 +2887,14 @@ class StorageSync {
 
   String? get pmD1Cursor => _pmCursor;
 
+  int _pmEvictedTs = 0;
+
+  void notePmEvicted(int tsSec) {
+    if (tsSec <= 0) return;
+    if (tsSec > _pmEvictedTs) _pmEvictedTs = tsSec;
+    if (_pmCursorLoaded && _pmCursor != null) _pmCursorCommitNow();
+  }
+
   int get pmHeldCount => _pmHolds.length;
 
   void resetD1Cursors() {
@@ -2663,6 +2909,7 @@ class StorageSync {
     _inboxHolds.clear();
     _inboxHeldSince = 0;
     _inboxDoneAt.clear();
+    _inboxForced.clear();
     _inboxLegacyServer = false;
     _pmCursorCommitNow();
     _inboxCommitNow();
@@ -2712,9 +2959,12 @@ class StorageSync {
     final capStart = shape.anyCapped && shape.cappedOldest > 0
         ? shape.cappedOldest + 172800
         : 0;
-    final start = saved > capStart ? saved : capStart;
+    final evicted = (rec['evictedTs'] as num?)?.toInt() ?? 0;
+    final evictStart = evicted > 0 ? evicted + 172800 : 0;
+    var start = saved > capStart ? saved : capStart;
+    if (evictStart > start) start = evictStart;
     _pmOldestTs = start > 0 ? start : null;
-    _pmNoMore = rec['noMore'] == true && !shape.anyCapped;
+    _pmNoMore = rec['noMore'] == true && !shape.anyCapped && evictStart == 0;
     if (_pmOldestTs == null && !_pmNoMore) _pmNoMore = true;
   }
 
@@ -2724,7 +2974,7 @@ class StorageSync {
     if (start == null) return _pmRestoreCold(replay);
     var after = D1Cursor.startAfter(start)!;
     String? best = start;
-    for (var page = 0; page < D1Cursor.maxPages; page++) {
+    for (var page = 0; page < D1Cursor.catchupPages; page++) {
       StorageStream stream;
       try {
         stream = await _api.storageStream({
@@ -2756,6 +3006,7 @@ class StorageSync {
       final next = step.next;
       if (next == null) break;
       after = next;
+      if ((page + 1) % D1Cursor.maxPages == 0) _pmCursorCommitNow();
     }
     await pmRetryHeld(replay: replay);
     _pmCursorCommitNow();
@@ -2905,6 +3156,7 @@ class StorageSync {
       'c': D1Cursor.persistable(_pmCursor, held, now),
       'noMore': _pmNoMore,
       'oldestTs': _pmOldestTs ?? 0,
+      'evictedTs': _pmEvictedTs,
       'heldSince': active.isNotEmpty
           ? (_pmHeldSince > 0 ? _pmHeldSince : now)
           : 0,
@@ -2927,6 +3179,7 @@ class StorageSync {
   int _inboxHeldSince = 0;
   final Map<String, int> _inboxDoneAt = {};
   final Set<String> _inboxQueue = {};
+  final Set<String> _inboxForced = {};
   Future<void>? _inboxRunning;
   bool _inboxLegacyServer = false;
   bool _inboxRetrying = false;
@@ -2937,10 +3190,12 @@ class StorageSync {
   void setInboxLiveKeys(List<String>? Function() live) => _inboxLiveKeys = live;
 
   Future<void> pmInboxRestore(List<String> keys,
-      {required ArchiveReplay replay}) {
+      {required ArchiveReplay replay, bool force = false}) {
     for (final raw in keys) {
       final pk = raw.toLowerCase();
-      if (_isHex64(pk)) _inboxQueue.add(pk);
+      if (!_isHex64(pk)) continue;
+      _inboxQueue.add(pk);
+      if (force) _inboxForced.add(pk);
     }
     final running = _inboxRunning;
     if (running != null) return running;
@@ -2959,8 +3214,11 @@ class StorageSync {
       final now = _nowMs();
       final due = [
         for (final k in batch)
-          if (!D1Cursor.coalesce(_inboxDoneAt[k], now)) k,
+          if (_inboxForced.contains(k) ||
+              !D1Cursor.coalesce(_inboxDoneAt[k], now))
+            k,
       ];
+      _inboxForced.removeAll(batch);
       if (due.isEmpty) continue;
       try {
         await _inboxPass(due, replay);
@@ -3031,7 +3289,7 @@ class StorageSync {
       String? best;
       var legacy = false;
       try {
-        for (var page = 0; page < D1Cursor.maxPages; page++) {
+        for (var page = 0; page < D1Cursor.catchupPages; page++) {
           final stream = await _inboxRead(
               group.keys, {'after': after, 'limit': D1Cursor.pageLimit});
           final events = _freshWraps(stream.items);
@@ -3049,6 +3307,10 @@ class StorageSync {
           final next = step.next;
           if (next == null) break;
           after = next;
+          if ((page + 1) % D1Cursor.maxPages == 0) {
+            _inboxMap = D1Cursor.inboxStore(_inboxMap, group.keys, best, null);
+            _inboxCommitNow();
+          }
         }
       } catch (_) {}
       if (legacy) {
@@ -3075,12 +3337,13 @@ class StorageSync {
   }
 
   Future<void> pmAnonInboxRestore(List<({String pk, Uint8List sk})> ids,
-      {required ArchiveReplay replay}) async {
+      {required ArchiveReplay replay, bool force = false}) async {
     if (ids.isEmpty) return;
     await _inboxLoad();
     for (final id in ids) {
       final key = id.pk.toLowerCase();
-      if (!_isHex64(key) || D1Cursor.coalesce(_inboxDoneAt[key], _nowMs())) {
+      if (!_isHex64(key) ||
+          (!force && D1Cursor.coalesce(_inboxDoneAt[key], _nowMs()))) {
         continue;
       }
       try {
@@ -3097,7 +3360,7 @@ class StorageSync {
           var after = D1Cursor.startAfter(cur)!;
           String? best;
           var legacy = false;
-          for (var page = 0; page < D1Cursor.maxPages; page++) {
+          for (var page = 0; page < D1Cursor.catchupPages; page++) {
             final stream = await _anonRead(
                 id, {'after': after, 'limit': D1Cursor.pageLimit});
             final step = D1Cursor.step(page, after,
@@ -3282,7 +3545,14 @@ class StorageSync {
       for (final item in stream.items) {
         if (item is! Map) continue;
         final at = item['created_at'];
-        if (at is num && at.toInt() > newest) newest = at.toInt();
+        if (at is num) {
+          var t = at.toInt();
+          final stored = item['stored_at'];
+          if (stored is num && stored > 0 && stored.toInt() ~/ 1000 < t) {
+            t = stored.toInt() ~/ 1000;
+          }
+          if (t > newest) newest = t;
+        }
         events.add(Map<String, dynamic>.from(item));
       }
       if (cover) _noteChannelCovered(entry.value, newest);
@@ -3829,7 +4099,11 @@ class StorageSync {
   }
 
   /// Forgets content hashes so post-link writes aren't skipped as unchanged.
-  void clearSettingsHashes() => _lastSettingsHash.clear();
+  void clearSettingsHashes() {
+    _rows.clearSynced();
+    _publishedSectionJson.clear();
+    _readStateJson = null;
+  }
 
   /// Reads NIP-44, `pq1.` or `pq2.` blobs, trying every derivable epoch.
   Future<String?> _decryptFromSelf(String ciphertext) async {

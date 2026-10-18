@@ -8,11 +8,65 @@ import '../../services/nostr/verified_rows.dart';
 
 /// D1 archive of public kind-9735 receipts: batched `zap-put` uploads and `zap-get` backfill.
 class ZapArchive {
-  ZapArchive(this._sync, {Future<bool> Function(NostrEvent event)? verify})
+  ZapArchive(this._sync,
+      {Future<bool> Function(NostrEvent event)? verify,
+      this._readKnown,
+      this._writeKnown,
+      this._owner = ''})
       : _verify = verify ?? _verifyInline;
 
   final StorageSync _sync;
   final Future<bool> Function(NostrEvent event) _verify;
+  final String? Function()? _readKnown;
+  final void Function(String value)? _writeKnown;
+  final String _owner;
+
+  static const String knownKey = 'nym_zap_known';
+  static const int knownCap = 2000;
+
+  Set<String>? _knownCache;
+
+  static String _short(String id) =>
+      id.length > 16 ? id.substring(0, 16).toLowerCase() : id.toLowerCase();
+
+  Set<String> get _known {
+    final held = _knownCache;
+    if (held != null) return held;
+    final out = <String>{};
+    try {
+      final raw = _readKnown?.call();
+      final m = raw == null || raw.isEmpty ? null : jsonDecode(raw);
+      if (m is Map && m['pk'] == _owner && m['ids'] is List) {
+        out.addAll((m['ids'] as List).whereType<String>());
+      }
+    } catch (_) {}
+    return _knownCache = out;
+  }
+
+  bool _isKnown(String id) => _known.contains(_short(id));
+
+  void _noteKnown(Iterable<String> ids) {
+    final known = _known;
+    var changed = false;
+    for (final id in ids) {
+      final k = _short(id);
+      if (known.remove(k)) {
+        known.add(k);
+        continue;
+      }
+      known.add(k);
+      changed = true;
+    }
+    while (known.length > knownCap) {
+      known.remove(known.first);
+      changed = true;
+    }
+    final write = _writeKnown;
+    if (!changed || write == null) return;
+    try {
+      write(jsonEncode({'pk': _owner, 'ids': known.toList()}));
+    } catch (_) {}
+  }
 
   static Future<bool> _verifyInline(NostrEvent event) async =>
       schnorr.verifyEvent(event);
@@ -27,6 +81,18 @@ class ZapArchive {
   bool _disposed = false;
 
   static final RegExp _hex64 = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
+
+  static String claimedZapper(NostrEvent event) {
+    final description = event.tagValue('description');
+    if (description == null || description.isEmpty) return '';
+    try {
+      final req = jsonDecode(description);
+      final pk = req is Map ? req['pubkey'] : null;
+      return pk is String && _hex64.hasMatch(pk) ? pk.toLowerCase() : '';
+    } catch (_) {
+      return '';
+    }
+  }
 
   /// Archive scope from the receipt's zap-request `k` tag, or null if absent or not archived.
   static String? scopeFor(NostrEvent event) {
@@ -63,6 +129,7 @@ class ZapArchive {
       final targetId = event.tagValue('e');
       if (targetId == null || !_hex64.hasMatch(targetId)) return;
     }
+    if (_isKnown(event.id)) return;
     if (!_archivedIds.add(event.id)) return;
     if (_archivedIds.length > 6000) {
       final keep = _archivedIds.toList().sublist(_archivedIds.length - 4000);
@@ -82,7 +149,9 @@ class ZapArchive {
     final n = _queue.length < 100 ? _queue.length : 100;
     final batch = _queue.sublist(0, n);
     _queue.removeRange(0, n);
-    await _sync.zapPut(batch);
+    if (await _sync.zapPut(batch)) {
+      _noteKnown([for (final e in batch) '${e['id']}']);
+    }
     if (_queue.isNotEmpty && !_disposed) {
       _flushTimer ??= Timer(const Duration(seconds: 4), _flush);
     }
@@ -96,7 +165,10 @@ class ZapArchive {
   ) async {
     if (_disposed || ids.isEmpty) return;
     final events = await _sync.zapGet(scope, ids);
-    for (final receipt in await verifiedRows(events, _verify)) {
+    final receipts = await verifiedRows(events, _verify);
+    _noteKnown([for (final r in receipts) r.id]);
+    for (final receipt in receipts) {
+      _archivedIds.add(receipt.id);
       try {
         onReceipt(receipt);
       } catch (_) {}

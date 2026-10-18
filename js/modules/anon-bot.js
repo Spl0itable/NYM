@@ -419,7 +419,8 @@
                     ['ms', String(nowMs)],
                     ...(threadRoot ? [['nymthread', threadRoot]] : []),
                     ...this.customEmojiTagsForContent(content),
-                    ...(typeof this.imetaTagsForContent === 'function' ? this.imetaTagsForContent(content) : [])
+                    ...(typeof this.imetaTagsForContent === 'function' ? this.imetaTagsForContent(content) : []),
+                    ...(typeof this.quoteTagsForContent === 'function' ? this.quoteTagsForContent(content) : [])
                 ],
                 content,
                 pubkey: id.pk
@@ -435,6 +436,7 @@
             const wrapped = plan.kemPk
                 ? await this.pqWrapForPeerAsync(plan.pq2, rumor, id.sk, recipientPubkey, plan.kemPk, expirationTs)
                 : await this.nip59WrapEventAsync(rumor, id.sk, recipientPubkey, expirationTs);
+            if (typeof this._markAnonLane === 'function') this._markAnonLane([wrapped.id]);
             this.sendDMToRelays(['EVENT', wrapped]);
             this._recordGiftWrapId(nymMessageId, wrapped.id);
 
@@ -442,6 +444,7 @@
             const selfWrapped = kem
                 ? await this.pqWrapForPeerAsync(true, rumor, id.sk, id.pk, kem.publicKey, expirationTs)
                 : await this.nip59WrapEventAsync(rumor, id.sk, id.pk, expirationTs);
+            if (typeof this._markAnonLane === 'function') this._markAnonLane([selfWrapped.id]);
             this.sendDMToRelays(['EVENT', selfWrapped]);
             this._recordGiftWrapId(nymMessageId, selfWrapped.id);
             this._botAnonArchive(selfWrapped);
@@ -658,7 +661,7 @@
                     }
                 }
             }
-            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000, { wanted: true });
             return issued;
         },
 
@@ -680,7 +683,7 @@
                 this._botAnonFlushVouchers();
             }
             this._saveBotAnonState();
-            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500);
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500, { wanted: true });
             this._refreshBotControlBar();
             this._refreshBotCreditMeta();
         },
@@ -696,7 +699,7 @@
             this._botAnonRefreshSubs();
             let moved = 0;
             if (sweep) moved = await this.botAnonSweepPrev();
-            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500);
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500, { wanted: true });
             this._refreshBotCreditMeta();
             return moved;
         },
@@ -901,7 +904,7 @@
             await this._botVoucherFinishIssue(this._botAnon.pending);
             let credited = 0;
             while (this._botVoucherTokens(tier).length) credited += await this._botVoucherRedeem(tier);
-            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000, { wanted: true });
             return credited;
         },
 

@@ -402,17 +402,21 @@ class _Grabber extends StatelessWidget {
       label: tr('Close sheet'),
       onTap: onTap,
       excludeSemantics: true,
-      child: Container(
-        height: 26,
-        alignment: Alignment.center,
-        color: Colors.transparent,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
         child: Container(
-          key: const ValueKey('nymSheetGrabber'),
-          width: 36,
-          height: 4,
-          decoration: BoxDecoration(
-            color: c.textDim.withValues(alpha: 0.55),
-            borderRadius: const BorderRadius.all(Radius.circular(2)),
+          height: 26,
+          alignment: Alignment.center,
+          color: Colors.transparent,
+          child: Container(
+            key: const ValueKey('nymSheetGrabber'),
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: c.textDim.withValues(alpha: 0.55),
+              borderRadius: const BorderRadius.all(Radius.circular(2)),
+            ),
           ),
         ),
       ),

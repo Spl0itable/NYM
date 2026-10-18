@@ -56,13 +56,15 @@ ProviderSubscription<int> installAppBadge(
     final before = shown;
     shown = count;
     unawaited(platform.setCount(count));
-    if (before == null || count < before) {
-      Set<String> keys = const {};
-      try {
-        keys = c.read(notificationHistoryProvider.notifier).unreadConversationKeys();
-      } catch (_) {}
-      unawaited(platform.clearRead(count > 0 ? keys : const {}));
-    }
+    if (before == null || count >= before) return;
+    Set<String>? keys;
+    try {
+      final history = c.read(notificationHistoryProvider.notifier);
+      if (!history.hydrating) {
+        keys = count > 0 ? history.unreadConversationKeys() : const {};
+      }
+    } catch (_) {}
+    if (keys != null) unawaited(platform.clearRead(keys));
   }
 
   return c.listen<int>(appBadgeCountProvider, (_, next) => push(next),

@@ -180,6 +180,8 @@
                 created_at: msg.created_at || 0,
                 eventKind: msg.eventKind || (msg.geohash ? 20000 : 0),
                 channel: msg.geohash ? `#${msg.geohash}` : (msg.channel || ''),
+                quoted: typeof this._quotedOf === 'function' ? this._quotedOf(msg).slice() : [],
+                people: Array.isArray(msg.people) ? msg.people.slice() : [],
                 local: true
             };
         },
@@ -277,7 +279,9 @@
                 content: typeof event.content === 'string' ? event.content : '',
                 created_at: event.created_at || 0,
                 eventKind: event.kind,
-                channel: channelTag && channelTag[1] ? `#${channelTag[1]}` : ''
+                channel: channelTag && channelTag[1] ? `#${channelTag[1]}` : '',
+                quoted: typeof this._quotedFromTags === 'function' ? this._quotedFromTags(event.tags) : [],
+                people: (typeof this._botAskerOf === 'function' && this._botAskerOf(event)) || []
             };
         },
 
@@ -378,7 +382,10 @@
             if (data.channel && F.channelHidden(ctx, data.channel)) return true;
             const stored = data.id ? this._findStoredMessage(data.id) : null;
             if (stored && typeof this.isContentHidden === 'function') return this.isContentHidden(stored);
-            return F.hidden(ctx, { pubkey: data.pubkey || '', content: data.content || '', nym });
+            return F.hidden(ctx, {
+                pubkey: data.pubkey || '', content: data.content || '', nym,
+                quoted: Array.isArray(data.quoted) ? data.quoted : [], people: Array.isArray(data.people) ? data.people : []
+            });
         },
 
         _pruneHiddenNostrCards() {
@@ -420,7 +427,9 @@
             const channelHtml = data.channel
                 ? `<span class="nostr-card-channel">${esc(data.channel)}</span>` : '';
             // Render the body as a message body, not an escaped excerpt; the event is often just media.
-            const body = (data.content || '').trim();
+            const body = (typeof this._shownContent === 'function'
+                ? this._shownContent({ content: data.content || '', quoted: Array.isArray(data.quoted) ? data.quoted : [] })
+                : (data.content || '')).trim();
             const bodyHtml = body
                 ? `<div class="nostr-card-body">${this.formatMessage(body)}</div>`
                 : '<div class="nostr-card-body nostr-card-empty">No text content</div>';

@@ -122,7 +122,6 @@ class LocalizationService {
   /// Reads one bundled pack; injectable so tests need no asset bundle.
   Future<String> Function(String assetKey) packLoader = rootBundle.loadString;
 
-  /// Merges the bundled `assets/i18n/<lang>.json` pack (works offline); on-device entries win and gaps use the runtime queues.
   Future<void> _primeFromPack(String code) async {
     if (code.isEmpty || code == 'en' || !_packed.add(code)) return;
     try {
@@ -134,7 +133,7 @@ class LocalizationService {
       var added = 0;
       map.forEach((k, v) {
         if (k is! String || v is! String || v.isEmpty) return;
-        if (_cache.containsKey(k)) return;
+        if (_cache[k] == v) return;
         _cache[k] = v;
         // Nothing stays queued for a string the pack answered.
         _pending.remove(k);

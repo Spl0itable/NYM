@@ -13,8 +13,9 @@ import '../services/storage/key_value_store.dart';
 import '../services/attest/attest_badge.dart';
 import '../services/filter/filter_packs.dart';
 import '../features/sync/pref_stamps.dart';
-import 'app_state.dart'
-    show appSpamFilterAggressive, appSpamFilterEnabled, appThreadsEnabled;
+import '../core/crypto/pow.dart' show normalizePowDifficulty;
+import 'app_state.dart' show appThreadsEnabled, setAppSpamFilter;
+import 'app_state.dart' as globals show appPowFilterBits, appVerifiedFilter;
 
 /// Provides the opened [KeyValueStore]; overridden in `main()` because SharedPreferences opens asynchronously.
 final keyValueStoreProvider = Provider<KeyValueStore>((ref) {
@@ -46,6 +47,38 @@ class SettingsController extends StateNotifier<Settings> {
 
   void notifySyncedChange() => _syncedChanged();
 
+  void Function()? onPrefChanged;
+
+  int _remoteDepth = 0;
+
+  T applyingRemote<T>(T Function() body) {
+    _remoteDepth++;
+    try {
+      return body();
+    } finally {
+      _remoteDepth--;
+    }
+  }
+
+  bool get isApplyingRemote => _remoteDepth > 0;
+
+  void _changed(List<String> names) {
+    if (_remoteDepth > 0) {
+      _syncedChanged();
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final name in names) {
+      PrefStamps.set(_kv, name, now);
+    }
+    final cb = onPrefChanged;
+    if (cb != null) {
+      cb();
+    } else {
+      _syncedChanged();
+    }
+  }
+
   /// Reloads first-run defaults after the panic path has wiped the store.
   void resetToDefaults() {
     state = Settings.fromStore(_kv);
@@ -54,31 +87,31 @@ class SettingsController extends StateNotifier<Settings> {
   void setTheme(NymThemeKey theme) {
     _kv.setString(StorageKeys.theme, theme.id);
     state = state.copyWith(theme: theme);
-    _syncedChanged();
+    _changed(const ['theme']);
   }
 
   void setColorMode(ColorMode mode) {
     _kv.setString(StorageKeys.colorMode, mode.name);
     state = state.copyWith(colorMode: mode);
-    _syncedChanged();
+    _changed(const ['colorMode']);
   }
 
   void setTransparencyEnabled(bool enabled) {
     _kv.setBool(StorageKeys.transparencyEnabled, enabled);
     state = state.copyWith(transparencyEnabled: enabled);
-    _syncedChanged();
+    _changed(const ['transparencyEnabled']);
   }
 
   void setChatLayout(String layout) {
     _kv.setString(StorageKeys.chatLayout, layout);
     state = state.copyWith(chatLayout: layout);
-    _syncedChanged();
+    _changed(const ['chatLayout']);
   }
 
   void setChatViewMode(String mode) {
     _kv.setString(StorageKeys.chatViewMode, mode);
     state = state.copyWith(chatViewMode: mode);
-    _syncedChanged();
+    _changed(const ['chatViewMode']);
   }
 
   /// Mirrored onto [appThreadsEnabled] so [visibleMessagesFor] can read it without a provider dependency.
@@ -86,7 +119,7 @@ class SettingsController extends StateNotifier<Settings> {
     _kv.setBool(StorageKeys.threadsEnabled, v);
     appThreadsEnabled = v;
     state = state.copyWith(threadsEnabled: v);
-    _syncedChanged();
+    _changed(const ['threadsEnabled']);
   }
 
   /// Clears the saved column layout and bumps [Settings.columnsResetTick] so a mounted deck re-seeds live.
@@ -101,19 +134,19 @@ class SettingsController extends StateNotifier<Settings> {
     final clamped = size.clamp(12, 28);
     _kv.setInt(StorageKeys.textSize, clamped);
     state = state.copyWith(textSize: clamped);
-    _syncedChanged();
+    _changed(const ['textSize']);
   }
 
   void setTimeFormat(String fmt) {
     _kv.setString(StorageKeys.timeFormat, fmt);
     state = state.copyWith(timeFormat: fmt);
-    _syncedChanged();
+    _changed(const ['timeFormat']);
   }
 
   void setAutoscroll(bool v) {
     _kv.setBool(StorageKeys.autoscroll, v);
     state = state.copyWith(autoscroll: v);
-    _syncedChanged();
+    _changed(const ['autoscroll']);
   }
 
   void setMeshEnabled(bool v) {
@@ -125,13 +158,13 @@ class SettingsController extends StateNotifier<Settings> {
   void setShowTimestamps(bool v) {
     _kv.setBool(StorageKeys.timestamps, v);
     state = state.copyWith(showTimestamps: v);
-    _syncedChanged();
+    _changed(const ['showTimestamps']);
   }
 
   void setSound(String sound) {
     _kv.setString(StorageKeys.sound, sound);
     state = state.copyWith(sound: sound);
-    _syncedChanged();
+    _changed(const ['sound']);
   }
 
   void setWallpaperType(String type) {
@@ -141,25 +174,25 @@ class SettingsController extends StateNotifier<Settings> {
       _kv.remove(StorageKeys.wallpaperCustomUrl);
     }
     state = state.copyWith(wallpaperType: type);
-    _syncedChanged();
+    _changed(const ['wallpaperType']);
   }
 
   void setColumnsWallpaper(bool v) {
     _kv.setBool(StorageKeys.columnsWallpaper, v);
     state = state.copyWith(columnsWallpaper: v);
-    _syncedChanged();
+    _changed(const ['columnsWallpaper']);
   }
 
   void setNickStyle(String style) {
     _kv.setString(StorageKeys.nickStyle, style);
     state = state.copyWith(nickStyle: style);
-    _syncedChanged();
+    _changed(const ['nickStyle']);
   }
 
   void setDateFormat(String fmt) {
     _kv.setString(StorageKeys.dateFormat, fmt);
     state = state.copyWith(dateFormat: fmt);
-    _syncedChanged();
+    _changed(const ['dateFormat']);
   }
 
   /// Applies the PWA's session-nsec side effects of a keypair-mode change; registered by the controller.
@@ -182,6 +215,8 @@ class SettingsController extends StateNotifier<Settings> {
 
   void setPowDifficulty(int bits) {
     _kv.setInt(StorageKeys.powDifficulty, bits);
+    globals.appPowFilterBits = normalizePowDifficulty(bits);
+    _changed(const ['powDifficulty']);
   }
 
   int get powDifficulty =>
@@ -190,6 +225,8 @@ class SettingsController extends StateNotifier<Settings> {
   /// Inbound verified-app filter: 'off', 'verified' or 'any'.
   void setAppVerifiedFilter(String mode) {
     _kv.setString(StorageKeys.appVerifiedFilter, normalizeAppVerifiedFilter(mode));
+    globals.appVerifiedFilter = appVerifiedFilter;
+    _changed(const ['appVerifiedFilter']);
   }
 
   String get appVerifiedFilter =>
@@ -198,6 +235,7 @@ class SettingsController extends StateNotifier<Settings> {
   void setFilterPacks(List<String> ids) {
     _kv.setString(StorageKeys.filterPacks,
         jsonEncode(ids.where(kFilterPackIds.contains).toList()));
+    _changed(const ['filterPacks']);
   }
 
   List<String> get filterPacks {
@@ -230,59 +268,58 @@ class SettingsController extends StateNotifier<Settings> {
     if (aggressive != null) {
       _kv.setBool(StorageKeys.spamFilterAggressive, aggressive);
     }
-    appSpamFilterEnabled = spamFilterEnabled;
-    appSpamFilterAggressive = spamFilterAggressive;
-    PrefStamps.touch(_kv, 'spamFilter');
-    _syncedChanged();
+    setAppSpamFilter(
+        enabled: spamFilterEnabled, aggressive: spamFilterAggressive);
+    _changed(const ['spamFilter']);
   }
 
   void setAcceptPMs(String v) {
     _kv.setString(StorageKeys.acceptPms, v);
     state = state.copyWith(acceptPMs: v);
-    _syncedChanged();
+    _changed(const ['acceptPMs']);
   }
 
   void setAcceptCalls(String v) {
     _kv.setString(StorageKeys.acceptCalls, v);
     state = state.copyWith(acceptCalls: v);
-    _syncedChanged();
+    _changed(const ['acceptCalls']);
   }
 
   void setDmForwardSecrecy(bool v) {
     _kv.setBool(StorageKeys.dmFwdSecEnabled, v);
     state = state.copyWith(dmForwardSecrecyEnabled: v);
-    _syncedChanged();
+    _changed(const ['dmForwardSecrecyEnabled']);
   }
 
   void setDmTtlSeconds(int seconds) {
     _kv.setInt(StorageKeys.dmTtlSeconds, seconds);
     state = state.copyWith(dmTtlSeconds: seconds);
-    _syncedChanged();
+    _changed(const ['dmTTLSeconds']);
   }
 
   void setReadReceiptsScope(String scope) {
     _kv.setString(StorageKeys.readReceiptsScope, scope);
     state = state.copyWith(readReceiptsScope: scope);
-    _syncedChanged();
+    _changed(const ['readReceiptsScope']);
   }
 
   void setTypingIndicatorsScope(String scope) {
     _kv.setString(StorageKeys.typingIndicatorsScope, scope);
     state = state.copyWith(typingIndicatorsScope: scope);
-    _syncedChanged();
+    _changed(const ['typingIndicatorsScope']);
   }
 
   /// 'true' | 'friends' | 'false'.
   void setShowStatus(String v) {
     _kv.setString(StorageKeys.showStatus, v);
     state = state.copyWith(showStatus: v);
-    _syncedChanged();
+    _changed(const ['showStatus']);
   }
 
   void setCachePMs(bool v) {
     _kv.setBool(StorageKeys.cachePms, v);
     state = state.copyWith(cachePMs: v);
-    _syncedChanged();
+    _changed(const ['cachePMs']);
   }
 
   /// Blur others' images: 'true' | 'friends' | 'false'; also writes the per-pubkey key when [pubkey] is given.
@@ -291,6 +328,7 @@ class SettingsController extends StateNotifier<Settings> {
     if (pubkey != null && pubkey.isNotEmpty) {
       _kv.setString(StorageKeys.imageBlurFor(pubkey), v);
     }
+    _changed(const ['blurOthersImages']);
   }
 
   String? activePubkey;
@@ -308,7 +346,7 @@ class SettingsController extends StateNotifier<Settings> {
   void setTranslateLanguage(String lang) {
     _kv.setString(StorageKeys.translateLanguage, lang);
     state = state.copyWith(translateLanguage: lang);
-    _syncedChanged();
+    _changed(const ['translateLanguage']);
   }
 
   /// The app's UI language (empty means English); synced across devices.
@@ -318,7 +356,7 @@ class SettingsController extends StateNotifier<Settings> {
     // Defaults the translation target to the app language; English maps to Disabled ('').
     _kv.setString(StorageKeys.translateLanguage, lang);
     state = state.copyWith(uiLanguage: lang, translateLanguage: lang);
-    _syncedChanged();
+    _changed(const ['uiLanguage', 'translateLanguage']);
   }
 
   void setTimestamps(bool v) => setShowTimestamps(v);
@@ -331,13 +369,13 @@ class SettingsController extends StateNotifier<Settings> {
     _kv.setBool(StorageKeys.groupchatPmOnlyMode, v);
     state = state.copyWith(groupChatPMOnlyMode: v);
     if (changed) onGroupChatPMOnlyModeChanged?.call(v);
-    _syncedChanged();
+    _changed(const ['groupChatPMOnlyMode']);
   }
 
   void setSortByProximity(bool v) {
     _kv.setBool(StorageKeys.sortProximity, v);
     state = state.copyWith(sortByProximity: v);
-    _syncedChanged();
+    _changed(const ['sortByProximity']);
   }
 
   /// Persists the landing-channel JSON (blank clears it) and fires a synced change.
@@ -348,17 +386,17 @@ class SettingsController extends StateNotifier<Settings> {
     } else {
       _kv.setString(StorageKeys.pinnedLandingChannel, v);
     }
-    _syncedChanged();
+    _changed(const ['pinnedLandingChannel']);
   }
 
   /// The persisted landing-channel JSON, or null when unset.
   String? get pinnedLandingChannelJson =>
       _kv.getString(StorageKeys.pinnedLandingChannel);
 
-  /// Device-local only, so it deliberately does not fire [_syncedChanged].
   void setHideNonPinned(bool v) {
     _kv.setBool(StorageKeys.hideNonPinned, v);
     state = state.copyWith(hideNonPinned: v);
+    _changed(const ['hideNonPinned']);
   }
 
   bool get hideNonPinned => state.hideNonPinned;
@@ -392,42 +430,38 @@ class SettingsController extends StateNotifier<Settings> {
     _stampPref('hidePreviews', syncedTs);
   }
 
-  void notePrefChanged(String name) {
-    PrefStamps.touch(_kv, name);
-    _syncedChanged();
-  }
+  void notePrefChanged(String name) => _changed([name]);
 
   void _stampPref(String name, int? syncedTs) {
     if (syncedTs != null) {
       PrefStamps.set(_kv, name, syncedTs);
       return;
     }
-    PrefStamps.touch(_kv, name);
-    _syncedChanged();
+    _changed([name]);
   }
 
   void setGesturesEnabled(bool v) {
     _kv.setBool(StorageKeys.gesturesEnabled, v);
     state = state.copyWith(gesturesEnabled: v);
-    _syncedChanged();
+    _changed(const ['gesturesEnabled']);
   }
 
   void setSwipeLeftAction(String v) {
     _kv.setString(StorageKeys.swipeLeftAction, v);
     state = state.copyWith(swipeLeftAction: v);
-    _syncedChanged();
+    _changed(const ['swipeLeftAction']);
   }
 
   void setSwipeRightAction(String v) {
     _kv.setString(StorageKeys.swipeRightAction, v);
     state = state.copyWith(swipeRightAction: v);
-    _syncedChanged();
+    _changed(const ['swipeRightAction']);
   }
 
   void setSwipeThreshold(int px) {
     _kv.setInt(StorageKeys.swipeThreshold, px);
     state = state.copyWith(swipeThreshold: px);
-    _syncedChanged();
+    _changed(const ['swipeThreshold']);
   }
 
   /// Stamps the pick time so stale synced blobs can't revert it; [remoteTs] keeps an inbound pick's original stamp.
@@ -438,7 +472,7 @@ class SettingsController extends StateNotifier<Settings> {
       remoteTs ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
     );
     state = state.copyWith(swipeReactEmoji: emoji);
-    _syncedChanged();
+    _changed(const []);
   }
 
   /// Unix seconds of the last Quick-React pick, or 0 when never chosen.
@@ -451,14 +485,14 @@ class SettingsController extends StateNotifier<Settings> {
     _kv.setBool(StorageKeys.lowDataMode, v);
     state = state.copyWith(lowDataMode: v);
     onLowDataModeChanged?.call(v);
-    _syncedChanged();
+    _changed(const ['lowDataMode']);
   }
 
   /// Keeps relay sockets and the mesh running while backgrounded.
   void setBackgroundConnectivity(bool v) {
     _kv.setBool(StorageKeys.backgroundConnectivity, v);
     state = state.copyWith(backgroundConnectivity: v);
-    _syncedChanged();
+    _changed(const ['backgroundConnectivity']);
   }
 
   void update(Settings Function(Settings) fn) {

@@ -3,6 +3,7 @@
 
     const OVERLAP_MS = 120000;
     const MAX_PAGES = 5;
+    const CATCHUP_PAGES = 50;
     const PAGE_LIMIT = 200;
     const INBOX_CHUNK = 200;
     const HOLD_MS = 86400000;
@@ -62,12 +63,13 @@
 
     function fromHead(h) {
         if (typeof h !== 'string' || !HEAD_RE.test(h)) return null;
-        return Number.isSafeInteger(Number(h)) ? h : null;
+        const n = Number(h);
+        return Number.isSafeInteger(n) && n > 0 ? h : null;
     }
 
     function step(page, after, xCursor, xHasMore) {
         if (!valid(xCursor)) return { serverOk: false, cursor: null, next: null };
-        const more = xHasMore === '1' && page + 1 < MAX_PAGES && xCursor !== after;
+        const more = xHasMore === '1' && page + 1 < CATCHUP_PAGES && xCursor !== after;
         return { serverOk: true, cursor: xCursor, next: more ? xCursor : null };
     }
 
@@ -96,10 +98,16 @@
         const legacy = [];
         for (let i = 0; i < without.length; i += INBOX_CHUNK) legacy.push(without.slice(i, i + INBOX_CHUNK));
         const cursor = [];
-        for (let i = 0; i < withCur.length; i += INBOX_CHUNK) {
-            const chunk = withCur.slice(i, i + INBOX_CHUNK);
-            cursor.push({ keys: chunk.map((e) => e.k), after: String(Math.max(0, chunk[0].s - OVERLAP_MS)) });
+        let chunk = [];
+        const close = () => {
+            if (chunk.length) cursor.push({ keys: chunk.map((e) => e.k), after: String(Math.max(0, chunk[0].s - OVERLAP_MS)) });
+            chunk = [];
+        };
+        for (const e of withCur) {
+            if (chunk.length && (chunk.length >= INBOX_CHUNK || e.s - chunk[0].s > OVERLAP_MS)) close();
+            chunk.push(e);
         }
+        close();
         return { legacy, cursor };
     }
 
@@ -136,7 +144,7 @@
     }
 
     G.NymD1Cursor = Object.freeze({
-        OVERLAP_MS, MAX_PAGES, PAGE_LIMIT, INBOX_CHUNK, HOLD_MS, COALESCE_MS,
+        OVERLAP_MS, MAX_PAGES, CATCHUP_PAGES, PAGE_LIMIT, INBOX_CHUNK, HOLD_MS, COALESCE_MS,
         parse, valid, format, compare, newer, older, startAfter, fromHead, step,
         inboxPlan, inboxStore, persistable, coalesce,
     });

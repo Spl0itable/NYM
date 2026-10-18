@@ -59,6 +59,10 @@
             return 'member';
         },
 
+        _gtMask(pk) {
+            return typeof this._personMask === 'function' ? this._personMask(pk) : '';
+        },
+
         _gtNymTag(pk) {
             const raw = pk === this.pubkey ? this.nym : this.getNymFromPubkey(pk);
             return String(raw || 'nym').replace(/(#[0-9a-f]{4})+$/i, '') + '#' + this.getPubkeySuffix(pk);
@@ -158,8 +162,7 @@
             const ts = nowSec();
             group.slowmode = next;
             group.slowmodeSince = ts;
-            group.metaUpdatedAt = ts;
-            group.metaUpdatedBy = this.pubkey;
+            this._stampGroupMeta(group, this.pubkey, ts);
             this.groupConversations.set(groupId, group);
             this._saveGroupConversations();
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -180,8 +183,7 @@
             const next = !!on;
             if (next === (group.joinApproval === true)) return;
             group.joinApproval = next;
-            group.metaUpdatedAt = nowSec();
-            group.metaUpdatedBy = this.pubkey;
+            this._stampGroupMeta(group, this.pubkey, nowSec());
             this.groupConversations.set(groupId, group);
             this._saveGroupConversations();
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -243,12 +245,14 @@
             const group = this.groupConversations.get(groupId);
             if (!group) return;
             const before = (group.joinRequests || []).length;
+            const blockedJoiner = !!joinerPubkey && joinerPubkey !== this.pubkey && !!this.blockedUsers && this.blockedUsers.has(joinerPubkey);
             group.joinRequests = T().addJoinRequest(group.joinRequests || [], { pubkey: joinerPubkey, ts, via: viaPubkey || '' }, nowSec());
             this.groupConversations.set(groupId, group);
             this._saveGroupConversations();
-            this._debouncedNostrSettingsSave();
+            if (!blockedJoiner) this._debouncedNostrSettingsSave();
             if (!forward) {
-                if (group.joinRequests.length > before && T().mayApproveJoins(this._gtRole(groupId, this.pubkey))) this._gtNotifyJoinRequest(groupId, joinerPubkey);
+                const blockedVia = !!viaPubkey && viaPubkey !== this.pubkey && !!this.blockedUsers && this.blockedUsers.has(viaPubkey);
+                if (!blockedVia && group.joinRequests.length > before && T().mayApproveJoins(this._gtRole(groupId, this.pubkey))) this._gtNotifyJoinRequest(groupId, joinerPubkey, ts);
                 return;
             }
             const deciders = [group.createdBy].concat(group.admins || []).filter((pk) => pk && pk !== this.pubkey && group.members.includes(pk));
@@ -257,19 +261,23 @@
                 const rumor = { kind: 14, created_at: nowSec(), tags: deciders.map((pk) => ['p', pk]).concat([['type', T().TYPES.joinPending]], base), content: '', pubkey: this.pubkey };
                 await this._sendGiftWrapsAsync(deciders, rumor, null, groupId);
             }
-            const deciderTags = [group.createdBy].concat(group.admins || []).filter((pk) => pk && group.members.includes(pk)).map((pk) => ['decider', pk]);
-            const ack = { kind: 14, created_at: nowSec(), tags: [['p', joinerPubkey], ['g', groupId], ['subject', group.name], ['type', T().TYPES.joinWaiting]].concat(deciderTags, [['x', this._generateSharedEventId()]]), content: '', pubkey: this.pubkey };
-            await this._sendGiftWrapsAsync([joinerPubkey], ack, null);
-            if (group.joinRequests.length > before && T().mayApproveJoins(this._gtRole(groupId, this.pubkey))) this._gtNotifyJoinRequest(groupId, joinerPubkey);
+            if (!blockedJoiner) {
+                const deciderTags = [group.createdBy].concat(group.admins || []).filter((pk) => pk && group.members.includes(pk)).map((pk) => ['decider', pk]);
+                const ack = { kind: 14, created_at: nowSec(), tags: [['p', joinerPubkey], ['g', groupId], ['subject', group.name], ['type', T().TYPES.joinWaiting]].concat(deciderTags, [['x', this._generateSharedEventId()]]), content: '', pubkey: this.pubkey };
+                await this._sendGiftWrapsAsync([joinerPubkey], ack, null);
+            }
+            if (group.joinRequests.length > before && T().mayApproveJoins(this._gtRole(groupId, this.pubkey))) this._gtNotifyJoinRequest(groupId, joinerPubkey, ts);
         },
 
-        async _gtNotifyJoinRequest(groupId, joinerPubkey) {
+        async _gtNotifyJoinRequest(groupId, joinerPubkey, ts) {
             const group = this.groupConversations.get(groupId);
             if (!group) return;
+            if (this._gtMask(joinerPubkey)) return;
             if (!this.users.has(joinerPubkey) && typeof this.fetchProfileDirect === 'function') await this.fetchProfileDirect(joinerPubkey);
+            if (this._gtMask(joinerPubkey)) return;
             const title = this._gx('Join request in {group}', { group: (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) });
             const body = this._gx('{nym} wants to join. Open the group menu to approve or decline.', { nym: this.getNymFromPubkey(joinerPubkey) });
-            this.showNotification(title, body, { type: 'group', groupId, id: this.getGroupConversationKey(groupId), pubkey: joinerPubkey, eventId: 'join-req-' + groupId + '-' + joinerPubkey }, Date.now());
+            this.showNotification(title, body, { type: 'group', groupId, id: this.getGroupConversationKey(groupId), pubkey: joinerPubkey, eventId: window.NymNotifyView.joinRequestId(groupId, joinerPubkey, ts), stableId: true }, Date.now());
         },
 
         async gtDecideJoin(groupId, joinerPubkey, approve) {
@@ -284,7 +292,7 @@
             const banned = Array.isArray(group.banned) && group.banned.includes(joinerPubkey);
             if (approve && !banned && !group.members.includes(joinerPubkey)) {
                 if (group.members.length >= (this.MAX_GROUP_MEMBERS || 100)) {
-                    this._gtNotice(this._gx('{group} is full. Remove someone to approve {nym}.', { group: (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')), nym: this.getNymFromPubkey(joinerPubkey) }));
+                    this._gtNotice(this._gx('{group} is full. Remove someone to approve {nym}.', { group: (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')), nym: this._gtMask(joinerPubkey) || this.getNymFromPubkey(joinerPubkey) }));
                     refreshList();
                     return;
                 }
@@ -297,7 +305,7 @@
             group.joinRequests = T().removeJoinRequest(group.joinRequests || [], joinerPubkey);
             this.groupConversations.set(groupId, group);
             this._saveGroupConversations();
-            this._debouncedNostrSettingsSave();
+            this._debouncedNostrSettingsSave(5000, { wanted: true });
             const deciders = [group.createdBy].concat(group.admins || []).filter((pk) => pk && pk !== this.pubkey && group.members.includes(pk));
             if (deciders.length) {
                 const rumor = { kind: 14, created_at: nowSec(), tags: deciders.map((pk) => ['p', pk]).concat([['g', groupId], ['subject', group.name], ['type', T().TYPES.joinResolved], ['joiner', joinerPubkey], ['decision', approve ? 'approve' : 'decline'], ['x', this._generateSharedEventId()]]), content: '', pubkey: this.pubkey };
@@ -305,11 +313,11 @@
             }
             if (approve) {
                 if (banned) return;
-                this._gtNotice(this._gx('Approved. {nym} was added to the group.', { nym: this.getNymFromPubkey(joinerPubkey) }));
+                this._gtNotice(this._gx('Approved. {nym} was added to the group.', { nym: this._gtMask(joinerPubkey) || this.getNymFromPubkey(joinerPubkey) }));
             } else {
                 const rumor = { kind: 14, created_at: nowSec(), tags: [['p', joinerPubkey], ['g', groupId], ['subject', group.name], ['type', T().TYPES.joinDeclined], ['x', this._generateSharedEventId()]], content: '', pubkey: this.pubkey };
                 await this._sendGiftWrapsAsync([joinerPubkey], rumor, null);
-                this._gtNotice(this._gx('Declined the join request from {nym}.', { nym: this.getNymFromPubkey(joinerPubkey) }));
+                this._gtNotice(this._gx('Declined the join request from {nym}.', { nym: this._gtMask(joinerPubkey) || this.getNymFromPubkey(joinerPubkey) }));
             }
             if (document.getElementById('gtJoinRequestsModal') && document.getElementById('gtJoinRequestsModal').classList.contains('active')) this.openJoinRequests(groupId);
         },
@@ -371,7 +379,7 @@
                         const group = this.groupConversations.get(groupId);
                         if (group && group.members.includes(this.pubkey) && senderPubkey !== this.pubkey
                             && (senderPubkey === group.joinedVia || this._isGroupOwner(groupId, senderPubkey) || this._isGroupAdmin(groupId, senderPubkey))) {
-                            this._gcLeaveFull(groupId, group.name);
+                            this._gcLeaveFull(groupId, typeof this._groupLabel === 'function' ? this._groupLabel(group) : group.name);
                         }
                     }
                     return true;
@@ -383,7 +391,7 @@
                     if (!p.waiting) {
                         p.waiting = true;
                         this._gtSavePendingJoins();
-                        this._gtNotice(this._gx('Waiting for approval to join "{name}".', { name: p.n }));
+                        this._gtNotice(this._gx('Waiting for approval to join "{name}".', { name: this._gtPendingName(p) }));
                     }
                     return true;
                 }
@@ -393,12 +401,14 @@
                 this._gtSavePendingJoins();
                 if (this._pendingInviteJoins) this._pendingInviteJoins.delete(groupId);
                 if (fullReason) {
-                    this._gtNotice(this._gx("{group} is full, so you couldn't join.", { group: p.n || 'Group' }));
+                    this._gtNotice(this._gx("{group} is full, so you couldn't join.", { group: this._gtPendingName(p) }));
                     return true;
                 }
-                const body = this._gx('Your request to join "{name}" was declined.', { name: p.n });
+                const body = this._gx('Your request to join "{name}" was declined.', { name: this._gtPendingName(p) });
                 this._gtNotice(body);
-                this.showNotification(this._gx('Join request declined'), body, { type: 'group', groupId, pubkey: senderPubkey, eventId: 'join-declined-' + groupId }, Date.now());
+                const declined = { type: 'group', groupId, eventId: window.NymNotifyView.joinDeclinedId(groupId, rumor.created_at || nowSec()), stableId: true };
+                if (this._gtMask(senderPubkey)) this._addNotificationToHistory(this._gx('Join request declined'), body, Object.assign(declined, { noBanner: true }), Date.now());
+                else this.showNotification(this._gx('Join request declined'), body, declined, Date.now());
                 return true;
             }
             return false;
@@ -416,10 +426,14 @@
                 body.innerHTML = `<div class="ct-empty">${esc(this._gx('No pending join requests.'))}</div>`;
                 return;
             }
-            if (typeof this.ensureListProfiles === 'function') this.ensureListProfiles(null, list.map((r) => r.pubkey));
+            const masks = new Map(list.map((r) => [r.pubkey, this._gtMask(r.pubkey)]));
+            if (typeof this.ensureListProfiles === 'function') this.ensureListProfiles(null, list.filter((r) => !masks.get(r.pubkey)).map((r) => r.pubkey));
+            const who = (pk) => (masks.get(pk)
+                ? `${esc(masks.get(pk))}<span class="nym-suffix">#${esc(this.getPubkeySuffix(pk))}</span>`
+                : this.formatNymWithPubkey(this.getNymFromPubkey(pk), pk));
             body.innerHTML = list.map((r) => `<div class="gt-join-row" data-pubkey="${esc(r.pubkey)}">
-                <img class="avatar-message" src="${esc(this.getAvatarUrl(r.pubkey))}" alt="">
-                <div class="gt-join-info"><div class="gt-join-nym">${this.formatNymWithPubkey(this.getNymFromPubkey(r.pubkey), r.pubkey)}</div>
+                <img class="avatar-message" src="${esc(masks.get(r.pubkey) ? (typeof this._maskedAvatar === 'function' ? this._maskedAvatar(r.pubkey) : '') : this.getAvatarUrl(r.pubkey))}" alt="">
+                <div class="gt-join-info"><div class="gt-join-nym">${who(r.pubkey)}</div>
                 <div class="gt-join-time">${this.formatMessage('<t:' + r.ts + ':R>')}</div></div>
                 ${canDecide ? `${full ? `<span class="gt-join-full">${esc(this._gx('Full'))}</span>` : ''}<button class="send-btn gt-join-approve" data-action="gtJoinApprove" data-group-id="${esc(groupId)}" data-pubkey="${esc(r.pubkey)}"${full ? ` disabled title="${esc(this._gx('Group is full'))}"` : ''}>${esc(this._gx('Approve'))}</button>
                 <button class="icon-btn gt-join-decline" data-action="gtJoinDecline" data-group-id="${esc(groupId)}" data-pubkey="${esc(r.pubkey)}">${esc(this._gx('Decline'))}</button>` : ''}
@@ -466,7 +480,7 @@
 
         async gtInvitePreview(payload) {
             const fields = this._gtVerifySummary(payload);
-            const p = T().invitePreview(payload, fields);
+            const p = this._gtFilterInvitePreview(T().invitePreview(payload, fields), payload && payload.a);
             const pending = this._gtPendingJoins()[payload.g];
             const esc = (s) => this.escapeHtml(String(s));
             return new Promise((resolve) => {
@@ -504,6 +518,28 @@
             });
         },
 
+        _gtFilterInvitePreview(p, inviter) {
+            const F = window.NymContentFilter;
+            if (!p || !F || typeof this._cfCtx !== 'function') return p;
+            const ctx = this._cfCtx();
+            const blocked = !!inviter && inviter !== this.pubkey && F.userBlocked(ctx, inviter);
+            const label = (n) => (typeof this._groupLabel === 'function' ? this._groupLabel({ name: n }) : (n || 'Group'));
+            const name = label(blocked ? '' : p.name);
+            const description = blocked || (p.description && this.hasBlockedKeyword(p.description, '', '')) ? '' : p.description;
+            const admins = (p.admins || []).filter((l) => !F.labelHidden(ctx, l));
+            const art = blocked ? { avatar: '', banner: '' } : {};
+            return Object.assign({}, p, { name, description, admins }, art);
+        },
+
+        _gtPendingName(p) {
+            const F = window.NymContentFilter;
+            const inviter = p && typeof p.a === 'string' ? p.a : '';
+            const blocked = !!inviter && inviter !== this.pubkey && (F && typeof this._cfCtx === 'function'
+                ? F.userBlocked(this._cfCtx(), inviter) : !!(this.blockedUsers && this.blockedUsers.has(inviter)));
+            const name = blocked ? '' : String((p && p.n) || '');
+            return typeof this._groupLabel === 'function' ? this._groupLabel({ name }) : (name || 'Group');
+        },
+
         _gtRememberPendingJoin(payload) {
             const fields = this._gtVerifySummary(payload);
             const pend = this._gtPendingJoins();
@@ -519,16 +555,16 @@
             return this._gtRsvps;
         },
 
-        _gtSaveRsvps() {
+        _gtSaveRsvps(wanted) {
             const s = this._gtRsvpStore();
             const ids = Object.keys(s);
             if (ids.length > 300) for (const id of ids.slice(0, ids.length - 300)) delete s[id];
             save(RSVP_KEY + (this.pubkey || ''), s);
-            this._gtSyncChanged();
+            this._gtSyncChanged(wanted);
         },
 
-        _gtSyncChanged() {
-            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(3000);
+        _gtSyncChanged(wanted) {
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(3000, wanted ? { wanted: true } : undefined);
         },
 
         _gtRemindersRemoved() {
@@ -602,7 +638,7 @@
             const store = this._gtRsvpStore();
             const r = T().applyRsvp(store[eventId] || {}, this.pubkey, status, ts);
             store[eventId] = r.entries;
-            this._gtSaveRsvps();
+            this._gtSaveRsvps(true);
             this._gtRefreshEventCards(eventId);
             await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
         },
@@ -663,7 +699,9 @@
                 const gone = this._gtRemindersRemoved();
                 const t = Math.max(Date.now(), (gone[eventId] || 0) + 1);
                 if (gone[eventId]) { delete gone[eventId]; save(REMINDER_REMOVED_KEY, gone); }
+                const src = this._gtEventMessage(groupId, eventId);
                 rem[eventId] = { offset, start: ev.start, title: ev.title, groupId, fired: false, t };
+                if (src && /^[0-9a-f]{64}$/i.test(src.pubkey || '')) rem[eventId].by = src.pubkey.toLowerCase();
                 const at = T().reminderAt(ev.start, offset);
                 if (at * 1000 <= Date.now()) this._gtNotice(this._gx('That reminder time has already passed.'));
                 else this._gtNotice(this._gx('Reminder set: {label}.', { label: this._gx(T().reminderLabel(offset)) }));
@@ -673,7 +711,7 @@
             }
             save(REMINDER_KEY, rem);
             this._gtArmReminders();
-            this._gtSyncChanged();
+            this._gtSyncChanged(true);
         },
 
         _gtArmReminders() {
@@ -699,10 +737,12 @@
         _gtFireReminder(eventId, r) {
             const source = this._gtEventMessage(r.groupId, eventId);
             if (source && typeof this.isContentHidden === 'function' && this.isContentHidden(source)) return;
+            const by = source ? source.pubkey : (r && typeof r.by === 'string' ? r.by : '');
+            if (by && by !== this.pubkey && typeof this.isPersonHidden === 'function' && this.isPersonHidden(by)) return;
             const group = this.groupConversations.get(r.groupId);
             const title = this._gx('Reminder: {title}', { title: r.title });
             const body = this._gx('Starts {when}', { when: window.NymMessageFormat && window.NymMessageFormat.formatTimestamp ? window.NymMessageFormat.formatTimestamp(String(r.start), 'R') : new Date(r.start * 1000).toLocaleString() });
-            this.showNotification(title, body + (group ? ' · ' + (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) : ''), { type: 'group', groupId: r.groupId, id: this.getGroupConversationKey(r.groupId), eventId: 'event-reminder-' + eventId, subject: String(r.title || '') }, Date.now());
+            this.showNotification(title, body + (group ? ' · ' + (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) : ''), { type: 'group', groupId: r.groupId, id: this.getGroupConversationKey(r.groupId), eventId: 'event-reminder-' + eventId, stableId: true, subject: String(r.title || '') }, Date.now());
         },
 
         _gtCardHtml(message) {
@@ -1128,7 +1168,7 @@
 
         _gtSaveCallLinks() {
             save(CALL_LINKS_KEY + (this.pubkey || ''), this._gtCallLinks());
-            this._gtSyncChanged();
+            this._gtSyncChanged(true);
         },
 
         _gtCallLinkUrl(link) {
@@ -1140,7 +1180,10 @@
             if (!this._canSendGiftWraps()) { this._gtNotice(this._gx('Call links need a logged-in account.')); return; }
             const ctx = context || {};
             let name = '';
-            if (ctx.groupId && this.groupConversations.has(ctx.groupId)) name = this.groupConversations.get(ctx.groupId).name || '';
+            if (ctx.groupId && this.groupConversations.has(ctx.groupId)) {
+                const g = this.groupConversations.get(ctx.groupId);
+                name = typeof this._groupLabel === 'function' ? this._groupLabel(g, 'Call') : (g.name || '');
+            }
             else if (ctx.pubkey) name = this.getNymFromPubkey(ctx.pubkey);
             const esc = (s) => this.escapeHtml(String(s));
             const { body } = this._ctModal('gtCallLinkModal', this._gx('New call link'));
@@ -1261,8 +1304,9 @@
             return !!(j && data && data.link === j.id && sender === j.host && Date.now() - j.at < LINK_JOIN_WAIT_MS);
         },
 
-        async _gtOnCallSignal(sender, data) {
+        async _gtOnCallSignal(sender, data, createdAt) {
             const S = T().CALL_SIGNALS;
+            if (sender && sender !== this.pubkey && this.blockedUsers && this.blockedUsers.has(sender)) return;
             if (data.type === S.refused) {
                 const j = this._gtLinkJoin;
                 if (!j || j.host !== sender || data.linkId !== j.id) return;
@@ -1283,13 +1327,20 @@
                 return;
             }
             const link = this._gtCallLinks().find((l) => l.id === data.linkId);
+            const declineHidden = () => {
+                if (!this._gtMask(sender)) return false;
+                this._sendCallSignal(sender, { type: S.refused, linkId: link.id, reason: 'declined' });
+                return true;
+            };
+            if (declineHidden()) return;
             if (this.incomingCall || (this.activeCall && this.activeCall.kind !== link.kind)) {
                 this._sendCallSignal(sender, { type: S.refused, linkId: link.id, reason: 'busy' });
                 return;
             }
             if (!this.users.has(sender) && typeof this.fetchProfileDirect === 'function') { try { await this.fetchProfileDirect(sender); } catch (_) { } }
+            if (declineHidden()) return;
             const who = this._gtNymTag(sender);
-            this.showNotification(this._gx('Call link: {name}', { name: link.name }), this._gx('{nym} wants to join', { nym: who }), { type: 'call', pubkey: sender, eventId: 'call-link-' + link.id + '-' + sender + '-' + nowSec() }, Date.now());
+            this.showNotification(this._gx('Call link: {name}', { name: link.name }), this._gx('{nym} wants to join', { nym: who }), { type: 'call', pubkey: sender, eventId: window.NymNotifyView.knockId(link.id, sender, createdAt || nowSec()), stableId: true }, Date.now());
             const admit = await window.showAppConfirm(this._gx('{nym} wants to join your call link "{name}".', { nym: who, name: link.name }), { title: this._gx('Join request'), okLabel: this._gx('Admit'), cancelLabel: this._gx('Decline') });
             const recheck = T().checkCallLinkJoin(this._gtCallLinks(), data.linkId, data.secret, nowSec());
             if (!admit || !recheck.ok) {
@@ -1345,15 +1396,12 @@
             const esc = (s) => this.escapeHtml(String(s));
             const role = this._gtRole(groupId, this.pubkey);
             const admin = role === 'owner' || role === 'admin';
-            const checkbox = (on) => ico(on
-                ? '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M 5 8 L 7 10 L 11 5.5"/>'
-                : '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/>');
             const offline = !this.connected;
             const dis = offline ? ` data-gt-disabled="1" title="${esc(this._gx(T().STRINGS.groupsNeedNet))}"` : '';
             const out = [];
             if (admin) {
                 out.push(`<div class="context-menu-item gt-menu-row${offline ? ' gt-disabled' : ''}" data-action="gtOpenSlowmode" data-group-id="${esc(groupId)}"${dis}>${ICONS.slowmode}<span class="gt-menu-label">${esc(this._gx('Slowmode'))}</span><span class="gt-menu-value">${esc(this._gx(T().slowmodeLabel(group.slowmode)))}</span></div>`);
-                out.push(`<div class="context-menu-item${offline ? ' gt-disabled' : ''}" data-action="gtToggleJoinApproval" data-group-id="${esc(groupId)}"${dis}>${checkbox(group.joinApproval === true)}${esc(this._gx('Admins approve join requests'))}</div>`);
+                out.push(this._groupCtxSwitchHtml('joinApproval', 'gtToggleJoinApproval', this._gx('Admins approve join requests'), group.joinApproval === true, { groupId, disabled: offline, title: offline ? this._gx(T().STRINGS.groupsNeedNet) : '' }));
                 const n = T().pruneJoinRequests(group.joinRequests || [], nowSec()).length;
                 if (group.joinApproval === true || n) out.push(`<div class="context-menu-item gt-menu-row" data-action="gtOpenJoinRequests" data-group-id="${esc(groupId)}">${ICONS.requests}<span class="gt-menu-label">${esc(this._gx('Join requests'))}</span>${n ? `<span class="gt-menu-badge">${n}</span>` : ''}</div>`);
             }
@@ -1537,8 +1585,9 @@
         try { data = JSON.parse(event.content); } catch (_) { data = null; }
         const S = window.NymGroupTools && window.NymGroupTools.CALL_SIGNALS;
         if (data && S && (data.type === S.join || data.type === S.refused || data.type === S.memberAdd)) {
-            if (event.pubkey === this.pubkey || (this.blockedUsers && this.blockedUsers.has(event.pubkey))) return;
-            this._gtOnCallSignal(event.pubkey, data);
+            if (event.pubkey === this.pubkey) return;
+            if (this.blockedUsers && this.blockedUsers.has(event.pubkey)) return;
+            this._gtOnCallSignal(event.pubkey, data, event.created_at);
             return;
         }
         return origHandleCallSignal.apply(this, arguments);
@@ -1558,7 +1607,7 @@
                 if (!found) return;
                 found.msg._heldShown = true;
                 const holder = t.closest('.gt-held');
-                if (holder) holder.outerHTML = nym().formatMessageWithQuotes(found.msg.content, 0, false);
+                if (holder) holder.outerHTML = nym().formatMessageWithQuotes(found.msg.content, 0, false, found.msg.quoted);
             },
             gtShowDescription: function (_e, t) { nym().gtShowDescription(t.dataset.groupId); },
             gtRsvp: function (e, t) { if (e && e.stopPropagation) e.stopPropagation(); nym().gtRsvp(t.dataset.groupId, t.dataset.eventId, t.dataset.status); },
@@ -1577,11 +1626,11 @@
             gtOpenSlowmode: function (_e, t) { if (disabled(t)) return; nym().closeGroupContextMenu(); nym().gtOpenSlowmode(t.dataset.groupId); },
             gtSetSlowmode: function (_e, t) { nym()._ctCloseModal('gtSlowmodeModal'); nym().setGroupSlowmode(t.dataset.groupId, parseInt(t.dataset.sec, 10)); },
             gtToggleJoinApproval: function (_e, t) {
-                if (disabled(t)) return;
+                if (disabled(t) || t.disabled) return;
                 const n = nym();
                 const g = n.groupConversations.get(t.dataset.groupId);
-                n.closeGroupContextMenu();
                 if (g) n.setGroupJoinApproval(t.dataset.groupId, g.joinApproval !== true);
+                n._groupCtxRedraw();
             },
             gtOpenJoinRequests: function (_e, t) { nym().closeGroupContextMenu(); nym().openJoinRequests(t.dataset.groupId); },
             gtJoinApprove: function (_e, t) { nym().gtDecideJoin(t.dataset.groupId, t.dataset.pubkey, true); },

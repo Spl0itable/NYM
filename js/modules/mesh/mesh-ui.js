@@ -85,6 +85,7 @@
                 },
                 onPublicMessage: (m) => this._onMeshPublicMessage(m),
                 onPrivateMessage: (m) => this._onMeshPrivateMessage(m),
+                acksPrivateMessage: (m) => this._meshAcksPrivate(m),
                 onReceipt: (r) => { if (typeof this.onMeshReceipt === 'function') this.onMeshReceipt(r); },
                 onFile: (f) => { if (typeof this.onMeshFile === 'function') this.onMeshFile(f); },
                 onPeersChanged: () => { this._renderMeshPanel(); this._renderMeshStatusRow(); },
@@ -298,6 +299,25 @@
             });
         },
 
+        _meshAcksPrivate(m) {
+            if (!m) return true;
+            const pubkey = typeof m.senderNostrPubkey === 'string' ? m.senderNostrPubkey : '';
+            if (pubkey && pubkey !== this.pubkey) {
+                if (this.blockedUsers && this.blockedUsers.has(pubkey)) return false;
+                const accept = this.settings && this.settings.acceptPMs;
+                if (accept === 'disabled') return false;
+                if (accept === 'friends' && !(typeof this.isFriend === 'function' && this.isFriend(pubkey))) return false;
+            }
+            if (typeof this.isContentHidden !== 'function') return true;
+            return !this.isContentHidden({
+                pubkey,
+                author: m.senderNickname || '',
+                content: typeof m.content === 'string' ? m.content : '',
+                isMesh: true,
+                isPM: !!pubkey
+            });
+        },
+
         _onMeshPrivateMessage(m) {
             const seconds = Math.floor((m.timestampMs || Date.now()) / 1000);
             const ms = m.timestampMs || Date.now();
@@ -348,7 +368,7 @@
             if (typeof this._gtAbsorbLive === 'function' && this._gtAbsorbLive(msg, list)) return;
             list.push(msg);
             list.sort((a, b) => this._compareMessages(a, b));
-            if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
+            if (list.length > this.pmStorageLimit) list = typeof this._storeTrim === 'function' ? this._storeTrim(list, this.pmStorageLimit) : list.slice(-this.pmStorageLimit);
             this.pmMessages.set(conversationKey, list);
             if (typeof this.persistPMMessages === 'function') this.persistPMMessages(conversationKey);
             if (typeof this.isContentHidden === 'function' && this.isContentHidden(msg)) return;
@@ -554,6 +574,11 @@
 
         _meshRefreshForFilters() {
             if (this._meshPageOpen) this._renderMeshPanel();
+            this._renderMeshLog();
+        },
+
+        _meshPeerHidden(p) {
+            return typeof this.isPersonHidden === 'function' && this.isPersonHidden(this._meshLinkedKey(p) || '', (p && p.nickname) || '');
         },
 
         _renderMeshPanel() {
@@ -563,8 +588,7 @@
             const mesh = this._mesh;
             const running = !!(mesh && mesh.running);
             const links = running ? (mesh.linkList || []) : [];
-            const peers = (running ? (mesh.peerList || []) : []).filter((p) =>
-                !(typeof this.isPersonHidden === 'function' && this.isPersonHidden(this._meshLinkedKey(p) || '', p.nickname || '')));
+            const peers = (running ? (mesh.peerList || []) : []).filter((p) => !this._meshPeerHidden(p));
             const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
             const u = (s) => esc(this.uiText(s));
             const icon = (inner) => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -614,8 +638,8 @@
                         <div class="mesh-power-sub">${powerSub}</div>
                     </div>
                     <label class="nym-switch" title="${u('Bluetooth mesh')}">
-                        <input type="checkbox" id="meshPowerSwitch" data-on-change="meshToggle" aria-label="${u('Bluetooth mesh')}"${running ? ' checked' : ''}>
-                        <span class="nym-switch-track"><span class="nym-switch-thumb"></span></span>
+                        <input type="checkbox" role="switch" id="meshPowerSwitch" data-on-change="meshToggle" aria-label="${u('Bluetooth mesh')}"${running ? ' checked' : ''}>
+                        <span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span>
                     </label>
                 </div>
                 ${section(this.uiText('Channels'))}
@@ -645,7 +669,7 @@
             const mesh = this._mesh;
             const ids = [];
             if (mesh && mesh.running && mesh.peerID) ids.push(this.uiText('Your mesh ID') + '  ' + mesh.peerID);
-            if (mesh && mesh.running) for (const p of (mesh.peerList || [])) ids.push((p.nickname || p.peerID) + '  ' + p.peerID);
+            if (mesh && mesh.running) for (const p of (mesh.peerList || [])) if (!this._meshPeerHidden(p)) ids.push((p.nickname || p.peerID) + '  ' + p.peerID);
             return ids.concat((this._meshLog || []).slice(-60));
         },
 

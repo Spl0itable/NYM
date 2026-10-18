@@ -415,7 +415,7 @@ Object.assign(NYM.prototype, {
         this.columnsLayout = [];
         this._cvSeeded = false;
         if (!this._cvActive) {
-            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+            if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
             return;
         }
         for (const c of [...this._cvColumns]) { if (c._observer) c._observer.disconnect(); if (c.el) c.el.remove(); }
@@ -439,7 +439,7 @@ Object.assign(NYM.prototype, {
         const header = document.createElement('div');
         header.className = 'cv-column-header';
         header.innerHTML =
-            `<span class="cv-drag-handle" title="Drag to reorder"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>` +
+            `<span class="cv-drag-handle" aria-label="Drag to reorder" data-tip=""><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></span>` +
             `<span class="cv-col-icon">${this._cvColIcon(col)}</span>` +
             `<span class="cv-col-title">${this._cvColTitleHtml(col)}</span>` +
             `<span class="cv-col-dots" title="Switch columns"></span>` +
@@ -521,7 +521,7 @@ Object.assign(NYM.prototype, {
         }
         if (col.type === 'group') {
             const g = this.groupConversations && this.groupConversations.get(col.groupId);
-            if (g && g.avatar) {
+            if (g && g.avatar && !(typeof this._groupMetaHidden === 'function' && this._groupMetaHidden(g, 'avatar'))) {
                 return `<img class="avatar-pm" src="${this.escapeHtml(this._profileMediaUrl(g.avatar))}" alt="" width="20" height="20" decoding="async" loading="lazy">`;
             }
             return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
@@ -552,9 +552,9 @@ Object.assign(NYM.prototype, {
         const flairHtml = this.getFlairForUser(pubkey);
         const friendBadge = this.getFriendBadgeHtml(pubkey);
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
-            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+            ? `<span class="verified-badge" data-tip="${this.verifiedDeveloper.title}">✓</span>`
             : this.isVerifiedBot(pubkey)
-                ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
+                ? `<span class="verified-badge" data-tip="${this.verifiedBot.title}">✓</span>`
                 : '';
         return `${title}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
     },
@@ -886,7 +886,7 @@ Object.assign(NYM.prototype, {
                 const row = document.createElement('button');
                 row.className = 'cv-picker-row';
                 row.type = 'button';
-                row.innerHTML = `<span class="cv-picker-row-icon">${r.icon}</span><span class="cv-picker-row-label">${this.escapeHtml(r.label)}</span>`;
+                row.innerHTML = `<span class="cv-picker-row-icon">${r.icon}</span><span class="cv-picker-row-label">${r.html || this.escapeHtml(r.label)}</span>`;
                 row.addEventListener('click', () => {
                     this.cvAddColumn(r.desc, { focus: true });
                     close();
@@ -916,14 +916,20 @@ Object.assign(NYM.prototype, {
                 const desc = { type: 'pm', pubkey, nym: conv.nym };
                 if (open.has(this._cvColKey(desc)) || this._cvDescHidden(desc, false)) continue;
                 const src = this.getAvatarUrl(pubkey);
-                out.push({ label: conv.nym || 'Private message', icon: `<img class="avatar-pm" src="${this.escapeHtml(src)}" data-avatar-pubkey="${this._safePubkey(pubkey)}" alt="" width="20" height="20">`, desc });
+                const named = !!conv.nym;
+                out.push({
+                    label: named ? `${this.stripPubkeySuffix(conv.nym)}${window.NymSuffix.suffixOf(pubkey)}` : 'Private message',
+                    html: named ? this.formatNymWithPubkey(conv.nym, pubkey) : '',
+                    icon: `<img class="avatar-pm" src="${this.escapeHtml(src)}" data-avatar-pubkey="${this._safePubkey(pubkey)}" alt="" width="20" height="20">`,
+                    desc,
+                });
             }
         }
         if (this.groupConversations) {
             for (const [groupId, g] of this.groupConversations) {
                 const desc = { type: 'group', groupId };
                 if (open.has(this._cvColKey(desc))) continue;
-                const gicon = g.avatar
+                const gicon = g.avatar && !(typeof this._groupMetaHidden === 'function' && this._groupMetaHidden(g, 'avatar'))
                     ? `<img class="avatar-pm" src="${this.escapeHtml(this._profileMediaUrl(g.avatar))}" alt="" width="20" height="20">`
                     : '◧';
                 out.push({ label: (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')), icon: gicon, desc });
@@ -1110,7 +1116,7 @@ Object.assign(NYM.prototype, {
         const data = this._cvColumns.map(c => this._cvDescForSave(c));
         try { localStorage.setItem('nym_columns_layout', JSON.stringify(data)); } catch (_) { }
         this.columnsLayout = data;
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
     },
 
     _cvLoadLayout() {

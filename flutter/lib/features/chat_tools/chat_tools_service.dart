@@ -47,19 +47,21 @@ String chatSurfaceForKey(String key) {
 String chatDomId(Message m) =>
     (m.isPM || m.isGroup) ? (m.nymMessageId ?? m.id) : m.id;
 
-ChatToolsMessage chatToolsMessageOf(Message m, {String? author}) =>
+ChatToolsMessage chatToolsMessageOf(Message m,
+        {String? author, String? content}) =>
     ChatToolsMessage(
       id: m.id,
       nid: m.nymMessageId ?? '',
       pubkey: m.pubkey,
       author: author ?? m.author,
-      content: m.content,
+      content: content ?? m.content,
       at: m.createdAt,
       edited: m.isEdited,
       system: m.isSystemRow || m.pubkey.isEmpty,
       fileOfferName: m.isFileOffer ? (m.fileOffer?['name'] as String?) : null,
       fileOfferSize:
           m.isFileOffer ? (m.fileOffer?['size'] as num?)?.toInt() : null,
+      quoted: m.quoted,
     );
 
 class ChatToolsHooks {
@@ -74,6 +76,7 @@ class ChatToolsHooks {
     this.sendMeshKeep,
     this.groupMembers,
     this.findMessage,
+    this.shownContent,
     this.notice,
     this.onChanged,
     this.now,
@@ -97,6 +100,7 @@ class ChatToolsHooks {
       sendMeshKeep;
   final List<String>? Function(String groupId)? groupMembers;
   final ({Message msg, String key})? Function(String id)? findMessage;
+  final String Function(Message m)? shownContent;
   final void Function(String text)? notice;
   final void Function()? onChanged;
   final int Function()? now;
@@ -174,7 +178,11 @@ class ChatToolsService {
       isSaved(savedState(), m.nymMessageId ?? m.id);
 
   SaveResult saveMessage(Message m, Map<String, String> chat, {String? author}) {
-    final res = savedEntry(chatToolsMessageOf(m, author: author), chat, _nowMs);
+    final res = savedEntry(
+        chatToolsMessageOf(m,
+            author: author, content: hooks.shownContent?.call(m)),
+        chat,
+        _nowMs);
     if (res.error == 'once') {
       hooks.notice?.call(ChatToolsStrings.onceNotSaved);
       return SaveResult.once;

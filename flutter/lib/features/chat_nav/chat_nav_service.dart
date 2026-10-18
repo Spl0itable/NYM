@@ -90,6 +90,7 @@ class ChatNavHooks {
     this.random,
     this.storeRaw,
     this.plainlyVisible,
+    this.messageHidden,
   });
 
   static bool _never() => false;
@@ -105,6 +106,7 @@ class ChatNavHooks {
   final List<Message> Function(String key)? storeList;
   final List<Message> Function(String key)? storeRaw;
   final bool Function(Message m)? plainlyVisible;
+  final bool Function(Message m)? messageHidden;
   final int Function(String key)? lastRead;
   final int Function(String key)? badge;
   final bool Function(Message m)? isMention;
@@ -442,7 +444,10 @@ class ChatNavService {
   void flushMentions() {
     _mentionTimer?.cancel();
     _mentionTimer = null;
-    _prefs.write(_mentionKey, jsonEncode(mentions()));
+    final pk = _mentionPk;
+    final s = _mentionCache;
+    if (pk == null || s == null) return;
+    _prefs.write('nym_unread_mentions:$pk', jsonEncode(s));
   }
 
   void _scanOnOpen(ChatNavEntry e) {
@@ -455,14 +460,37 @@ class ChatNavService {
     }
   }
 
-  int mentionCountFor(String key) => mentionCount(mentions(), key);
+  int mentionCountFor(String key) => mentionCount(_shownMentions(key), key);
 
-  String? nextMention(String key) => mentionNext(mentions(), key);
+  String? nextMention(String key) => mentionNext(_shownMentions(key), key);
 
-  List<String> queuedMentionIds(String key) {
-    final c = (mentions()['chats'] as Map)[key];
+  List<String> queuedMentionIds(String key) =>
+      _queuedIds(_shownMentions(key), key);
+
+  List<String> _queuedIds(Map<String, dynamic> s, String key) {
+    final c = (s['chats'] as Map)[key];
     if (c is! Map) return const [];
     return [for (final e in c['ids'] as List) (e as Map)['id'] as String];
+  }
+
+  Map<String, dynamic> _shownMentions(String key) {
+    final s = mentions();
+    final hidden = hooks.messageHidden;
+    final raw = hooks.storeRaw;
+    if (hidden == null || raw == null) return s;
+    final ids = _queuedIds(s, key);
+    if (ids.isEmpty) return s;
+    final byId = <String, Message>{};
+    for (final m in raw(key)) {
+      byId[m.id] = m;
+      final n = m.nymMessageId;
+      if (n != null && n.isNotEmpty) byId[n] = m;
+    }
+    final gone = [
+      for (final id in ids)
+        if (byId[id] != null && hidden(byId[id]!)) id,
+    ];
+    return gone.isEmpty ? s : mentionDrop(s, key, gone);
   }
 
   bool hasUnreadMention(String key, {List<String> aliases = const []}) {
@@ -531,6 +559,8 @@ class ChatNavService {
 
   void dropMention(String key, String id) =>
       _setMentions(mentionDrop(mentions(), key, [id]));
+
+  void pruneHiddenMentions() => _changed();
 
   void pruneRemoteRead(String key, int floorSec) {
     if (_entries.containsKey(key)) return;

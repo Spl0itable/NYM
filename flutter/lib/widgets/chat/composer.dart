@@ -93,6 +93,28 @@ export '../../features/composer/composer_drafts.dart' show ComposerDrafts;
 
 final composerOverhangProvider = StateProvider<double>((ref) => 0);
 
+List<ChannelResult> channelAutocompleteResults(
+    AppState state, String query, String currentKey) {
+  final counts = <String, int>{};
+  state.messages.forEach((key, msgs) {
+    if (key.startsWith('#') && !state.isChannelHidden(key)) {
+      counts[key.substring(1)] = state.visibleMessageCount(msgs);
+    }
+  });
+  return [
+    for (final r in queryChannels(
+      search: query,
+      channels: [
+        for (final ch in state.channels)
+          if (!state.isChannelHidden(ch.key)) ch
+      ],
+      messageChannelCounts: counts,
+      currentKey: currentKey,
+    ))
+      if (!state.isChannelHidden(r.name)) r,
+  ];
+}
+
 class ComposerOverhangInset extends ConsumerWidget {
   const ComposerOverhangInset({super.key, required this.child});
 
@@ -532,8 +554,11 @@ class _ComposerState extends ConsumerState<Composer> {
         _controller.text = existing + insert;
         _controller.selection =
             TextSelection.collapsed(offset: _controller.text.length);
-      case QuoteAction(:final fullNym, :final content, :final messageId):
+      case QuoteAction(:final fullNym, content: final raw, :final messageId):
+        final content =
+            ref.read(appStateProvider.notifier).shownTextFor(raw, messageId);
         _pendingQuoteId = messageId;
+        ref.read(nostrControllerProvider).noteQuoteSource(fullNym, messageId);
         _pendingQuote = (
           author: fullNym,
           text: _strippedQuoteText(content),
@@ -595,11 +620,16 @@ class _ComposerState extends ConsumerState<Composer> {
 
   /// Seeds the input with the original content, drops a pending quote, and shows the edit chip.
   void _applyEdit(PendingEdit edit) {
+    final seed = ref
+        .read(appStateProvider.notifier)
+        .editSeed(edit.content, edit.messageId);
+    final shown = PendingEdit(
+        messageId: edit.messageId, content: seed.shown, head: seed.head);
     setState(() {
-      _pendingEdit = edit;
+      _pendingEdit = shown;
       _pendingQuote = null;
     });
-    _controller.text = edit.content;
+    _controller.text = shown.content;
     _controller.selection =
         TextSelection.collapsed(offset: _controller.text.length);
     _focus.requestFocus();
@@ -772,7 +802,7 @@ class _ComposerState extends ConsumerState<Composer> {
     final mods = group.mods;
     String nymOf(String pk) => users[pk]?.nym ?? '';
     int rank(String pk) => GroupLogic.roleRank(group, pk);
-    final sorted = [...group.members]..sort((a, b) {
+    final sorted = app.groupInfoMembers(group)..sort((a, b) {
         final ra = rank(a), rb = rank(b);
         if (ra != rb) return ra - rb;
         return nymOf(a).toLowerCase().compareTo(nymOf(b).toLowerCase());
@@ -792,12 +822,13 @@ class _ComposerState extends ConsumerState<Composer> {
           ],
         ),
     ];
-    ref.read(nostrControllerProvider).ensureProfiles(sorted);
+    ref.read(nostrControllerProvider).ensureProfiles(
+        [for (final pk in sorted) if (app.personMaskLabel(pk).isEmpty) pk]);
     ref
         .read(appStateProvider.notifier)
         .addSystemMessage(encodeGroupInfoSystemMessage((
-          name: group.name,
-          count: group.members.length,
+          name: app.groupLabel(group),
+          count: sorted.length,
           members: members,
         )));
   }
@@ -1074,22 +1105,8 @@ class _ComposerState extends ConsumerState<Composer> {
         ];
         return AutocompleteView.mentions([...broadcast, ...results]);
       case TriggerKind.channel:
-        final counts = <String, int>{};
-        state.messages.forEach((key, msgs) {
-          if (key.startsWith('#') && !state.isChannelBlockedKey(key)) {
-            counts[key.substring(1)] = msgs.length;
-          }
-        });
-        final results = queryChannels(
-          search: trigger.query,
-          channels: [
-            for (final ch in state.channels)
-              if (!state.isChannelBlockedKey(ch.key)) ch
-          ],
-          messageChannelCounts: counts,
-          currentKey: currentKey,
-        );
-        return AutocompleteView.channels(results);
+        return AutocompleteView.channels(
+            channelAutocompleteResults(state, trigger.query, currentKey));
       case TriggerKind.emoji:
         final results = queryEmoji(
           search: trigger.query,
@@ -1311,7 +1328,7 @@ class _ComposerState extends ConsumerState<Composer> {
       _hideOverlay();
       _focus.requestFocus();
       if (trimmed.isEmpty || trimmed == edit.content.trim()) return;
-      controller.editMessage(edit.messageId, trimmed);
+      controller.editMessage(edit.messageId, edit.head + trimmed);
       Haptics.light();
       return;
     }
@@ -2838,10 +2855,13 @@ class _ComposerState extends ConsumerState<Composer> {
                               itemCount: langs.length,
                               itemBuilder: (_, i) {
                                 final e = langs[i];
+                                final fav = favSet.contains(e.key);
                                 return _TranslateLangRow(
                                   name: languageNative(e.key),
                                   subtitle: languageSubtitle(e.key),
-                                  favorited: favSet.contains(e.key),
+                                  starLabel:
+                                      '${fav ? tr('Unfavorite') : tr('Favorite')} ${languageName(e.key)}',
+                                  favorited: fav,
                                   onTap: () => _translateDraft(e.key),
                                   onToggleFavorite: () =>
                                       _toggleTranslateFavorite(e.key),
@@ -4076,6 +4096,7 @@ class _TranslateLangRow extends StatefulWidget {
   const _TranslateLangRow({
     required this.name,
     required this.subtitle,
+    required this.starLabel,
     required this.favorited,
     required this.onTap,
     required this.onToggleFavorite,
@@ -4085,6 +4106,7 @@ class _TranslateLangRow extends StatefulWidget {
 
   /// The English name under the endonym, when it adds something.
   final String subtitle;
+  final String starLabel;
   final bool favorited;
   final VoidCallback onTap;
   final VoidCallback onToggleFavorite;
@@ -4098,6 +4120,18 @@ class _TranslateLangRowState extends State<_TranslateLangRow> {
   bool _starHover = false;
 
   static const Color _favColor = Color(0xFFF5C518);
+
+  Widget _star(Widget child) => Semantics(
+        button: true,
+        label: widget.starLabel,
+        onTap: widget.onToggleFavorite,
+        excludeSemantics: true,
+        child: NymTooltip(
+          message: widget.starLabel,
+          excludeFromSemantics: true,
+          child: child,
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -4141,7 +4175,7 @@ class _TranslateLangRowState extends State<_TranslateLangRow> {
                 ),
               ),
               const SizedBox(width: 8),
-              MouseRegion(
+              _star(MouseRegion(
                 cursor: SystemMouseCursors.click,
                 onEnter: (_) => setState(() => _starHover = true),
                 onExit: (_) => setState(() => _starHover = false),
@@ -4171,7 +4205,7 @@ class _TranslateLangRowState extends State<_TranslateLangRow> {
                     ),
                   ),
                 ),
-              ),
+              )),
             ],
           ),
         ),
@@ -4561,7 +4595,7 @@ class _InputMentionChip extends ConsumerWidget {
   }
 }
 
-class _ComposerConnHint extends ConsumerWidget {
+class _ComposerConnHint extends ConsumerStatefulWidget {
   const _ComposerConnHint(
       {required this.phone, required this.anchor, required this.onBuilt});
 
@@ -4570,19 +4604,38 @@ class _ComposerConnHint extends ConsumerWidget {
   final VoidCallback onBuilt;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ComposerConnHint> createState() => _ComposerConnHintState();
+}
+
+class _ComposerConnHintState extends ConsumerState<_ComposerConnHint> {
+  final ConnNoticeTimer _grace = ConnNoticeTimer();
+
+  @override
+  void dispose() {
+    _grace.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final phone = widget.phone;
+    final anchor = widget.anchor;
     final open =
         ref.watch(appStateProvider.select((s) => s.connectedRelays > 0));
     final view = ref.watch(appStateProvider.select((s) => s.view));
     ref.watch(meshControllerProvider);
+    ref.watch(connNoticeGateProvider);
+    final gate = ref.read(connNoticeGateProvider.notifier);
     final bridge = ref.read(meshControllerProvider.notifier).bridge;
-    final text = ComposerConnStrings.forState(composerConnState(
+    final text = ComposerConnStrings.forState(gate.show(composerConnState(
       relayOpen: open,
       meshCarries: bridge?.shouldSendOverMesh(view) ?? false,
       deviceOffline: false,
-      connectFailed: composerConnectFailed(open ? 1 : 0),
-    ));
-    onBuilt();
+      connectFailed: composerConnectFailedFor(
+          everConnected: gate.everConnected, statusFailed: false),
+    )));
+    _grace.wait(gate, () => mounted);
+    widget.onBuilt();
     if (text.isEmpty) {
       return const Positioned(top: 0, left: 0, child: SizedBox.shrink());
     }

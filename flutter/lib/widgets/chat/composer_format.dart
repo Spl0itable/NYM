@@ -11,6 +11,8 @@ import '../../features/i18n/i18n.dart';
 import '../../features/messages/format/message_content.dart' show proxiedMedia;
 import '../../features/messages/inline_network_image.dart'
     show InlineNetworkImage;
+import '../../features/shortcuts/shortcuts.dart'
+    show keycapTooltip, shortcutsUseMac;
 import '../nym_icons.dart' show NymSvgIcon;
 import '../common/nym_tooltip.dart';
 
@@ -26,6 +28,7 @@ class FormatTool {
     this.glyph,
     this.svg,
     this.shortcut,
+    this.shiftShortcut,
   });
 
   final String id;
@@ -43,6 +46,8 @@ class FormatTool {
   final String? svg;
 
   final String? shortcut;
+
+  final String? shiftShortcut;
 }
 
 const List<String> _headingPrefixes = ['### ', '## ', '# '];
@@ -74,7 +79,8 @@ const List<FormatTool> kFormatTools = [
       kind: FormatToolKind.wrap,
       token: '~~',
       label: 'Strikethrough',
-      glyph: 'S'),
+      glyph: 'S',
+      shiftShortcut: 'x'),
   FormatTool(
     id: 'spoiler',
     kind: FormatToolKind.wrap,
@@ -299,13 +305,19 @@ FormatEdit applyFormatTool(FormatEdit input, FormatTool tool) {
 
 FormatTool? formatToolForShortcut(String key, {required bool shift}) {
   final k = key.toLowerCase();
-  if (shift) {
-    return k == 'x' ? kFormatTools.firstWhere((t) => t.id == 'strike') : null;
-  }
   for (final tool in kFormatTools) {
-    if (tool.shortcut == k) return tool;
+    if ((shift ? tool.shiftShortcut : tool.shortcut) == k) return tool;
   }
   return null;
+}
+
+String formatToolKeys(FormatTool tool, {bool? mac}) {
+  final letter = tool.shiftShortcut ?? tool.shortcut;
+  if (letter == null || letter.isEmpty) return '';
+  final k = letter.toUpperCase();
+  final shift = tool.shiftShortcut != null;
+  if (mac ?? shortcutsUseMac) return '${shift ? '⌘⇧' : '⌘'}$k';
+  return '${shift ? 'Ctrl+Shift+' : 'Ctrl+'}$k';
 }
 
 FormatEdit insertTimestampTag(FormatEdit input, int seconds) {
@@ -533,6 +545,24 @@ class _FormatToolButton extends StatefulWidget {
 
 class _FormatToolButtonState extends State<_FormatToolButton> {
   bool _hover = false;
+  bool _mouse = WidgetsBinding.instance.mouseTracker.mouseIsConnected;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.mouseTracker.addListener(_onMouse);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.mouseTracker.removeListener(_onMouse);
+    super.dispose();
+  }
+
+  void _onMouse() {
+    final mouse = WidgetsBinding.instance.mouseTracker.mouseIsConnected;
+    if (mounted && mouse != _mouse) setState(() => _mouse = mouse);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -584,31 +614,43 @@ class _FormatToolButtonState extends State<_FormatToolButton> {
       }
     }
 
-    return NymTooltip(
-      message: tr(tool.label),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          behavior: HitTestBehavior.opaque,
-          child: Container(
-            width: 28,
-            height: 26,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: _hover
-                  ? (c.isLight
-                      ? Colors.black.withValues(alpha: 0.06)
-                      : Colors.white.withValues(alpha: 0.08))
-                  : null,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: child,
+    final label = tr(tool.label);
+    final keys = _mouse ? formatToolKeys(tool) : '';
+    final body = MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          width: 28,
+          height: 26,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: _hover
+                ? (c.isLight
+                    ? Colors.black.withValues(alpha: 0.06)
+                    : Colors.white.withValues(alpha: 0.08))
+                : null,
+            borderRadius: BorderRadius.circular(4),
           ),
+          child: child,
         ),
       ),
+    );
+    return Semantics(
+      button: true,
+      label: label,
+      onTap: widget.onTap,
+      excludeSemantics: true,
+      child: keys.isEmpty
+          ? NymTooltip(message: label, excludeFromSemantics: true, child: body)
+          : NymTooltip(
+              richMessage: keycapTooltip(context, label, keys),
+              excludeFromSemantics: true,
+              child: body,
+            ),
     );
   }
 }
@@ -896,6 +938,7 @@ class _MediaThumb extends StatelessWidget {
       ),
     );
 
+    if (_uploading) return NymTooltip(message: tr('Uploading…'), child: tile);
     if (!_failed) return tile;
     return NymTooltip(
       message: error.isEmpty

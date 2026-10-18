@@ -418,6 +418,11 @@ Object.assign(NYM.prototype, {
         select.value = current;
     },
 
+    _translateStarLabel(fav, name) {
+        const word = fav ? 'Unfavorite' : 'Favorite';
+        return `${typeof this.uiText === 'function' ? this.uiText(word) : word} ${name}`;
+    },
+
     _renderTranslateDropdownList(filter = '') {
         const list = document.getElementById('translateDropdownList');
         if (!list) return;
@@ -431,7 +436,7 @@ Object.assign(NYM.prototype, {
             const sub = this._languageSubtitle(l.code);
             return `<div class="translate-dropdown-item" data-lang="${l.code}">
                 <span class="translate-dropdown-name">${this.escapeHtml(this._languageNative(l.code))}${sub ? `<span class="translate-dropdown-sub">${this.escapeHtml(sub)}</span>` : ''}</span>
-                <button class="translate-dropdown-star${fav ? ' favorited' : ''}" data-fav-lang="${l.code}" title="${fav ? 'Unfavorite' : 'Favorite'}" aria-label="Favorite ${this.escapeHtml(l.name)}">${starSvg(fav)}</button>
+                <button class="translate-dropdown-star${fav ? ' favorited' : ''}" data-fav-lang="${l.code}" aria-label="${this.escapeHtml(this._translateStarLabel(fav, l.name))}" data-tip="">${starSvg(fav)}</button>
             </div>`;
         }).join('') || `<div class="translate-dropdown-empty">No languages found</div>`;
     },
@@ -476,7 +481,7 @@ Object.assign(NYM.prototype, {
                 this._toggleTranslateFavorite(code);
                 const nowFav = this._getTranslateFavorites().includes(code);
                 star.classList.toggle('favorited', nowFav);
-                star.title = nowFav ? 'Unfavorite' : 'Favorite';
+                star.setAttribute('aria-label', this._translateStarLabel(nowFav, this._languageName(code)));
                 const svg = star.querySelector('svg');
                 if (svg) svg.setAttribute('fill', nowFav ? 'currentColor' : 'none');
                 return;
@@ -489,11 +494,21 @@ Object.assign(NYM.prototype, {
             }
         });
 
+        const close = () => {
+            dropdown.classList.remove('active');
+            btn.setAttribute('aria-expanded', 'false');
+        };
         document.addEventListener('click', (e) => {
-            if (!e.target.closest('#translateInputBtn') && !e.target.closest('#translateInputDropdown')) {
-                dropdown.classList.remove('active');
-            }
+            if (!e.target.closest('#translateInputBtn') && !e.target.closest('#translateInputDropdown')) close();
         });
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || !dropdown.classList.contains('active')) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const inside = dropdown.contains(document.activeElement);
+            close();
+            if (inside) btn.focus();
+        }, true);
     },
 
     _placeTranslateDropdown(btn, dropdown) {

@@ -110,6 +110,11 @@ Object.assign(NYM.prototype, {
             // Snapshot: publishing mutates the live array.
             for (const entry of list.slice()) {
                 if (!this._meshOutbox.includes(entry)) continue;
+                if (!this._meshOutboxWho(entry)) {
+                    this._meshOutbox = this._meshOutbox.filter(e => e !== entry);
+                    this._meshOutboxDropped(entry);
+                    continue;
+                }
                 if (!this._meshOutboxMine(entry)) continue;
                 let sent = false;
                 try {
@@ -131,11 +136,15 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _meshOutboxMine(entry) {
-        const who = (entry && typeof entry.owner === 'string' && entry.owner)
+    _meshOutboxWho(entry) {
+        return (entry && typeof entry.owner === 'string' && entry.owner)
             || (entry && entry.signedEvent && typeof entry.signedEvent.pubkey === 'string' && entry.signedEvent.pubkey)
             || '';
-        return !who || who === this.pubkey;
+    },
+
+    _meshOutboxMine(entry) {
+        const who = this._meshOutboxWho(entry);
+        return !!who && who === this.pubkey;
     },
 
     // Channels only (offline PMs are refused in `sendMessage`); the relay proxy archives it to D1.

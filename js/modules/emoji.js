@@ -6,6 +6,89 @@ const _REACTION_MAX_LENGTH = 64;
 const _REACTION_EXTRA_SYMBOLS = new Set(['\u20BF', '+', '-']);
 const EMOJI_D1_REFRESH_MS = 6 * 60 * 60 * 1000;
 const EMOJI_PACK_CACHE_MAX = 200;
+const _EMOJI_EXTRA_NAMES = {
+    '🫢': ['face_with_open_eyes_and_hand_over_mouth'], '😦': ['frowning_face_with_open_mouth'],
+    '👨‍👩‍👦': ['family_man_woman_boy'], '👨‍👩‍👧': ['family_man_woman_girl'],
+    '👨‍👩‍👧‍👦': ['family_man_woman_girl_boy'], '👨‍👩‍👦‍👦': ['family_man_woman_boy_boy'],
+    '👨‍👩‍👧‍👧': ['family_man_woman_girl_girl'], '🤟': ['love_you_gesture'], '🔈': ['speaker_low_volume'],
+    '🔉': ['speaker_medium_volume'], '📢': ['loudspeaker'], '📣': ['megaphone'], '📯': ['postal_horn'],
+    '🔯': ['dotted_six_pointed_star'], '🕎': ['menorah'], '☦️': ['orthodox_cross'], '🛐': ['place_of_worship'],
+    '⛎': ['ophiuchus'], '♈': ['aries'], '♉': ['taurus'], '♊': ['gemini'], '♋': ['cancer'], '♌': ['leo'],
+    '♍': ['virgo'], '♎': ['libra'], '♏': ['scorpio'], '♐': ['sagittarius'], '♑': ['capricorn'],
+    '♒': ['aquarius'], '♓': ['pisces'], '🆔': ['id_button'], '🉑': ['japanese_acceptable_button'],
+    '📴': ['mobile_phone_off'], '📳': ['vibration_mode'], '🈶': ['japanese_not_free_of_charge_button'],
+    '🈚': ['japanese_free_of_charge_button'], '🈸': ['japanese_application_button'],
+    '🈺': ['japanese_open_for_business_button'], '🈷️': ['japanese_monthly_amount_button'],
+    '✴️': ['eight_pointed_star'], '🆚': ['vs_button'], '🉐': ['japanese_bargain_button'],
+    '㊙️': ['japanese_secret_button'], '㊗️': ['japanese_congratulations_button'],
+    '🈴': ['japanese_passing_grade_button'], '🈵': ['japanese_no_vacancy_button'],
+    '🈹': ['japanese_discount_button'], '🈲': ['japanese_prohibited_button'], '🅰️': ['a_button_blood_type'],
+    '🅱️': ['b_button_blood_type'], '🆎': ['ab_button_blood_type'], '🆑': ['cl_button'],
+    '🅾️': ['o_button_blood_type'], '🆘': ['sos_button'], '⭕': ['hollow_red_circle'], '🛑': ['stop_sign'],
+    '⛔': ['no_entry'], '📛': ['name_badge'], '🚫': ['prohibited'], '♨️': ['hot_springs'],
+    '🚷': ['no_pedestrians'], '🚯': ['no_littering'], '🚳': ['no_bicycles'], '🚱': ['non_potable_water'],
+    '🔞': ['no_one_under_eighteen'], '📵': ['no_mobile_phones'], '🚭': ['no_smoking'],
+    '❕': ['white_exclamation_mark'], '❔': ['white_question_mark'], '🔅': ['dim_button'],
+    '🔆': ['bright_button'], '〽️': ['part_alternation_mark'], '🚸': ['children_crossing'],
+    '🔱': ['trident_emblem'], '⚜️': ['fleur_de_lis'], '🔰': ['japanese_symbol_for_beginner'],
+    '🈯': ['japanese_reserved_button'], '💹': ['chart_increasing_with_yen'], '❇️': ['sparkle'],
+    '✳️': ['eight_spoked_asterisk'], '❎': ['cross_mark_button'], '🌐': ['globe_with_meridians'],
+    '💠': ['diamond_with_a_dot'], 'Ⓜ️': ['circled_m'], '🌀': ['cyclone'], '🏧': ['atm_sign'],
+    '🚾': ['water_closet'], '♿': ['wheelchair_symbol'], '🅿️': ['p_button'], '🛗': ['elevator'],
+    '🈳': ['japanese_vacancy_button'], '🈂️': ['japanese_service_charge_button'], '🛂': ['passport_control'],
+    '🛃': ['customs'], '🛄': ['baggage_claim'], '🛅': ['left_luggage'], '🚹': ['mens_room'],
+    '🚺': ['womens_room'], '🚼': ['baby_symbol'], '⚧️': ['transgender_symbol'], '🚻': ['restroom'],
+    '🚮': ['litter_in_bin_sign'], '🎦': ['cinema'], '📶': ['antenna_bars'], '🈁': ['japanese_here_button'],
+    '🔣': ['input_symbols'], 'ℹ️': ['information'], '🔤': ['input_latin_letters'],
+    '🔡': ['input_latin_lowercase'], '🔠': ['input_latin_uppercase'], '🆖': ['ng_button'], '🆗': ['ok_button'],
+    '🆙': ['up_button'], '🆒': ['cool_button'], '🆕': ['new_button'], '🆓': ['free_button'],
+    '0️⃣': ['zero', 'keycap_0'], '1️⃣': ['one', 'keycap_1'], '2️⃣': ['two', 'keycap_2'],
+    '3️⃣': ['three', 'keycap_3'], '4️⃣': ['four', 'keycap_4'], '5️⃣': ['five', 'keycap_5'],
+    '6️⃣': ['six', 'keycap_6'], '7️⃣': ['seven', 'keycap_7'], '8️⃣': ['eight', 'keycap_8'],
+    '9️⃣': ['nine', 'keycap_9'], '🔟': ['keycap_10'], '🔢': ['input_numbers'], '#️⃣': ['hash', 'keycap_hash'],
+    '*️⃣': ['asterisk', 'keycap_asterisk'], '⏏️': ['eject_button'], '▶️': ['play_button'],
+    '⏸️': ['pause_button'], '⏯️': ['play_or_pause_button'], '⏹️': ['stop_button'], '⏺️': ['record_button'],
+    '⏭️': ['next_track_button'], '⏮️': ['last_track_button'], '⏩': ['fast_forward_button'],
+    '⏪': ['fast_reverse_button'], '⏫': ['fast_up_button'], '⏬': ['fast_down_button'],
+    '◀️': ['reverse_button'], '🔼': ['upwards_button'], '🔽': ['downwards_button'], '➡️': ['right_arrow'],
+    '⬅️': ['left_arrow'], '⬆️': ['up_arrow'], '⬇️': ['down_arrow'], '↗️': ['up_right_arrow'],
+    '↘️': ['down_right_arrow'], '↙️': ['down_left_arrow'], '↖️': ['up_left_arrow'], '↕️': ['up_down_arrow'],
+    '↔️': ['left_right_arrow'], '↩️': ['right_arrow_curving_left'], '↪️': ['left_arrow_curving_right'],
+    '⤴️': ['right_arrow_curving_up'], '⤵️': ['right_arrow_curving_down'], '🔀': ['shuffle_tracks_button'],
+    '🔁': ['repeat_button'], '🔂': ['repeat_single_button'], '🔄': ['counterclockwise_arrows_button'],
+    '🔃': ['clockwise_vertical_arrows'], '➕': ['plus'], '➖': ['minus'], '➗': ['divide'], '✖️': ['multiply'],
+    '🟰': ['heavy_equals_sign'], '💲': ['heavy_dollar_sign'], '💱': ['currency_exchange'], '〰️': ['wavy_dash'],
+    '➰': ['curly_loop'], '➿': ['double_curly_loop'], '🔚': ['end_arrow'], '🔙': ['back_arrow'],
+    '🔛': ['on_arrow'], '🔝': ['top_arrow'], '🔜': ['soon_arrow'], '✔️': ['check_mark'],
+    '☑️': ['check_box_with_check'], '🔘': ['radio_button'], '🔴': ['red_circle'], '🟠': ['orange_circle'],
+    '🟡': ['yellow_circle'], '🟢': ['green_circle'], '🔵': ['blue_circle'], '🟣': ['purple_circle'],
+    '⚫': ['black_circle'], '⚪': ['white_circle'], '🟤': ['brown_circle'], '🔺': ['red_triangle_pointed_up'],
+    '🔻': ['red_triangle_pointed_down'], '🔸': ['small_orange_diamond'], '🔹': ['small_blue_diamond'],
+    '🔶': ['large_orange_diamond'], '🔷': ['large_blue_diamond'], '🔳': ['white_square_button'],
+    '🔲': ['black_square_button'], '▪️': ['black_small_square'], '▫️': ['white_small_square'],
+    '◾': ['black_medium_small_square'], '◽': ['white_medium_small_square'], '◼️': ['black_medium_square'],
+    '◻️': ['white_medium_square'], '🟥': ['red_square'], '🟧': ['orange_square'], '🟨': ['yellow_square'],
+    '🟩': ['green_square'], '🟦': ['blue_square'], '🟪': ['purple_square'], '⬛': ['black_large_square'],
+    '⬜': ['white_large_square'], '🟫': ['brown_square'], '🎴': ['flower_playing_cards'], '🗜️': ['clamp'],
+    '💽': ['computer_disk'], '💾': ['floppy_disk'], '📞': ['telephone_receiver'], '💸': ['money_with_wings'],
+    '⚒️': ['hammer_and_pick'], '🚬': ['cigarette'], '📿': ['prayer_beads'], '🪭': ['folding_hand_fan'],
+    '🪮': ['hair_pick'], '🍰': ['shortcake'], '🪂': ['parachute'], '🏄': ['person_surfing'],
+    '🏊': ['person_swimming'], '🚣': ['person_rowing_boat'], '🚴': ['person_biking'],
+    '🚵': ['person_mountain_biking'], '🦯': ['white_cane'], '🦽': ['manual_wheelchair'],
+    '🦼': ['motorized_wheelchair'], '🚍': ['oncoming_bus'], '🚘': ['oncoming_automobile'],
+    '🚖': ['oncoming_taxi'], '🚡': ['aerial_tramway'], '🚠': ['mountain_cableway'], '🚟': ['suspension_railway'],
+    '🚃': ['railway_car'], '🚋': ['tram_car'], '🚈': ['light_rail'], '🚂': ['locomotive'], '🏘️': ['houses'],
+    '🏤': ['post_office'], '🗾': ['map_of_japan'], '🏞️': ['national_park'], '🌇': ['sunset_over_buildings'],
+    '🏙️': ['cityscape'], '🌁': ['foggy'], '🇧🇪': ['belgium'], '🇦🇹': ['austria'], '🇰🇪': ['kenya'],
+    '🇨🇱': ['chile'], '🇨🇴': ['colombia'], '🇵🇪': ['peru'], '🇻🇪': ['venezuela'], '🇲🇾': ['malaysia'],
+    '🇵🇰': ['pakistan'], '🇧🇩': ['bangladesh'], '🇨🇿': ['czechia'], '🇭🇺': ['hungary'], '🇷🇴': ['romania'],
+    '🇭🇷': ['croatia'], '🇷🇸': ['serbia'], '🇧🇬': ['bulgaria'], '🇸🇰': ['slovakia'], '🇸🇮': ['slovenia'],
+    '🇱🇹': ['lithuania'], '🇱🇻': ['latvia'], '🇪🇪': ['estonia'], '🇮🇸': ['iceland'], '🇱🇺': ['luxembourg'],
+    '🇲🇹': ['malta'], '🇨🇾': ['cyprus'], '🇹🇹': ['trinidad_and_tobago'], '🇧🇸': ['bahamas'], '🇧🇧': ['barbados'],
+    '🇩🇴': ['dominican_republic'], '🇭🇹': ['haiti'], '🇵🇦': ['panama'], '🇨🇷': ['costa_rica'],
+    '🇬🇹': ['guatemala'], '🇭🇳': ['honduras'], '🇸🇻': ['el_salvador'], '🇳🇮': ['nicaragua'], '🇧🇴': ['bolivia'],
+    '🇪🇨': ['ecuador'], '🇺🇾': ['uruguay'], '🇵🇾': ['paraguay'], '🇬🇾': ['guyana']
+};
 
 Object.assign(NYM.prototype, {
 
@@ -255,14 +338,43 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _emojiPackBlocked(pack) {
+        const pk = String((pack && pack.pubkey) || '');
+        return !!pk && pk !== this.pubkey && !!this.blockedUsers && this.blockedUsers.has(pk);
+    },
+
+    _emojiPackHidden(pack) {
+        if (!pack) return true;
+        const pk = String(pack.pubkey || '');
+        if (pk && pk === this.pubkey) return false;
+        if (this._emojiPackBlocked(pack)) return true;
+        if ((typeof this.isEmojiPackSubscribed === 'function' && this.isEmojiPackSubscribed(pack))
+            || (typeof this.isEmojiPackFavorite === 'function' && this.isEmojiPackFavorite(pack))) return false;
+        const title = String(pack.title || pack.identifier || '');
+        return !!title && typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword(title, '', pk);
+    },
+
+    _emojiRefreshForFilters() {
+        this._emojiPickerDirty = true;
+        if (!this.customEmojiPacks || !this.customEmojis) return;
+        for (const pack of this.customEmojiPacks.values()) {
+            if (!pack || !Array.isArray(pack.emojis) || this._emojiPackBlocked(pack)) continue;
+            for (const e of pack.emojis) {
+                if (e && e.shortcode && !this.customEmojis.has(e.shortcode)) this.registerCustomEmoji(e.shortcode, e.url);
+            }
+        }
+    },
+
     _storeEmojiPack(pack, persist = true) {
         if (!pack || !pack.pubkey || !Array.isArray(pack.emojis) || pack.emojis.length === 0) return;
+        const blocked = this._emojiPackBlocked(pack);
+        if (blocked && !this._hydratingEmojiCache) return;
         const key = `${pack.pubkey}:${pack.identifier || ''}`;
         const existing = this.customEmojiPacks.get(key);
         if (existing && (existing.created_at || 0) >= (pack.created_at || 0)) return;
         this.customEmojiPacks.set(key, pack);
         this._emojiPickerDirty = true;
-        for (const e of pack.emojis) this.registerCustomEmoji(e.shortcode, e.url);
+        if (!blocked) for (const e of pack.emojis) this.registerCustomEmoji(e.shortcode, e.url);
         if (persist) this._saveCustomEmojiCache();
         this._prefetchCustomEmojiImages();
     },
@@ -423,12 +535,14 @@ Object.assign(NYM.prototype, {
             if (m && this.customEmojis && this.customEmojis.has(m[1])) {
                 const img = this.renderCustomEmojiImg(m[1]);
                 const code = this.escapeHtml(m[1]);
-                return `<button class="${btnClass} custom-emoji-option" data-emoji=":${code}:" data-names="${code}" title=":${code}:">${img}</button>`;
+                return `<button class="${btnClass} custom-emoji-option" data-emoji=":${code}:" data-names="${code}" aria-label=":${code}:" data-tip="">${img}</button>`;
             }
         }
         const names = (emojiToNames && Object.prototype.hasOwnProperty.call(emojiToNames, emoji) && Array.isArray(emojiToNames[emoji])) ? emojiToNames[emoji] : [];
         const safe = this.escapeHtml(emoji);
-        return `<button class="${btnClass}" data-emoji="${safe}" data-names="${this.escapeHtml(names.join(' '))}" title="${this.escapeHtml(names.join(', '))}">${safe}</button>`;
+        const label = names.join(', ');
+        const named = label ? ` aria-label="${this.escapeHtml(label)}" data-tip=""` : '';
+        return `<button class="${btnClass}" data-emoji="${safe}" data-names="${this.escapeHtml(names.join(' '))}"${named}>${safe}</button>`;
     },
 
     _emojiPackKey(pack) {
@@ -560,6 +674,7 @@ Object.assign(NYM.prototype, {
         let shown = 0;
         for (const pack of packs) {
             if (shown >= 50) break;
+            if (this._emojiPackHidden(pack)) continue;
             const emojis = pack.emojis
                 .filter(e => this.customEmojis.has(e.shortcode))
                 .slice(0, 120);
@@ -585,6 +700,9 @@ Object.assign(NYM.prototype, {
             const map = {};
             for (const [name, emoji] of Object.entries(this.emojiMap)) {
                 (map[emoji] || (map[emoji] = [])).push(name);
+            }
+            for (const [emoji, names] of Object.entries(_EMOJI_EXTRA_NAMES)) {
+                if (!map[emoji]) map[emoji] = names.slice();
             }
             this._emojiToNames = map;
         }

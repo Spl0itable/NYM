@@ -33,11 +33,52 @@ Object.assign(NYM.prototype, {
             const resp = await this._storageApiStream('zap-get', { scope, ids }, false);
             const evs = [];
             await this._readNdjsonStream(resp, (ev) => { if (ev) evs.push(ev); });
+            const verified = [];
             for (const ev of evs) {
-                if (!(await this._verifyRelayEventAsync(ev))) continue;
+                if (await this._verifyRelayEventAsync(ev)) verified.push(ev);
+            }
+            this._zapNoteKnown(verified.map((ev) => ev.id));
+            if (!this._zapArchivedIds) this._zapArchivedIds = new Set();
+            for (const ev of verified) {
+                this._zapArchivedIds.add(ev.id);
                 try { this.handleZapReceipt(ev); } catch (_) { }
             }
         } catch (_) { }
+    },
+
+    _zapKnownSet() {
+        if (this._zapKnown && this._zapKnown.pk === this.pubkey) return this._zapKnown.ids;
+        const ids = new Set();
+        try {
+            const m = JSON.parse(localStorage.getItem('nym_zap_known') || 'null');
+            if (m && m.pk === this.pubkey && Array.isArray(m.ids)) {
+                for (const id of m.ids) if (typeof id === 'string') ids.add(id);
+            }
+        } catch (_) { }
+        this._zapKnown = { pk: this.pubkey, ids };
+        return ids;
+    },
+
+    _zapIsKnown(id) {
+        return typeof id === 'string' && this._zapKnownSet().has(id.slice(0, 16).toLowerCase());
+    },
+
+    _zapNoteKnown(ids) {
+        const known = this._zapKnownSet();
+        let changed = false;
+        for (const id of ids) {
+            if (typeof id !== 'string') continue;
+            const k = id.slice(0, 16).toLowerCase();
+            if (known.has(k)) { known.delete(k); known.add(k); continue; }
+            known.add(k);
+            changed = true;
+        }
+        while (known.size > 2000) {
+            known.delete(known.values().next().value);
+            changed = true;
+        }
+        if (!changed) return;
+        try { localStorage.setItem('nym_zap_known', JSON.stringify({ pk: this.pubkey, ids: [...known] })); } catch (_) { }
     },
 
     _archiveZapReceipt(event, eTag, descriptionTag) {
@@ -47,6 +88,8 @@ Object.assign(NYM.prototype, {
         if (descriptionTag && descriptionTag[1]) {
             try {
                 const req = JSON.parse(descriptionTag[1]);
+                const claimed = req && typeof req.pubkey === 'string' ? req.pubkey.toLowerCase() : '';
+                if (claimed && claimed !== this.pubkey && this.blockedUsers && this.blockedUsers.has(claimed)) return;
                 const kTag = req && Array.isArray(req.tags) && req.tags.find(t => t[0] === 'k');
                 if (kTag) {
                     if (kTag[1] === '20000' || kTag[1] === '23333') scope = 'channel';
@@ -62,7 +105,7 @@ Object.assign(NYM.prototype, {
             if (!targetId || !this._isNostrHex64(targetId)) return;
         }
         if (!this._zapArchivedIds) this._zapArchivedIds = new Set();
-        if (this._zapArchivedIds.has(event.id)) return;
+        if (this._zapArchivedIds.has(event.id) || this._zapIsKnown(event.id)) return;
         this._zapArchivedIds.add(event.id);
         if (this._zapArchivedIds.size > 6000) {
             this._zapArchivedIds = new Set(Array.from(this._zapArchivedIds).slice(-4000));
@@ -82,6 +125,7 @@ Object.assign(NYM.prototype, {
         const batch = this._zapArchiveQueue.splice(0, 100);
         try {
             await this._storageApiRequest('zap-put', { events: batch });
+            this._zapNoteKnown(batch.map((ev) => ev.id));
         } catch (_) { }
         if (this._zapArchiveQueue.length > 0 && !this._zapArchiveFlushTimer) {
             this._zapArchiveFlushTimer = setTimeout(() => {
@@ -1319,6 +1363,7 @@ Object.assign(NYM.prototype, {
                 type: 'reaction',
                 id: event.id,
                 eventId: event.id,
+                stableId: true,
                 pubkey: zapperPubkey,
                 sourceType: 'pm',
                 sourcePubkey: zapperPubkey
@@ -1332,13 +1377,18 @@ Object.assign(NYM.prototype, {
     _notifyZapToOurMessage(messageId, amount, zapperPubkey, event) {
         const zapperNym = this.getNymFromPubkey(zapperPubkey);
         const ts = (event && event.created_at ? event.created_at * 1000 : Date.now());
-        const eventId = (event && event.id) || '';
+        const NV = window.NymNotifyView;
+        const alert = event && event.wrapped === true
+            ? NV.reactionId(event.id || '', messageId)
+            : NV.alertId({ id: (event && event.id) || '', stable: true });
+        const eventId = alert.eventId;
 
         let msgPreview = '';
         let channelInfo = {
             type: 'reaction',
             id: eventId,
             eventId,
+            ...(alert.stable ? { stableId: true } : {}),
             pubkey: zapperPubkey,
             messageId
         };
@@ -1384,6 +1434,13 @@ Object.assign(NYM.prototype, {
                     break;
                 }
             }
+        }
+
+        if (!channelInfo.sourceType && event && Array.isArray(event.tags) && typeof this._notifSourceFromTags === 'function') {
+            let reqTags = null;
+            const desc = event.tags.find((t) => Array.isArray(t) && t[0] === 'description' && typeof t[1] === 'string');
+            if (desc) { try { const r = JSON.parse(desc[1]); reqTags = r && Array.isArray(r.tags) ? r.tags : null; } catch (_) { reqTags = null; } }
+            Object.assign(channelInfo, this._notifSourceFromTags(event.tags, reqTags) || {});
         }
 
         if (msgPreview && window.NymFormat && typeof window.NymFormat.stripForPreview === 'function') msgPreview = window.NymFormat.stripForPreview(msgPreview);

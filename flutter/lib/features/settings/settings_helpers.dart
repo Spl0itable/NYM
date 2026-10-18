@@ -284,6 +284,7 @@ const List<String> kSettingsResetKeys = [
   'nym_notification_history',
   'nym_notification_last_read',
   'nym_notification_seen',
+  'nym_tray_posted',
 ];
 
 /// Key prefixes also wiped on reset.

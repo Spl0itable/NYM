@@ -369,6 +369,10 @@ body.sidebar-reorder-mode .nav-title {
     font-size: var(--user-text-size);
 }
 
+#pmList .pm-item.cf-hidden-row {
+    display: none;
+}
+
 .channel-tile {
     flex: 0 0 auto;
     width: var(--sb-icon);

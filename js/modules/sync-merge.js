@@ -12,6 +12,47 @@
         keepCallHistory: Object.freeze(['keepCallHistory']),
         largeTargets: Object.freeze(['largeTargets']),
         highContrast: Object.freeze(['highContrast']),
+        theme: Object.freeze(['theme']),
+        colorMode: Object.freeze(['colorMode']),
+        uiLanguage: Object.freeze(['uiLanguage']),
+        chatLayout: Object.freeze(['chatLayout']),
+        chatViewMode: Object.freeze(['chatViewMode']),
+        columnsWallpaper: Object.freeze(['columnsWallpaper']),
+        wallpaperType: Object.freeze(['wallpaperType', 'wallpaperCustomUrl']),
+        transparencyEnabled: Object.freeze(['transparencyEnabled']),
+        textSize: Object.freeze(['textSize']),
+        showTimestamps: Object.freeze(['showTimestamps']),
+        timeFormat: Object.freeze(['timeFormat']),
+        dateFormat: Object.freeze(['dateFormat']),
+        nickStyle: Object.freeze(['nickStyle']),
+        sound: Object.freeze(['sound']),
+        blurOthersImages: Object.freeze(['blurOthersImages']),
+        autoscroll: Object.freeze(['autoscroll']),
+        dmForwardSecrecyEnabled: Object.freeze(['dmForwardSecrecyEnabled']),
+        dmTTLSeconds: Object.freeze(['dmTTLSeconds']),
+        readReceiptsScope: Object.freeze(['readReceiptsScope', 'readReceiptsEnabled']),
+        typingIndicatorsScope: Object.freeze(['typingIndicatorsScope', 'typingIndicatorsEnabled']),
+        acceptPMs: Object.freeze(['acceptPMs']),
+        acceptCalls: Object.freeze(['acceptCalls']),
+        showStatus: Object.freeze(['showStatus']),
+        powDifficulty: Object.freeze(['powDifficulty']),
+        appVerifiedFilter: Object.freeze(['appVerifiedFilter']),
+        filterPacks: Object.freeze(['filterPacks']),
+        remotePanic: Object.freeze(['remotePanic']),
+        groupChatPMOnlyMode: Object.freeze(['groupChatPMOnlyMode']),
+        threadsEnabled: Object.freeze(['threadsEnabled']),
+        translateLanguage: Object.freeze(['translateLanguage']),
+        gesturesEnabled: Object.freeze(['gesturesEnabled']),
+        swipeLeftAction: Object.freeze(['swipeLeftAction']),
+        swipeRightAction: Object.freeze(['swipeRightAction']),
+        swipeThreshold: Object.freeze(['swipeThreshold']),
+        sortByProximity: Object.freeze(['sortByProximity']),
+        pinnedLandingChannel: Object.freeze(['pinnedLandingChannel']),
+        hideNonPinned: Object.freeze(['hideNonPinned']),
+        lowDataMode: Object.freeze(['lowDataMode']),
+        backgroundConnectivity: Object.freeze(['backgroundConnectivity', 'backgroundConnectivityChosen']),
+        cachePMs: Object.freeze(['cachePMs']),
+        addedRelays: Object.freeze(['addedRelays']),
     });
 
     const RX_EVENT = /^[0-9a-f]{16}$/;
@@ -33,6 +74,73 @@
 
     function prefTake(localTs, remoteTs) {
         return int(remoteTs) >= int(localTs);
+    }
+
+    function fpCanon(v) {
+        if (v === null || v === undefined) return 'null';
+        if (typeof v === 'number') return isFinite(v) ? (Number.isInteger(v) ? String(v) : JSON.stringify(v)) : 'null';
+        if (typeof v === 'boolean') return v ? 'true' : 'false';
+        if (typeof v === 'string') return JSON.stringify(v);
+        if (Array.isArray(v)) return '[' + v.map(fpCanon).join(',') + ']';
+        if (typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + fpCanon(v[k])).join(',') + '}';
+        return 'null';
+    }
+
+    function prefFp(payload, keys) {
+        const src = obj(payload);
+        const text = fpCanon((Array.isArray(keys) ? keys : []).map((k) => src[k]));
+        let h = 0x811c9dc5;
+        const add = (b) => { h = Math.imul(h ^ b, 0x01000193) >>> 0; };
+        for (const ch of text) {
+            let c = ch.codePointAt(0);
+            if (c >= 0xd800 && c <= 0xdfff) c = 0xfffd;
+            if (c < 0x80) add(c);
+            else if (c < 0x800) { add(0xc0 | (c >> 6)); add(0x80 | (c & 63)); }
+            else if (c < 0x10000) { add(0xe0 | (c >> 12)); add(0x80 | ((c >> 6) & 63)); add(0x80 | (c & 63)); }
+            else { add(0xf0 | (c >> 18)); add(0x80 | ((c >> 12) & 63)); add(0x80 | ((c >> 6) & 63)); add(0x80 | (c & 63)); }
+        }
+        return h.toString(16).padStart(8, '0');
+    }
+
+    function prefRowStamp(payload, rowTs, stamped) {
+        const out = Object.assign({}, obj(payload));
+        const at = Math.max(0, int(rowTs));
+        const map = obj(stamped || STAMPED);
+        const own = (k) => Object.prototype.hasOwnProperty.call(out, k);
+        for (const name of Object.keys(map)) {
+            const keys = Array.isArray(map[name]) ? map[name] : [];
+            if (!keys.some(own)) continue;
+            const ts = name + 'Ts';
+            const fp = name + 'Fp';
+            if (own(ts) && (!own(fp) || out[fp] === prefFp(out, keys))) continue;
+            if (!own(ts) && at <= 0) continue;
+            out[ts] = at;
+            delete out[fp];
+        }
+        return out;
+    }
+
+    function prefGate(payload, stamps, stamped, rowTs) {
+        const src = prefRowStamp(payload, rowTs, stamped);
+        const local = obj(stamps);
+        const map = obj(stamped || STAMPED);
+        const out = Object.assign({}, src);
+        const take = {};
+        let skipped = false;
+        for (const name of Object.keys(map)) {
+            const keys = Array.isArray(map[name]) ? map[name] : [];
+            if (!keys.some((k) => Object.prototype.hasOwnProperty.call(src, k))) continue;
+            const remote = src[name + 'Ts'];
+            if (prefTake(local[name], remote)) {
+                take[name] = int(remote);
+                continue;
+            }
+            for (const k of keys) delete out[k];
+            delete out[name + 'Ts'];
+            delete out[name + 'Fp'];
+            skipped = true;
+        }
+        return { payload: out, take, skipped };
     }
 
     function tsMapNorm(raw, cap) {
@@ -121,7 +229,7 @@
         const offset = int(o.offset);
         const start = int(o.start);
         if (typeof o.offset !== 'number' || OFFSETS.indexOf(offset) < 0 || start <= 0) return null;
-        return {
+        const out = {
             offset,
             start,
             title: typeof o.title === 'string' ? o.title : '',
@@ -129,6 +237,8 @@
             fired: o.fired === true,
             t: Math.max(0, int(o.t)),
         };
+        if (typeof o.by === 'string' && /^[0-9a-f]{64}$/i.test(o.by)) out.by = o.by.toLowerCase();
+        return out;
     }
 
     function remindersNorm(raw) {
@@ -241,7 +351,7 @@
     }
 
     G.NymSyncMerge = Object.freeze({
-        CAPS, STAMPED, prefTake, tsMapNorm, tsMapMerge, marksMerge, rsvpNorm, rsvpMerge,
+        CAPS, STAMPED, prefTake, prefFp, prefRowStamp, prefGate, tsMapNorm, tsMapMerge, marksMerge, rsvpNorm, rsvpMerge,
         remindersNorm, remindersMerge, callLinkNorm, callLinksMerge, callsNorm, callsMerge, callsRowAction,
     });
 })();

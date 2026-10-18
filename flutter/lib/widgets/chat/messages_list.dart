@@ -23,6 +23,7 @@ import '../../models/poll.dart';
 import '../../features/mesh/mesh_diagnostics.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
+import '../common/nym_tooltip.dart';
 import '../nym_icons.dart';
 import 'list_anchor.dart';
 import 'message_row.dart';
@@ -946,7 +947,8 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
                 blurRadius: 16,
               );
 
-    return MouseRegion(
+    final label = tr('Scroll to bottom');
+    final body = MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
@@ -970,6 +972,11 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
           ),
         ),
       ),
+    );
+    return NymTooltip(
+      message: label,
+      excludeFromSemantics: true,
+      child: Semantics(button: true, label: label, child: body),
     );
   }
 }

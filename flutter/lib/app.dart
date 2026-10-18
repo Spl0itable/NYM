@@ -13,6 +13,7 @@ import 'features/accounts/account_host.dart';
 import 'features/ai_consent/ai_consent.dart';
 import 'features/i18n/app_strings_catalog.dart';
 import 'features/commands/command_i18n.dart';
+import 'features/composer/composer_conn.dart';
 import 'features/chat_lock/chat_lock_providers.dart';
 import 'features/chat_lock/chat_lock_ui.dart';
 import 'features/group_tools/group_tools_providers.dart' show groupToolsContext;
@@ -74,6 +75,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     super.initState();
     registerAiConsentPrompter(_navKey);
     _backgroundConnectivity = ref.read(backgroundConnectivityServiceProvider);
+    ref.read(connNoticeGateProvider);
     WidgetsBinding.instance.addObserver(this);
     _initLocalization();
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncBrightness());

@@ -34,7 +34,7 @@ import 'chat_tools_service.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_label.dart';
 import '../../widgets/common/nym_tooltip.dart';
-import '../identity/deleted_notice.dart' show dimNymSuffixes;
+import '../identity/deleted_notice.dart' show dimNymLabel;
 
 class ChatToolIcons {
   const ChatToolIcons._();
@@ -215,7 +215,7 @@ Map<String, String> chatInfoFor(AppState s, String key, {Message? from}) {
     final gid = key.substring(6);
     String name = '';
     for (final g in s.groups) {
-      if (g.id == gid) name = g.name;
+      if (g.id == gid) name = s.groupLabel(g, '');
     }
     return {'t': t, 'k': key, 'n': name.isEmpty ? tr('Group') : name};
   }
@@ -239,7 +239,7 @@ ChatMediaSource chatMessagesFor(AppState s, String key) {
   final out = <ChatToolsMessage>[];
   for (final m in list) {
     if (m.isSystemRow) continue;
-    var content = m.content;
+    var content = s.stripBlockedQuotes(m.content, m.quoted);
     final path = m.localMediaPath;
     if (path != null && path.isNotEmpty) {
       final lid = _localId(path);
@@ -284,6 +284,7 @@ extension on ChatToolsMessage {
         system: system,
         fileOfferName: fileOfferName,
         fileOfferSize: fileOfferSize,
+        quoted: quoted,
       );
 }
 
@@ -373,7 +374,7 @@ class ChatToolsActions {
     read(nostrControllerProvider)
         .startPM(m.pubkey, nym: stripPubkeySuffix(nym));
     final hooks = read(pendingComposerActionProvider.notifier);
-    final content = m.content;
+    final content = s.shownContent(m);
     SchedulerBinding.instance.addPostFrameCallback((_) {
       hooks.requestQuote(fullNym: nym, content: content);
     });
@@ -486,16 +487,39 @@ bool _savedHidden(AppState app, Map<String, dynamic> e) {
   final a = e['a'] is Map ? e['a'] as Map : const {};
   final pk = '${a['pk'] ?? ''}';
   final key = '${chat['k'] ?? ''}';
-  if (chat['t'] == 'channel' && key.isNotEmpty && app.isChannelBlockedKey(key)) {
+  if (chat['t'] == 'channel' && key.isNotEmpty && app.isChannelHidden(key)) {
     return true;
   }
-  if (chat['t'] == 'dm' &&
-      key.isNotEmpty &&
-      app.blockedUsers.contains(key.startsWith('pm-') ? key.substring(3) : key)) {
+  if (chat['t'] == 'dm' && key.isNotEmpty) {
+    final peer = key.startsWith('pm-') ? key.substring(3) : key;
+    if (app.blockedUsers.contains(peer)) return true;
+    if (peer != app.selfPubkey && app.isPersonHidden(peer)) return true;
+  }
+  if (pk.isNotEmpty && pk != app.selfPubkey && app.isPersonHidden(pk)) {
     return true;
   }
   return app.isRefHidden(
-      pubkey: pk, author: '${a['n'] ?? ''}', body: '${e['text'] ?? ''}');
+      pubkey: pk,
+      author: '${a['n'] ?? ''}',
+      body: '${e['text'] ?? ''}',
+      quoted: savedQuotedKeys(e['q']));
+}
+
+String _savedGroupLabel(AppState app, Map chat) {
+  final key = '${chat['k'] ?? ''}';
+  final gid = key.startsWith('group-') ? key.substring(6) : key;
+  String label = '';
+  var found = false;
+  for (final g in app.groups) {
+    if (g.id == gid) {
+      found = true;
+      label = app.groupLabel(g, '');
+    }
+  }
+  if (!found) label = app.groupNameLabel('${chat['n'] ?? ''}', '');
+  return label.trim().isEmpty
+      ? tr('Group')
+      : tr('Group: {name}', {'name': label});
 }
 
 class SavedMessagesPanel extends ConsumerWidget {
@@ -566,7 +590,7 @@ class SavedMessagesPanel extends ConsumerWidget {
                   final chatLabel = chat['t'] == 'channel'
                       ? '${chat['n']}'
                       : chat['t'] == 'group'
-                          ? tr('Group: {name}', {'name': '${chat['n']}'})
+                          ? _savedGroupLabel(app, chat)
                           : tr('PM with {name}', {'name': '${chat['n']}'});
                   final when = formatFullTimestamp(
                       DateTime.fromMillisecondsSinceEpoch(
@@ -586,7 +610,7 @@ class SavedMessagesPanel extends ConsumerWidget {
                       children: [
                         Wrap(spacing: 8, children: [
                           Text.rich(
-                              dimNymSuffixes(
+                              dimNymLabel(
                                   '${a['n']}',
                                   nymSuffixStyle(
                                       TextStyle(
@@ -604,7 +628,10 @@ class SavedMessagesPanel extends ConsumerWidget {
                               style: TextStyle(color: c.textDim, fontSize: 12)),
                         ]),
                         const SizedBox(height: 6),
-                        MessageContent(content: '${e['text']}', nostrRefCards: false),
+                        MessageContent(
+                            content: '${e['text']}',
+                            quoted: savedQuotedKeys(e['q']),
+                            nostrRefCards: false),
                         const SizedBox(height: 8),
                         Wrap(spacing: 8, children: [
                           _ToolButton(
@@ -697,6 +724,15 @@ class _EditHistorySheetState extends ConsumerState<EditHistorySheet> {
           child: _note(context, "Earlier versions aren't available on this device."));
     }
     final timeline = editTimeline(rec, message.content);
+    final app = ref.read(appStateProvider);
+    bool hiddenVersion(EditVersion v) =>
+        !v.current &&
+        app.isRefHidden(
+            pubkey: message.pubkey,
+            author: message.author,
+            body: v.text,
+            quoted: message.quoted,
+            people: message.people);
     return _PanelShell(
       title: tr('Edit history'),
       child: ListView.separated(
@@ -723,7 +759,16 @@ class _EditHistorySheetState extends ConsumerState<EditHistorySheet> {
                   style: TextStyle(color: c.textDim, fontSize: 12),
                 ),
                 const SizedBox(height: 4),
-                MessageContent(content: v.text, nostrRefCards: false),
+                if (hiddenVersion(v))
+                  Text(tr('Content hidden'),
+                      key: ValueKey('version-hidden-$i'),
+                      style: TextStyle(
+                          color: c.textDim, fontStyle: FontStyle.italic))
+                else
+                  MessageContent(
+                      content: v.text,
+                      quoted: message.quoted,
+                      nostrRefCards: false),
               ],
             ),
           );
@@ -969,7 +1014,7 @@ class _ChatMediaPanelState extends ConsumerState<ChatMediaPanel> {
                           fontSize: 13)),
                   Text.rich(
                       TextSpan(children: [
-                        dimNymSuffixes(
+                        dimNymLabel(
                             it.author,
                             nymSuffixStyle(
                                 TextStyle(color: c.textDim, fontSize: 11),

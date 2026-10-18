@@ -51,6 +51,7 @@ Object.assign(NYM.prototype, {
         try {
             const data = JSON.parse(event.content);
             const senderPubkey = event.pubkey;
+            if (!senderPubkey || this._p2pPeerHidden(senderPubkey)) return;
 
             if (data.type === 'offer') {
                 this.handleP2POffer(senderPubkey, data);
@@ -62,6 +63,61 @@ Object.assign(NYM.prototype, {
         } catch (e) {
             console.error('P2P signaling error:', e);
         }
+    },
+
+    _p2pPeerHidden(pubkey) {
+        if (!pubkey || pubkey === this.pubkey) return false;
+        if (this.blockedUsers && this.blockedUsers.has(pubkey)) return true;
+        return typeof this.isPersonHidden === 'function' && this.isPersonHidden(pubkey);
+    },
+
+    _p2pTransferPeer(transferId) {
+        const t = this.p2pActiveTransfers && this.p2pActiveTransfers.get(transferId);
+        if (t && typeof t.peerPubkey === 'string' && t.peerPubkey) return t.peerPubkey;
+        let peer = '';
+        if (this.p2pConnections) {
+            this.p2pConnections.forEach((pc, connectionId) => {
+                if (!peer && String(connectionId).endsWith('-' + transferId)) peer = String(connectionId).slice(0, String(connectionId).length - transferId.length - 1);
+            });
+        }
+        return peer;
+    },
+
+    _p2pDropTransfer(transferId) {
+        const transfer = this.p2pActiveTransfers && this.p2pActiveTransfers.get(transferId);
+        if (transfer && transfer.isTorrent && transfer.torrent) {
+            try { transfer.torrent.destroy(); } catch (e) {}
+        }
+        const ids = [];
+        if (this.p2pConnections) {
+            this.p2pConnections.forEach((pc, connectionId) => {
+                if (String(connectionId).endsWith('-' + transferId)) ids.push(connectionId);
+            });
+        }
+        for (const id of ids) this.cleanupP2PConnection(id, transferId);
+        if (this.p2pActiveTransfers) this.p2pActiveTransfers.delete(transferId);
+        if (this.p2pReceivedChunks) this.p2pReceivedChunks.delete(transferId);
+    },
+
+    _p2pRefreshForFilters() {
+        const drop = new Set();
+        if (this.p2pConnections) {
+            this.p2pConnections.forEach((pc, connectionId) => {
+                const id = String(connectionId);
+                const peer = id.slice(0, 64);
+                if (/^[0-9a-f]{64}$/i.test(peer) && id.charAt(64) === '-' && this._p2pPeerHidden(peer)) drop.add(id.slice(65));
+            });
+        }
+        if (this.p2pActiveTransfers) {
+            this.p2pActiveTransfers.forEach((t, transferId) => {
+                const peer = t && (t.peerPubkey || (t.offer && t.offer.seederPubkey !== this.pubkey ? t.offer.seederPubkey : ''));
+                if (peer && this._p2pPeerHidden(peer)) drop.add(transferId);
+            });
+        }
+        if (!drop.size) return;
+        for (const transferId of drop) this._p2pDropTransfer(transferId);
+        const modal = typeof document !== 'undefined' ? document.getElementById('p2pTransfersModal') : null;
+        if (modal && modal.classList && modal.classList.contains('active') && typeof this.openP2PTransfersModal === 'function') this.openP2PTransfersModal();
     },
 
     _isOfferSeeder(offerId, pubkey) {
@@ -260,6 +316,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Cannot download your own file');
             return;
         }
+        if (this._p2pPeerHidden(offer.seederPubkey)) return;
 
         if (this.p2pUnseededOffers.has(offerId)) {
             this.displaySystemMessage('This file is no longer being seeded by the owner');
@@ -283,7 +340,8 @@ Object.assign(NYM.prototype, {
             offer: offer,
             status: 'connecting',
             bytesReceived: 0,
-            startTime: Date.now()
+            startTime: Date.now(),
+            peerPubkey: offer.seederPubkey
         });
         this.p2pReceivedChunks.set(transferId, []);
 
@@ -420,6 +478,14 @@ Object.assign(NYM.prototype, {
     async startSendingFile(transferId, dataChannel) {
         const transfer = this.p2pActiveTransfers.get(transferId);
         if (!transfer) return;
+        const peerHidden = () => {
+            const peer = this._p2pTransferPeer(transferId);
+            return !!peer && this._p2pPeerHidden(peer);
+        };
+        if (peerHidden()) {
+            this._p2pDropTransfer(transferId);
+            return;
+        }
 
         const file = this.p2pPendingFiles.get(transfer.offerId);
         if (!file) {
@@ -439,6 +505,10 @@ Object.assign(NYM.prototype, {
 
         // Small delay so metadata is received before binary data.
         await new Promise(resolve => setTimeout(resolve, 50));
+        if (peerHidden()) {
+            this._p2pDropTransfer(transferId);
+            return;
+        }
 
         const chunkSize = this.P2P_CHUNK_SIZE;
         const HIGH_WATER = chunkSize * 16;   // start backpressure
@@ -463,6 +533,10 @@ Object.assign(NYM.prototype, {
         });
 
         const sendNextChunk = async () => {
+            if (peerHidden()) {
+                this._p2pDropTransfer(transferId);
+                return;
+            }
             if (dataChannel.readyState !== 'open') {
                 this.updateTransferStatus(transferId, 'error', 'Connection closed during transfer');
                 return;
@@ -508,6 +582,11 @@ Object.assign(NYM.prototype, {
     handleFileChunk(transferId, data) {
         const transfer = this.p2pActiveTransfers.get(transferId);
         if (!transfer) return;
+        const peer = this._p2pTransferPeer(transferId);
+        if (peer && this._p2pPeerHidden(peer)) {
+            this._p2pDropTransfer(transferId);
+            return;
+        }
 
         if (typeof data === 'string') {
             try {
@@ -647,6 +726,7 @@ Object.assign(NYM.prototype, {
     },
 
     async sendP2PSignal(targetPubkey, data) {
+        if (this._p2pPeerHidden(targetPubkey)) return;
         const event = {
             kind: this.P2P_SIGNALING_KIND,
             created_at: Math.floor(Date.now() / 1000),
@@ -679,7 +759,8 @@ Object.assign(NYM.prototype, {
             offer: fileOffer,
             status: 'connecting',
             bytesSent: 0,
-            startTime: Date.now()
+            startTime: Date.now(),
+            peerPubkey: senderPubkey
         });
 
         const pc = await this.createP2PConnection(senderPubkey, transferId, false);
@@ -952,6 +1033,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Cannot download your own file');
             return;
         }
+        if (this._p2pPeerHidden(offer.seederPubkey)) return;
 
         if (this.p2pUnseededOffers.has(offerId)) {
             this.displaySystemMessage('This file is no longer being seeded');

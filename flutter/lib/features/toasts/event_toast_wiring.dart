@@ -73,6 +73,20 @@ void installEventToasts(
     }
     return true;
   };
+  et.hiddenOf = (token) {
+    final t = et.targetOf(token);
+    if (t == null) return true;
+    final hidden = NotificationHistoryNotifier.hiddenEntry;
+    if (t.eventId.isNotEmpty && hidden != null) {
+      for (final e in c.read(notificationHistoryProvider).entries) {
+        if (e.eventId == t.eventId) return hidden(e);
+      }
+    }
+    final sender = t.senderPubkey;
+    return sender.isNotEmpty &&
+        sender != c.read(appStateProvider).selfPubkey &&
+        c.read(appStateProvider).isPersonHidden(sender);
+  };
   et.onOpen = (target, all) {
     final ids = {
       for (final t in all)

@@ -45,6 +45,7 @@
         async setRemotePanic(on) {
             if (!on) {
                 this._remotePanicStore(false);
+                if (typeof this.notePrefChanged === 'function') this.notePrefChanged('remotePanic');
                 try { await this.saveSyncedSettings(); } catch (_) { }
                 return true;
             }
@@ -71,6 +72,7 @@
                 return false;
             }
             this._remotePanicStore(true);
+            if (typeof this.notePrefChanged === 'function') this.notePrefChanged('remotePanic');
             try { await this.saveSyncedSettings(); } catch (_) { }
             return true;
         },

@@ -247,9 +247,9 @@ Object.assign(NYM.prototype, {
         const supporterBadge = userShopItems?.supporter ?
             `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>` : '';
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
-            ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
+            ? `<span class="verified-badge" data-tip="${this.verifiedDeveloper.title}">✓</span>`
             : this.isVerifiedBot(pubkey)
-                ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
+                ? '<span class="verified-badge" data-tip="Nymchat Bot">✓</span>'
                 : '';
         const userColorClass = this.getUserColorClass(pubkey);
 

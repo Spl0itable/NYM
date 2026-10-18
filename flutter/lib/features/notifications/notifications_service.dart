@@ -67,6 +67,8 @@ class NotifyContext {
     this.kind = NotificationKind.message,
     this.presentWhileOpen = true,
     this.preview,
+    this.stableId = false,
+    this.alertScope = '',
   });
 
   final String? senderPubkey;
@@ -99,6 +101,10 @@ class NotifyContext {
   final bool presentWhileOpen;
 
   final EventToastEvent? preview;
+
+  final bool stableId;
+
+  final String alertScope;
 }
 
 String systemNotificationBody({
@@ -384,16 +390,11 @@ class NotificationsService {
       sender: sender,
       ts: ts,
       exact: exactOnly,
+      stable: context.stableId && eventId.isNotEmpty,
+      scope: context.alertScope,
     );
-    final isDupe = history.any((e) => NotifyView.sameAlert(
-        probe,
-        NotifyAlertKey(
-          eventId: e.eventId ?? '',
-          title: e.title,
-          body: e.body,
-          sender: e.senderPubkey ?? '',
-          ts: e.ts,
-        )));
+    final isDupe =
+        history.any((e) => NotifyView.sameAlert(probe, e.alertKey));
     if (isDupe) return true;
 
     // Seen key matching the history store: event id, else sender+minute+40-char body prefix.

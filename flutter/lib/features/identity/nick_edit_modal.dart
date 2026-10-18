@@ -28,6 +28,9 @@ import '../../widgets/nym_icons.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../i18n/i18n.dart';
 import '../accounts/account_host.dart';
+import '../accounts/account_logic.dart' show AccountLogic;
+import '../accounts/account_switcher.dart'
+    show accountKeyText, accountLandingText, accountRemoveText;
 import 'dev_nsec_modal.dart';
 import 'key_backup/key_backup_actions.dart';
 import 'modal_chrome.dart';
@@ -1082,19 +1085,35 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   Future<void> _logout() async {
     final controller = ref.read(nostrControllerProvider);
     final accounts = ref.read(accountsProvider);
-    final ok = await showAppConfirm(
-      context,
-      accounts == null
-          ? tr('Sign out and disconnect from Nymchat?')
-          : tr('Log out of this identity? Keys stored only on this device will '
-              'be deleted. Back up your nsec first. Your other identities stay '
-              'on this device.'),
-      okLabel: tr('Sign out'),
-      danger: true,
-    );
+    final index = accounts?.changes.value;
+    final current = index?.activeAccount;
+    final self = controller.identity;
+    final ok = index != null && current != null
+        ? await showAppConfirm(
+            context,
+            accountRemoveText(current, accountLandingText(index, current.id)),
+            title: tr('Log out'),
+            okLabel: tr('Log out'),
+            danger: true,
+          )
+        : await showAppConfirm(
+            context,
+            [
+              tr('Sign out of {nym} and disconnect from Nymchat?', {
+                'nym': self == null
+                    ? tr('this identity')
+                    : getNymFromPubkey(self.nym, self.pubkey)
+              }),
+              accountKeyText(AccountLogic.methodFromStorage(
+                  ref.read(keyValueStoreProvider).getString)),
+              tr('You will return to the welcome screen.'),
+            ].join('\n\n'),
+            okLabel: tr('Sign out'),
+            danger: true,
+          );
     if (!ok) return;
     if (mounted) Navigator.of(context).pop();
-    if (accounts != null) {
+    if (accounts != null && current != null) {
       await accounts.logout();
       return;
     }

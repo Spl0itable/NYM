@@ -333,6 +333,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
         .ensureProfiles([for (final p in pms) p.pubkey]);
     final groups = ref.watch(groupsProvider);
     final users = ref.watch(usersProvider);
+    final nymsList = ref.watch(nymsListUsersProvider);
     final unread = ref.watch(unreadCountsProvider);
 
     // Mesh-only DM peers get a Bluetooth glyph; channels are dual-transport and carry none.
@@ -402,7 +403,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
           }
         : null;
     // No self exclusion: the PWA lists and counts your own nym.
-    final onlineUsers = users.values
+    final onlineUsers = nymsList.values
         .where((u) => pmOnlyPubkeys == null || pmOnlyPubkeys.contains(u.pubkey))
         .toList()
       ..sort((a, b) {
@@ -552,7 +553,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
               final String rendered;
               if (e.group != null) {
                 final g = e.group!;
-                final name = g.name.isEmpty ? 'Group' : g.name;
+                final name = app.groupLabel(g);
                 rendered = '$name · ${_abbreviateNumber(g.members.length)}';
               } else {
                 rendered =
@@ -1942,7 +1943,8 @@ class _GroupListItem extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    final name = group.name.isEmpty ? tr('Group') : group.name;
+    ref.watch(appStateProvider.select((a) => a.contentFilterSignature));
+    final name = ref.read(appStateProvider).groupLabel(group);
     ref.watch(chatNavRevisionProvider);
     final pinned = !active &&
         ref.read(chatNavProvider).pinIndexOfChat('group-${group.id}') >= 0;
