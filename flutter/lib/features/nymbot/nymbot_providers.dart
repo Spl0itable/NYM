@@ -434,14 +434,15 @@ class BotChatController extends StateNotifier<BotChatState> {
     final err = data['error'];
     final custom =
         err is String && err.isNotEmpty && err != 'Insufficient credits';
-    _system(custom
-        ? err
-        : (pro
-            ? "You're out of Nymbot Pro credits (${creditFigure(balance)} left). "
-                'Type ?buy and switch to Pro, or ?model off for standard '
-                'replies.'
-            : "You're out of Nymbot credits (${creditFigure(balance)} left). "
-                'Zap Nymbot or type ?buy to purchase more.'));
+    if (custom) {
+      _system(err);
+    } else {
+      _systemT(
+          pro
+              ? "You're out of Nymbot Pro credits ({balance} left). Type ?buy and switch to Pro, or ?model off for standard replies."
+              : "You're out of Nymbot credits ({balance} left). Zap Nymbot or type ?buy to purchase more.",
+          {'balance': creditFigure(balance)});
+    }
     _applyLedgerBalance(balance, pro: pro);
     _ref
         .read(botBuyRequestProvider.notifier)
@@ -480,20 +481,25 @@ class BotChatController extends StateNotifier<BotChatState> {
       if (isPro && cost > 0) {
         final sel = state.proModel;
         if (sel != null && cost > sel.baseCredits) {
-          _system('Long reply used ${creditFigure(cost)} Pro credits. '
-              'Pro balance: ${creditFigure(balance)}.');
+          _systemT('Long reply used {cost} Pro credits. Pro balance: {balance}.',
+              {'cost': creditFigure(cost), 'balance': creditFigure(balance)});
         }
       } else if (!isPro && cost > 1) {
-        _system('${data['taskType'] ?? 'Heavy'} reply used ${creditFigure(cost)} credits. '
-            'Balance: ${creditFigure(balance)}.');
+        final task = data['taskType'];
+        _systemT(
+            task == null
+                ? 'Heavy reply used {cost} credits. Balance: {balance}.'
+                : '{task} reply used {cost} credits. Balance: {balance}.',
+            {'task': task, 'cost': creditFigure(cost), 'balance': creditFigure(balance)});
       }
       if (data['lowBalance'] == true) {
-        _system(isPro
-            ? 'Nymbot Pro credits running low: ${creditFigure(balance)} left. '
-                'Type ?buy and switch to Pro to top up.'
-            : 'Nymbot credits running low: ${creditFigure(balance)} '
-                'credit${balance == 1 ? '' : 's'} left. '
-                'Type ?buy to top up.');
+        _systemT(
+            isPro
+                ? 'Nymbot Pro credits running low: {balance} left. Type ?buy and switch to Pro to top up.'
+                : balance == 1
+                    ? 'Nymbot credits running low: {balance} credit left. Type ?buy to top up.'
+                    : 'Nymbot credits running low: {balance} credits left. Type ?buy to top up.',
+            {'balance': creditFigure(balance)});
       }
     }
   }
@@ -657,6 +663,12 @@ class BotChatController extends StateNotifier<BotChatState> {
       stripPubkeySuffix(_appState.users[kNymbotPubkey]?.nym ?? 'Nymbot');
 
   void _system(String text) => showToast(tr(text));
+
+  void _systemT(String template, Map<String, Object?> args) =>
+      showToast(tr(template, args));
+
+  void _systemFeedT(String template, Map<String, Object?> args) =>
+      _app.addSystemMessage(tr(template, args), storageKey: conversationKey);
 
   void _systemFeed(String text) =>
       _app.addSystemMessage(tr(text), storageKey: conversationKey);
@@ -1333,7 +1345,12 @@ class BotChatController extends StateNotifier<BotChatState> {
       }
     } on NymbotException catch (e) {
       if (display) {
-        _system('Nymbot: ${_errorDetail(e) ?? 'could not check balance'}');
+        final detail = _errorDetail(e);
+        if (detail == null) {
+          _system('Nymbot: could not check balance');
+        } else {
+          _systemT('Nymbot: {error}', {'error': detail});
+        }
       }
       _markBalanceUnavailable();
     } catch (_) {
@@ -1441,13 +1458,14 @@ class BotChatController extends StateNotifier<BotChatState> {
     final picked = _catalog.byKey(arg);
     if (picked == null) {
       // Unknown model keeps the current pin.
-      _system(
-          'Unknown model "$arg". Type ?model to see the available Pro models.');
+      _systemT('Unknown model "{model}". Type ?model to see the available Pro models.',
+          {'model': arg});
       return;
     }
     setModelDirect(picked);
-    _system('Nymbot Pro model set to ${picked.label} — every reply now uses '
-        'it (${_price(picked)}). Type ?model off to switch back.');
+    _systemT(
+        'Nymbot Pro model set to {model} — every reply now uses it ({price}). Type ?model off to switch back.',
+        {'model': picked.label, 'price': _price(picked)});
   }
 
   Future<void> clearBotPMHistory() async {
@@ -1561,8 +1579,8 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
     final giftPubkey = resolvePubkeyFromNym(arg);
     if (giftPubkey == null) {
-      _system('Could not find user "$arg". Try ?gift with their full nym '
-          '(e.g. ?gift @cyber_wolf#a3f2).');
+      _systemT('Could not find user "{nym}". Try ?gift with their full nym (e.g. {example}).',
+          {'nym': arg, 'example': '?gift @cyber_wolf#a3f2'});
       return;
     }
     final giftNym = stripPubkeySuffix(
@@ -1593,9 +1611,9 @@ class BotChatController extends StateNotifier<BotChatState> {
     var targetPubkey = normalizePubkeyInput(targetArg);
     targetPubkey ??= resolvePubkeyFromNym(targetArg);
     if (targetPubkey == null) {
-      _system('Could not resolve "$targetArg". Try ?transfer with a full nym '
-          '(e.g. ?transfer @friend#a1b2 confirm), an npub, or a 64-char hex '
-          'pubkey.');
+      _systemT(
+          'Could not resolve "{nym}". Try ?transfer with a full nym (e.g. {example}), an npub, or a 64-char hex pubkey.',
+          {'nym': targetArg, 'example': '?transfer @friend#a1b2 confirm'});
       return;
     }
     if (targetPubkey == _appState.selfPubkey) {
@@ -1614,37 +1632,54 @@ class BotChatController extends StateNotifier<BotChatState> {
         return;
       }
       final segs = <String>[];
-      if (have > 0) segs.add('$have credit${have == 1 ? '' : 's'}');
-      if (havePro > 0) {
-        segs.add('$havePro Pro credit${havePro == 1 ? '' : 's'}');
+      if (have > 0) {
+        segs.add(tr(have == 1 ? '{n} credit' : '{n} credits', {'n': have}));
       }
-      _systemFeed('Transfer ALL ${segs.join(' and ')} to @$targetNym? This '
-          'empties your balance. To confirm, type: ?transfer @$targetNym'
-          '#${getPubkeySuffix(targetPubkey)} confirm');
+      if (havePro > 0) {
+        segs.add(tr(havePro == 1 ? '{n} Pro credit' : '{n} Pro credits', {'n': havePro}));
+      }
+      _systemFeedT(
+          'Transfer ALL {amount} to @{nym}? This empties your balance. To confirm, type: {command}',
+          {
+            'amount': segs.join(tr(' and ')),
+            'nym': targetNym,
+            'command': '?transfer @$targetNym#${getPubkeySuffix(targetPubkey)} confirm',
+          });
       return;
     }
 
     try {
       final res = await transferCredits(targetPubkey);
       if (res == null || res['error'] != null) {
-        _system('Transfer failed: ${res?['error'] ?? 'request failed'}');
+        final error = res?['error'];
+        if (error == null) {
+          _system('Transfer failed: request failed');
+        } else {
+          _systemT('Transfer failed: {error}', {'error': error});
+        }
         return;
       }
       final moved = <String>[];
       final transferred = (res['transferred'] as num?)?.toInt() ?? 0;
       final proTransferred = (res['proTransferred'] as num?)?.toInt() ?? 0;
       if (transferred > 0) {
-        moved.add('$transferred credit${transferred == 1 ? '' : 's'}');
+        moved.add(tr(transferred == 1 ? '{n} credit' : '{n} credits', {'n': transferred}));
       }
       if (proTransferred > 0) {
-        moved
-            .add('$proTransferred Pro credit${proTransferred == 1 ? '' : 's'}');
+        moved.add(tr(proTransferred == 1 ? '{n} Pro credit' : '{n} Pro credits',
+            {'n': proTransferred}));
       }
-      _system(
-          'Transferred ${moved.isEmpty ? '0 credits' : moved.join(' and ')} '
-          'to @$targetNym. Your balance is now 0.');
+      _systemT('Transferred {amount} to @{nym}. Your balance is now 0.', {
+        'amount': moved.isEmpty ? tr('{n} credits', {'n': 0}) : moved.join(tr(' and ')),
+        'nym': targetNym,
+      });
     } on NymbotException catch (e) {
-      _system('Transfer failed: ${_errorDetail(e) ?? 'request failed'}');
+      final detail = _errorDetail(e);
+      if (detail == null) {
+        _system('Transfer failed: request failed');
+      } else {
+        _systemT('Transfer failed: {error}', {'error': detail});
+      }
     } catch (_) {
       _system('Transfer failed. Please try again.');
     }

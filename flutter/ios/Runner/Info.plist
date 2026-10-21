@@ -14,8 +14,16 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>Nymchat</string>
+	<key>NFCReaderUsageDescription</key>
+	<string>Nymchat uses NFC to read and write Nymchat links when you ask it to.</string>
+	<key>NSNearbyInteractionUsageDescription</key>
+	<string>Nymchat uses Nearby Interaction to find the iPhone you point at when you share nearby.</string>
+	<key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
+	<array>
+		<string>D2760000850101</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Nymchat needs camera access for video calls, video notes, taking photos to share, and scanning QR codes.</string>
+	<string>Nymchat needs camera access for video calls, video notes, taking photos to share, and scanning Nymchat QR codes.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Nymchat needs microphone access for voice and video calls, voice messages and video notes.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

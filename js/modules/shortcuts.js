@@ -218,8 +218,10 @@
         switch (action) {
             case 'help': openSheet(); return true;
             case 'settings':
-                if (typeof G.showSettings === 'function') { G.showSettings(); return true; }
-                return false;
+                if (typeof G.showSettings !== 'function') return false;
+                if (n && typeof n._closeChatListNow === 'function' && window.innerWidth <= 1024) n._closeChatListNow();
+                G.showSettings();
+                return true;
             case 'prevChat': return goChat('prev');
             case 'nextChat': return goChat('next');
             case 'nextUnread': return goChat('nextUnread');

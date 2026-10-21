@@ -117,6 +117,8 @@ class ListAnchorKeeper {
 
   bool get retargeting => _retargeting;
 
+  bool get flinging => _scrolling && !_dragging;
+
   void reset({int? target, String? anchorUnit}) {
     this.target = target;
     this.anchorUnit = anchorUnit;
@@ -189,7 +191,7 @@ class ListAnchorKeeper {
             (now - lastAt).inMicroseconds;
         _lastPixels = n.metrics.pixels;
         _lastAt = now;
-      } else if (last == null || lastAt == null) {
+      } else {
         _lastPixels = n.metrics.pixels;
         _lastAt = now;
       }
@@ -208,28 +210,22 @@ class ListAnchorKeeper {
     }
     final position = units.positionOf(unit);
     final velocity = _scrolling ? _velocity : 0.0;
+    final fling = velocity != 0 && position is ScrollActivityDelegate;
     _retargeting = true;
     try {
       controller.jumpTo(index: index, alignment: alignment);
+      if (fling && position!.hasPixels) {
+        (position as ScrollActivityDelegate).goBallistic(velocity);
+      }
     } finally {
       _retargeting = false;
     }
-    _scrolling = false;
-    _velocity = 0;
+    _scrolling = fling;
+    _velocity = fling ? velocity : 0;
     _lastPixels = null;
     target = index;
     anchorUnit = unit;
     pending = false;
-    if (velocity != 0 &&
-        position != null &&
-        position is ScrollActivityDelegate) {
-      final delegate = position as ScrollActivityDelegate;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (controller.isAttached && position.hasPixels) {
-          delegate.goBallistic(velocity);
-        }
-      });
-    }
   }
 }
 

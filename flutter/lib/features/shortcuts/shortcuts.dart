@@ -18,14 +18,14 @@ class ShortcutRow {
 
 const List<ShortcutRow> kShortcutSheet = [
   ShortcutRow('search', 'Search and switch chats', ['⌘', 'K'], ['Ctrl', 'K']),
-  ShortcutRow('prevChat', 'Previous chat', ['⌥', '↑'], ['Alt', '↑']),
-  ShortcutRow('nextChat', 'Next chat', ['⌥', '↓'], ['Alt', '↓']),
-  ShortcutRow(
-      'nextUnread', 'Next unread chat', ['⌥', '⇧', '↓'], ['Alt', 'Shift', '↓']),
-  ShortcutRow('back', 'Go back', ['⌥', '←'], ['Alt', '←']),
-  ShortcutRow('forward', 'Go forward', ['⌥', '→'], ['Alt', '→']),
-  ShortcutRow('editLast', 'Edit your last message (empty composer)', ['↑'],
-      ['↑']),
+  ShortcutRow('prevChat', 'Previous chat', ['⌥', 'up'], ['Alt', 'up']),
+  ShortcutRow('nextChat', 'Next chat', ['⌥', 'down'], ['Alt', 'down']),
+  ShortcutRow('nextUnread', 'Next unread chat', ['⌥', 'shift', 'down'],
+      ['Alt', 'Shift', 'down']),
+  ShortcutRow('back', 'Go back', ['⌥', 'left'], ['Alt', 'left']),
+  ShortcutRow('forward', 'Go forward', ['⌥', 'right'], ['Alt', 'right']),
+  ShortcutRow('editLast', 'Edit your last message (empty composer)', ['up'],
+      ['up']),
   ShortcutRow('escape', 'Close the top layer', ['Esc'], ['Esc']),
   ShortcutRow('settings', 'Open Settings', ['⌘', ','], ['Ctrl', ',']),
   ShortcutRow('help', 'Show keyboard shortcuts', ['?'], ['?']),
@@ -93,7 +93,10 @@ bool get shortcutsUseMac =>
 String shortcutKeyLabel(String action, {bool? mac}) {
   final m = mac ?? shortcutsUseMac;
   for (final r in kShortcutSheet) {
-    if (r.action == action) return m ? r.mac.join() : r.other.join('+');
+    if (r.action == action) {
+      final keys = [for (final k in m ? r.mac : r.other) _kKeyNames[k] ?? k];
+      return m ? keys.join() : keys.join('+');
+    }
   }
   return '';
 }
@@ -152,6 +155,77 @@ InlineSpan keycapTooltip(BuildContext context, String label, String keys) {
   );
 }
 
+const Map<String, IconData> kShortcutKeyIcons = {
+  'up': Icons.arrow_upward,
+  'down': Icons.arrow_downward,
+  'left': Icons.arrow_back,
+  'right': Icons.arrow_forward,
+};
+
+const Map<String, String> _kKeyNames = {
+  'up': 'Up',
+  'down': 'Down',
+  'left': 'Left',
+  'right': 'Right',
+  'shift': 'Shift',
+};
+
+Widget _keyCapFace(String k, Color color) {
+  final icon = kShortcutKeyIcons[k];
+  if (icon != null) {
+    return Icon(icon,
+        key: ValueKey('keycap-$k'),
+        size: 14,
+        color: color,
+        semanticLabel: _kKeyNames[k]);
+  }
+  if (k == 'shift') {
+    return Semantics(
+      key: const ValueKey('keycap-shift'),
+      label: _kKeyNames[k],
+      child: SizedBox(
+        width: 12,
+        height: 14,
+        child: CustomPaint(painter: _ShiftKeyPainter(color)),
+      ),
+    );
+  }
+  return Text(k,
+      style: TextStyle(color: color, fontSize: 12, fontFamily: 'monospace'));
+}
+
+class _ShiftKeyPainter extends CustomPainter {
+  _ShiftKeyPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final path = Path()
+      ..moveTo(w * 0.5, h * 0.12)
+      ..lineTo(w * 0.95, h * 0.56)
+      ..lineTo(w * 0.7, h * 0.56)
+      ..lineTo(w * 0.7, h * 0.9)
+      ..lineTo(w * 0.3, h * 0.9)
+      ..lineTo(w * 0.3, h * 0.56)
+      ..lineTo(w * 0.05, h * 0.56)
+      ..close();
+    canvas.drawPath(
+        path,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4
+          ..strokeJoin = StrokeJoin.round);
+  }
+
+  @override
+  bool shouldRepaint(_ShiftKeyPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
 Future<void> showShortcutSheet(BuildContext context) {
   final mac = shortcutsUseMac;
   return showDialog<void>(
@@ -193,11 +267,7 @@ Future<void> showShortcutSheet(BuildContext context) {
                               border: Border.all(color: c.glassBorder),
                               borderRadius: BorderRadius.circular(6),
                             ),
-                            child: Text(k,
-                                style: TextStyle(
-                                    color: c.text,
-                                    fontSize: 12,
-                                    fontFamily: 'monospace')),
+                            child: _keyCapFace(k, c.text),
                           ),
                       ],
                     ),

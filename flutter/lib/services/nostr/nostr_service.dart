@@ -35,6 +35,7 @@ import 'event_provenance.dart';
 import '../relay/relay_pool.dart';
 import '../relay/relay_pool_proxy.dart';
 import '../relay/relay_stats.dart';
+import '../../features/presence/geo_presence.dart';
 import 'event_mapper.dart';
 import 'event_signer.dart';
 import 'identity_service.dart';
@@ -609,6 +610,11 @@ class NostrService {
 
   /// True when the current transport is the proxy pool.
   bool get isProxyMode => _pool is RelayPoolProxy;
+
+  bool get relayLinked {
+    final p = _pool;
+    return p.connectedCount > 0 || (p is RelayPoolProxy && p.linked);
+  }
 
   /// True while running on the direct fallback.
   bool _poolFallbackActive = false;
@@ -1337,6 +1343,79 @@ class NostrService {
     // Typing events route through onEvent; cancellation is handled on close.
     s.onError((_) {});
     return sub;
+  }
+
+  Subscription? _geoPresenceSub;
+  String? _geoPresenceKey;
+
+  String? get channelPresenceSubscribedKey =>
+      (_geoPresenceSub?.isClosed ?? true) ? null : _geoPresenceKey;
+
+  Subscription? subscribeChannelPresence(String type, String id) {
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final named = type == 'named';
+    final f = named
+        ? GeoPresence.namedFilter(id, nowSec)
+        : GeoPresence.filter(id, nowSec);
+    if (f == null) {
+      closeGeoPresence();
+      return null;
+    }
+    final key = '$type:$id';
+    final cached = _geoPresenceSub;
+    if (_geoPresenceKey == key && cached != null && !cached.isClosed) {
+      return cached;
+    }
+    _geoPresenceSub?.close();
+    final sub = pool.subscribe([
+      NostrFilter(
+        kinds: const [EventKind.geoPresence],
+        since: f['since'] as int,
+        tags: {
+          named ? 'd' : 'g': [named ? id.toLowerCase() : id],
+        },
+      ),
+    ]);
+    final s = sub.events.listen((e) => _handlers?.onEvent?.call(e));
+    s.onError((_) {});
+    _geoPresenceSub = sub;
+    _geoPresenceKey = key;
+    return sub;
+  }
+
+  void closeGeoPresence() {
+    _geoPresenceSub?.close();
+    _geoPresenceSub = null;
+    _geoPresenceKey = null;
+  }
+
+  Future<NostrEvent?> publishChannelPresence(String type, String id,
+      {Future<bool> Function()? beforeSend}) async {
+    final sig = signer;
+    final named = type == 'named';
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final t = named
+        ? GeoPresence.namedTemplate(id, now)
+        : GeoPresence.template(id, now);
+    if (sig == null || t == null) return null;
+    final signed = await sig.sign(UnsignedEvent(
+      pubkey: sig.pubkey,
+      createdAt: t['created_at'] as int,
+      kind: EventKind.geoPresence,
+      tags: [
+        for (final tag in t['tags'] as List) List<String>.from(tag as List)
+      ],
+      content: '',
+    ));
+    if (beforeSend != null && !await beforeSend()) return null;
+    if (named) {
+      await pool.publish(signed);
+      return signed;
+    }
+    final closest =
+        closestGeoRelays(id).map((r) => r.url).toList(growable: false);
+    await pool.publishGeo(signed, closest);
+    return signed;
   }
 
   /// Max wait for a one-shot PQ announcement lookup before sending classically.
@@ -2918,7 +2997,9 @@ class NostrService {
 
   /// Admits kind-20000 geohash messages only from that geohash's nearest relays, failing open whenever it can't judge.
   bool geoOriginAllowsEvent(NostrEvent e, String? relayUrl) {
-    if (e.kind != EventKind.geoChannel) return true;
+    if (e.kind != EventKind.geoChannel && e.kind != EventKind.geoPresence) {
+      return true;
+    }
     if (relayUrl == null || relayUrl.isEmpty) return true;
     final gh = e.tagValue('g')?.toLowerCase();
     if (gh == null || gh.isEmpty) return true;
@@ -3008,6 +3089,7 @@ class NostrService {
     }
     await _eventSub?.cancel();
     await _channelTypingSub?.close();
+    closeGeoPresence();
     for (final sub in _wrapCatchUpSubs.toList()) {
       await sub.close();
     }

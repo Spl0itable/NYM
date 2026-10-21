@@ -13,6 +13,7 @@ import '../services/storage/key_value_store.dart';
 import '../services/attest/attest_badge.dart';
 import '../services/filter/filter_packs.dart';
 import '../features/sync/pref_stamps.dart';
+import '../features/reactions/hover_actions.dart' as hover;
 import '../core/crypto/pow.dart' show normalizePowDifficulty;
 import 'app_state.dart' show appThreadsEnabled, setAppSpamFilter;
 import 'app_state.dart' as globals show appPowFilterBits, appVerifiedFilter;
@@ -120,6 +121,12 @@ class SettingsController extends StateNotifier<Settings> {
     appThreadsEnabled = v;
     state = state.copyWith(threadsEnabled: v);
     _changed(const ['threadsEnabled']);
+  }
+
+  void setChannelCounts(bool v) {
+    _kv.setBool(StorageKeys.channelCounts, v);
+    state = state.copyWith(channelCounts: v);
+    _changed(const ['channelCounts']);
   }
 
   /// Clears the saved column layout and bumps [Settings.columnsResetTick] so a mounted deck re-seeds live.
@@ -457,6 +464,18 @@ class SettingsController extends StateNotifier<Settings> {
     state = state.copyWith(swipeRightAction: v);
     _changed(const ['swipeRightAction']);
   }
+
+  void setHoverActions(List<String> v) {
+    final next = hover.normalizeHoverActions(v);
+    _kv.setString(StorageKeys.hoverActions, jsonEncode(next));
+    state = state.copyWith(hoverActions: next);
+    _changed(const ['hoverActions']);
+  }
+
+  void pickHoverAction(int index, String id) =>
+      setHoverActions(hover.pickHoverAction(state.hoverActions, index, id));
+
+  void resetHoverActions() => setHoverActions(hover.kHoverActionDefaults);
 
   void setSwipeThreshold(int px) {
     _kv.setInt(StorageKeys.swipeThreshold, px);

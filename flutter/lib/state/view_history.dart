@@ -43,17 +43,43 @@ class ViewHistory {
 
   void record(ViewHistoryEntry entry) {
     if (navigating || current == entry) return;
+    final cur = current;
+    if (cur != null &&
+        cur.threadRoot != null &&
+        entry.threadRoot == null &&
+        entry.view == cur.view &&
+        _index > 0 &&
+        _entries[_index - 1] == entry) {
+      _index--;
+      return;
+    }
     _entries.removeRange(_index + 1, _entries.length);
     _entries.add(entry);
     if (_entries.length > limit) _entries.removeAt(0);
     _index = _entries.length - 1;
   }
 
-  ViewHistoryEntry? step(int delta) {
-    final next = _index + delta;
-    if (next < 0 || next >= _entries.length) return null;
-    _index = next;
-    return _entries[next];
+  ViewHistoryEntry? step(int delta) => jump(_index + delta);
+
+  ViewHistoryEntry? jump(int index) {
+    if (_index < 0 || index < 0 || index >= _entries.length) return null;
+    _index = index;
+    return _entries[index];
+  }
+
+  ViewHistoryEntry? at(int index) =>
+      index < 0 || index >= _entries.length ? null : _entries[index];
+
+  List<int> recent({int max = 10}) {
+    final out = <int>[];
+    final seen = <ViewHistoryEntry>{};
+    final cur = current;
+    for (var i = _index - 1; i >= 0 && out.length < max; i--) {
+      final e = _entries[i];
+      if (e.mesh || e == cur || !seen.add(e)) continue;
+      out.add(i);
+    }
+    return out;
   }
 }
 
@@ -65,7 +91,15 @@ ViewHistoryEntry chatViewEntry(ChatView view, ActiveThread? thread) =>
 
 bool stepViewHistory(ProviderContainer c, int delta) {
   final history = c.read(viewHistoryProvider);
-  final entry = history.step(delta);
+  return _goToEntry(c, history, history.step(delta));
+}
+
+bool jumpViewHistory(ProviderContainer c, int index) {
+  final history = c.read(viewHistoryProvider);
+  return _goToEntry(c, history, history.jump(index));
+}
+
+bool _goToEntry(ProviderContainer c, ViewHistory history, ViewHistoryEntry? entry) {
   if (entry == null) return false;
   history.navigating = true;
   final view = entry.view;

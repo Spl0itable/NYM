@@ -440,6 +440,13 @@
     fill: var(--text);
 }
 
+.hover-bar-btn svg[stroke="currentColor"] {
+    color: var(--text);
+    stroke: currentColor;
+    stroke-width: 1.5;
+    fill: none;
+}
+
 .message .msg-hover-buttons .hover-bar-btn {
     background: linear-gradient(var(--bg-secondary), var(--bg-secondary)) var(--bg);
 }
@@ -799,6 +806,13 @@
 
 .delivery-status.sent {
     color: var(--text-dim);
+}
+
+.delivery-status .delivery-ticks {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    vertical-align: middle;
 }
 
 .delivery-status.delivered {

@@ -201,6 +201,12 @@
         const card = state.card;
 
         highlight.style.display = 'none';
+        const ov = card.parentElement ? getComputedStyle(card.parentElement) : null;
+        const inset = (k) => (ov ? parseFloat(ov[k]) || 0 : 0);
+        const minTop = 12 + inset('paddingTop');
+        const maxBottom = window.innerHeight - 12 - inset('paddingBottom');
+        const minLeft = 12 + inset('paddingLeft');
+        const maxRight = window.innerWidth - 12 - inset('paddingRight');
 
         if (target && target.getBoundingClientRect) {
             const rect = target.getBoundingClientRect();
@@ -233,8 +239,8 @@
 
             requestAnimationFrame(() => {
                 const cRect = card.getBoundingClientRect();
-                const spaceBelow = window.innerHeight - rect.bottom;
-                const spaceAbove = rect.top;
+                const spaceBelow = maxBottom - rect.bottom;
+                const spaceAbove = rect.top - minTop;
 
                 let top;
                 if (spaceBelow > cRect.height + 16) {
@@ -242,11 +248,12 @@
                 } else if (spaceAbove > cRect.height + 16) {
                     top = rect.top - cRect.height - 12;
                 } else {
-                    top = Math.min(window.innerHeight - cRect.height - 12, Math.max(12, rect.bottom + 12));
+                    top = Math.min(maxBottom - cRect.height, Math.max(minTop, rect.bottom + 12));
                 }
 
                 let left = rect.left + (rect.width - cRect.width) / 2;
-                left = Math.max(12, Math.min(left, window.innerWidth - cRect.width - 12));
+                left = Math.max(minLeft, Math.min(left, maxRight - cRect.width));
+                top = Math.max(minTop, Math.min(top, maxBottom - cRect.height));
 
                 card.style.left = `${left}px`;
                 card.style.top = `${top}px`;
@@ -257,8 +264,8 @@
             card.style.visibility = 'hidden';
             requestAnimationFrame(() => {
                 const cRect = card.getBoundingClientRect();
-                const left = Math.max(12, (window.innerWidth - cRect.width) / 2);
-                const top = Math.max(12, (window.innerHeight - cRect.height) / 2);
+                const left = Math.max(minLeft, Math.min((window.innerWidth - cRect.width) / 2, maxRight - cRect.width));
+                const top = Math.max(minTop, Math.min((window.innerHeight - cRect.height) / 2, maxBottom - cRect.height));
                 card.style.left = `${left}px`;
                 card.style.top = `${top}px`;
                 card.style.visibility = 'visible';
@@ -726,7 +733,9 @@ class NYM {
         this.channelHistoryMaxAgeMs = 24 * 60 * 60 * 1000;
         this.channelPageSize = 50;
         this.channelLoadMoreSize = 50;
+        this.channelWindowSize = 150;
         this.channelRenderedStart = new Map();
+        this.channelWindowEnd = new Map();
         this.pmStorageLimit = 1000;
         this.pmPageSize = 50;
         this.pmLoadMoreSize = 50;
@@ -2484,6 +2493,12 @@ const SETTING_FIELDS = {
         nym.settings.dmTTLSeconds = isFinite(ttl) && ttl > 0 ? ttl : 86400;
         localStorage.setItem('nym_dm_ttl_seconds', String(nym.settings.dmTTLSeconds));
     },
+    channelCounts(v, el) {
+        const on = el && el.type === 'checkbox' ? !!el.checked : v !== 'false';
+        nym.settings.channelCounts = on;
+        localStorage.setItem('nym_channel_counts', String(on));
+        if (typeof nym._syncGeoPresenceSend === 'function') nym._syncGeoPresenceSend();
+    },
     readReceiptsScope(v) { settingIndicatorScope('readReceipts', v); },
     typingIndicatorsScope(v) { settingIndicatorScope('typingIndicators', v); },
     showStatus(v) {
@@ -2496,6 +2511,7 @@ const SETTING_FIELDS = {
             if (typeof nym.refreshPMHeaderStatus === 'function') nym.refreshPMHeaderStatus();
             if (typeof nym.updateUserList === 'function') nym.updateUserList();
         }
+        if (typeof nym._syncGeoPresenceSend === 'function') nym._syncGeoPresenceSend();
     },
     blurOthersImages(v) {
         nym.blurOthersImages = v === 'friends' ? 'friends' : v === 'true';
@@ -2528,12 +2544,57 @@ const SETTING_FIELDS = {
         nym.settings.swipeThreshold = t;
         localStorage.setItem('nym_swipe_threshold', String(t));
     },
+    hoverActions(v, el) {
+        const A = window.NymMessageActions;
+        const slot = parseInt(String((el && el.dataset.settingKey) || '').split('.')[1], 10);
+        if (!A || A.HOVER_ACTIONS.indexOf(v) < 0 || !(slot >= 0 && slot < A.HOVER_SLOTS)) return false;
+        setHoverActions(A.pickHoverAction(nym.settings.hoverActions, slot, v));
+        return ['hoverActions'];
+    },
 };
+
+function setHoverActions(list) {
+    const next = window.NymMessageActions.normalizeHoverActions(list);
+    nym.settings.hoverActions = next;
+    localStorage.setItem('nym_hover_actions', JSON.stringify(next));
+    syncHoverActionsUi();
+}
+
+function syncHoverActionsUi() {
+    const A = window.NymMessageActions;
+    const ui = window.NymMessageActionUi;
+    if (!A || typeof nym === 'undefined' || !nym) return;
+    const slots = A.normalizeHoverActions(nym.settings && nym.settings.hoverActions);
+    const t = (s) => (typeof nym.uiText === 'function' ? (nym.uiText(s) || s) : s);
+    const label = (id) => t(id === 'react' ? 'React' : ((ui && ui.LABELS[id]) || id));
+    document.querySelectorAll('select[data-setting-key^="hoverActions."]').forEach((sel) => {
+        const slot = parseInt(sel.dataset.settingKey.split('.')[1], 10);
+        if (sel.options.length !== A.HOVER_ACTIONS.length) {
+            sel.innerHTML = '';
+            for (const id of A.HOVER_ACTIONS) {
+                const o = document.createElement('option');
+                o.value = id;
+                sel.appendChild(o);
+            }
+        }
+        Array.from(sel.options).forEach((o) => { o.textContent = label(o.value); });
+        sel.value = slots[slot] || '';
+    });
+    const reset = document.getElementById('hoverActionsResetBtn');
+    if (reset) reset.disabled = slots.join(' ') === A.HOVER_DEFAULTS.join(' ');
+}
+
+function resetHoverActions() {
+    if (typeof nym === 'undefined' || !nym || !window.NymMessageActions) return;
+    setHoverActions(window.NymMessageActions.HOVER_DEFAULTS.slice());
+    nym.notePrefChanged(['hoverActions']);
+}
+(window.NYM_ACTIONS = window.NYM_ACTIONS || {}).resetHoverActions = function () { resetHoverActions(); };
 
 function onSettingFieldChange(el) {
     if (!el || typeof nym === 'undefined' || !nym) return;
     const name = String(el.dataset.settingKey || '');
-    const apply = SETTING_FIELDS[name];
+    const apply = SETTING_FIELDS[name] || (name.indexOf('.') > 0 ? SETTING_FIELDS[name.split('.')[0]] : null);
     if (!apply) return;
     const stamped = apply(el.value, el);
     if (stamped === false) return;
@@ -3893,6 +3954,7 @@ async function showSettings() {
         const t = String(nym.settings.swipeThreshold || 60);
         swipeThresholdSelect.value = ['40', '60', '80', '100'].includes(t) ? t : '60';
     }
+    syncHoverActionsUi();
     let pendingReactEmoji = nym.settings.swipeReactEmoji || '❤️';
     const renderEmojiPreview = (emoji) => {
         if (!swipeReactEmojiPreview) return;
@@ -3957,6 +4019,7 @@ async function showSettings() {
     }
 
     nym.updateHiddenChannelsList();
+    if (typeof nym.updateFavoriteChannelsList === 'function') nym.updateFavoriteChannelsList();
 
     const pinnedSearchInput = document.getElementById('pinnedLandingChannelSearch');
     const pinnedValueInput = document.getElementById('pinnedLandingChannelValue');
@@ -4216,6 +4279,9 @@ async function showSettings() {
         const scope = nym.settings.typingIndicatorsScope;
         typingIndicatorsSel.value = VALID_INDICATOR_SCOPES.includes(scope) ? scope : 'everywhere';
     }
+
+    const channelCountsToggle = document.getElementById('channelCountsToggle');
+    if (channelCountsToggle) channelCountsToggle.checked = nym.settings.channelCounts !== false;
 
     const showStatusSel = document.getElementById('showStatusSelect');
     if (showStatusSel) {
@@ -5769,8 +5835,8 @@ function _nip46NotifyAuthNeeded(url) {
         const now = Date.now();
         if (now - _nip46AuthPromptTs < 30000) return;
         _nip46AuthPromptTs = now;
-        const msg = 'Your remote signer needs authorization to continue. Approve the request in your signer app'
-            + (url ? ', or open the auth page it provided.' : '.');
+        const msg = url ? 'Your remote signer needs authorization to continue. Approve the request in your signer app, or open the auth page it provided.'
+            : 'Your remote signer needs authorization to continue. Approve the request in your signer app.';
         if (typeof nym !== 'undefined' && typeof nym.displaySystemMessage === 'function') {
             nym.displaySystemMessage(msg);
         }
@@ -6910,6 +6976,15 @@ async function applyNostrSettings(s, opts) {
     if (typeof s.showStatus === 'boolean' || s.showStatus === 'friends') {
         nym.settings.showStatus = s.showStatus;
         localStorage.setItem('nym_show_status', String(s.showStatus));
+        if (typeof nym._syncGeoPresenceSend === 'function') nym._syncGeoPresenceSend();
+    }
+
+    if (typeof s.channelCounts === 'boolean') {
+        nym.settings.channelCounts = s.channelCounts;
+        localStorage.setItem('nym_channel_counts', String(s.channelCounts));
+        const channelCountsToggle = document.getElementById('channelCountsToggle');
+        if (channelCountsToggle) channelCountsToggle.checked = s.channelCounts;
+        if (typeof nym._syncGeoPresenceSend === 'function') nym._syncGeoPresenceSend();
     }
 
     if (s.nickStyle) {
@@ -6934,6 +7009,7 @@ async function applyNostrSettings(s, opts) {
         nym.settings.swipeThreshold = s.swipeThreshold;
         localStorage.setItem('nym_swipe_threshold', String(s.swipeThreshold));
     }
+    if (Array.isArray(s.hoverActions) && window.NymMessageActions) setHoverActions(s.hoverActions);
     if (isValidSwipeReactEmoji(s.swipeReactEmoji)) {
         const remoteTs = typeof s.swipeReactEmojiTs === 'number' ? Math.floor(s.swipeReactEmojiTs) : 0;
         const localTs = parseInt(localStorage.getItem('nym_swipe_react_emoji_ts') || '0', 10) || 0;
@@ -7546,6 +7622,7 @@ async function signOut() {
         : uiVars('Its key is stored only on this device: back up the nsec first or you lose this identity.');
     const ask = [uiVars('Sign out of {nym} and disconnect from Nymchat?', { nym: who }), keys, uiVars('You will return to the welcome screen.')].join('\n\n');
     if (!(await window.showAppConfirm(ask, { okLabel: uiVars('Sign out'), danger: true }))) return;
+    if (nym && typeof nym._stopAllAnonPresence === 'function') nym._stopAllAnonPresence();
     localStorage.removeItem('nym_auto_ephemeral');
     localStorage.removeItem('nym_auto_ephemeral_nick');
     localStorage.removeItem('nym_auto_ephemeral_channel');
@@ -7859,8 +7936,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
+            const windowKey = !nym.inPMMode && !nym._cvActive ? (nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel) : null;
+            const detached = !!(windowKey && typeof nym._chWinDetached === 'function' && nym._chWinDetached(windowKey));
+            if (detached && distanceFromBottom < messagesScroller.clientHeight && !nym._channelLoadingNewer) {
+                nym._channelLoadingNewer = true;
+                requestAnimationFrame(() => {
+                    nym.loadNewerChannelMessages(windowKey);
+                    nym._channelLoadingNewer = false;
+                });
+            }
+
             const wasScrolledUp = nym.userScrolledUp;
-            nym.userScrolledUp = distanceFromBottom > 150;
+            nym.userScrolledUp = detached || distanceFromBottom > 150;
             if (wasScrolledUp && !nym.userScrolledUp) {
                 if (!nym.inPMMode && typeof nym.markVisibleChannelMessagesRead === 'function') {
                     nym.markVisibleChannelMessagesRead();
@@ -7869,7 +7956,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            if (distanceFromBottom < 50) {
+            if (distanceFromBottom < 50 && !detached) {
                 if (nym.inPMMode) {
                     const collapseKey = nym.currentGroup
                         ? nym.getGroupConversationKey(nym.currentGroup)
@@ -7885,13 +7972,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (storageKey) {
                         clearTimeout(nym._channelCollapseTimer);
                         nym._channelCollapseTimer = setTimeout(() => {
-                            if (Math.abs(messagesScroller.scrollTop) < 50) nym.collapseChannelToLatest(storageKey);
+                            if (Math.abs(messagesScroller.scrollTop) < 50 && !(typeof nym._chWinDetached === 'function' && nym._chWinDetached(storageKey))) nym.collapseChannelToLatest(storageKey);
                         }, 600);
                     }
                 }
             }
 
-            if (distanceFromBottom > 150) {
+            if (detached || distanceFromBottom > 150) {
                 scrollToBottomBtn.classList.add('visible');
             } else {
                 scrollToBottomBtn.classList.remove('visible');
@@ -7980,6 +8067,11 @@ window.addEventListener('hashchange', () => {
         if (window.nym && nym.pubkey && typeof nym.handleCallLinkFromUrl === 'function') routeToUrlChannel();
         return;
     }
+    if (/^#p=/.test(window.location.hash)) {
+        window.pendingProfileLink = window.location.hash.slice(1);
+        if (window.nym && nym.pubkey) routeToUrlChannel();
+        return;
+    }
     const m = window.location.hash.match(/^#gjoin=([A-Za-z0-9_-]+)/);
     if (!m) return;
     window.pendingGroupInvite = m[1];
@@ -8007,6 +8099,10 @@ function parseUrlChannel() {
             try { localStorage.setItem('nym_pending_group_invite', inviteMatch[1]); } catch (e) { }
             return;
         }
+        if (/^#p=/.test(hash)) {
+            window.pendingProfileLink = hash.slice(1);
+            return;
+        }
         const channelFromUrl = hash.substring(1).toLowerCase();
 
         window.pendingChannel = channelFromUrl;
@@ -8019,6 +8115,13 @@ async function routeToUrlChannel() {
         delete window.pendingCallLink;
         history.replaceState(null, null, window.location.pathname);
         try { await nym.handleCallLinkFromUrl(callToken); } catch (e) { console.warn('[CallLink]', e); }
+        return;
+    }
+    if (window.pendingProfileLink) {
+        const frag = window.pendingProfileLink;
+        delete window.pendingProfileLink;
+        history.replaceState(null, null, window.location.pathname);
+        if (typeof nym.shareInbound === 'function') nym.shareInbound('https://web.nymchat.app/#' + frag, 'deepLink');
         return;
     }
     let pendingInvite = window.pendingGroupInvite;
@@ -8041,15 +8144,20 @@ async function routeToUrlChannel() {
         if (channelInput.startsWith('g:')) {
             channelName = channelInput.substring(2);
         }
+        const parsedLink = window.NymShareLinks ? window.NymShareLinks.parseShareInput('https://web.nymchat.app/#' + channelInput) : null;
+        const namedChannel = parsedLink && parsedLink.kind === 'channel' && !parsedLink.geohash ? parsedLink.channel : '';
+        if (parsedLink && parsedLink.kind === 'channel' && parsedLink.geohash) channelName = parsedLink.channel;
         channelName = nym.sanitizeChannelName(channelName);
-        if (nym.isValidGeohash(channelName)) {
+        if (namedChannel) {
+            await nym.handleChannelLink(namedChannel);
+        } else if (nym.isValidGeohash(channelName)) {
             nym.addChannel(channelName, channelName);
             nym.switchChannel(channelName, channelName);
             nym.userJoinedChannels.add(channelName);
             nym.saveUserChannels();
-            nym.displaySystemMessage(`Joined geohash channel #${channelName} from URL`);
+            nym.displaySystemMessage(nym.uiText(`Joined geohash channel #{channelName} from URL`, { channelName }));
         } else {
-            nym.displaySystemMessage(`Invalid geohash channel: ${channelName}`);
+            nym.displaySystemMessage(nym.uiText(`Invalid geohash channel: {channelName}`, { channelName }));
         }
 
         history.replaceState(null, null, window.location.pathname);

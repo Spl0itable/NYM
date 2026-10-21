@@ -4,6 +4,7 @@
     const LIMITS = Object.freeze({
         pinMax: 10,
         pinHardMax: 50,
+        pinChannelMax: 500,
         pinRemovedMax: 300,
         pinRemovedTtlMs: 180 * 24 * 60 * 60 * 1000,
         mentionChatsMax: 200,
@@ -487,10 +488,13 @@
         const rest = [...live].filter((k) => order.indexOf(k) < 0)
             .sort((a, b) => (items[b] - items[a]) || cmpStr(a, b));
         order = order.concat(rest);
-        if (order.length > LIMITS.pinHardMax) {
-            for (const k of order.slice(LIMITS.pinHardMax)) delete items[k];
-            order = order.slice(0, LIMITS.pinHardMax);
-        }
+        const room = { channel: LIMITS.pinChannelMax, chat: LIMITS.pinHardMax };
+        order = order.filter((k) => {
+            const sec = pinSection(k);
+            if (room[sec] > 0) { room[sec]--; return true; }
+            delete items[k];
+            return false;
+        });
         const removed = {};
         const cutoff = num(nowMs) > 0 ? num(nowMs) - LIMITS.pinRemovedTtlMs : 0;
         for (const [k, at] of Object.entries(s.removed)) {
@@ -523,8 +527,8 @@
         const s = normalizePins(state);
         if (!pinParse(k)) return { state: s, error: 'invalid' };
         if (s.order.indexOf(k) >= 0) return { state: s, error: null };
-        const cap = opts && num(opts.cap) > 0 ? num(opts.cap) : LIMITS.pinMax;
         const section = pinSection(k);
+        const cap = opts && num(opts.cap) > 0 ? num(opts.cap) : (section === 'channel' ? LIMITS.pinChannelMax : LIMITS.pinMax);
         if (s.order.filter((x) => pinSection(x) === section).length >= cap) return { state: s, error: 'cap' };
         const at = Math.max(num(nowMs), (s.removed[k] || 0) + 1, (s.items[k] || 0) + 1);
         s.items[k] = at;
@@ -628,12 +632,13 @@
             return true;
         }
         if (Array.isArray(s.order)) {
-            const seen = { channel: 0, chat: 0 };
+            const channels = s.order.filter((k) => pinSection(k) === 'channel').length;
+            const room = { channel: Math.max(LIMITS.pinMax, channels - Math.ceil(channels / 4)), chat: LIMITS.pinMax };
             const keep = [];
             const drop = [];
             for (const k of s.order) {
                 const sec = pinSection(k);
-                if (seen[sec] < LIMITS.pinMax) { seen[sec]++; keep.push(k); } else drop.push(k);
+                if (room[sec] > 0) { room[sec]--; keep.push(k); } else drop.push(k);
             }
             if (drop.length) {
                 s.order = keep;

@@ -17,8 +17,10 @@ import '../features/mesh/mesh_controller.dart'
     show MeshController, meshScreenOpenProvider;
 import '../core/constants/storage_keys.dart';
 import '../features/i18n/i18n.dart';
+import '../features/layout/info_dock.dart';
 import '../features/layout/info_dock_host.dart';
 import '../features/layout/layout_model.dart';
+import '../features/layout/slide_out_list.dart';
 import '../features/mesh/mesh_screen.dart';
 import '../features/nymbot/bot_credits_modal.dart';
 import '../features/nymbot/nymbot_providers.dart'
@@ -41,6 +43,8 @@ import '../widgets/sidebar/sidebar.dart';
 import '../widgets/wallpaper/wallpaper_layer.dart';
 
 final chatListLandingProvider = StateProvider<bool>((ref) => false);
+
+const double _kMouseClickSlop = 4;
 
 /// Responsive shell: two panes above 1024px, else a 300px off-canvas drawer; call UI mounts above everything.
 class HomeShell extends ConsumerStatefulWidget {
@@ -73,9 +77,6 @@ class HomeShellState extends ConsumerState<HomeShell>
 
   /// The right edge drives the thread.
   bool _edgeSwipeFromRight = false;
-
-  /// The thread last closed, so a right-edge swipe can step back into it.
-  ActiveThread? _lastThread;
 
   @override
   void initState() {
@@ -214,6 +215,10 @@ class HomeShellState extends ConsumerState<HomeShell>
         return _stepHistory(1);
       case 'escape':
         if (inText) return false;
+        if (ref.read(infoDockProvider) != null) {
+          _dismissDock();
+          return true;
+        }
         if (ref.read(activeThreadProvider) != null) {
           ref.read(activeThreadProvider.notifier).state = null;
           return true;
@@ -302,11 +307,10 @@ class HomeShellState extends ConsumerState<HomeShell>
   /// Past the 50px threshold the drawer toggles (so it also closes), then tracking stops for this touch.
   void _edgePointerMove(PointerMoveEvent e) {
     if (e.pointer != _edgeSwipePointer) return;
-    // Right edge, traveling left: step back into the thread just left.
     if (_edgeSwipeFromRight) {
       if (_edgeSwipeStartX - e.position.dx > _sidebarSwipeThreshold) {
         _edgeSwipePointer = null;
-        _reopenLastThread();
+        _swipeForward();
       }
       return;
     }
@@ -329,20 +333,11 @@ class HomeShellState extends ConsumerState<HomeShell>
     }
   }
 
-  /// Back into the thread just left, else the PM/group header's menu.
-  void _reopenLastThread() {
+  void _swipeForward() {
     if (_drawerOpen) return;
+    if (_stepHistory(1)) return;
     if (ref.read(activeThreadProvider) != null) return;
-    final app = ref.read(appStateProvider);
-    final thread = _lastThread;
-    if (appThreadsEnabled && thread != null && thread.view == app.view) {
-      if (threadRootMessage(app, thread.view.storageKey, thread.rootId) != null) {
-        ref.read(activeThreadProvider.notifier).state = thread;
-        return;
-      }
-      _lastThread = null;
-    }
-    _openConversationMenu(app);
+    _openConversationMenu(ref.read(appStateProvider));
   }
 
   void _openConversationMenu(AppState app) => openConversationInfo(context, ref);
@@ -357,6 +352,9 @@ class HomeShellState extends ConsumerState<HomeShell>
   @override
   Widget build(BuildContext context) {
     if (ref.read(viewHistoryProvider).isEmpty) _recordCurrentView();
+    ref.listen<int>(slideOutListCloseProvider, (_, _) {
+      if (!_phone && _drawerOpen && mounted) setState(() => _drawerOpen = false);
+    });
     ref.listen<ChatView>(currentViewProvider, (_, next) => _recordCurrentView());
     ref.listen<ActiveThread?>(activeThreadProvider, (_, next) => _recordCurrentView());
     ref.listen<bool>(meshScreenOpenProvider, (prev, next) {
@@ -414,12 +412,6 @@ class HomeShellState extends ConsumerState<HomeShell>
         (prev, next) {
       if (next.isEmpty || next == prev) return;
       _bindBotEngine();
-    });
-
-    // A real view change closes the mobile drawer; a closed thread is remembered for the right-edge swipe.
-    ref.listen(activeThreadProvider, (prev, next) {
-      if (prev != null && next == null) _lastThread = prev;
-      if (next != null) _lastThread = null;
     });
 
     ref.listen(appStateProvider.select((s) => s.view), (prev, next) {
@@ -498,6 +490,7 @@ class HomeShellState extends ConsumerState<HomeShell>
         return;
       }
       if (_drawerOpen) return;
+      if (_stepHistory(-1)) return;
       if (ref.read(activeThreadProvider) != null) {
         ref.read(activeThreadProvider.notifier).state = null;
         return;
@@ -532,6 +525,53 @@ class HomeShellState extends ConsumerState<HomeShell>
 
   double? _sidebarW;
 
+  DockedInfo? _dockAtDown;
+  int? _dockPointer;
+  Offset _dockDownAt = Offset.zero;
+  double _dockSlop = kTouchSlop;
+  int? _resizerPointer;
+
+  void _dismissDock() {
+    ref.read(infoDockProvider.notifier).state = null;
+    ref.read(settingsProvider.notifier).setInfoPanelOpen(false);
+  }
+
+  void _outsideDockDown(PointerDownEvent e) {
+    final dock = ref.read(infoDockProvider);
+    final primary =
+        e.kind != PointerDeviceKind.mouse || e.buttons == kPrimaryMouseButton;
+    final onResizer = _resizerPointer == e.pointer;
+    _resizerPointer = null;
+    _dockAtDown = dock != null && primary && !onResizer ? dock : null;
+    _dockPointer = _dockAtDown == null ? null : e.pointer;
+    _dockDownAt = e.position;
+    _dockSlop = e.kind == PointerDeviceKind.mouse ? _kMouseClickSlop : kTouchSlop;
+  }
+
+  void _outsideDockMove(PointerMoveEvent e) {
+    if (_dockPointer != e.pointer) return;
+    if ((e.position - _dockDownAt).distance <= _dockSlop) return;
+    _dockAtDown = null;
+    _dockPointer = null;
+  }
+
+  void _outsideDockUp(PointerUpEvent e) {
+    final at = _dockAtDown;
+    if (at == null || _dockPointer != e.pointer) return;
+    _dockAtDown = null;
+    _dockPointer = null;
+    scheduleMicrotask(() {
+      if (!mounted || !identical(ref.read(infoDockProvider), at)) return;
+      _dismissDock();
+    });
+  }
+
+  void _outsideDockCancel(PointerCancelEvent e) {
+    if (_dockPointer != e.pointer) return;
+    _dockAtDown = null;
+    _dockPointer = null;
+  }
+
   Widget _wide(BuildContext context, bool useColumns) {
     // The mesh screen swaps in like any view; the persistent sidebar needs no hamburger.
     final meshOpen = _meshShown;
@@ -540,6 +580,16 @@ class HomeShellState extends ConsumerState<HomeShell>
         clampSidebarWidth(kv.getString(StorageKeys.sidebarWidth)).toDouble();
     return Row(
       children: [
+        Expanded(
+          child: Listener(
+            key: const ValueKey('outsideInfoDock'),
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: _outsideDockDown,
+            onPointerMove: _outsideDockMove,
+            onPointerUp: _outsideDockUp,
+            onPointerCancel: _outsideDockCancel,
+            child: Row(
+              children: [
         SizedBox(
           width: sidebarW,
           child: Stack(
@@ -556,20 +606,23 @@ class HomeShellState extends ConsumerState<HomeShell>
                   slider: true,
                   child: MouseRegion(
                     cursor: SystemMouseCursors.resizeColumn,
-                    child: GestureDetector(
-                      key: const ValueKey('sidebarResizer'),
-                      behavior: HitTestBehavior.opaque,
-                      dragStartBehavior: DragStartBehavior.down,
-                      onHorizontalDragUpdate: (d) => setState(() => _sidebarW =
-                          clampSidebarWidth((_sidebarW ?? sidebarW) + d.delta.dx)
-                              .toDouble()),
-                      onHorizontalDragEnd: (_) => kv.setString(
-                          StorageKeys.sidebarWidth, '${(_sidebarW ?? sidebarW).round()}'),
-                      onDoubleTap: () {
-                        setState(() => _sidebarW = kSidebarDefault.toDouble());
-                        kv.setString(StorageKeys.sidebarWidth, '$kSidebarDefault');
-                      },
-                      child: const SizedBox.expand(),
+                    child: Listener(
+                      onPointerDown: (e) => _resizerPointer = e.pointer,
+                      child: GestureDetector(
+                        key: const ValueKey('sidebarResizer'),
+                        behavior: HitTestBehavior.opaque,
+                        dragStartBehavior: DragStartBehavior.down,
+                        onHorizontalDragUpdate: (d) => setState(() => _sidebarW =
+                            clampSidebarWidth((_sidebarW ?? sidebarW) + d.delta.dx)
+                                .toDouble()),
+                        onHorizontalDragEnd: (_) => kv.setString(
+                            StorageKeys.sidebarWidth, '${(_sidebarW ?? sidebarW).round()}'),
+                        onDoubleTap: () {
+                          setState(() => _sidebarW = kSidebarDefault.toDouble());
+                          kv.setString(StorageKeys.sidebarWidth, '$kSidebarDefault');
+                        },
+                        child: const SizedBox.expand(),
+                      ),
                     ),
                   ),
                 ),
@@ -579,6 +632,10 @@ class HomeShellState extends ConsumerState<HomeShell>
         ),
         Expanded(
           child: meshOpen ? const MeshScreen() : _content(context, useColumns),
+        ),
+              ],
+            ),
+          ),
         ),
         const InfoDockHost(),
       ],
@@ -672,6 +729,7 @@ class HomeShellState extends ConsumerState<HomeShell>
                   },
                   onBack: _closeChatList,
                   child: Sidebar(
+                    hidden: !_drawerOpen && _listDrag == null,
                     compact: true,
                     onItemSelected: phone
                         ? null

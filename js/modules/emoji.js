@@ -101,7 +101,9 @@ Object.assign(NYM.prototype, {
                 const map = JSON.parse(localStorage.getItem('nym_custom_emojis') || '[]');
                 if (Array.isArray(map)) {
                     for (const entry of map) {
-                        if (Array.isArray(entry)) this.registerCustomEmoji(entry[0], entry[1]);
+                        if (!Array.isArray(entry)) continue;
+                        this.registerCustomEmoji(entry[0], entry[1]);
+                        if (entry[2] === 1 && this.customEmojis.get(entry[0]) === entry[1]) this._taggedEmojiSet().add(entry[0]);
                     }
                 }
             } catch (_) { }
@@ -194,17 +196,66 @@ Object.assign(NYM.prototype, {
         this._emojiMapSaveTimer = setTimeout(() => {
             this._emojiMapSaveTimer = null;
             try {
-                const entries = Array.from(this.customEmojis.entries()).slice(-5000);
+                const entries = this._customEmojiSaveEntries().slice(-5000);
                 localStorage.setItem('nym_custom_emojis', JSON.stringify(entries));
             } catch (err) {
                 if (err && err.name === 'QuotaExceededError') {
                     try {
-                        const trimmed = Array.from(this.customEmojis.entries()).slice(-800);
+                        const trimmed = this._customEmojiSaveEntries().slice(-800);
                         localStorage.setItem('nym_custom_emojis', JSON.stringify(trimmed));
                     } catch (_) { }
                 }
             }
         }, 2000);
+    },
+
+    _taggedEmojiSet() {
+        if (!this._taggedEmoji) this._taggedEmoji = new Set();
+        return this._taggedEmoji;
+    },
+
+    _customEmojiSaveEntries() {
+        const tagged = this._taggedEmoji || new Set();
+        const plain = [];
+        const kept = [];
+        for (const [code, url] of this.customEmojis.entries()) {
+            if (tagged.has(code)) kept.push([code, url, 1]);
+            else plain.push([code, url]);
+        }
+        return plain.concat(kept);
+    },
+
+    _markTaggedEmoji(code, url) {
+        if (!this.customEmojis || this.customEmojis.get(code) !== url) return;
+        const set = this._taggedEmojiSet();
+        if (set.has(code)) return;
+        set.add(code);
+        if (set.size > 4000) set.delete(set.values().next().value);
+        this._saveCustomEmojiMap();
+    },
+
+    noteMissingCustomEmoji(code) {
+        if (typeof code !== 'string' || !_RX_EMOJI_SHORTCODE.test(code) || !/[a-zA-Z_]/.test(code)) return;
+        if (this.emojiMap && this.emojiMap[code.toLowerCase()]) return;
+        if (!this.customEmojis || this.customEmojis.has(code)) return;
+        if (!this._emojiAsked) this._emojiAsked = new Set();
+        if (this._emojiAsked.has(code) || this._emojiAsked.size >= 2000) return;
+        this._emojiAsked.add(code);
+        this._emojiAskPending = true;
+        if (this._emojiAskTimer) return;
+        const wait = Math.max(400, (this._emojiAskAt || 0) + 60000 - Date.now());
+        this._emojiAskTimer = setTimeout(() => {
+            this._emojiAskTimer = null;
+            if (!this._emojiAskPending) return;
+            this._emojiAskPending = false;
+            this._emojiAskAt = Date.now();
+            Promise.resolve(this._emojiRestoreFromD1({ force: true })).catch(() => { });
+        }, wait);
+    },
+
+    noteMissingCustomEmojiIn(content) {
+        if (typeof content !== 'string' || content.indexOf(':') === -1) return;
+        for (const m of content.matchAll(/:([a-zA-Z0-9_]+):/g)) this.noteMissingCustomEmoji(m[1]);
     },
 
     registerCustomEmoji(shortcode, url) {
@@ -238,7 +289,7 @@ Object.assign(NYM.prototype, {
         const pending = this._pendingEmojiRefreshCodes;
         if (!pending || pending.size === 0) return;
         this._pendingEmojiRefreshCodes = new Set();
-        const roots = document.querySelectorAll('.message-content, .notification-item-body');
+        const roots = document.querySelectorAll('.message-content, .notification-item-body, .reaction-badge');
         if (roots.length === 0) return;
         const skip = (node, root) => {
             let p = node.parentNode;
@@ -253,6 +304,7 @@ Object.assign(NYM.prototype, {
             return false;
         };
         for (const root of roots) {
+            const extra = root.classList && root.classList.contains('reaction-badge') ? 'custom-emoji-reaction' : '';
             const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
             const textNodes = [];
             let tn;
@@ -273,7 +325,7 @@ Object.assign(NYM.prototype, {
                         frag.appendChild(document.createTextNode(text.slice(last, mm.index)));
                     }
                     const tmp = document.createElement('span');
-                    tmp.innerHTML = this.renderCustomEmojiImg(mm[1]) || '';
+                    tmp.innerHTML = this.renderCustomEmojiImg(mm[1], extra) || '';
                     frag.appendChild(tmp.firstChild || document.createTextNode(mm[0]));
                     last = mm.index + mm[0].length;
                 }
@@ -292,12 +344,13 @@ Object.assign(NYM.prototype, {
         } catch (_) { return null; }
     },
 
-    async _emojiRestoreFromD1() {
+    async _emojiRestoreFromD1(opts) {
         if (!this._getApiHost || !this._getApiHost()) return;
         if (typeof this._storageApiStream !== 'function') return;
+        const force = !!(opts && opts.force);
         const now = Date.now();
-        if (this._emojiD1FetchedAt && now - this._emojiD1FetchedAt < 600000) return;
-        const held = this.customEmojiPacks && this.customEmojiPacks.size > 0;
+        if (!force && this._emojiD1FetchedAt && now - this._emojiD1FetchedAt < 600000) return;
+        const held = !force && this.customEmojiPacks && this.customEmojiPacks.size > 0;
         const meta = held ? this._emojiD1Meta() : null;
         if (meta && Number.isFinite(meta.at) && now >= meta.at && now - meta.at < EMOJI_D1_REFRESH_MS) return;
         this._emojiD1FetchedAt = now;
@@ -334,6 +387,7 @@ Object.assign(NYM.prototype, {
         for (const t of tags) {
             if (Array.isArray(t) && t[0] === 'emoji' && t[1] && t[2]) {
                 this.registerCustomEmoji(t[1], t[2]);
+                this._markTaggedEmoji(t[1], t[2]);
             }
         }
     },
@@ -504,6 +558,7 @@ Object.assign(NYM.prototype, {
             if (m) {
                 const img = this.renderCustomEmojiImg(m[1], 'custom-emoji-reaction');
                 if (img) return img;
+                this.noteMissingCustomEmoji(m[1]);
             }
         }
         return this.escapeHtml(emoji);

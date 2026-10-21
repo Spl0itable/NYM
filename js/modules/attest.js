@@ -291,7 +291,11 @@
                 btn.classList.remove('send-btn-verifying');
                 btn.removeAttribute('aria-busy');
                 btn.disabled = false;
-                if (input.dataset.attestPrevPlaceholder) {
+                delete input.dataset.composerPlaceholder;
+                if (typeof this._composerBasePlaceholder === 'function') {
+                    input.setAttribute('data-placeholder', this._composerBasePlaceholder());
+                    input.dataset.composerPlaceholder = this._composerBasePlaceholder();
+                } else if (input.dataset.attestPrevPlaceholder) {
                     input.setAttribute('data-placeholder', input.dataset.attestPrevPlaceholder);
                 }
             }
@@ -303,19 +307,10 @@
         },
 
         _i18nComposerPlaceholder(input) {
-            const lang = typeof this.getUiLanguage === 'function' ? this.getUiLanguage() : '';
-            if (!lang || lang === 'en' || !input) return;
-            if (typeof this._i18nApplyAttr !== 'function' || typeof this._i18nAttrKey !== 'function') return;
-            try {
-                if (input.__i18nAttrOrig) delete input.__i18nAttrOrig['data-placeholder'];
-                if (typeof this._i18nLoadCache === 'function') this._i18nLoadCache(lang);
-                this._i18nApplyAttr({ el: input, attr: 'data-placeholder' }, lang);
-                const key = this._i18nAttrKey(input, 'data-placeholder');
-                const cache = typeof this._i18nLoadCache === 'function' ? this._i18nLoadCache(lang) : null;
-                if (key && cache && cache[key] == null && typeof this._i18nEnqueue === 'function') {
-                    this._i18nEnqueue([key], 'hi', lang);
-                }
-            } catch (_) { }
+            if (!input || typeof this.i18nBindAttr !== 'function') return;
+            const value = input.getAttribute('data-placeholder');
+            if (!value) return;
+            try { this.i18nBindAttr(input, 'data-placeholder', value); } catch (_) { }
         },
 
         queueSendAfterVerify() {

@@ -1155,12 +1155,12 @@ function transportMessages(t, messages) {
 async function callTransport(env, t, rawMessages) {
   const messages = transportMessages(t, rawMessages);
   if (t.kind === "bound") {
-    const opts = String(env.SPAM_VIA_GATEWAY || "") === "1" && env.AI_GATEWAY_NAME ? { gateway: { id: env.AI_GATEWAY_NAME } } : undefined;
+    const opts = String(env.SPAM_VIA_GATEWAY || "") === "1" && env.AI_GATEWAY_NAME ? { gateway: { id: env.AI_GATEWAY_NAME, collectLog: false } } : undefined;
     const body = { messages, max_tokens: 300, temperature: 0 };
     const res = await timed(opts ? env.AI.run(t.model, body, opts) : env.AI.run(t.model, body), MODEL_TIMEOUT_MS, "model call");
     return messageText(res);
   }
-  const headers = { "Content-Type": "application/json" };
+  const headers = { "Content-Type": "application/json", "cf-aig-collect-log": "false" };
   const token = env.CF_API_TOKEN || env.AI_GATEWAY_API_TOKEN;
   const gatewayToken = env.AI_GATEWAY_TOKEN || token;
   if (gatewayToken) headers["cf-aig-authorization"] = "Bearer " + gatewayToken;
@@ -1176,7 +1176,7 @@ async function callTransport(env, t, rawMessages) {
   }
   let data = null;
   try { data = JSON.parse(raw); } catch (e) { data = null; }
-  if (!res.ok) throw new Error("gateway HTTP " + res.status + ": " + raw.slice(0, 160));
+  if (!res.ok) throw Object.assign(new Error("gateway HTTP " + res.status + ": " + raw.slice(0, 160)), { status: res.status });
   return messageText(data);
 }
 
@@ -1208,8 +1208,14 @@ export async function askSpamModel(env, settings, prompt) {
     state.cooldownUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
     state.counters.rateLimited++;
   }
-  if (failures.length > 1) throw new Error(failures.join(" | "));
+  if (failures.length > 1) throw Object.assign(new Error(failures.join(" | ")), lastErr && lastErr.status ? { status: lastErr.status } : {});
   throw lastErr || new Error("model failed");
+}
+
+export function spamErrorSummary(e) {
+  const name = (e && typeof e.name === "string" && /^[A-Za-z][A-Za-z0-9_]{0,60}$/.test(e.name)) ? e.name : "Error";
+  const status = e && Number.isInteger(e.status) ? e.status : 0;
+  return status ? name + " " + status : name;
 }
 
 function mergeList(existing, value, cap) {
@@ -4166,7 +4172,7 @@ async function runJob(env, context, job, generation) {
     state.counters.errors++;
     state.lastError = String(e && e.message || e).slice(0, 300);
     state.lastErrorAt = Date.now();
-    console.error("[spam] audit failed for " + job.id + ": " + state.lastError);
+    console.error("[spam] audit failed: " + spamErrorSummary(e));
     settle(job.id, false);
   }
   if (generation !== state.generation) return;

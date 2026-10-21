@@ -329,6 +329,13 @@
             Block User
         </div>
 
+        <div class="context-menu-item nm-hidden" id="ctxShareProfile">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico8">
+                <rect x="2" y="2" width="5" height="5" rx="1" /><rect x="9" y="2" width="5" height="5" rx="1" /><rect x="2" y="9" width="5" height="5" rx="1" /><path d="M 9.5 9.5 H 11 M 13.5 9.5 V 11 M 9.5 13.5 H 13.5 M 11.5 11.5 V 13.5" stroke-linecap="round" />
+            </svg>
+            Share profile
+        </div>
+
         <div class="context-menu-item nm-hidden" id="ctxEditProfile">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico8">
                 <circle cx="8" cy="5.5" r="2.5" />
@@ -357,6 +364,12 @@
                 </svg>
                 Copy Invite Link
             </div>
+            <div class="context-menu-copy-pubkey" id="grpCtxShareGroup" data-action="groupCtxShareGroup">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico4">
+                    <rect x="2" y="2" width="5" height="5" rx="1" /><rect x="9" y="2" width="5" height="5" rx="1" /><rect x="2" y="9" width="5" height="5" rx="1" /><path d="M 9.5 9.5 H 11 M 13.5 9.5 V 11 M 9.5 13.5 H 13.5" stroke-linecap="round" />
+                </svg>
+                Share group
+            </div>
         </div>
         <div class="context-menu-bio" id="grpCtxBio"></div>
         <div class="context-menu-actions" id="grpCtxActions"></div>
@@ -382,6 +395,7 @@
                             data-on-input="onNewPMRecipientInput"
                             data-on-keydown="onNewPMRecipientKeydown"
                             autocomplete="off">
+                        <button type="button" class="pm-scan-btn" data-action="openShareScanner" aria-label="Scan a code" data-tip="Scan a code"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2 5V2h3M11 2h3v3M14 11v3h-3M5 14H2v-3"/><path d="M4 8h8"/></svg></button>
                     </div>
                     <div class="gt-add-spots nm-hidden" id="pmAddMembersSpots"></div>
                     <div class="pm-suggestions" id="pmSuggestions"></div>
@@ -704,6 +718,7 @@
                             <line x1="3" y1="18" x2="21" y2="18"></line>
                         </svg>
                     </button>
+                    <button type="button" class="uh-phone-menu uh-phone-back" id="phoneBackBtn" aria-label="Go back" data-tip="" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
                     <div class="channel-nav-buttons">
                         <button class="channel-nav-btn" id="channelBackBtn" data-action="navigateBack" aria-label="Go back" data-tip-key="Alt+←" disabled>
                                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2281,6 +2296,14 @@
                         </select>
                         <div class="form-hint">When enabled, online/away/offline status dots are shown on avatars and in user profiles. "Friends only" broadcasts a hidden status publicly while privately sharing your real status with people you've marked as friends, so only they can see it. When disabled, your status is hidden from everyone, but you can still see other people's status indicators.</div>
                     </div>
+
+                    <div class="form-group">
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="channelCountsLabel">Show me in channel online counts</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="channelCountsToggle" data-setting-key="channelCounts" aria-labelledby="channelCountsLabel" aria-describedby="channelCountsHint" data-on-change="onSettingFieldChange" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="channelCountsHint">While a public channel is open and you're active, Nymchat tells the relays you're there, so you count as online in that channel even when you don't post. Turn this off to stay out of channel online counts. You still see who else is online, and Show Status Indicators set to Disabled turns this off too.</div>
+                    </div>
                     </div>
                 </div>
 
@@ -2487,6 +2510,17 @@
                         </label>
                     </div>
 
+                    <div class="form-group hover-actions-group" id="hoverActionsGroup">
+                        <label class="form-label" id="hoverActionsLabel">Message hover actions</label>
+                        <div class="hover-actions-slots" role="group" aria-labelledby="hoverActionsLabel" aria-describedby="hoverActionsHint">
+                            <select class="form-select" id="hoverAction0Select" data-setting-key="hoverActions.0" data-on-change="onSettingFieldChange" aria-label="First button"></select>
+                            <select class="form-select" id="hoverAction1Select" data-setting-key="hoverActions.1" data-on-change="onSettingFieldChange" aria-label="Second button"></select>
+                            <select class="form-select" id="hoverAction2Select" data-setting-key="hoverActions.2" data-on-change="onSettingFieldChange" aria-label="Third button"></select>
+                        </div>
+                        <div class="form-hint" id="hoverActionsHint">The three buttons shown when you point at a message, from left to right. More always opens the full menu.</div>
+                        <button type="button" class="icon-btn" id="hoverActionsResetBtn" data-action="resetHoverActions">Reset to defaults</button>
+                    </div>
+
                     <div class="form-group" id="speechModelGroup">
                         <label class="form-label">Voice message transcription</label>
                         <div class="form-hint" id="speechModelStatus" role="status" aria-live="polite"></div>
@@ -2536,6 +2570,11 @@
                             <span class="nym-switch"><input type="checkbox" role="switch" id="hideNonPinnedToggle" data-setting-key="hideNonPinned" data-on-change="onSettingPillChange" aria-labelledby="hideNonPinnedLabel" aria-describedby="hideNonPinnedHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
                         </label>
                         <div class="form-hint" id="hideNonPinnedHint">When enabled, only your favorited channels will appear in the sidebar</div>
+                    </div>
+
+                    <div class="form-group" data-geohash-setting>
+                        <label class="form-label">Favorite Channels</label>
+                        <div class="blocked-list" id="favoriteChannelsList"></div>
                     </div>
 
                     <div class="form-group" data-geohash-setting>
@@ -2848,24 +2887,30 @@
         </div>
     </div>
 
-    <!-- Share Channel Modal -->
-    <div class="modal" id="shareModal">
+    <div class="modal" id="shareModal" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
         <div class="modal-content share-modal">
             <button class="modal-close" data-action="closeModal" data-modal-id="shareModal" aria-label="Close">✕</button>
-            <div class="modal-header">Share Channel</div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label class="form-label">Channel URL</label>
+            <div class="modal-header" id="shareTitle">Share channel</div>
+            <div class="modal-body share-body">
+                <div class="share-refusal nm-hidden" id="shareRefusal" role="status"></div>
+                <div class="share-qr-card" id="shareQrCard"><canvas id="shareQrCanvas" width="0" height="0" role="img"></canvas></div>
+                <div class="share-subtitle" id="shareSubtitle"></div>
+                <div class="share-detail" id="shareDetail"></div>
+                <div class="share-note" id="shareNote"></div>
+                <div class="share-hint" id="shareHint"></div>
+                <div class="form-group share-link-row" id="shareLinkRow">
                     <div class="share-url-container">
-                        <input type="text" class="share-url-input" id="shareUrlInput" readonly>
+                        <input type="text" class="share-url-input" id="shareUrlInput" readonly aria-label="Link">
                         <button class="copy-url-btn" data-action="copyShareUrl">COPY</button>
                     </div>
-                    <div class="form-hint">Share this URL to invite others to this channel</div>
                 </div>
+                <div class="share-actions" id="shareActions"></div>
             </div>
             <div class="modal-actions">
                 <button class="icon-btn" data-action="closeModal" data-modal-id="shareModal">Close</button>
             </div>
+        </div>
+    </div>
         </div>
     </div>
 
@@ -2875,6 +2920,7 @@
             <button class="modal-close" data-action="closeModal" data-modal-id="aboutModal" aria-label="Close">✕</button>
             <div class="modal-header">Nymchat <span class="about-version" id="aboutVersion"></span></div>
             <div class="modal-body">
+                <button type="button" class="icon-btn about-share-app" data-action="openShareApp">Share Nymchat app</button>
                 <div class="about-build" id="aboutBuild">
                     <div class="about-build-row">
                         <span class="about-build-title">Build integrity</span>
@@ -3020,12 +3066,16 @@
     <script defer src="js/modules/upload-activity.js"></script>
     <script defer src="js/modules/nostr-core.js"></script>
     <script defer src="js/modules/nym-suffix.js"></script>
+    <script defer src="js/modules/last-seen.js"></script>
+    <script defer src="js/modules/geo-presence.js"></script>
     <script defer src="js/modules/users.js"></script>
     <script defer src="js/modules/channels.js"></script>
     <script defer src="js/modules/syntax-highlight.js"></script>
     <script defer src="js/modules/media-notes.js"></script>
     <script defer src="js/modules/chat-tools.js"></script>
     <script defer src="js/modules/group-tools.js"></script>
+    <script defer src="js/modules/share-links.js"></script>
+    <script defer src="js/modules/share-qr.js"></script>
     <script defer src="js/modules/dm-polls.js"></script>
     <script defer src="js/modules/chat-nav.js"></script>
     <script defer src="js/modules/day-labels.js"></script>
@@ -3056,12 +3106,18 @@
     <script defer src="js/modules/bot-runs.js"></script>
     <script defer src="js/modules/groups.js"></script>
     <script defer src="js/modules/ui-context.js"></script>
+    <script defer src="js/modules/share-sheet.js"></script>
+    <script defer src="js/modules/share-scanner.js"></script>
+    <script defer src="js/modules/share-nfc.js"></script>
+    <script defer src="js/modules/share-app.js"></script>
+    <script defer src="js/modules/share-nearby.js"></script>
     <script defer src="js/modules/mesh/mesh-ui.js"></script>
     <script defer src="js/modules/mesh/mesh-outbox.js"></script>
     <script defer src="js/modules/init.js"></script>
     <script defer src="js/modules/emoji.js"></script>
     <script defer src="js/modules/reactions.js"></script>
     <script defer src="js/modules/commands.js"></script>
+    <script defer src="js/modules/presence-activity.js"></script>
     <script defer src="js/modules/away-sync.js"></script>
     <script defer src="js/modules/away-status.js"></script>
     <script defer src="js/modules/command-i18n.js"></script>

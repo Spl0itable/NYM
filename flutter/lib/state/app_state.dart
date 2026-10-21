@@ -19,6 +19,7 @@ import '../features/chat_tools/chat_tools_service.dart' show chatToolsHidden;
 import '../features/emoji/custom_emoji.dart'
     show
         CustomEmojiPack,
+        customEmojiMissingSink,
         CustomEmojiState,
         emojiPrefsProvider,
         kCustomEmojiMapKey,
@@ -35,6 +36,8 @@ import '../features/notifications/notification_routing.dart';
 import '../features/notifications/notify_view.dart';
 import '../features/nymbot/bot_runs.dart' show anchorBotReply;
 import '../features/messages/trust_graph.dart';
+import '../features/pms/last_seen.dart';
+import '../features/presence/geo_presence.dart';
 import '../features/pms/pm_logic.dart';
 import '../features/polls/poll_logic.dart';
 import '../features/toasts/toast_center.dart';
@@ -258,8 +261,11 @@ class AppState {
     required this.unreadCounts,
     required this.view,
     this.connectedRelays = 0,
+    this.poolLinked = false,
     this.proxyMode = true,
     this.displayRev = 0,
+    this.globalRev = 0,
+    Map<String, int>? keyRevs,
     Map<String, int>? typing,
     Map<String, String>? typingActivity,
     Map<String, Poll>? polls,
@@ -277,7 +283,8 @@ class AppState {
     Set<String>? nymchatVouches,
     Set<String>? trustedPubkeys,
     Set<String>? archiveUnavailable,
-  })  : typing = typing ?? <String, int>{},
+  })  : keyRevs = keyRevs ?? <String, int>{},
+        typing = typing ?? <String, int>{},
         typingActivity = typingActivity ?? <String, String>{},
         polls = polls ?? <String, Poll>{},
         zaps = zaps ?? <String, MessageZaps>{},
@@ -300,6 +307,10 @@ class AppState {
 
   final int connectedRelays;
 
+  final bool poolLinked;
+
+  bool get relayLinked => connectedRelays > 0 || poolLinked;
+
   final bool proxyMode;
 
   /// Client-side automatic spam heuristics only run in direct mode; explicit user filters apply in both.
@@ -307,6 +318,12 @@ class AppState {
 
   /// Bumped when rendered list content changes; ambient churn skips it to avoid list rebuilds.
   final int displayRev;
+
+  final int globalRev;
+
+  final Map<String, int> keyRevs;
+
+  (int, int) viewRevOf(String key) => (globalRev, keyRevs[key] ?? 0);
 
   final List<ChannelEntry> channels;
   final List<PMConversation> pmConversations;
@@ -721,8 +738,10 @@ class AppState {
     String? selfNym,
     ChatView? view,
     int? connectedRelays,
+    bool? poolLinked,
     bool? proxyMode,
     int? displayRev,
+    int? globalRev,
   }) =>
       AppState(
         selfPubkey: selfPubkey ?? this.selfPubkey,
@@ -736,8 +755,11 @@ class AppState {
         unreadCounts: unreadCounts,
         view: view ?? this.view,
         connectedRelays: connectedRelays ?? this.connectedRelays,
+        poolLinked: poolLinked ?? this.poolLinked,
         proxyMode: proxyMode ?? this.proxyMode,
         displayRev: displayRev ?? this.displayRev,
+        globalRev: globalRev ?? this.globalRev,
+        keyRevs: keyRevs,
         typing: typing,
         typingActivity: typingActivity,
         polls: polls,
@@ -1477,6 +1499,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Clears the session dedup sets so a restore after a cache wipe isn't dropped as duplicates.
   void clearSessionDedup() {
     _seenIds.clear();
+    _seenCopyKeys.clear();
     _seenNymMessageIds.clear();
     _deletedEventIds.clear();
     _pendingDeletions.clear();
@@ -1488,6 +1511,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
   int _localSeq = 1000000;
   int _ingestSeq = 1;
   final Set<String> _seenIds = <String>{};
+  final Set<String> _seenCopyKeys = <String>{};
+
+  bool _claimCopy(String pubkey, int ms, String content) {
+    if (pubkey.isEmpty || ms <= 0) return true;
+    return _seenCopyKeys.add('$pubkey|$ms|$content');
+  }
 
   /// nymMessageIds already ingested; wrap ids differ per recipient copy.
   final Set<String> _seenNymMessageIds = <String>{};
@@ -1546,6 +1575,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Switches to a live, identity-backed empty state once an identity boots.
   void goLive(String pubkey, String nym) {
     _seenIds.clear();
+    _seenCopyKeys.clear();
     _seenNymMessageIds.clear();
     _pendingEdits.clear();
     _editHeads.clear();
@@ -1581,6 +1611,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Resets to the empty logged-out shell, clearing all session-scoped dedup and private maps.
   void reset() {
     _seenIds.clear();
+    _seenCopyKeys.clear();
     _seenNymMessageIds.clear();
     _pendingEdits.clear();
     _editHeads.clear();
@@ -1610,6 +1641,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void setConnectedRelays(int count) {
     if (count == state.connectedRelays) return;
     state = state.copyWith(connectedRelays: count);
+  }
+
+  void setPoolLinked(bool linked) {
+    if (linked == state.poolLinked) return;
+    state = state.copyWith(poolLinked: linked);
   }
 
   void setProxyMode(bool proxy) {
@@ -1754,7 +1790,39 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   /// Notifies listeners now, or at the end of the enclosing [runBatched].
   void _scheduleEmit() {
-    if (_ambientDepth == 0) _displayRev++;
+    if (_ambientDepth == 0) {
+      _displayRev++;
+      _globalRev++;
+    }
+    if (_batchDepth > 0) {
+      _pendingEmit = true;
+      return;
+    }
+    _emitNow();
+  }
+
+  int _globalRev = 0;
+  int _emittedSig = 0;
+
+  int _visibilitySig() => Object.hash(
+        state.contentFilterSignature,
+        state.autoMutedUsers.length,
+        identityHashCode(ServerQuiet.keys),
+        state.clientGatesActive,
+        AppState._visibilityRev,
+        appSpamFilterEnabled,
+        appSpamFilterAggressive,
+        state.blockedUsers.length,
+        state.blockedKeywords.length,
+      );
+
+  void _scheduleEmitFor(String key) {
+    if (_ambientDepth > 0 || _visibilitySig() != _emittedSig) {
+      _scheduleEmit();
+      return;
+    }
+    state.keyRevs[key] = (state.keyRevs[key] ?? 0) + 1;
+    _displayRev++;
     if (_batchDepth > 0) {
       _pendingEmit = true;
       return;
@@ -1763,8 +1831,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
   }
 
   void _emitNow() {
-    final next = state.copyWith(displayRev: _displayRev);
+    final next = state.copyWith(displayRev: _displayRev, globalRev: _globalRev);
+    _emittedSig = 0;
     state = next;
+    _emittedSig = _visibilitySig();
   }
 
   /// Emits without advancing [AppState.displayRev]; use only for changes the message list never renders.
@@ -2113,6 +2183,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
         !_seenIds.add(meshReplayId)) {
       return;
     }
+    if (!_claimCopy(
+        e.pubkey, int.tryParse(e.tagValue('ms') ?? '') ?? 0, e.content)) {
+      return;
+    }
     final m = EventMapper.channelMessage(e, selfPubkey: state.selfPubkey);
     if (m != null) {
       final asker = botAskerOf(e);
@@ -2191,7 +2265,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       if (m.timestamp > (state.channelLastActivity[key] ?? 0)) {
         state.channelLastActivity[key] = m.timestamp;
       }
-      _scheduleEmit();
+      _scheduleEmitFor(key);
       return;
     }
 
@@ -2204,6 +2278,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
     if (senderBlocked) _capBlockedSender(key, list, e.pubkey);
 
+    final authorBefore = state.users[e.pubkey]?.nym;
     final u = state.users.putIfAbsent(
       e.pubkey,
       () => User(pubkey: e.pubkey, nym: m.author),
@@ -2214,7 +2289,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     } else {
       _seedAuthorFromStore(m);
     }
-    u.lastSeen = m.timestamp;
+    u.lastSeen = mergeLastSeen(
+          u.lastSeen, m.timestamp, DateTime.now().millisecondsSinceEpoch);
     // Membership uses the bare lowercase key: geohash when present, else the channel name.
     final memberKey =
         ((m.geohash?.isNotEmpty ?? false) ? m.geohash! : m.channel)
@@ -2263,7 +2339,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
     _consumePendingEdit(id: m.id);
 
-    _scheduleEmit();
+    if (authorBefore != null && authorBefore == u.nym) {
+      _scheduleEmitFor(key);
+    } else {
+      _scheduleEmit();
+    }
   }
 
   /// Kind-0 name fallback chain name → username → display_name, capped at 20 chars.
@@ -2830,7 +2910,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
         () => User(pubkey: m.pubkey, nym: m.author),
       );
       _seedAuthorFromStore(m);
-      u.lastSeen = m.timestamp;
+      u.lastSeen = mergeLastSeen(
+          u.lastSeen, m.timestamp, DateTime.now().millisecondsSinceEpoch);
     }
 
     // Seen means the active PM, or a focused, at-bottom, visible column.
@@ -2914,7 +2995,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
         () => User(pubkey: m.pubkey, nym: m.author),
       );
       _seedAuthorFromStore(m);
-      u.lastSeen = m.timestamp;
+      u.lastSeen = mergeLastSeen(
+          u.lastSeen, m.timestamp, DateTime.now().millisecondsSinceEpoch);
     }
     final seenGroup = _isConversationSeen(key);
     if (!seenGroup &&
@@ -2976,7 +3058,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
       } else {
         _seedAuthorFromStore(m);
       }
-      u.lastSeen = m.timestamp;
+      u.lastSeen = mergeLastSeen(
+          u.lastSeen, m.timestamp, DateTime.now().millisecondsSinceEpoch);
       final memberKey = (m.channel ?? '').toLowerCase();
       if (memberKey.isNotEmpty) u.channels.add(memberKey);
     }
@@ -3726,6 +3809,22 @@ class AppStateNotifier extends StateNotifier<AppState> {
     runAmbient(_scheduleEmit);
   }
 
+  void notePeerActivity(String pubkey, int atMs) {
+    if (pubkey.isEmpty || pubkey == state.selfPubkey) return;
+    if (state.blockedUsers.contains(pubkey)) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final existing = state.users[pubkey];
+    final prev = existing?.lastSeen ?? 0;
+    final next = mergeLastSeen(prev, atMs > 0 ? atMs : now, now);
+    if (existing != null && next == prev) return;
+    final u = state.users.putIfAbsent(
+      pubkey,
+      () => User(pubkey: pubkey, nym: getNymFromPubkey('nym', pubkey)),
+    );
+    u.lastSeen = next;
+    runAmbient(_scheduleEmit);
+  }
+
   /// Applies a presence event to the user; `hidden` updates lastSeen/away but leaves [User.status] alone.
   void setUserPresence({
     required String pubkey,
@@ -3756,8 +3855,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
     u.awayMessage = (awayMessage != null && awayMessage.isNotEmpty)
         ? awayMessage
         : (status == UserStatus.away ? u.awayMessage : null);
-    // Presence isn't activity; only message, friend-presence and own-activity paths stamp lastSeen.
-    if (stampLastSeen && lastSeenMs != null) u.lastSeen = lastSeenMs;
+    if (stampLastSeen && lastSeenMs != null) {
+      u.lastSeen = mergeLastSeen(
+          u.lastSeen, lastSeenMs, DateTime.now().millisecondsSinceEpoch);
+    }
 
     // An `avatar-update` tag sets, or clears when empty, the picture.
     if (hasAvatarTag && !kVerifiedBotPubkeys.contains(pubkey)) {
@@ -3778,6 +3879,31 @@ class AppStateNotifier extends StateNotifier<AppState> {
       runAmbient(_scheduleEmit);
     }
   }
+
+  final Map<String, Set<String>> _geoPresenceMembers = {};
+
+  void noteGeoPresence({
+    required String pubkey,
+    required String geohash,
+    required int seenMs,
+  }) {
+    final key = geohash.toLowerCase();
+    final members = _geoPresenceMembers.putIfAbsent(key, () => <String>{});
+    if (!GeoPresence.admits(members.length, members.contains(pubkey))) return;
+    members.add(pubkey);
+    final u = state.users.putIfAbsent(
+      pubkey,
+      () => User(pubkey: pubkey, nym: getNymFromPubkey('nym', pubkey)),
+    );
+    final before = u.lastSeen;
+    final had = u.channels.contains(key);
+    u.lastSeen =
+        mergeLastSeen(u.lastSeen, seenMs, DateTime.now().millisecondsSinceEpoch);
+    u.channels.add(key);
+    if (before != u.lastSeen || !had) runAmbient(_scheduleEmit);
+  }
+
+  void clearGeoPresence() => _geoPresenceMembers.clear();
 
   /// Closes a PM, stamping the close time so only a strictly newer message re-opens it.
   void closePM(String peerPubkey, {int? nowSec}) {
@@ -4931,6 +5057,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final isChannelKey = !key.startsWith('pm-') && !key.startsWith('group-');
     for (final m in msgs) {
       if (m.id.isNotEmpty && !_seenIds.add(m.id)) continue;
+      if (isChannelKey && !_claimCopy(m.pubkey, m.ms, m.content)) continue;
       _seedAuthorFromStore(m);
       m.seq = _nextIngestSeq();
       list.add(m);
@@ -5364,6 +5491,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       final idx = list.indexWhere((m) => m.id == optimisticId);
       if (idx < 0) continue;
       final m = list[idx];
+      if (realMs != null && realMs > 0) _claimCopy(m.pubkey, realMs, m.content);
       // A relay echo already landed, so drop the placeholder.
       final landed = list.where((x) => x.id == realId && !identical(x, m));
       if (alreadySeen && landed.isNotEmpty) {
@@ -5727,12 +5855,27 @@ bool threadEligibleRoot(Message m) {
   return m.id.length == 64 && !m.id.startsWith('_optim_');
 }
 
-/// Recomputed once per display revision and shared by every row.
 final threadCountsProvider =
     Provider.family<Map<String, int>, String>((ref, storageKey) {
-  ref.watch(appStateProvider.select((s) => s.displayRev));
-  return threadReplyCounts(ref.read(appStateProvider), storageKey);
+  ref.watch(appStateProvider.select((s) => s.viewRevOf(storageKey)));
+  final next = threadReplyCounts(ref.read(appStateProvider), storageKey);
+  final memo = _threadCountsMemo[ref.read(appStateProvider.notifier)] ??=
+      <String, Map<String, int>>{};
+  final prev = memo[storageKey];
+  if (prev != null && _sameCounts(prev, next)) return prev;
+  memo[storageKey] = next;
+  return next;
 });
+
+final Expando<Map<String, Map<String, int>>> _threadCountsMemo = Expando();
+
+bool _sameCounts(Map<String, int> a, Map<String, int> b) {
+  if (a.length != b.length) return false;
+  for (final e in a.entries) {
+    if (b[e.key] != e.value) return false;
+  }
+  return true;
+}
 
 Message? threadRootMessage(AppState s, String storageKey, String rootId) {
   final list = s.messages[storageKey] ?? const <Message>[];
@@ -5813,8 +5956,8 @@ bool isThreadReplyMarker(String? threadRoot) =>
 
 /// Ordered messages for the active view, via [visibleMessagesFor].
 final messagesForCurrentViewProvider = Provider<List<Message>>((ref) {
-  // Re-run only on view or display revision changes, not ambient emits.
-  ref.watch(appStateProvider.select((s) => (s.view.storageKey, s.displayRev)));
+  ref.watch(appStateProvider.select(
+      (s) => (s.view.storageKey, s.viewRevOf(s.view.storageKey))));
   final s = ref.read(appStateProvider);
   return visibleMessagesFor(s, s.view.storageKey);
 });
@@ -5882,8 +6025,8 @@ final typingForCurrentViewProvider = Provider<List<String>>((ref) {
 
 /// Polls in the active channel view, time-ordered; empty for PM/group views.
 final pollsForCurrentViewProvider = Provider<List<Poll>>((ref) {
-  // Poll cards render in the list, so refresh on view and display revision.
-  ref.watch(appStateProvider.select((s) => (s.view.storageKey, s.displayRev)));
+  ref.watch(appStateProvider.select(
+      (s) => (s.view.storageKey, s.viewRevOf(s.view.storageKey))));
   final s = ref.read(appStateProvider);
   if (s.view.kind != ViewKind.channel) return const [];
   final geohash = s.view.id;
@@ -6870,6 +7013,35 @@ class NotificationHistoryNotifier
   }
 
   /// Marks entries for [route] viewed (optionally up to [tsSec]) and re-derives the badge.
+  void markShownSeen(String storageKey, num atSec) {
+    if (storageKey.isEmpty || !(atSec > 0)) return;
+    if (_hydrating) {
+      _pendingRecords.add(() => markShownSeen(storageKey, atSec));
+      return;
+    }
+    final view = _view();
+    if (!view.focused) return;
+    var changed = false;
+    var seenGrew = false;
+    for (final e in state.entries) {
+      if (e.viewed || e.type == 'reaction') continue;
+      if (!NotifyView.shownSeen(view, _entryEvent(e), e.ts, storageKey, atSec)) {
+        continue;
+      }
+      e.viewed = true;
+      changed = true;
+      if (_rememberSeen(e)) seenGrew = true;
+    }
+    if (!changed) return;
+    final entries = List.of(state.entries);
+    state = state.copyWith(entries: entries, unread: _countUnread(entries));
+    _persist();
+    if (seenGrew) {
+      _persistSeenKeys();
+      onSeenChanged?.call();
+    }
+  }
+
   void markConversationSeen(String route, {int? tsSec}) {
     if (route.isEmpty) return;
     // Boot race: operate on the hydrated history.
@@ -7342,7 +7514,50 @@ final RegExp _kEmojiUrlRx = RegExp(r'^https?://', caseSensitive: false);
 
 class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
   LiveCustomEmojiNotifier(this._ref) : super(CustomEmojiState.empty) {
+    customEmojiMissingSink = noteMissing;
     _hydrate();
+  }
+
+  /// Shortcodes learned from message or reaction tags, oldest first.
+  final Set<String> _tagged = <String>{};
+
+  final Set<String> _asked = <String>{};
+  bool _askPending = false;
+  Timer? _askTimer;
+  int _askAt = 0;
+  void Function()? _onLookup;
+
+  /// Runs a forced D1 emoji read; set by the controller once storage is reachable.
+  set onLookup(void Function()? f) {
+    _onLookup = f;
+    if (f != null && _askPending && _askTimer == null) _scheduleAsk();
+  }
+
+  /// Asks D1 once for a rendered shortcode whose image is unknown (each code once, at most once a minute).
+  void noteMissing(String code) {
+    if (!_kEmojiShortcodeRx.hasMatch(code) ||
+        !RegExp(r'[a-zA-Z_]').hasMatch(code)) {
+      return;
+    }
+    if (kEmojiShortcodeMap.containsKey(code.toLowerCase())) return;
+    if (_codeToUrl.containsKey(code)) return;
+    if (_asked.contains(code) || _asked.length >= 2000) return;
+    _asked.add(code);
+    _askPending = true;
+    if (_askTimer == null && _onLookup != null) _scheduleAsk();
+  }
+
+  void _scheduleAsk() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final wait = _askAt + 60000 - now;
+    _askTimer = Timer(Duration(milliseconds: wait > 400 ? wait : 400), () {
+      _askTimer = null;
+      final run = _onLookup;
+      if (!_askPending || run == null || !mounted) return;
+      _askPending = false;
+      _askAt = DateTime.now().millisecondsSinceEpoch;
+      run();
+    });
   }
 
   final Ref _ref;
@@ -7365,6 +7580,7 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
       _prefs = prefs;
       final cached = loadCustomEmojiState(prefs);
       _codeToUrl.addAll(cached.codeToUrl);
+      _tagged.addAll(cached.tagged);
       for (final p in cached.packs) {
         _packsByKey[p.key] = p;
       }
@@ -7398,8 +7614,11 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     _codeToUrl[shortcode] = url;
     // Cap the loose map at 5000, like the PWA.
     if (_codeToUrl.length > 5000) {
-      final keys = _codeToUrl.keys.toList();
-      for (final k in keys.sublist(0, _codeToUrl.length - 5000)) {
+      final victims = _codeToUrl.keys
+          .where((k) => !_tagged.contains(k))
+          .take(_codeToUrl.length - 5000)
+          .toList();
+      for (final k in victims) {
         _codeToUrl.remove(k);
       }
     }
@@ -7412,16 +7631,21 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
   /// Ingests `['emoji', shortcode, url]` tags from any inbound event.
   void ingestEmojiTags(List<List<String>> tags) {
     var changed = false;
+    var marked = false;
     for (final t in tags) {
       if (t.length >= 3 && t[0] == 'emoji') {
         if (registerEmojiQuiet(t[1], t[2])) changed = true;
+        if (_codeToUrl[t[1]] == t[2] && _tagged.add(t[1])) {
+          marked = true;
+          if (_tagged.length > 4000) _tagged.remove(_tagged.first);
+        }
       }
     }
     if (changed) {
       _publish();
-      _persist();
       _schedulePrefetch();
     }
+    if (changed || marked) _persist();
   }
 
   /// Like [registerEmoji] but defers publish/persist for batch ingest.
@@ -7501,6 +7725,8 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     _persistTimer?.cancel();
     _persistTimer = null;
     _codeToUrl.clear();
+    _tagged.clear();
+    _asked.clear();
     _packsByKey.clear();
     _userPackRefs.clear();
     _userListTs = 0;
@@ -7537,6 +7763,9 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
 
   @override
   void dispose() {
+    _askTimer?.cancel();
+    _askTimer = null;
+    if (customEmojiMissingSink == noteMissing) customEmojiMissingSink = null;
     // Flush a pending write so teardown never loses registrations.
     if (_persistTimer != null) {
       _persistTimer!.cancel();
@@ -7551,9 +7780,16 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     final prefs = _prefs;
     if (prefs == null) return;
     try {
-      final mapEntries =
-          _codeToUrl.entries.map((e) => [e.key, e.value]).toList();
-      prefs.setString(kCustomEmojiMapKey, jsonEncode(mapEntries));
+      final mapEntries = <List<Object>>[
+        for (final e in _codeToUrl.entries)
+          if (!_tagged.contains(e.key)) [e.key, e.value],
+        for (final e in _codeToUrl.entries)
+          if (_tagged.contains(e.key)) [e.key, e.value, 1],
+      ];
+      final kept = mapEntries.length > 5000
+          ? mapEntries.sublist(mapEntries.length - 5000)
+          : mapEntries;
+      prefs.setString(kCustomEmojiMapKey, jsonEncode(kept));
       final packs = _packsByKey.values.toList()
         ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
       final capped = packs.length > 200 ? packs.sublist(0, 200) : packs;

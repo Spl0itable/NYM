@@ -43,6 +43,7 @@ import 'profile_badges.dart';
 import 'report_modal.dart';
 import '../common/hit_slop.dart';
 import '../../core/theme/nym_a11y.dart';
+import '../../features/share/share_sheet.dart';
 
 CtxTarget enrichCtxTarget(AppState s, CtxTarget target) {
   final self = s.selfPubkey;
@@ -213,6 +214,10 @@ class ContextMenuPanel extends ConsumerWidget {
     // A mesh peer's presence is "Mesh" (Bluetooth), not a Nostr status.
     final isMeshPeer = ref.watch(meshControllerProvider
         .select((s) => s.meshPmPubkeys.contains(target.pubkey)));
+    final sharePubkey = shareProfilePubkey(target,
+        activePubkey: ref.watch(appStateProvider.select((s) => s.selfPubkey)),
+        isMeshPeer: isMeshPeer,
+        isOwnOtherKey: controller.isOwnShareExcludedKey);
 
     final panel = Material(
       // The opaque bg is painted on the full-height Container below; this Material only provides ink.
@@ -280,6 +285,14 @@ class ContextMenuPanel extends ConsumerWidget {
                               _invoke(context, ref, actions[i], target, fullNym),
                         ),
                     ],
+                    if (sharePubkey != null)
+                      _ActionItem(
+                        key: const ValueKey('ctx-share-profile'),
+                        svg: NymIcons.shareNodes,
+                        label: tr('Share profile'),
+                        color: c.text,
+                        onTap: () => _shareProfile(context, target, sharePubkey, fullNym),
+                      ),
                   ],
                 ),
               ),
@@ -602,6 +615,18 @@ class ContextMenuPanel extends ConsumerWidget {
   Color _colorFor(CtxAction a, NymColors c) =>
       menuToneColor(ctxActionTone(a), c);
 
+
+  void _shareProfile(
+      BuildContext context, CtxTarget target, String pubkey, String fullNym) {
+    final nav = Navigator.of(context, rootNavigator: true);
+    onClose();
+    if (target.isSelf) {
+      unawaited(ShareSheet.openOwnProfile(nav.context));
+    } else {
+      unawaited(ShareSheet.openProfile(nav.context,
+          pubkey: pubkey, displayName: fullNym));
+    }
+  }
   Future<void> _invoke(
     BuildContext context,
     WidgetRef ref,

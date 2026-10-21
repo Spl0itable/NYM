@@ -89,6 +89,14 @@ export async function shopPut(db, pk, data) {
   await shopPutStatement(db, pk, data).run();
 }
 
+export async function shopPutActive(db, pk, data) {
+  data.updatedAt = Date.now();
+  await db.prepare(
+    "INSERT INTO shop (pubkey, owned, active, updated_at) VALUES (?, ?, ?, ?) " +
+    "ON CONFLICT(pubkey) DO UPDATE SET active = excluded.active, updated_at = excluded.updated_at"
+  ).bind(pk, JSON.stringify(data.owned || {}), JSON.stringify(data.active || blankActive()), data.updatedAt).run();
+}
+
 export async function shopGetActiveMany(db, pks) {
   const out = {};
   if (!hasD1(db) || pks.length === 0) {

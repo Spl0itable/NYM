@@ -346,6 +346,20 @@ Object.assign(NYM.prototype, {
         return found;
     },
 
+    _claimChannelCopy(event) {
+        if (!event || !Array.isArray(event.tags) || typeof event.pubkey !== 'string' || !event.pubkey) return true;
+        if (event.tags.some(t => Array.isArray(t) && t[0] === 'edit')) return true;
+        const msTag = event.tags.find(t => Array.isArray(t) && t[0] === 'ms');
+        const ms = msTag ? parseInt(msTag[1], 10) : 0;
+        if (!(ms > 0)) return true;
+        if (!(this._channelCopyKeys instanceof Set)) this._channelCopyKeys = new Set();
+        const key = event.pubkey + '|' + ms + '|' + String(event.content || '');
+        if (this._channelCopyKeys.has(key)) return false;
+        this._channelCopyKeys.add(key);
+        if (this._channelCopyKeys.size > 5000) this._channelCopyKeys = new Set(Array.from(this._channelCopyKeys).slice(-4000));
+        return true;
+    },
+
     async handleEvent(event) {
         // Normalize malicious or malformed relay payloads up front.
         if (!event || typeof event !== 'object' || typeof event.pubkey !== 'string') return;
@@ -371,6 +385,7 @@ Object.assign(NYM.prototype, {
                 this.processedMessageEventIds = new Set(idsArray.slice(-4000));
             }
             if (this._sendAsEchoes instanceof Map && this._sendAsEchoes.has(event.id)) this._sendAsSeen(event);
+            if (!this._claimChannelCopy(event)) return;
         }
 
         // D1 backfill tags events with the pool's receipt time (stored_at, ms).
@@ -705,6 +720,8 @@ Object.assign(NYM.prototype, {
             } else if (tTag && tTag[1] === this.PQ_D_TAG) {
                 this.handlePqAnnouncement(event);
             }
+        } else if (event.kind === 20001) {
+            this.handleGeoPresenceEvent(event);
         } else if (event.kind === 24420) {
             this.handleChannelTypingEvent(event);
         } else if (event.kind === 24421) {
@@ -2404,7 +2421,7 @@ Object.assign(NYM.prototype, {
                 }
             });
         } catch (error) {
-            this.displaySystemMessage('Failed to delete message: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to delete message: {error}', { error: error.message }));
         }
     },
 
@@ -3036,7 +3053,7 @@ Object.assign(NYM.prototype, {
 
             return true;
         } catch (error) {
-            this.displaySystemMessage('Failed to send message: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message }));
             return false;
         }
     },
@@ -3050,6 +3067,7 @@ Object.assign(NYM.prototype, {
                 throw new Error('Not connected to relay');
             }
 
+            const presenceCh = this._presenceChannelOf(channel, geohash);
             const ephSk = window.NostrTools.generateSecretKey();
             const ephPk = window.NostrTools.getPublicKey(ephSk);
             this._noteOwnAnonKey(ephPk);
@@ -3172,6 +3190,7 @@ Object.assign(NYM.prototype, {
                     sentId = signedEvent.id;
                     const res = await lane.publish(signedEvent);
                     if (!res || !res.ok) throw new Error(res && !res.transport && res.reason && res.reason !== 'timeout' ? res.reason : 'Not connected to relay');
+                    this._startAnonPresence(presenceCh, ephSk, ephPk, lane);
                     return true;
                 } catch (err) {
                     this._markOptimisticFailed(sentId, storageKey, err);
@@ -3183,7 +3202,7 @@ Object.assign(NYM.prototype, {
 
             return { nym: anonNym, pubkey: ephPk, lane, posted };
         } catch (error) {
-            this.displaySystemMessage('Failed to send pseudonymous message: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to send pseudonymous message: {error}', { error: error.message }));
             return false;
         }
     },
@@ -3398,7 +3417,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    recordOwnActivity() {
+    recordOwnActivity(kind = 'send') {
         if (!this.pubkey) return;
         if (typeof this._awayEnsureRestored === 'function') this._awayEnsureRestored();
 
@@ -3422,15 +3441,305 @@ Object.assign(NYM.prototype, {
 
         if (typeof this.updateUserList === 'function') this.updateUserList();
 
-        // Never re-assert presence when disabled, or a send would undo the hidden state.
-        if (this._statusMode() === 'disabled') return;
+        this.notePresenceActivity(kind);
+    },
 
-        // Skipped while away (cmdAway/cmdBack handle those transitions).
-        const PRESENCE_BROADCAST_THROTTLE_MS = 60000;
-        const lastBroadcast = this._lastPresenceBroadcast || 0;
-        if (now - lastBroadcast < PRESENCE_BROADCAST_THROTTLE_MS) return;
-        if (this.awayMessages && this.awayMessages.has(this.pubkey)) return;
-        this.publishPresence('online');
+    notePresenceActivity(kind) {
+        const P = (typeof self !== 'undefined' ? self : window).NymPresenceActivity;
+        if (!P || !P.evaluates(kind)) return;
+        const now = Date.now();
+        if (P.countsAsActivity(kind)) this._presenceInputAt = now;
+        if (!this.connected) return;
+        if (this.pubkey && typeof this._awayEnsureRestored === 'function') this._awayEnsureRestored();
+        let visible = true, focused = true;
+        try {
+            visible = document.visibilityState === 'visible';
+            focused = typeof document.hasFocus === 'function' ? document.hasFocus() : visible;
+        } catch (_) { }
+        const action = P.decide({
+            now,
+            lastInputMs: this._presenceInputAt || 0,
+            lastBroadcastMs: this._lastPresenceBroadcast || 0,
+            visible,
+            focused,
+            mode: this._statusMode(),
+            away: !!(this.awayMessages && this.pubkey && this.awayMessages.has(this.pubkey)),
+            hasIdentity: !!this.pubkey
+        });
+        if (action === 'publish') {
+            this._lastPresenceBroadcast = now;
+            this.publishPresence('online');
+        } else if (action === 'friends') {
+            this._lastPresenceBroadcast = now;
+            this._sendFriendPresence('online');
+        }
+        this._syncGeoPresenceSend();
+    },
+
+    _presenceChannelOf(channel, geohash) {
+        const G = (typeof self !== 'undefined' && self.NymGeoPresence) || null;
+        if (!G) return null;
+        const gh = geohash ? String(geohash).toLowerCase() : '';
+        if (gh && G.isGeohash(gh)) return { type: 'geohash', id: gh };
+        const name = typeof this.sanitizeChannelName === 'function' ? this.sanitizeChannelName(gh || channel || '') : '';
+        return name && G.isChannelName(name) ? { type: 'named', id: name } : null;
+    },
+
+    _presenceChannel() {
+        if (this.inPMMode) return null;
+        return this._presenceChannelOf(this.currentChannel, this.currentGeohash);
+    },
+
+    _geoPresenceGeohash() {
+        const ch = this._presenceChannel();
+        return ch && ch.type === 'geohash' ? ch.id : null;
+    },
+
+    _geoPresenceRotatingKey() {
+        if (this.connectionMode !== 'ephemeral') return false;
+        try {
+            return localStorage.getItem('nym_keypair_mode') === 'hardcore';
+        } catch (_) {
+            return false;
+        }
+    },
+
+    _geoPresenceInput(target) {
+        const cur = this._presenceChannel();
+        const ch = target || cur;
+        let visible = true, focused = true;
+        try {
+            visible = document.visibilityState === 'visible';
+            focused = typeof document.hasFocus === 'function' ? document.hasFocus() : visible;
+        } catch (_) { }
+        const now = Date.now();
+        const last = this._presenceInputAt || 0;
+        const P = (typeof self !== 'undefined' ? self : window).NymPresenceActivity;
+        const idleMs = (P && P.IDLE_MS) || 120000;
+        const mode = this._statusMode();
+        const away = !!(this.awayMessages && this.pubkey && this.awayMessages.has(this.pubkey));
+        return {
+            type: ch ? ch.type : 'none',
+            geohash: ch && ch.type === 'geohash' ? ch.id : null,
+            name: ch && ch.type === 'named' ? ch.id : null,
+            onScreen: !!ch && !!cur && cur.type === ch.type && cur.id === ch.id,
+            foreground: visible,
+            focused,
+            idle: last <= 0 || now - last < 0 || now - last >= idleMs,
+            presence: !!this.pubkey && mode !== 'disabled',
+            status: away ? 'away' : (mode === 'enabled' ? 'online' : (mode === 'friends' ? 'friends' : 'hidden')),
+            connected: this._canPublishChannelEvent(),
+            meshOnly: !!ch && typeof this.meshShouldCarry === 'function' && !!this.meshShouldCarry(ch.id),
+            locked: false,
+            rotatingKey: this._geoPresenceRotatingKey(),
+            showInCounts: !(this.settings && this.settings.channelCounts === false),
+            sendAs: null
+        };
+    },
+
+    _geoPresenceSendKey() {
+        const ch = this._presenceChannel();
+        return ch && this.pubkey ? `${ch.type}:${ch.id}|${this.pubkey}` : null;
+    },
+
+    _syncGeoPresenceSend() {
+        const G = (typeof self !== 'undefined' && self.NymGeoPresence) || null;
+        if (!G) return;
+        this._syncAnonPresence();
+        const plan = G.sendPlan(this._geoPresenceInput());
+        const key = this._geoPresenceSendKey();
+        if (!plan.send || !key) {
+            this._stopGeoPresenceSend();
+            return;
+        }
+        if (this._geoPresenceTimer && this._geoPresenceSending === key) return;
+        this._stopGeoPresenceSend();
+        this._geoPresenceSending = key;
+        this._scheduleGeoPresence('first');
+    },
+
+    _channelPresenceCount(ch) {
+        return ch && ch.type === 'named' ? (this._channelOnlineCount || 0) : 0;
+    },
+
+    _scheduleGeoPresence(phase, atMs) {
+        const G = self.NymGeoPresence;
+        const now = Date.now();
+        const ch = this._presenceChannel();
+        const ms = atMs ? Math.max(0, atMs - now)
+            : (phase === 'loop' ? G.loopMs(ch ? ch.type : 'geohash', this._channelPresenceCount(ch), Math.random()) : G.delayMs(phase, Math.random()));
+        this._geoPresenceNextAt = now + ms;
+        this._geoPresenceTimer = setTimeout(() => { this._fireGeoPresence(); }, ms);
+    },
+
+    _anonPresenceTimes() {
+        const out = [];
+        for (const e of this._anonPresenceLive || []) {
+            if (e.lastAt) out.push(e.lastAt);
+            if (e.nextAt) out.push(e.nextAt);
+        }
+        return out;
+    },
+
+    async _fireGeoPresence() {
+        this._geoPresenceTimer = null;
+        this._geoPresenceNextAt = 0;
+        const G = self.NymGeoPresence;
+        const plan = G.sendPlan(this._geoPresenceInput());
+        const key = this._geoPresenceSendKey();
+        const ch = this._presenceChannel();
+        if (!plan.send || !key || !ch || key !== this._geoPresenceSending) {
+            this._stopGeoPresenceSend();
+            return;
+        }
+        const now = Date.now();
+        const at = G.spacedAtMs(now, this._anonPresenceTimes());
+        if (at > now) {
+            this._scheduleGeoPresence('loop', at);
+            return;
+        }
+        this._geoPresenceLastAt = now;
+        this._scheduleGeoPresence('loop');
+        const nowSec = Math.floor(now / 1000);
+        const t = ch.type === 'named' ? G.namedTemplate(ch.id, nowSec) : G.template(ch.id, nowSec);
+        if (!t) return;
+        try {
+            const signed = await this.signEvent(Object.assign({ pubkey: this.pubkey }, t));
+            if (this._geoPresenceSendKey() !== key) return;
+            const signedAt = Date.now();
+            const sendAt = G.spacedAtMs(signedAt, this._anonPresenceTimes());
+            this._geoPresenceLastAt = sendAt;
+            if (sendAt > signedAt) {
+                await new Promise((r) => setTimeout(r, sendAt - signedAt));
+                if (this._geoPresenceSendKey() !== key) return;
+            }
+            this.sendToRelay(["EVENT", signed]);
+            if (ch.type === 'geohash') this.ensureGeoRelayDelivery(signed, ch.id);
+        } catch (_) { }
+    },
+
+    _stopGeoPresenceSend() {
+        if (this._geoPresenceTimer) clearTimeout(this._geoPresenceTimer);
+        this._geoPresenceTimer = null;
+        this._geoPresenceNextAt = 0;
+        this._geoPresenceSending = null;
+    },
+
+    _startAnonPresence(ch, sk, pk, lane) {
+        const G = (typeof self !== 'undefined' && self.NymGeoPresence) || null;
+        if (!G || !ch || !sk || !pk || !lane || !this.pubkey) return;
+        if (!this._anonPresence) this._anonPresence = new Map();
+        if (!this._anonPresenceLive) this._anonPresenceLive = new Set();
+        const entry = {
+            key: ch.type + ':' + ch.id, ch, pk, sk: Uint8Array.from(sk), owner: this.pubkey, lane,
+            timer: null, nextAt: 0, lastAt: 0, stopAtMs: 0, online: this._channelPresenceCount(ch)
+        };
+        lane.hold();
+        this._anonPresence.set(entry.key, entry);
+        this._anonPresenceLive.add(entry);
+        this._scheduleAnonPresence(entry, Date.now() + G.delayMs('first', Math.random()));
+    },
+
+    _scheduleAnonPresence(entry, atMs) {
+        if (entry.timer) clearTimeout(entry.timer);
+        entry.nextAt = atMs;
+        entry.timer = setTimeout(() => { this._tickAnonPresence(entry); }, Math.max(0, atMs - Date.now()));
+    },
+
+    _anonPresenceVerdict(entry, now) {
+        const G = self.NymGeoPresence;
+        const cur = this._presenceChannel();
+        if (cur && cur.type === entry.ch.type && cur.id === entry.ch.id) {
+            entry.stopAtMs = 0;
+            entry.online = this._channelPresenceCount(cur);
+        } else if (!entry.stopAtMs) {
+            entry.stopAtMs = now + G.delayMs('tail', Math.random());
+        }
+        const newest = this._anonPresence ? this._anonPresence.get(entry.key) : null;
+        return G.anonTick(Object.assign(this._geoPresenceInput(entry.ch), {
+            pubkey: entry.pk,
+            newest: newest ? newest.pk : '',
+            signedIn: !!this.pubkey && this.pubkey === entry.owner,
+            nowMs: now,
+            stopAtMs: entry.stopAtMs,
+            identityMs: [this._geoPresenceLastAt || 0, this._geoPresenceNextAt || 0]
+        }));
+    },
+
+    async _tickAnonPresence(entry) {
+        entry.timer = null;
+        entry.nextAt = 0;
+        if (!this._anonPresenceLive || !this._anonPresenceLive.has(entry)) return;
+        const G = self.NymGeoPresence;
+        const now = Date.now();
+        const v = this._anonPresenceVerdict(entry, now);
+        if (v.action === 'stop') {
+            this._stopAnonPresence(entry);
+            return;
+        }
+        if (v.action === 'defer') {
+            this._scheduleAnonPresence(entry, v.atMs);
+            return;
+        }
+        const next = now + G.loopMs(entry.ch.type, entry.online, Math.random());
+        this._scheduleAnonPresence(entry, entry.stopAtMs && entry.stopAtMs < next ? entry.stopAtMs : next);
+        if (v.action !== 'send') return;
+        const nowSec = Math.floor(now / 1000);
+        const t = entry.ch.type === 'named' ? G.namedTemplate(entry.ch.id, nowSec) : G.template(entry.ch.id, nowSec);
+        if (!t || !entry.sk || !entry.lane) return;
+        try {
+            const signed = window.NostrTools.finalizeEvent(t, entry.sk);
+            entry.lastAt = Date.now();
+            await entry.lane.publish(signed);
+        } catch (_) { }
+    },
+
+    _syncAnonPresence() {
+        if (!this._anonPresenceLive || !this._anonPresenceLive.size) return;
+        const now = Date.now();
+        for (const entry of [...this._anonPresenceLive]) {
+            const v = this._anonPresenceVerdict(entry, now);
+            if (v.action === 'stop') this._stopAnonPresence(entry);
+            else if (entry.stopAtMs && entry.nextAt > entry.stopAtMs) this._scheduleAnonPresence(entry, entry.stopAtMs);
+        }
+    },
+
+    _stopAnonPresence(entry) {
+        if (entry.timer) clearTimeout(entry.timer);
+        entry.timer = null;
+        entry.nextAt = 0;
+        if (this._anonPresenceLive) this._anonPresenceLive.delete(entry);
+        if (this._anonPresence && this._anonPresence.get(entry.key) === entry) this._anonPresence.delete(entry.key);
+        if (entry.sk) entry.sk.fill(0);
+        entry.sk = null;
+        const lane = entry.lane;
+        entry.lane = null;
+        if (lane) {
+            try { lane.release(); } catch (_) { }
+        }
+    },
+
+    _stopAllAnonPresence() {
+        for (const entry of [...(this._anonPresenceLive || [])]) this._stopAnonPresence(entry);
+    },
+
+    installPresenceActivity() {
+        if (this._presenceActivityInstalled) return;
+        this._presenceActivityInstalled = true;
+        const opts = { capture: true, passive: true };
+        const on = (kind) => () => this.notePresenceActivity(kind);
+        document.addEventListener('pointerdown', on('pointer'), opts);
+        document.addEventListener('touchstart', on('pointer'), opts);
+        document.addEventListener('keydown', on('key'), opts);
+        document.addEventListener('wheel', on('wheel'), opts);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') this.notePresenceActivity('visible');
+            else this._syncGeoPresenceSend();
+        });
+        window.addEventListener('focus', on('focus'));
+        try {
+            if (document.visibilityState === 'visible' && document.hasFocus()) this.notePresenceActivity('visible');
+        } catch (_) { }
     },
 
     async publishStatusVisibility() {

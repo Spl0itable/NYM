@@ -40,6 +40,9 @@ import '../../features/shop/shop_widgets.dart' show FlairBadge, SupporterMark;
 import '../../features/shop/shop_modal.dart';
 import '../../models/channel.dart';
 import '../../models/group.dart';
+import '../../features/pms/last_seen.dart';
+import '../../features/pms/pm_logic.dart';
+import '../../features/presence/nyms_online.dart';
 import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -110,30 +113,10 @@ class ChatPane extends ConsumerWidget {
         ref.read(activeThreadProvider.notifier).state = null;
       }
     });
-    if (view.kind == ViewKind.pm && view.id.toLowerCase() == kNymbotPubkey) {
-      // The bot chat keeps this shared header (preserving nav history) and swaps only the body.
-      return Container(
-        color: Colors.transparent,
-        child: Column(
-          children: [
-            ReportExtent(
-              onExtent: (h) =>
-                  ref.read(chatHeaderExtentProvider.notifier).state = h,
-              child: _ChatHeader(
-                onOpenSidebar: onOpenSidebar,
-                compact: compact,
-                onStartCall: onStartCall,
-                onStartGroupCall: onStartGroupCall,
-                columnsMode: useColumns,
-              ),
-            ),
-            Expanded(child: BotChatScreen(onOpenSidebar: onOpenSidebar)),
-          ],
-        ),
-      );
-    }
-
-    final pmOnlyEmpty = !useColumns && ref.watch(pmOnlyEmptyShownProvider);
+    final bot =
+        view.kind == ViewKind.pm && view.id.toLowerCase() == kNymbotPubkey;
+    final pmOnlyEmpty =
+        !bot && !useColumns && ref.watch(pmOnlyEmptyShownProvider);
     return Container(
       // Transparent so the wallpaper layer behind the pane shows through.
       color: Colors.transparent,
@@ -155,7 +138,9 @@ class ChatPane extends ConsumerWidget {
             // Tap-outside dismisses the soft keyboard; interactive children still win the gesture arena.
             child: EventToastAreaReporter(
               target: eventToastRegion,
-              child: ComposerOverhangInset(child: GestureDetector(
+              child: ComposerOverhangInset(child: bot
+                  ? BotChatScreen(onOpenSidebar: onOpenSidebar)
+                  : GestureDetector(
               behavior: HitTestBehavior.translucent,
               excludeFromSemantics: true,
               onTap: () => FocusScope.of(context).unfocus(),
@@ -195,6 +180,32 @@ class ChatPane extends ConsumerWidget {
   }
 }
 
+Object chatHeaderSignature(AppState s, ChatView view) {
+  final rev = s.viewRevOf(view.storageKey);
+  switch (view.kind) {
+    case ViewKind.channel:
+      final key = view.id.toLowerCase();
+      final count = channelOnlineNymsCount(s.users.values, key,
+          nowMs: DateTime.now().millisecondsSinceEpoch,
+          selfPubkey: s.selfPubkey,
+          isPersonHidden: (u) => s.isPersonHidden(u.pubkey, u.nym));
+      return (rev, count, s.pinnedChannels.contains(key));
+    case ViewKind.pm:
+      final u = s.users[view.id];
+      return (
+        rev,
+        u?.nym,
+        u?.effectiveStatus(),
+        u?.lastSeen,
+        u?.awayMessage,
+        u?.profile?.picture,
+        s.friends.contains(view.id),
+      );
+    case ViewKind.group:
+      return (rev, view.id);
+  }
+}
+
 class _ChatHeader extends ConsumerStatefulWidget {
   const _ChatHeader({
     this.onOpenSidebar,
@@ -229,6 +240,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
   final Map<String, Timer> _placeRetries = {};
 
   final _TitleRoom _room = _TitleRoom('chat');
+  Timer? _seenTick;
 
   bool get _canBack => ref.read(viewHistoryProvider).canBack;
   bool get _canForward => ref.read(viewHistoryProvider).canForward;
@@ -237,6 +249,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _seenTick = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted && ref.read(currentViewProvider).kind == ViewKind.pm) {
+        setState(() {});
+      }
+    });
     // The deck may already focus the bot column at mount (restored layout), so activate for the initial view too.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _maybeActivateBotHeader(ref.read(currentViewProvider));
@@ -257,6 +274,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _seenTick?.cancel();
     for (final t in _placeRetries.values) {
       t.cancel();
     }
@@ -284,13 +302,35 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     }
   }
 
+  Future<void> _showRecentChats(AppState app) async {
+    final history = ref.read(viewHistoryProvider);
+    final entries = <NymActionEntry<int>>[NymActionEntry.heading(tr('Recent chats'))];
+    for (final i in history.recent()) {
+      final view = history.at(i)?.view;
+      if (view == null) continue;
+      final thread = history.at(i)?.threadRoot != null;
+      entries.add(NymActionEntry<int>(
+        key: ValueKey('recentChat:$i'),
+        label: thread ? '${_titleFor(app, view)} · ${tr('Thread')}' : _titleFor(app, view),
+        value: i,
+      ));
+    }
+    if (entries.length < 2) return;
+    final pick = await showNymActionSheet<int>(context, entries, label: tr('Recent chats'));
+    if (pick == null || !mounted) return;
+    if (jumpViewHistory(ProviderScope.containerOf(context, listen: false), pick) && mounted) {
+      setState(() {});
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
     final compact = widget.compact;
     final settings = ref.watch(settingsProvider);
-    final app = ref.watch(appStateProvider);
     final view = ref.watch(currentViewProvider);
+    ref.watch(appStateProvider.select((s) => chatHeaderSignature(s, view)));
+    final app = ref.read(appStateProvider);
     ref.watch(activeThreadProvider);
     ref.watch(meshScreenOpenProvider);
 
@@ -309,6 +349,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     final width = MediaQuery.of(context).size.width;
     final phone = width <= NymDimens.mobileBreakpoint;
     final drawer = !phone && compact;
+    var back = phone && _canBack;
     final titleSize = settings.textSize + 3.0;
     final double headerHeight = (widget.columnsMode && !phone)
         ? 37 + math.max(68.0, titleSize * 1.4 + 35) - 1
@@ -338,10 +379,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     final info = !empty && (!isChannel || loc.geohash != null);
     final insets = MediaQuery.paddingOf(context);
     final side = phone ? 2.0 : NymSpace.s1;
-    final plan = _room.plan(
+    ({List<String> moved, double room, bool more}) planFor() => _room.plan(
       layout: '$phone:$drawer:${metrics.box}:${metrics.gap}',
       width: width - insets.left - insets.right,
-      extra: badges.length * (_kBadgeGap + _kBadge) +
+      extra: (back ? metrics.pitch : 0) +
+          badges.length * (_kBadgeGap + _kBadge) +
           (info ? _kInfoGap + _kInfo : 0),
       kind: switch (view.kind) {
         ViewKind.channel => 'channel',
@@ -356,6 +398,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       step: metrics.pitch,
       phone: phone,
     );
+    var plan = planFor();
+    if (back && plan.room < _kBackMinTitle) {
+      back = false;
+      plan = planFor();
+    }
     final shown = [
       for (final a in actions)
         if (!capped.contains(a.id) && !plan.moved.contains(a.id)) a,
@@ -381,11 +428,22 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                 if (phone)
                   HitSlopLimit(
                     end: side,
-                    child: _HeaderPill(
-                      svg: NymIcons.menu,
-                      label: tr('Menu'),
-                      onTap: widget.onOpenSidebar ?? () {},
-                    ),
+                    child: _HeaderActionRow(children: [
+                      _HeaderPill(
+                        svg: NymIcons.menu,
+                        label: tr('Menu'),
+                        onTap: widget.onOpenSidebar ?? () {},
+                      ),
+                      if (back)
+                        _HeaderPill(
+                          key: const ValueKey('phoneBack'),
+                          svg: NymIcons.chevronLeft,
+                          label: tr('Go back'),
+                          onTap: () => _step(-1),
+                          onLongPress: () =>
+                              _showRecentChats(ref.read(appStateProvider)),
+                        ),
+                    ]),
                   )
                 else ...[
                   _NavBtn(
@@ -549,24 +607,40 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     });
   }
 
-  /// Bot "Always at your service", hidden "", online "Active now", away "Away", else relative last seen.
-  String _pmLastSeenText(AppState app, String pubkey) {
-    if (ref.read(nostrControllerProvider).isVerifiedBot(pubkey)) {
-      return tr('Always at your service');
-    }
+  PmSeenView _pmSeen(AppState app, String pubkey) {
     final user = app.users[pubkey];
     final status = user?.effectiveStatus() ?? UserStatus.offline;
-    if (status == UserStatus.hidden) return '';
-    if (status == UserStatus.online) return tr('Active now');
-    if (status == UserStatus.away) return tr('Away');
-    final lastSeen = user?.lastSeen ?? 0;
-    if (lastSeen > 0) {
-      return tr('Last seen {time}', {
-        'time':
-            formatRelativeTime(DateTime.fromMillisecondsSinceEpoch(lastSeen))
-      });
+    return pmSeenView(
+      nowMs: DateTime.now().millisecondsSinceEpoch,
+      bot: ref.read(nostrControllerProvider).isVerifiedBot(pubkey),
+      hidden: status == UserStatus.hidden,
+      away: status == UserStatus.away,
+      seenMs: [
+        user?.lastSeen ?? 0,
+        pmPeerActivityMs(app.messages[PmLogic.pmStorageKey(pubkey)], pubkey),
+      ],
+    );
+  }
+
+  String _pmLastSeenText(AppState app, String pubkey) {
+    final seen = _pmSeen(app, pubkey);
+    switch (seen.state) {
+      case PmSeenState.bot:
+        return tr('Always at your service');
+      case PmSeenState.hidden:
+        return '';
+      case PmSeenState.active:
+        return tr('Active now');
+      case PmSeenState.away:
+        return tr('Away');
+      case PmSeenState.seen:
+        return tr('Last seen {time}', {
+          'time': formatRelativeTime(
+              DateTime.fromMillisecondsSinceEpoch(seen.atMs))
+        });
+      case PmSeenState.unknown:
+        return tr('Last seen unknown');
     }
-    return tr('Last seen unknown');
   }
 
   List<({String id, Widget button, String label, String svg, VoidCallback? onTap})>
@@ -702,8 +776,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             : meta.text;
       case ViewKind.pm:
         final user = app.users[view.id];
-        final status = user?.effectiveStatus(isVerifiedBot: isBot) ??
-            (isBot ? UserStatus.online : UserStatus.offline);
         avatar = SizedBox(
           width: 36,
           height: 36,
@@ -713,7 +785,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         final base = stripPubkeySuffix(title);
         final suffix = getPubkeySuffix(view.id);
         titleText = NymLabel(base, suffix: suffix, style: titleStyle);
-        dot = status == UserStatus.online && !isBot;
+        dot = !isBot && _pmSeen(app, view.id).state == PmSeenState.active;
         sub = isBot
             ? meta.text
             : [
@@ -919,18 +991,10 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         // Channel-scoped count of recent (not strictly online) non-hidden users, excluding self.
         final now = DateTime.now().millisecondsSinceEpoch;
         final key = view.id.toLowerCase();
-        final count = app.users.values.where((u) {
-          if (u.pubkey == app.selfPubkey) return false;
-          if (!u.channels.contains(key)) return false;
-          if (app.isPersonHidden(u.pubkey, u.nym)) return false;
-          // Unlike `activeCount`, this has no bot always-online bypass, so the recency check applies to bots too.
-          if (u.effectiveStatus(
-                  isVerifiedBot: kVerifiedBotPubkeys.contains(u.pubkey)) ==
-              UserStatus.hidden) {
-            return false;
-          }
-          return now - u.lastSeen < kActiveThresholdMs;
-        }).length;
+        final count = channelOnlineNymsCount(app.users.values, key,
+            nowMs: now,
+            selfPubkey: app.selfPubkey,
+            isPersonHidden: (u) => app.isPersonHidden(u.pubkey, u.nym));
         return (
           svg: null,
           text: tr('{count} online nyms', {'count': _abbreviateCount(count)})
@@ -1095,6 +1159,7 @@ const double _kHeaderActionGlyph = 18;
 const double _kNavBox = 32;
 const double _kBadge = 18;
 const double _kBadgeGap = 4;
+const double _kBackMinTitle = 24;
 const double _kInfo = 16;
 const double _kInfoGap = 6;
 
@@ -1258,6 +1323,7 @@ class _HeaderPill extends StatefulWidget {
     required this.svg,
     required this.label,
     required this.onTap,
+    this.onLongPress,
     this.badge = 0,
     this.keys,
   });
@@ -1265,6 +1331,7 @@ class _HeaderPill extends StatefulWidget {
   final String label;
   final String? keys;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final int badge;
 
   @override
@@ -1284,6 +1351,7 @@ class _HeaderPillState extends State<_HeaderPill> {
         radius: NymRadius.rsm,
         child: InkWell(
           onTap: widget.onTap,
+          onLongPress: widget.onLongPress,
           canRequestFocus: false,
           excludeFromSemantics: true,
           borderRadius: NymRadius.rsm,

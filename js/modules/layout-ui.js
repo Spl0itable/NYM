@@ -440,6 +440,72 @@
         NYM.prototype[name] = wrapped;
     }
 
+    var openSeq = 0;
+    var CLICK_SLOP_MOUSE = 4;
+    var CLICK_SLOP_TOUCH = 18;
+    var outsideDown = null;
+    var OUTSIDE_SKIP = '.context-menu, .modal, [role="dialog"], [role="menu"], [role="listbox"], .quick-react-popup, .quick-context-menu, #infoPanelBtn';
+
+    function countCalls(name, bump) {
+        if (typeof NYM === 'undefined' || !NYM.prototype || typeof NYM.prototype[name] !== 'function' || NYM.prototype[name]._lyCount) return;
+        var orig = NYM.prototype[name];
+        var wrapped = function () {
+            bump();
+            return orig.apply(this, arguments);
+        };
+        Object.keys(orig).forEach(function (k) { wrapped[k] = orig[k]; });
+        wrapped._lyCount = true;
+        NYM.prototype[name] = wrapped;
+    }
+
+    function dockedPanel() {
+        if (!document.documentElement.classList.contains('info-docked')) return null;
+        return activePanels().filter(function (p) { return p.classList.contains('docked') && !p.hasAttribute('inert'); })[0] || null;
+    }
+
+    function onOutsideDown(e) {
+        var t = e.target;
+        outsideDown = {
+            id: e.pointerId,
+            x: e.clientX,
+            y: e.clientY,
+            slop: e.pointerType === 'mouse' ? CLICK_SLOP_MOUSE : CLICK_SLOP_TOUCH,
+            drag: !!(t && t.closest && t.closest('#sidebarResizer')),
+        };
+    }
+
+    function onOutsideMove(e) {
+        var d = outsideDown;
+        if (!d || d.drag || d.id !== e.pointerId) return;
+        if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > d.slop) d.drag = true;
+    }
+
+    function wasDrag(e) {
+        var d = outsideDown;
+        outsideDown = null;
+        if (!d || !e.detail) return false;
+        return d.drag || Math.hypot(e.clientX - d.x, e.clientY - d.y) > d.slop;
+    }
+
+    function onOutsideClick(e) {
+        var n = window.nym;
+        var t = e.target;
+        var drag = wasDrag(e);
+        var p = dockedPanel();
+        if (drag || !n || !p || e.button !== 0 || !t || !t.closest || !t.isConnected) return;
+        if (p.contains(t) || t.closest(OUTSIDE_SKIP) || document.querySelector('.quick-react-popup, .quick-context-menu')) return;
+        if (typeof n._menuLayerModals === 'function' && n._menuLayerModals().length) return;
+        var opens = openSeq;
+        setTimeout(function () {
+            if (opens !== openSeq || !p.classList.contains('active') || !p.classList.contains('docked') || p.hasAttribute('inert')) return;
+            var sel = window.getSelection ? window.getSelection() : null;
+            if (sel && !sel.isCollapsed && String(sel).trim()) return;
+            lsSet(OPEN_KEY, '0');
+            if (p.id === 'groupContextMenu') n.closeGroupContextMenu();
+            else n.closeContextMenu();
+        }, 0);
+    }
+
     function bootDock() {
         PANELS.forEach(function (id) {
             var el = panelEl(id);
@@ -453,6 +519,10 @@
             }).observe(el, { attributes: true, attributeFilter: ['class'] });
         });
         ['openGroup', 'openPM', 'switchChannel'].forEach(function (name) { wrapAfter(name, followConversation); });
+        ['showContextMenu', 'showGroupContextMenu'].forEach(function (name) { countCalls(name, function () { openSeq++; }); });
+        document.addEventListener('pointerdown', onOutsideDown, true);
+        document.addEventListener('pointermove', onOutsideMove, true);
+        document.addEventListener('click', onOutsideClick, true);
         document.addEventListener('click', function (e) {
             if (!document.documentElement.classList.contains('info-docked')) return;
             var t = e.target;
@@ -725,7 +795,11 @@
             var t = notifTriple(n, el._notif);
             return LM().notifGroupKey(t[0], t[1], t[2]);
         });
-        var groups = LM().groupNotifications(keys);
+        var at = items.map(function (el) {
+            var e = el._notif || {};
+            return typeof n._notifReadTs === 'function' ? n._notifReadTs(e) : (e.timestamp || 0);
+        });
+        var groups = LM().groupNotifications(keys, at);
         var frag = document.createDocumentFragment();
         groups.forEach(function (g) {
             var wrap = document.createElement('section');
@@ -1217,7 +1291,28 @@
     function textOf(el) { return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : ''; }
 
     function joinSub(parts) {
-        return parts.filter(function (x) { return !!x; }).join(' · ');
+        return parts.filter(function (x) { return !!x; });
+    }
+
+    function userPart(s) {
+        return s ? { user: s } : '';
+    }
+
+    function subNodes(parts) {
+        var out = [];
+        (Array.isArray(parts) ? parts : [parts]).forEach(function (p) {
+            if (!p) return;
+            if (out.length) out.push(document.createTextNode(' · '));
+            if (typeof p === 'object') {
+                var s = document.createElement('span');
+                s.setAttribute('data-no-i18n', '');
+                s.textContent = p.user;
+                out.push(s);
+            } else {
+                out.push(document.createTextNode(p));
+            }
+        });
+        return out;
     }
 
     function renderHeader() {
@@ -1258,15 +1353,15 @@
             var gimg = src.querySelector('.group-header-custom-avatar');
             if (gimg) av.appendChild(gimg.cloneNode(true));
             else av.innerHTML = PEOPLE_SVG;
-            title.textContent = g ? (typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || 'Group')) : textOf(src.querySelector('.group-name-text'));
+            title.textContent = g ? (typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || uiT(n, 'Group'))) : textOf(src.querySelector('.group-name-text'));
             var count = g ? (typeof n.abbreviateNumber === 'function' ? n.abbreviateNumber(g.members.length) : g.members.length) : '';
             var desc = g && window.NymGroupTools ? window.NymGroupTools.descriptionLine((typeof n._groupDescription === 'function' ? n._groupDescription(g) : (g.description || ''))) : '';
-            subText = joinSub([count !== '' ? uiT(n, count + ' members') : '', desc || enc]);
+            subText = joinSub([count !== '' ? uiT(n, count + ' members') : '', desc ? userPart(desc) : enc]);
         } else if (kind === 'geohash') {
             av.innerHTML = n._channelGlyphSvg(true, 18);
             title.textContent = '#' + geoKey(n);
             var place = textOf(src.querySelector('.channel-location'));
-            subText = joinSub([place, textOf(meta)]);
+            subText = joinSub([userPart(place), textOf(meta)]);
         } else {
             av.innerHTML = n._channelGlyphSvg(false, 18);
             title.textContent = textOf(src.querySelector('.channel-title-line')) || ('#' + (n.currentChannel || ''));
@@ -1276,9 +1371,9 @@
             var d = document.createElement('span');
             d.className = 'uh-dot';
             d.setAttribute('aria-hidden', 'true');
-            sub.replaceChildren(d, document.createTextNode(subText));
+            sub.replaceChildren.apply(sub, [d].concat(subNodes(subText)));
         } else {
-            sub.textContent = subText;
+            sub.replaceChildren.apply(sub, subNodes(subText));
         }
         var label = kind === 'geohash' ? uiT(n, 'Show this location on the map') : (kind === 'channel' ? '' : uiT(n, 'Conversation info'));
         mid.classList.toggle('uh-clickable', !!label);
@@ -1385,17 +1480,24 @@
         var room = head.getBoundingClientRect().width > 0 ? titleRoom(mid) : null;
         var moved = [];
         var more = false;
+        var backBtn = phone ? head.querySelector('#phoneBackBtn') : null;
+        var backWas = head.classList.contains('uh-back-off');
+        var backWanted = !!backBtn && !backBtn.hidden && (backWas || shownEl(backBtn));
+        var backOff = backWas;
         if (room !== null) {
             var was = live.filter(function (b) { return b.classList.contains('uh-over'); }).length;
-            var base = room - was * step + (phone && head.classList.contains('uh-more-on') ? step : 0);
+            var base = room - was * step + (phone && head.classList.contains('uh-more-on') ? step : 0) + (backWanted && !backWas ? step : 0);
             var kind = mesh ? 'mesh' : (M.HEADER_KINDS[headerKind(n)] || 'channel');
-            var plan = M.headerOverflow({ kind: kind, actions: live.map(function (b) { return HEADER_IDS[b.id] || b.id; }).concat('bell'), base: base, step: step, more: !phone });
+            var opts = { kind: kind, actions: live.map(function (b) { return HEADER_IDS[b.id] || b.id; }).concat('bell'), base: base, step: step, more: !phone };
+            var plan = backWanted && typeof M.headerBackPlan === 'function' ? M.headerBackPlan(opts) : M.headerOverflow(opts);
             moved = plan.moved;
             more = phone && plan.more;
+            backOff = backWanted && plan.back === false;
         } else {
             moved = live.filter(function (b) { return b.classList.contains('uh-over'); }).map(function (b) { return HEADER_IDS[b.id] || b.id; });
             more = phone && head.classList.contains('uh-more-on');
         }
+        if (backWas !== backOff) head.classList.toggle('uh-back-off', backOff);
         live.forEach(function (b) {
             var want = moved.indexOf(HEADER_IDS[b.id] || b.id) >= 0;
             if (b.classList.contains('uh-over') !== want) b.classList.toggle('uh-over', want);

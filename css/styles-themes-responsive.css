@@ -1864,6 +1864,18 @@ body.solid-ui.theme-ghost.light-mode.chat-bubbles .message-content {
 body.solid-ui.theme-ghost.light-mode.chat-bubbles .message.self .message-content {
     background: #bbbbbb;
 }
+body.chat-bubbles .message.self.style-ghost .message-content {
+    background: rgba(255, 255, 255, 0.18);
+}
+body.light-mode.chat-bubbles .message.self.style-ghost .message-content {
+    background: rgba(0, 0, 0, 0.14);
+}
+body.solid-ui.chat-bubbles .message.self.style-ghost .message-content {
+    background: #444444;
+}
+body.solid-ui.light-mode.chat-bubbles .message.self.style-ghost .message-content {
+    background: #bbbbbb;
+}
 
 body.solid-ui.chat-bubbles .message.style-fire .message-content,
 body.solid-ui.chat-bubbles .message.style-ice .message-content,

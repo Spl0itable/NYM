@@ -34,6 +34,7 @@ import 'key_backup/passkey_backup_service.dart';
 import 'modal_chrome.dart';
 import 'nip46_service.dart';
 import '../../widgets/common/nym_field.dart';
+import '../media_notes/profile_image.dart';
 
 enum _SetupTab { signup, login }
 
@@ -95,18 +96,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
 
   bool _busy = false;
 
-  /// Upload caps: avatar 5MB, banner 10MB.
-  static const int _avatarMaxBytes = 5 * 1024 * 1024;
-  static const int _bannerMaxBytes = 10 * 1024 * 1024;
 
-  /// Best-effort MIME type from the file extension (BUD-02 `Content-Type`).
-  static String _contentTypeFor(String path) {
-    final lower = path.toLowerCase();
-    if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.gif')) return 'image/gif';
-    if (lower.endsWith('.webp')) return 'image/webp';
-    return 'image/jpeg';
-  }
 
   void _complete() {
     DeletedNotice.pending.value = null;
@@ -135,7 +125,8 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       final file = await picker.pickImage(source: ImageSource.gallery);
       if (file == null || !mounted) return;
       bytes = await file.readAsBytes();
-      contentType = _contentTypeFor(file.path);
+      contentType = profileImageContentType(bytes,
+          path: file.path, declared: file.mimeType ?? '');
       path = file.path;
     } catch (_) {
       // Picker unavailable (tests, desktop): ignore.
@@ -144,9 +135,9 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     if (!mounted) return;
 
     // Enforce the size cap before uploading.
-    final cap = avatar ? _avatarMaxBytes : _bannerMaxBytes;
+    final cap = profileImageMaxBytes(avatar: avatar);
     if (bytes.length > cap) {
-      final capMb = avatar ? 5 : 10;
+      final capMb = cap ~/ (1024 * 1024);
       final actualMb = (bytes.length / (1024 * 1024)).toStringAsFixed(1);
       await showAppAlert(
         context,

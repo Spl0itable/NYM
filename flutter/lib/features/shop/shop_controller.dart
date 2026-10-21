@@ -13,6 +13,7 @@ import '../../services/api/storage_sync.dart' show ShopStatus, ShopStatusActive;
 import '../../services/nostr/event_signer.dart';
 import '../../services/storage/key_value_store.dart';
 import '../../state/settings_provider.dart';
+import '../i18n/i18n.dart';
 import 'shop_catalog.dart';
 import 'shop_models.dart';
 
@@ -37,6 +38,8 @@ class ShopState {
     this.owned = const {},
     this.active = const ActiveItems(),
     this.supply = const {},
+    this.loaded = false,
+    this.loadFailed = false,
   });
 
   final Map<String, OwnedItem> owned;
@@ -45,17 +48,24 @@ class ShopState {
   /// Remaining supply per limited item id; empty until fetched.
   final Map<String, int> supply;
 
+  final bool loaded;
+  final bool loadFailed;
+
   bool owns(String itemId) => owned.containsKey(itemId);
 
   ShopState copyWith({
     Map<String, OwnedItem>? owned,
     ActiveItems? active,
     Map<String, int>? supply,
+    bool? loaded,
+    bool? loadFailed,
   }) =>
       ShopState(
         owned: owned ?? this.owned,
         active: active ?? this.active,
         supply: supply ?? this.supply,
+        loaded: loaded ?? this.loaded,
+        loadFailed: loadFailed ?? this.loadFailed,
       );
 }
 
@@ -66,6 +76,8 @@ class ShopController extends StateNotifier<ShopState> {
         super(const ShopState()) {
     _load();
   }
+
+  int _recordGen = 0;
 
   final KeyValueStore _kv;
   final ApiClient _api;
@@ -92,6 +104,7 @@ class ShopController extends StateNotifier<ShopState> {
     final raw = _kv.getString(StorageKeys.purchasesCache);
     Map<String, OwnedItem> owned = {};
     ActiveItems active = const ActiveItems();
+    var loaded = false;
     if (raw != null && raw.isNotEmpty) {
       try {
         final j = jsonDecode(raw) as Map<String, dynamic>;
@@ -105,6 +118,7 @@ class ShopController extends StateNotifier<ShopState> {
         active = ActiveItems.fromJson(
           (j['active'] as Map?)?.cast<String, dynamic>(),
         );
+        loaded = j['owned'] is Map;
       } catch (_) {
         // Corrupt cache: start empty rather than throw.
       }
@@ -118,10 +132,11 @@ class ShopController extends StateNotifier<ShopState> {
       flair:
           flairKey != null && flairKey.isNotEmpty ? [flairKey] : active.flair,
     );
-    state = ShopState(owned: owned, active: active);
+    state = ShopState(owned: owned, active: active, loaded: loaded);
   }
 
   Future<void> _persist() async {
+    if (!state.loaded) return;
     final ownedJson = {
       for (final e in state.owned.entries) e.key: e.value.toJson(),
     };
@@ -188,8 +203,9 @@ class ShopController extends StateNotifier<ShopState> {
   /// Emits `Activated <name>` / `Deactivated <name>` after a toggle.
   void _announceToggle(String itemId, {required bool deactivated}) {
     final name = ShopCatalog.byId(itemId)?.name ?? itemId;
-    onSystemMessage
-        ?.call(deactivated ? 'Deactivated $name' : 'Activated $name');
+    onSystemMessage?.call(deactivated
+        ? tr('Deactivated {name}', {'name': name})
+        : tr('Activated {name}', {'name': name}));
   }
 
   /// Only one style is active at a time.
@@ -242,8 +258,8 @@ class ShopController extends StateNotifier<ShopState> {
     await _persist();
     // The supporter line names the badge in full.
     onSystemMessage?.call(deactivated
-        ? 'Deactivated Nymchat Supporter badge'
-        : 'Activated Nymchat Supporter badge');
+        ? tr('Deactivated Nymchat Supporter badge')
+        : tr('Activated Nymchat Supporter badge'));
   }
 
   /// Money actions signed fresh every time instead of using the 90s auth cache.
@@ -507,7 +523,9 @@ class ShopController extends StateNotifier<ShopState> {
     if (ownedJson is! Map && activeJson is! Map) return;
 
     var owned = state.owned;
+    final fromRecord = ownedJson is Map;
     if (ownedJson is Map) {
+      _recordGen++;
       final next = <String, OwnedItem>{};
       ownedJson.forEach((id, info) {
         final m =
@@ -544,28 +562,41 @@ class ShopController extends StateNotifier<ShopState> {
       );
     }
 
-    state = state.copyWith(owned: owned, active: active);
+    state = state.copyWith(
+      owned: owned,
+      active: active,
+      loaded: fromRecord ? true : null,
+      loadFailed: fromRecord ? false : null,
+    );
     await _persist();
   }
 
   /// Authenticated `shop-get` of the user's own record at boot or identity switch; no-op if nothing can sign.
   Future<void> loadFromServer(ShopIdentity identity) async {
-    final auth = await _auth('shop-get', identity);
-    if (auth == null) return; // nothing can sign; keep cached record.
+    final gen = _recordGen;
+    if (state.loadFailed) state = state.copyWith(loadFailed: false);
+    Map<String, dynamic>? data;
     try {
-      final data = await _api.storageAction({
-        'action': 'shop-get',
-        'pubkey': identity.pubkey,
-        'auth': auth,
-      });
+      final auth = await _auth('shop-get', identity);
+      if (auth != null) {
+        data = await _api.storageAction({
+          'action': 'shop-get',
+          'pubkey': identity.pubkey,
+          'auth': auth,
+        });
+      }
+    } catch (_) {}
+    if (!mounted || gen != _recordGen) return;
+    if (data != null && data['owned'] is Map) {
       await applyOwnRecord(data);
-    } catch (_) {
-      // Keep cached state.
+      return;
     }
+    state = state.copyWith(loadFailed: true);
   }
 
   /// Pushes active items to D1 so others can render them; the server filters to owned items and echoes the result.
   Future<void> publishActiveItems(ShopIdentity identity) async {
+    if (!state.loaded) return;
     final a = state.active;
     final payload = <String, dynamic>{
       'style': a.style,
@@ -782,21 +813,23 @@ class ShopController extends StateNotifier<ShopState> {
     if (data['alreadyClaimed'] == true) return;
     final name = item?.name ?? 'item';
     if (data['gift'] == true) {
-      onSystemMessage?.call('Gift purchase completed: $name.');
+      onSystemMessage
+          ?.call(tr('Gift purchase completed: {name}.', {'name': name}));
     } else {
-      var msg = 'Purchase completed: $name';
       final edition = data['edition'];
-      if (edition is Map && edition['n'] != null) {
-        msg += ' #${edition['n']}/${edition['max']}';
-      }
-      msg += '.';
+      final shown = edition is Map && edition['n'] != null
+          ? '$name #${edition['n']}/${edition['max']}'
+          : name;
       final bundle = data['bundle'];
       if (bundle is List && bundle.isNotEmpty) {
-        msg += ' Unlocked ${bundle.length} items.';
+        onSystemMessage?.call(tr('Purchase completed: {name}. Unlocked {count} items.',
+            {'name': shown, 'count': bundle.length}));
       } else if (data['code'] != null) {
-        msg += ' Recovery code: ${data['code']}';
+        onSystemMessage?.call(tr('Purchase completed: {name}. Recovery code: {code}',
+            {'name': shown, 'code': data['code']}));
+      } else {
+        onSystemMessage?.call(tr('Purchase completed: {name}.', {'name': shown}));
       }
-      onSystemMessage?.call(msg);
     }
   }
 

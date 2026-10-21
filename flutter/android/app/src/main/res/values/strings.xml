@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="play_integrity_project_number" translatable="false">435441872913</string>
+    <string name="nfc_share_service">Nymchat tap to share</string>
 </resources>

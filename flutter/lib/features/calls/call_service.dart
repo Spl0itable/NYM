@@ -170,12 +170,13 @@ class CallService {
       };
       p.onRingCheck = ringCheck;
       p.onRingToken = (platform, token, env) async {
-        await _ref
-            .read(ringRegistrationProvider)
-            .onToken(platform: platform, token: token, env: env);
+        final reg = _ref.read(ringRegistrationProvider);
+        await reg.onToken(platform: platform, token: token, env: env);
+        await reg.sync(self: _self, blocked: _isBlocked);
       };
     } catch (_) {}
     _ref.listen(appStateProvider, (_, _) => _dropGoneGroup());
+    _ref.listen(appStateProvider, (_, _) => _withdrawBlockedWakes());
     // Hydrate seen calls so a call already handled or relay-replayed isn't re-rung.
     unawaited(_hydrateSeenCalls());
   }
@@ -2490,28 +2491,32 @@ class CallService {
   Future<bool> _send(String to, Map<String, dynamic> payload) {
     if (_isBlocked(to)) return Future<bool>.value(false);
     final wake = _ownWakeFor(to);
-    return _ref
-        .read(nostrControllerProvider)
-        .sendCallSignal(
-            to: to,
-            payload: wake == null ? payload : {...payload, 'wake': wake},
-            groupId: _signalGroupId(payload['callId']));
+    return _ref.read(nostrControllerProvider).sendCallSignal(
+        to: to,
+        payload: wake == null ? payload : {...payload, 'wake': wake},
+        groupId: _signalGroupId(payload['callId']));
   }
 
   String? _ownWakeFor(String peer) {
     try {
       if (_isBlocked(peer)) return null;
-      final own = _ref.read(ringRegistrationProvider).wakeFor(_self);
-      if (own == null) return null;
+      final reg = _ref.read(ringRegistrationProvider);
+      if (!reg.enabledFor(_self)) return null;
       final share = shouldShareWake(
         acceptCalls: _ref.read(settingsProvider).acceptCalls,
         isFriend: _isFriend(peer),
         registered: true,
       );
-      return share ? own : null;
+      return share ? reg.wakeForPeer(_self, peer) : null;
     } catch (_) {
       return null;
     }
+  }
+
+  void _withdrawBlockedWakes() {
+    try {
+      _ref.read(ringRegistrationProvider).withdrawBlocked(_self, _isBlocked);
+    } catch (_) {}
   }
 
   void _ringWakes(List<String> targets) {

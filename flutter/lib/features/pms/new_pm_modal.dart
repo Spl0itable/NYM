@@ -23,6 +23,9 @@ import '../chat_lock/chat_lock_providers.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_field.dart';
 import '../settings/settings_widgets.dart' show SettingsToggleRow;
+import '../media_notes/profile_image.dart';
+import '../share/qr_decoder_channel.dart';
+import '../share/share_scanner.dart';
 
 /// A picked recipient: 64-hex pubkey plus display nym.
 class PmRecipient {
@@ -208,18 +211,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     });
   }
 
-  /// Upload caps: avatar 5MB, banner 10MB.
-  static const int _avatarMaxBytes = 5 * 1024 * 1024;
-  static const int _bannerMaxBytes = 10 * 1024 * 1024;
 
-  /// Best-effort MIME type from the file extension (BUD-02 `Content-Type`).
-  static String _contentTypeFor(String path) {
-    final lower = path.toLowerCase();
-    if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.gif')) return 'image/gif';
-    if (lower.endsWith('.webp')) return 'image/webp';
-    return 'image/jpeg';
-  }
 
   /// Uploads the picked group image before creating so `createGroup` gets a hosted URL; errors store nothing.
   Future<void> _pickGroupImage(bool avatar) async {
@@ -230,16 +222,17 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
       final file = await picker.pickImage(source: ImageSource.gallery);
       if (file == null || !mounted) return;
       bytes = await file.readAsBytes();
-      contentType = _contentTypeFor(file.path);
+      contentType = profileImageContentType(bytes,
+          path: file.path, declared: file.mimeType ?? '');
     } catch (_) {
       // Picker unavailable (tests, desktop).
       return;
     }
 
     // Enforce the size cap before uploading.
-    final cap = avatar ? _avatarMaxBytes : _bannerMaxBytes;
+    final cap = profileImageMaxBytes(avatar: avatar);
     if (bytes.length > cap) {
-      final capMb = avatar ? 5 : 10;
+      final capMb = cap ~/ (1024 * 1024);
       final actualMb = (bytes.length / (1024 * 1024)).toStringAsFixed(1);
       setState(() => _uploadError =
               tr('{label} must be under {cap}MB (this is {actual}MB).', {
@@ -362,7 +355,18 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                   children: [
                     _label(c, tr('To')),
                     const SizedBox(height: 8),
-                    _recipientBox(c),
+                    Row(
+                      children: [
+                        Expanded(child: _recipientBox(c)),
+                        if (ref.watch(qrScannerAvailableProvider))
+                          IconButton(
+                            key: const ValueKey('pm-scan-code'),
+                            tooltip: tr('Scan a code'),
+                            onPressed: () => openShareScanner(context),
+                            icon: NymSvgIcon(NymIcons.radar, size: 20, color: c.primary),
+                          ),
+                      ],
+                    ),
                     if (_recipientError != null)
                       Padding(
                         padding: const EdgeInsets.only(top: 6),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -366,8 +367,21 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     _measureScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _measureScheduled = false;
-      if (mounted) _remeasure();
+      if (!mounted) return;
+      _remeasure();
+      _scheduleMeasure();
     });
+  }
+
+  EdgeInsets _safeInsets(BuildContext context) {
+    final m = MediaQuery.of(context);
+    return EdgeInsets.fromLTRB(
+      math.max(m.padding.left, m.viewPadding.left),
+      math.max(m.padding.top, m.viewPadding.top),
+      math.max(m.padding.right, m.viewPadding.right),
+      math.max(math.max(m.padding.bottom, m.viewPadding.bottom),
+          m.viewInsets.bottom),
+    );
   }
 
   /// Steps without a target are always reachable.
@@ -434,10 +448,10 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     Rect? ring;
     final raw = _targetRect;
     if (raw != null) {
-      final left = (raw.left - 8).clamp(8.0, screen.width);
-      final top = (raw.top - 8).clamp(8.0, screen.height);
-      final right = (raw.right + 8).clamp(left, screen.width - 8);
-      final bottom = (raw.bottom + 8).clamp(top, screen.height - 8);
+      final left = math.max(8.0, raw.left - 8);
+      final top = math.max(8.0, raw.top - 8);
+      final right = math.min(screen.width - 8, raw.right + 8);
+      final bottom = math.min(screen.height - 8, raw.bottom + 8);
       if (right > left && bottom > top) {
         ring = Rect.fromLTRB(left, top, right, bottom);
       }
@@ -462,6 +476,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
           ),
           if (ring != null)
             Positioned.fromRect(
+              key: const Key('tutorialRing'),
               rect: ring,
               child: IgnorePointer(
                 child: Container(
@@ -495,6 +510,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
         delegate: _TutorialCardLayoutDelegate(
           ring: ring,
           phone: screen.width <= NymDimens.mobileBreakpoint,
+          safe: _safeInsets(context),
         ),
         child: _card(c),
       ),
@@ -526,6 +542,13 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Flexible(
+              child: SingleChildScrollView(
+                key: const Key('tutorialCardScroll'),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -550,6 +573,10 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
               style: TextStyle(color: c.text, fontSize: 13, height: 1.4),
             ),
             if (_index == 0) ..._keysPanel(c),
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 10),
             Text(
               tr('Step {n} of {total}',
@@ -777,51 +804,75 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
 
 /// Card placement: max width min(420, 92vw), centered without a ring, else below/above/clamped and centered on the ring.
 class _TutorialCardLayoutDelegate extends SingleChildLayoutDelegate {
-  const _TutorialCardLayoutDelegate({required this.ring, required this.phone});
+  const _TutorialCardLayoutDelegate({
+    required this.ring,
+    required this.phone,
+    required this.safe,
+  });
 
   final Rect? ring;
   final bool phone;
+  final EdgeInsets safe;
+
+  static const double _margin = 12;
+  static const double _minSideHeight = 160;
+
+  Rect _area(Size size) => Rect.fromLTRB(
+        safe.left + _margin,
+        safe.top + _margin,
+        math.max(safe.left + _margin, size.width - safe.right - _margin),
+        math.max(safe.top + _margin, size.height - safe.bottom - _margin),
+      );
 
   @override
   BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
+    final area = _area(constraints.biggest);
     final w = constraints.maxWidth;
     final capped = phone ? w * 0.94 : w * 0.92;
-    final maxW = capped < 420.0 || phone ? capped : 420.0;
-    final maxH = (constraints.maxHeight - 24).clamp(0.0, double.infinity);
-    return BoxConstraints(maxWidth: maxW, maxHeight: maxH);
+    final wanted = capped < 420.0 || phone ? capped : 420.0;
+    return BoxConstraints(
+      maxWidth: math.min(wanted, area.width),
+      maxHeight: _maxHeight(area),
+    );
+  }
+
+  double _below(Rect area, Rect r) => area.bottom - r.bottom - _margin;
+
+  double _above(Rect area, Rect r) => r.top - _margin - area.top;
+
+  double _maxHeight(Rect area) {
+    final r = ring;
+    if (r == null) return area.height;
+    final side = math.max(_below(area, r), _above(area, r));
+    return side >= _minSideHeight ? math.min(side, area.height) : area.height;
   }
 
   @override
   Offset getPositionForChild(Size size, Size childSize) {
+    final area = _area(size);
+    final maxTop = math.max(area.top, area.bottom - childSize.height);
+    final maxLeft = math.max(area.left, area.right - childSize.width);
     final r = ring;
     if (r == null) {
-      final left = (size.width - childSize.width) / 2;
-      final top = (size.height - childSize.height) / 2;
-      return Offset(left < 12 ? 12 : left, top < 12 ? 12 : top);
+      final left = area.left + (area.width - childSize.width) / 2;
+      final top = area.top + (area.height - childSize.height) / 2;
+      return Offset(left.clamp(area.left, maxLeft), top.clamp(area.top, maxTop));
     }
-    final spaceBelow = size.height - r.bottom;
-    final spaceAbove = r.top;
     final double top;
-    if (spaceBelow > childSize.height + 16) {
-      top = r.bottom + 12;
-    } else if (spaceAbove > childSize.height + 16) {
-      top = r.top - childSize.height - 12;
+    if (childSize.height <= _below(area, r) + 0.5) {
+      top = math.max(area.top, r.bottom + _margin);
+    } else if (childSize.height <= _above(area, r) + 0.5) {
+      top = math.min(maxTop, r.top - _margin - childSize.height);
     } else {
-      // The card is height-capped, so this is always at least 12.
-      final onScreen = size.height - childSize.height - 12;
-      final below = r.bottom + 12 < 12 ? 12.0 : r.bottom + 12;
-      top = onScreen < below ? onScreen : below;
+      top = (r.bottom + _margin).clamp(area.top, maxTop);
     }
-    var left = r.left + (r.width - childSize.width) / 2;
-    final maxLeft = size.width - childSize.width - 12;
-    if (left > maxLeft) left = maxLeft;
-    if (left < 12) left = 12;
-    return Offset(left, top);
+    final left = r.left + (r.width - childSize.width) / 2;
+    return Offset(left.clamp(area.left, maxLeft), top);
   }
 
   @override
   bool shouldRelayout(_TutorialCardLayoutDelegate old) =>
-      old.ring != ring || old.phone != phone;
+      old.ring != ring || old.phone != phone || old.safe != safe;
 }
 
 /// Dims the screen with a rounded-rect [hole] punched clear.

@@ -149,10 +149,10 @@ final StateNotifierProvider<ConnNoticeGate, int> connNoticeGateProvider =
   final gate = ConnNoticeGate(ref.watch(connNoticeClockProvider));
   ref.listen<bool>(
       appStateProvider
-          .select((s) => s.selfPubkey.isEmpty || s.connectedRelays > 0),
+          .select((s) => s.selfPubkey.isEmpty || s.relayLinked),
       (_, open) => gate.track(open),
       fireImmediately: true);
-  ref.listen<bool>(appStateProvider.select((s) => s.connectedRelays > 0),
+  ref.listen<bool>(appStateProvider.select((s) => s.relayLinked),
       (_, open) => gate.noteRelays(open),
       fireImmediately: true);
   return gate;

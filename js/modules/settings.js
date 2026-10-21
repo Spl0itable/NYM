@@ -12,12 +12,12 @@ const NYM_SETTINGS_SECTION_KEYS = {
     privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'blockedRelays', 'addedRelays', 'hiddenChannels',
         'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
         'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
-        'acceptCalls', 'showStatus', 'powDifficulty', 'appVerifiedFilter', 'filterPacks',
+        'acceptCalls', 'showStatus', 'channelCounts', 'powDifficulty', 'appVerifiedFilter', 'filterPacks',
         'encryptAtRestPreferred', 'remotePanic', 'spamFilterEnabled', 'spamFilterAggressive', 'spamFilterTs'],
     messaging: ['groupChatPMOnlyMode', 'threadsEnabled', 'translateLanguage', 'translateFavoriteLanguages',
         'emojiPackFavorites', 'emojiCategoryFavorites', 'favoriteGifs', 'recentEmojis',
         'gesturesEnabled', 'swipeLeftAction', 'swipeRightAction', 'swipeThreshold',
-        'swipeReactEmoji', 'swipeReactEmojiTs', 'notificationsEnabled', 'groupNotifyMentionsOnly',
+        'swipeReactEmoji', 'swipeReactEmojiTs', 'hoverActions', 'notificationsEnabled', 'groupNotifyMentionsOnly',
         'threadNotifyMentionsOnly', 'notifyFriendsOnly', 'eventToasts',
         'syncMLSHistory', 'seenCalls', 'hidePreviews', 'hidePreviewsTs', 'voiceSpeed', 'voiceSpeedTs',
         'keepCallHistory', 'keepCallHistoryTs'],
@@ -175,6 +175,7 @@ Object.assign(NYM.prototype, {
             swipeLeftAction: this.settings.swipeLeftAction || 'quote',
             swipeRightAction: this.settings.swipeRightAction || 'translate',
             swipeThreshold: this.settings.swipeThreshold || 60,
+            hoverActions: window.NymMessageActions.normalizeHoverActions(this.settings.hoverActions),
             ...(localStorage.getItem('nym_swipe_react_emoji')
                 ? {
                     swipeReactEmoji: localStorage.getItem('nym_swipe_react_emoji'),
@@ -198,6 +199,7 @@ Object.assign(NYM.prototype, {
             seenCalls: this._seenCallsForSync(),
             syncMLSHistory: this.settings.syncMLSHistory !== false,
             showStatus: this.settings.showStatus === false ? false : (this.settings.showStatus === 'friends' ? 'friends' : true),
+            channelCounts: this.settings.channelCounts !== false,
             cachePMs: this.settings.cachePMs !== false,
             tutorialSeen: localStorage.getItem('nym_tutorial_seen') === 'true',
             botPmWelcomed: localStorage.getItem('nym_botpm_welcomed') === 'true',
@@ -2423,10 +2425,14 @@ Object.assign(NYM.prototype, {
             swipeRightAction: localStorage.getItem('nym_swipe_right_action') || 'translate',
             swipeThreshold: parseInt(localStorage.getItem('nym_swipe_threshold') || '60', 10),
             swipeReactEmoji: localStorage.getItem('nym_swipe_react_emoji') || '❤️',
+            hoverActions: (() => {
+                try { return window.NymMessageActions.normalizeHoverActions(JSON.parse(localStorage.getItem('nym_hover_actions') || 'null')); } catch (_) { return window.NymMessageActions.normalizeHoverActions(null); }
+            })(),
             acceptPMs: localStorage.getItem('nym_accept_pms') || 'enabled',
             acceptCalls: localStorage.getItem('nym_accept_calls') || 'enabled',
             cachePMs: localStorage.getItem('nym_cache_pms') !== 'false', // default true
             syncMLSHistory: localStorage.getItem('nym_sync_mls_history') !== 'false', // default true
+            channelCounts: localStorage.getItem('nym_channel_counts') !== 'false',
             showStatus: (() => {
                 const v = localStorage.getItem('nym_show_status');
                 return v === 'false' ? false : (v === 'friends' ? 'friends' : true); // default true

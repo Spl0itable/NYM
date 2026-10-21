@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -18,10 +19,8 @@ import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
-import '../../features/channels/channel_manager.dart';
 import '../../features/globe/geohash_explorer.dart';
 import '../../features/mesh/mesh_controller.dart';
-import '../../features/groups/group_logic.dart';
 import '../../features/i18n/localization_service.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/accounts/account_host.dart';
@@ -38,7 +37,6 @@ import '../../features/settings/settings_screen.dart';
 import '../../features/shop/shop_modal.dart';
 import '../../models/channel.dart';
 import '../../models/group.dart';
-import '../../models/pm_conversation.dart';
 import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -63,6 +61,7 @@ import 'pm_list_item.dart';
 import 'row_preview.dart';
 import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
+import 'sidebar_rows.dart';
 import 'sidebar_skeleton.dart';
 import '../common/list_empty_note.dart';
 import 'user_list_item.dart';
@@ -98,7 +97,10 @@ class Sidebar extends ConsumerStatefulWidget {
       this.onItemSelected,
       this.compact = false,
       this.onClose,
-      this.closeShown = true});
+      this.closeShown = true,
+      this.hidden = false});
+
+  final bool hidden;
 
   /// Called after a row is tapped, so the mobile drawer can close.
   final VoidCallback? onItemSelected;
@@ -159,6 +161,17 @@ class _SidebarState extends ConsumerState<Sidebar> {
   bool _nymHover = false;
 
   final ScrollController _scroll = ScrollController();
+
+  final Map<Key, (Object, Widget)> _channelMemo = {};
+  final Map<Key, (Object, Widget)> _pmMemo = {};
+  final Map<Key, (Object, Widget)> _nymMemo = {};
+
+  @visibleForTesting
+  Map<String, int> get debugRowMemoCounts => {
+        'channel': _channelMemo.length,
+        'pm': _pmMemo.length,
+        'nym': _nymMemo.length,
+      };
 
   // Skeleton rows are dropped after an 8s safety timeout even if no content arrives.
   bool _skelTimedOut = false;
@@ -271,101 +284,184 @@ class _SidebarState extends ConsumerState<Sidebar> {
     _persistOrder();
   }
 
+  Widget? _frozen;
+
   @override
   Widget build(BuildContext context) {
-    final c = context.nym;
-    final settings = ref.watch(settingsProvider);
-    final textSize = settings.textSize.toDouble();
+    final frozen = _frozen;
+    if (widget.hidden && frozen != null) {
+      return TickerMode(
+          enabled: false, child: _SidebarHidden(hidden: true, child: frozen));
+    }
+    return TickerMode(
+        enabled: true,
+        child: _SidebarHidden(hidden: false, child: _frozen = _buildLive(context)));
+  }
 
-    final app = ref.watch(appStateProvider);
-    final view = ref.watch(currentViewProvider);
-    // While the mesh overlay is open nothing is active, so re-tapping the previous channel dismisses it.
-    final meshOpen = ref.watch(meshScreenOpenProvider);
-    // `#nymchat` and the active row are never hidden, keeping "Unhide channel" reachable.
-    final sortByProximity = ref
-        .watch(settingsProvider.select((settings) => settings.sortByProximity));
-    final hideNonPinned = ref
-        .watch(settingsProvider.select((settings) => settings.hideNonPinned));
-    final location = ref.watch(userLocationProvider);
-    final activeChannelKey = (!meshOpen && view.kind == ViewKind.channel)
-        ? view.id.toLowerCase()
-        : '';
-    final visibleChannels = app.channels
-        .where((ch) => !app.blockedChannels.contains(ch.key))
-        .where((ch) =>
-            ch.key == kDefaultChannel ||
-            ch.key == activeChannelKey ||
-            (!app.hiddenChannels.contains(ch.key) &&
-                !(hideNonPinned && !app.pinnedChannels.contains(ch.key))))
-        .toList();
-    var channels = ChannelManager.sortChannels(
-      visibleChannels,
-      ChannelSortContext(
-        activeKey: activeChannelKey,
-        pinned: app.pinnedChannels,
-        lastActivity: app.channelLastActivity,
-        unreadCounts: app.unreadCounts,
-        sortByProximity: sortByProximity,
-        userLocation: location,
+  void _trimMemo(Map<Key, (Object, Widget)> memo, List<Key> shown) {
+    final keep = shown.toSet();
+    memo.removeWhere((k, _) => !keep.contains(k));
+  }
+
+  Widget _memoRow(Map<Key, (Object, Widget)> memo, Key key, Object sig,
+      Widget Function() make) {
+    final hit = memo[key];
+    if (hit != null && hit.$1 == sig) return hit.$2;
+    final w = AutomaticKeepAlive(
+      key: ValueKey<Key>(key),
+      child: RepaintBoundary(child: _KeptRow(child: make())),
+    );
+    memo[key] = (sig, w);
+    return w;
+  }
+
+  Widget _channelRow(SidebarRow<ChannelEntry> row, double textSize, int i18n,
+      void Function(ChatView) select) {
+    final ch = row.item;
+    final s = row.sig as SidebarChannelSig;
+    final key = ValueKey('sidebar-channel-${ch.key}');
+    return _memoRow(
+      _channelMemo,
+      key,
+      (s, textSize, i18n),
+      () => ChannelListItem(
+        key: key,
+        entry: ch,
+        active: s.active,
+        pinned: s.pinned,
+        unread: s.unread,
+        textSize: textSize,
+        onTap: () => select(ChatView.channel(ch.key)),
       ),
     );
-    int orderBand(ChannelEntry ch) {
-      if (ch.key == kDefaultChannel) return -4;
-      if (app.pinnedChannels.contains(ch.key)) return -3;
-      if (ch.key == activeChannelKey) return -2;
-      if ((app.unreadCounts[ch.storageKey] ?? 0) > 0) return -1;
-      return 0;
+  }
+
+  Widget _pmRow(SidebarRow<SidebarPmEntry> row, double textSize, int i18n,
+      String selfPubkey, void Function(ChatView) select) {
+    final e = row.item;
+    final g = e.group;
+    if (g != null) {
+      final key = ValueKey('sidebar-group-${g.id}');
+      return _memoRow(
+        _pmMemo,
+        key,
+        (row.sig, textSize, i18n),
+        () => _GroupListItem(
+          key: key,
+          group: g,
+          active: e.active,
+          unread: e.unread,
+          textSize: textSize,
+          selfPubkey: selfPubkey,
+          users: ref.read(usersProvider),
+          onTap: () => select(ChatView.group(g.id)),
+        ),
+      );
     }
+    final pm = e.pm!;
+    final key = ValueKey('sidebar-pm-${pm.pubkey}');
+    return _memoRow(
+      _pmMemo,
+      key,
+      (row.sig, textSize, i18n),
+      () => PMListItem(
+        key: key,
+        nym: pm.nym,
+        pubkey: pm.pubkey,
+        active: e.active,
+        unread: e.unread,
+        textSize: textSize,
+        mesh: e.mesh,
+        onTap: () => select(ChatView.pm(pm.pubkey)),
+      ),
+    );
+  }
 
-    ref.watch(chatLockRevisionProvider);
-    final chatLock = ref.read(chatLockProvider);
-    channels = [
-      for (var band = -4; band <= 0; band++)
-        ...channels.where((ch) =>
-            orderBand(ch) == band &&
-            !chatLock.isConversationLocked(ch.storageKey)),
-    ];
-    final pinned = app.pinnedChannels;
-    final pms = ref.watch(pmListProvider);
-    // Backfill PM peers' profiles so older conversations show real avatars; debounced, so cheap per build.
-    ref
-        .read(nostrControllerProvider)
-        .ensureProfiles([for (final p in pms) p.pubkey]);
-    final groups = ref.watch(groupsProvider);
-    final users = ref.watch(usersProvider);
-    final nymsList = ref.watch(nymsListUsersProvider);
-    final unread = ref.watch(unreadCountsProvider);
+  Key _pmKey(SidebarPmEntry e) => e.group != null
+      ? ValueKey('sidebar-group-${e.group!.id}')
+      : ValueKey('sidebar-pm-${e.pm!.pubkey}');
 
-    // Mesh-only DM peers get a Bluetooth glyph; channels are dual-transport and carry none.
-    final meshPmPubkeys =
-        ref.watch(meshControllerProvider.select((s) => s.meshPmPubkeys));
+  Widget _nymRow(SidebarRow<User> row, double textSize, int i18n) {
+    final u = row.item;
+    final key = ValueKey('sidebar-nym-${u.pubkey}');
+    return _memoRow(
+      _nymMemo,
+      key,
+      (row.sig, textSize, i18n),
+      () => UserListItem(
+        key: key,
+        user: u,
+        textSize: textSize,
+        onTap: () => showUserContextMenu(context, ref, u, Offset.zero),
+      ),
+    );
+  }
 
-    // Groups and PMs share one list, newest-first by last-message time.
-    final byTime = <_PmEntry>[
-      for (final pm in pms) _PmEntry.pm(pm),
-      for (final g in groups) _PmEntry.group(g),
-    ]..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
-    final entryByKey = <String, _PmEntry>{
-      for (final e in byTime)
-        e.group != null
-            ? 'group-${e.group!.id}'
-            : 'pm-${e.pm!.pubkey.toLowerCase()}': e,
+  Widget _rowsSliver({
+    List<Widget> leading = const [],
+    required List<Key> keys,
+    required Widget Function(int) rowAt,
+    List<Widget> trailing = const [],
+  }) {
+    final lead = leading.length;
+    final count = keys.length;
+    final index = <Key, int>{
+      for (var i = 0; i < count; i++) ValueKey<Key>(keys[i]): lead + i,
     };
-    final pmEntries = [
-      for (final k in chatNavPinSort(ref, entryByKey.keys.toList()))
-        if (!chatLock.isConversationLocked(k)) entryByKey[k]!,
-    ];
-    final lockBadges = ref.watch(chatLockBadgesProvider);
+    return SliverList.builder(
+      itemCount: lead + count + trailing.length,
+      addAutomaticKeepAlives: false,
+      addRepaintBoundaries: false,
+      addSemanticIndexes: false,
+      findChildIndexCallback: (key) => index[key],
+      itemBuilder: (context, i) {
+        if (i < lead) return leading[i];
+        if (i < lead + count) return rowAt(i - lead);
+        return trailing[i - lead - count];
+      },
+    );
+  }
+
+  void _syncNav() {
+    final pmOnly = ref.read(settingsProvider).groupChatPMOnlyMode;
+    final channels = ref.read(sidebarChannelRowsProvider).rows;
+    final pms = ref.read(sidebarPmRowsProvider).rows;
     _publishNavOrder([
       for (final sec in _order)
-        if (sec == _SectionId.channels && !settings.groupChatPMOnlyMode)
-          for (final ch in channels) ChatView.channel(ch.key)
+        if (sec == _SectionId.channels && !pmOnly)
+          for (final r in channels) ChatView.channel(r.item.key)
         else if (sec == _SectionId.pms)
-          for (final e in pmEntries)
-            e.group != null
-                ? ChatView.group(e.group!.id)
-                : ChatView.pm(e.pm!.pubkey),
+          for (final r in pms)
+            r.item.group != null
+                ? ChatView.group(r.item.group!.id)
+                : ChatView.pm(r.item.pm!.pubkey),
     ]);
+  }
+
+  void _ensurePmProfiles() {
+    ref
+        .read(nostrControllerProvider)
+        .ensureProfiles([for (final p in ref.read(pmListProvider)) p.pubkey]);
+  }
+
+  Widget _buildLive(BuildContext context) {
+    final c = context.nym;
+    final i18n = ref.watch(i18nVersionProvider);
+    final settings = ref.watch(settingsProvider);
+    final textSize = settings.textSize.toDouble();
+    final selfNym = ref.watch(appStateProvider.select((s) => s.selfNym));
+    final selfPubkey = ref.watch(appStateProvider.select((s) => s.selfPubkey));
+    ref.watch(chatLockRevisionProvider);
+    final chatLock = ref.read(chatLockProvider);
+    final lockShown =
+        ref.watch(chatLockBadgesProvider.select((b) => b.shown));
+    ref.listen(sidebarChannelRowsProvider, (_, _) => _syncNav());
+    ref.listen(sidebarPmRowsProvider, (_, _) {
+      _ensurePmProfiles();
+      _syncNav();
+    });
+    _ensurePmProfiles();
+    _syncNav();
 
     bool secretOpened(String v) {
       if (!chatLock.matchesSecret(v)) return false;
@@ -379,66 +475,16 @@ class _SidebarState extends ConsumerState<Sidebar> {
       return true;
     }
 
-    final notifier = ref.read(appStateProvider.notifier);
-
-    // Channel skeletons follow the static `#nymchat` row, so they clear on the first non-default channel.
-    final showChannelSkel =
-        !_skelTimedOut && !app.channels.any((ch) => ch.key != kDefaultChannel);
-    final showPmSkel = !_skelTimedOut && pmEntries.isEmpty;
-
     void select(ChatView v) {
-      // Dismiss the mesh overlay on any tap, even on the current view, since switchView is then a no-op.
       if (ref.read(meshScreenOpenProvider)) {
         ref.read(meshScreenOpenProvider.notifier).state = false;
       }
-      notifier.switchView(v);
+      ref.read(appStateProvider.notifier).switchView(v);
       widget.onItemSelected?.call();
     }
 
-    // PM/group-only mode restricts the nyms list to PM peers and group members.
-    final Set<String>? pmOnlyPubkeys = settings.groupChatPMOnlyMode
-        ? {
-            for (final pm in pms) pm.pubkey,
-            for (final g in groups) ...g.members,
-          }
-        : null;
-    // No self exclusion: the PWA lists and counts your own nym.
-    final onlineUsers = nymsList.values
-        .where((u) => pmOnlyPubkeys == null || pmOnlyPubkeys.contains(u.pubkey))
-        .toList()
-      ..sort((a, b) {
-        int rank(User u) {
-          // Verified bots rank as online.
-          switch (u.effectiveStatus(
-              isVerifiedBot: kVerifiedBotPubkeys.contains(u.pubkey))) {
-            case UserStatus.online:
-              return 0;
-            case UserStatus.away:
-              return 1;
-            default:
-              return 2;
-          }
-        }
-
-        final r = rank(a) - rank(b);
-        if (r != 0) return r;
-        // Status ties break on the suffix-stripped, lowercased base nym.
-        return stripPubkeySuffix(a.nym)
-            .toLowerCase()
-            .compareTo(stripPubkeySuffix(b.nym).toLowerCase());
-      });
-
-    // Online count: non-hidden recent nyms, plus verified bots regardless of recency.
     final controller = ref.read(nostrControllerProvider);
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final nymActiveCount = onlineUsers.where((u) {
-      final isBot = kVerifiedBotPubkeys.contains(u.pubkey);
-      final st = u.effectiveStatus(isVerifiedBot: isBot);
-      if (st == UserStatus.hidden || st == UserStatus.offline) return false;
-      return nowMs - u.lastSeen < kActiveThresholdMs || isBot;
-    }).length;
 
-    // Applies the search term and 20-row cap; searching disables the cap.
     ({List<T> rows, int more}) capped<T>(
       List<T> all,
       String term,
@@ -456,20 +502,193 @@ class _SidebarState extends ConsumerState<Sidebar> {
       );
     }
 
+    Widget channelRows(BuildContext context, WidgetRef ref) {
+      final data = ref.watch(sidebarChannelRowsProvider);
+      final all = data.rows;
+      final term = _channelTerm.toLowerCase();
+      final r = capped<SidebarRow<ChannelEntry>>(
+        all,
+        term,
+        (row) => (row.item.isGeohash ? row.item.geohashKey : row.item.channel)
+            .toLowerCase()
+            .contains(term),
+        _channelExpanded,
+      );
+      final showChannelSkel = !_skelTimedOut && !data.flag;
+      final keys = <Key>[
+        for (final row in r.rows) ValueKey('sidebar-channel-${row.item.key}'),
+      ];
+      _trimMemo(_channelMemo, keys);
+      return _rowsSliver(
+        keys: keys,
+        rowAt: (i) => _channelRow(r.rows[i], textSize, i18n, select),
+        trailing: [
+          if (showChannelSkel)
+            for (final f in const [0.70, 0.42, 0.50, 0.58])
+              SidebarSkeletonRow.channel(barWidthFactor: f),
+          if (r.more > 0)
+            _ViewMoreButton(
+              more: r.more,
+              onTap: () => setState(() => _channelExpanded = true),
+            )
+          else if (term.isEmpty &&
+              _channelExpanded &&
+              all.length > _collapsedCap)
+            _ViewMoreButton(
+              more: 0,
+              onTap: () => setState(() => _channelExpanded = false),
+            ),
+          if (term.trim().isNotEmpty &&
+              !all.any((row) => row.item.key == term.trim()))
+            _SearchCreatePrompt(
+              term: term.trim(),
+              onTap: () {
+                final t = term.trim();
+                final geo = isValidGeohash(t) ? t : '';
+                controller.switchChannel(t, geohash: geo);
+                setState(() {
+                  _channelTerm = '';
+                  _channelSearch = false;
+                });
+                widget.onItemSelected?.call();
+              },
+            ),
+        ],
+      );
+    }
+
+    Widget pmRows(BuildContext context, WidgetRef ref) {
+      final all = ref.watch(sidebarPmRowsProvider).rows;
+      final term = _pmTerm.toLowerCase();
+      final users = term.isEmpty ? null : ref.watch(usersProvider);
+      final app = term.isEmpty ? null : ref.watch(appStateProvider);
+      final r = capped<SidebarRow<SidebarPmEntry>>(
+        all,
+        term,
+        (row) {
+          final e = row.item;
+          final String rendered;
+          if (e.group != null) {
+            final g = e.group!;
+            final name = app!.groupLabel(g);
+            rendered = '$name · ${_abbreviateNumber(g.members.length)}';
+          } else {
+            rendered =
+                '${pickDisplayNym(users![e.pm!.pubkey]?.nym, e.pm!.nym)}'
+                '#${getPubkeySuffix(e.pm!.pubkey)}';
+          }
+          return rendered.toLowerCase().contains(term);
+        },
+        _pmExpanded,
+      );
+      final showPmSkel = !_skelTimedOut && all.isEmpty;
+      final keys = [for (final row in r.rows) _pmKey(row.item)];
+      _trimMemo(_pmMemo, keys);
+      return _rowsSliver(
+        leading: [
+          if (showPmSkel)
+            for (final f in const [0.58, 0.70, 0.42])
+              SidebarSkeletonRow.pm(barWidthFactor: f)
+          else if (r.rows.isEmpty)
+            ListEmptyNote(
+              key: const ValueKey('pm-empty'),
+              text: all.isEmpty
+                  ? tr('No private messages yet')
+                  : tr('No matches'),
+              actionLabel: all.isEmpty ? tr('Start one') : null,
+              onAction: all.isEmpty
+                  ? () {
+                      widget.onItemSelected?.call();
+                      NewPmModal.open(context);
+                    }
+                  : null,
+            ),
+        ],
+        keys: keys,
+        rowAt: (i) => _pmRow(r.rows[i], textSize, i18n, selfPubkey, select),
+        trailing: [
+          if (r.more > 0)
+            _ViewMoreButton(
+              more: r.more,
+              onTap: () => setState(() => _pmExpanded = true),
+            )
+          else if (term.isEmpty && _pmExpanded && all.length > _collapsedCap)
+            _ViewMoreButton(
+              more: 0,
+              onTap: () => setState(() => _pmExpanded = false),
+            ),
+        ],
+      );
+    }
+
+    Widget nymRows(BuildContext context, WidgetRef ref) {
+      final onlineUsers = ref.watch(sidebarNymRowsProvider).rows;
+      final term = _nymTerm.toLowerCase();
+      final filtered = term.isEmpty
+          ? onlineUsers
+          : onlineUsers
+              .where((r) =>
+                  stripPubkeySuffix(r.item.nym).toLowerCase().contains(term))
+              .toList(growable: false);
+      final total = filtered.length;
+      final int renderCap;
+      if (term.isNotEmpty) {
+        renderCap = total;
+      } else if (_nymExpandedCap != null) {
+        renderCap = total < _nymExpandedCap! ? total : _nymExpandedCap!;
+      } else {
+        renderCap = total < _collapsedCap ? total : _collapsedCap;
+      }
+      final nymRows =
+          renderCap < total ? filtered.sublist(0, renderCap) : filtered;
+      final remaining = total - renderCap;
+      final keys = <Key>[
+        for (final row in nymRows) ValueKey('sidebar-nym-${row.item.pubkey}'),
+      ];
+      _trimMemo(_nymMemo, keys);
+      return _rowsSliver(
+        leading: [
+          if (!_skelTimedOut && onlineUsers.isEmpty)
+            for (final f in const [0.70, 0.42, 0.50, 0.58, 0.70])
+              SidebarSkeletonRow.nym(barWidthFactor: f)
+          else if (nymRows.isEmpty)
+            ListEmptyNote(
+              key: const ValueKey('nym-empty'),
+              text: onlineUsers.isEmpty
+                  ? tr('No one else is here right now')
+                  : tr('No matches'),
+            ),
+        ],
+        keys: keys,
+        rowAt: (i) => _nymRow(nymRows[i], textSize, i18n),
+        trailing: [
+          if (term.isEmpty && total > _collapsedCap)
+            if (_nymExpandedCap == null)
+              _ViewMoreButton(
+                more: total - _collapsedCap,
+                onTap: () => setState(() => _nymExpandedCap = _expandedStep),
+              )
+            else if (remaining > 0)
+              _ViewMoreButton(
+                more: remaining < _expandedStep ? remaining : _expandedStep,
+                stepMore: true,
+                onTap: () => setState(
+                    () => _nymExpandedCap = _nymExpandedCap! + _expandedStep),
+              )
+            else
+              _ViewMoreButton(
+                more: 0,
+                onTap: () => setState(() => _nymExpandedCap = null),
+              ),
+        ],
+      );
+    }
+
     Widget sectionFor(_SectionId s) {
       switch (s) {
         case _SectionId.channels:
-          final term = _channelTerm.toLowerCase();
-          final r = capped<ChannelEntry>(
-            channels,
-            term,
-            (ch) => (ch.isGeohash ? ch.geohashKey : ch.channel)
-                .toLowerCase()
-                .contains(term),
-            _channelExpanded,
-          );
           return _NavSection(
-            key: const ValueKey('section-channels'),
+            id: const ValueKey('section-channels'),
             sectionKey: TutorialTargets.keyFor(TutorialTarget.channelList),
             title: tr('Public Channels'),
             open: !_collapsed.contains(s),
@@ -497,75 +716,11 @@ class _SidebarState extends ConsumerState<Sidebar> {
             ),
             searchHint: tr('Search channels...'),
             searchTooltip: tr('Search channels'),
-            children: [
-              for (final ch in r.rows)
-                ChannelListItem(
-                  entry: ch,
-                  active: !meshOpen &&
-                      view.kind == ViewKind.channel &&
-                      view.id == ch.key,
-                  pinned: pinned.contains(ch.key),
-                  // `unreadCounts` is keyed by storageKey, not the bare registry key.
-                  unread: unread[ch.storageKey] ?? 0,
-                  textSize: textSize,
-                  onTap: () => select(ChatView.channel(ch.key)),
-                ),
-              if (showChannelSkel)
-                for (final f in const [0.70, 0.42, 0.50, 0.58])
-                  SidebarSkeletonRow.channel(barWidthFactor: f),
-              if (r.more > 0)
-                _ViewMoreButton(
-                  more: r.more,
-                  onTap: () => setState(() => _channelExpanded = true),
-                )
-              else if (term.isEmpty &&
-                  _channelExpanded &&
-                  channels.length > _collapsedCap)
-                _ViewMoreButton(
-                  more: 0,
-                  onTap: () => setState(() => _channelExpanded = false),
-                ),
-              // When the search matches no channel, offer a row to join it by name or geohash.
-              if (term.trim().isNotEmpty &&
-                  !channels.any((ch) => ch.key == term.trim()))
-                _SearchCreatePrompt(
-                  term: term.trim(),
-                  onTap: () {
-                    final t = term.trim();
-                    final geo = isValidGeohash(t) ? t : '';
-                    controller.switchChannel(t, geohash: geo);
-                    setState(() {
-                      _channelTerm = '';
-                      _channelSearch = false;
-                    });
-                    widget.onItemSelected?.call();
-                  },
-                ),
-            ],
+            body: _SidebarLive(builder: channelRows),
           );
         case _SectionId.pms:
-          final term = _pmTerm.toLowerCase();
-          // Matches the whole rendered name (including `#suffix` or member count), like the PWA.
-          final r = capped<_PmEntry>(
-            pmEntries,
-            term,
-            (e) {
-              final String rendered;
-              if (e.group != null) {
-                final g = e.group!;
-                final name = app.groupLabel(g);
-                rendered = '$name · ${_abbreviateNumber(g.members.length)}';
-              } else {
-                rendered =
-                    '${pickDisplayNym(users[e.pm!.pubkey]?.nym, e.pm!.nym)}'
-                    '#${getPubkeySuffix(e.pm!.pubkey)}';
-              }
-              return rendered.toLowerCase().contains(term);
-            },
-            _pmExpanded,
-          );
           return _NavSection(
-            key: const ValueKey('section-pms'),
+            id: const ValueKey('section-pms'),
             sectionKey: TutorialTargets.keyFor(TutorialTarget.pmList),
             title: tr('Private Messages'),
             open: !_collapsed.contains(s),
@@ -590,7 +745,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
               children: [
                 if (chatLock.entryShown) ...[
                   _LockedChatsEntry(
-                    count: lockBadges.shown,
+                    count: lockShown,
                     onTap: () => unawaited(openLockedChats(context, ref)),
                   ),
                   const SizedBox(width: 10),
@@ -607,91 +762,21 @@ class _SidebarState extends ConsumerState<Sidebar> {
             ),
             searchHint: tr('Search PMs...'),
             searchTooltip: tr('Search PMs'),
-            children: [
-              // No fixed Nymbot row: the bot appears here only once a real PM thread with it exists.
-              if (showPmSkel)
-                for (final f in const [0.58, 0.70, 0.42])
-                  SidebarSkeletonRow.pm(barWidthFactor: f)
-              else if (r.rows.isEmpty)
-                ListEmptyNote(
-                  key: const ValueKey('pm-empty'),
-                  text: pmEntries.isEmpty
-                      ? tr('No private messages yet')
-                      : tr('No matches'),
-                  actionLabel: pmEntries.isEmpty ? tr('Start one') : null,
-                  onAction: pmEntries.isEmpty
-                      ? () {
-                          widget.onItemSelected?.call();
-                          NewPmModal.open(context);
-                        }
-                      : null,
-                ),
-              for (final e in r.rows)
-                if (e.group != null)
-                  _GroupListItem(
-                    group: e.group!,
-                    active: !meshOpen &&
-                        view.kind == ViewKind.group &&
-                        view.id == e.group!.id,
-                    unread:
-                        unread[GroupLogic.groupStorageKey(e.group!.id)] ?? 0,
-                    textSize: textSize,
-                    selfPubkey: app.selfPubkey,
-                    users: users,
-                    onTap: () => select(ChatView.group(e.group!.id)),
-                  )
-                else
-                  PMListItem(
-                    nym: e.pm!.nym,
-                    pubkey: e.pm!.pubkey,
-                    active: !meshOpen &&
-                        view.kind == ViewKind.pm &&
-                        view.id == e.pm!.pubkey,
-                    unread: unread[e.pm!.pubkey] ?? 0,
-                    textSize: textSize,
-                    mesh: meshPmPubkeys.contains(e.pm!.pubkey.toLowerCase()),
-                    onTap: () => select(ChatView.pm(e.pm!.pubkey)),
-                  ),
-              if (r.more > 0)
-                _ViewMoreButton(
-                  more: r.more,
-                  onTap: () => setState(() => _pmExpanded = true),
-                )
-              else if (term.isEmpty &&
-                  _pmExpanded &&
-                  pmEntries.length > _collapsedCap)
-                _ViewMoreButton(
-                  more: 0,
-                  onTap: () => setState(() => _pmExpanded = false),
-                ),
-            ],
+            body: _SidebarLive(builder: pmRows),
           );
         case _SectionId.nyms:
-          final term = _nymTerm.toLowerCase();
-          // Searching shows all matches; the search matches the suffix-stripped lowercase base nym.
-          final filtered = term.isEmpty
-              ? onlineUsers
-              : onlineUsers
-                  .where((u) =>
-                      stripPubkeySuffix(u.nym).toLowerCase().contains(term))
-                  .toList(growable: false);
-          final total = filtered.length;
-          final int renderCap;
-          if (term.isNotEmpty) {
-            renderCap = total;
-          } else if (_nymExpandedCap != null) {
-            renderCap = total < _nymExpandedCap! ? total : _nymExpandedCap!;
-          } else {
-            renderCap = total < _collapsedCap ? total : _collapsedCap;
-          }
-          final nymRows =
-              renderCap < total ? filtered.sublist(0, renderCap) : filtered;
-          final remaining = total - renderCap;
           return _NavSection(
-            key: const ValueKey('section-nyms'),
+            id: const ValueKey('section-nyms'),
             sectionKey: TutorialTargets.keyFor(TutorialTarget.userList),
-            title: tr('Nyms ({count} online)',
-                {'count': _abbreviateNumber(nymActiveCount)}),
+            title: '',
+            titleText: _SidebarLive(
+              builder: (context, ref) => _NavTitleText(
+                tr('Nyms ({count} online)', {
+                  'count': _abbreviateNumber(ref.watch(
+                      sidebarNymRowsProvider.select((d) => d.count))),
+                }),
+              ),
+            ),
             open: !_collapsed.contains(s),
             searching: _nymSearch,
             reorderMode: _reorderMode,
@@ -709,46 +794,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
             onLongPressTitle: _toggleReorderMode,
             searchHint: tr('Search nyms...'),
             searchTooltip: tr('Search nyms'),
-            children: [
-              if (!_skelTimedOut && onlineUsers.isEmpty)
-                for (final f in const [0.70, 0.42, 0.50, 0.58, 0.70])
-                  SidebarSkeletonRow.nym(barWidthFactor: f)
-              else if (nymRows.isEmpty)
-                ListEmptyNote(
-                  key: const ValueKey('nym-empty'),
-                  text: onlineUsers.isEmpty
-                      ? tr('No one else is here right now')
-                      : tr('No matches'),
-                ),
-              for (final u in nymRows)
-                UserListItem(
-                  user: u,
-                  textSize: textSize,
-                  // A tap opens the profile menu (not a PM); the panel ignores the anchor.
-                  onTap: () =>
-                      showUserContextMenu(context, ref, u, Offset.zero),
-                ),
-              // The view-more control exists only for an unsearched list over 20.
-              if (term.isEmpty && total > _collapsedCap)
-                if (_nymExpandedCap == null)
-                  _ViewMoreButton(
-                    more: total - _collapsedCap,
-                    onTap: () =>
-                        setState(() => _nymExpandedCap = _expandedStep),
-                  )
-                else if (remaining > 0)
-                  _ViewMoreButton(
-                    more: remaining < _expandedStep ? remaining : _expandedStep,
-                    stepMore: true,
-                    onTap: () => setState(() =>
-                        _nymExpandedCap = _nymExpandedCap! + _expandedStep),
-                  )
-                else
-                  _ViewMoreButton(
-                    more: 0,
-                    onTap: () => setState(() => _nymExpandedCap = null),
-                  ),
-            ],
+            body: _SidebarLive(builder: nymRows),
           );
       }
     }
@@ -764,7 +810,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
         bottom: false,
         child: Column(
           children: [
-            _header(context, app.selfNym),
+            _header(context, selfNym),
             Expanded(
               child: ScrollbarTheme(
           data: ScrollbarThemeData(
@@ -782,23 +828,27 @@ class _SidebarState extends ConsumerState<Sidebar> {
           ),
           child: Scrollbar(
             controller: _scroll,
-            child: ListView(
+            child: CustomScrollView(
               controller: _scroll,
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-              padding: EdgeInsets.zero,
-              children: [
-                UnifiedSearchButton(onTap: () {
-                  widget.onItemSelected?.call();
-                  UnifiedSearchPanel.open(context);
-                }),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: UnifiedSearchButton(onTap: () {
+                    widget.onItemSelected?.call();
+                    UnifiedSearchPanel.open(context);
+                  }),
+                ),
                 if (widget.compact)
-                  _SidebarActions(onItemSelected: widget.onItemSelected),
-                // PM/group-only mode hides the whole channels section.
+                  SliverToBoxAdapter(
+                    child:
+                        _SidebarActions(onItemSelected: widget.onItemSelected),
+                  ),
                 for (final s in _order)
                   if (!(settings.groupChatPMOnlyMode &&
                       s == _SectionId.channels))
                     sectionFor(s),
-                const SizedBox(height: NymSpace.s3),
+                const SliverToBoxAdapter(
+                    child: SizedBox(height: NymSpace.s3)),
               ],
             ),
           ),
@@ -810,6 +860,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
       ),
     );
   }
+
 
   Widget _footer(BuildContext context) {
     final c = context.nym;
@@ -1501,9 +1552,188 @@ class _ActionButtonState extends State<_ActionButton> {
 }
 
 /// Collapsible nav section; a 500ms title hold toggles reorder mode and only the chevron collapses.
+class _KeptRow extends StatefulWidget {
+  const _KeptRow({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_KeptRow> createState() => _KeptRowState();
+}
+
+class _KeptRowState extends State<_KeptRow>
+    with AutomaticKeepAliveClientMixin {
+  bool _keep = false;
+
+  @override
+  bool get wantKeepAlive => _keep;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final box = mounted ? context.findRenderObject() : null;
+      if (box is RenderBox && box.hasSize) {
+        _keep = true;
+        updateKeepAlive();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
+}
+
+class _SidebarHidden extends InheritedWidget {
+  const _SidebarHidden({required this.hidden, required super.child});
+
+  final bool hidden;
+
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_SidebarHidden>()?.hidden ??
+      false;
+
+  @override
+  bool updateShouldNotify(_SidebarHidden oldWidget) =>
+      oldWidget.hidden != hidden;
+}
+
+class _SidebarLive extends ConsumerStatefulWidget {
+  const _SidebarLive({required this.builder});
+
+  final Widget Function(BuildContext context, WidgetRef ref) builder;
+
+  @override
+  ConsumerState<_SidebarLive> createState() => _SidebarLiveState();
+}
+
+class _SidebarLiveState extends ConsumerState<_SidebarLive> {
+  Widget? _last;
+
+  @override
+  Widget build(BuildContext context) {
+    final last = _last;
+    if (_SidebarHidden.of(context) && last != null) return last;
+    return _last = widget.builder(context, ref);
+  }
+}
+
+enum _TargetSlot { sliver, box }
+
+class _SliverTarget
+    extends SlottedMultiChildRenderObjectWidget<_TargetSlot, RenderObject> {
+  const _SliverTarget({required this.targetKey, required this.sliver});
+
+  final Key targetKey;
+  final Widget sliver;
+
+  @override
+  Iterable<_TargetSlot> get slots => _TargetSlot.values;
+
+  @override
+  Widget? childForSlot(_TargetSlot slot) => switch (slot) {
+        _TargetSlot.sliver => sliver,
+        _TargetSlot.box =>
+          KeyedSubtree(key: targetKey, child: const SizedBox.expand()),
+      };
+
+  @override
+  _RenderSliverTarget createRenderObject(BuildContext context) =>
+      _RenderSliverTarget();
+}
+
+class _RenderSliverTarget extends RenderSliver
+    with
+        SlottedContainerRenderObjectMixin<_TargetSlot, RenderObject>,
+        RenderSliverHelpers {
+  RenderSliver? get _sliver => childForSlot(_TargetSlot.sliver) as RenderSliver?;
+  RenderBox? get _box => childForSlot(_TargetSlot.box) as RenderBox?;
+
+  @override
+  void setupParentData(RenderObject child) {
+    if (child.parentData is! SliverPhysicalParentData) {
+      child.parentData = SliverPhysicalParentData();
+    }
+  }
+
+  @override
+  void performLayout() {
+    final sliver = _sliver!;
+    sliver.layout(constraints, parentUsesSize: true);
+    final g = sliver.geometry!;
+    geometry = g;
+    _box?.layout(BoxConstraints.tightFor(
+        width: constraints.crossAxisExtent, height: g.scrollExtent));
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final sliver = _sliver;
+    if (sliver != null && sliver.geometry!.visible) {
+      context.paintChild(sliver, offset);
+    }
+  }
+
+  @override
+  bool hitTestChildren(SliverHitTestResult result,
+          {required double mainAxisPosition,
+          required double crossAxisPosition}) =>
+      _sliver?.hitTest(result,
+          mainAxisPosition: mainAxisPosition,
+          crossAxisPosition: crossAxisPosition) ??
+      false;
+
+  @override
+  double childMainAxisPosition(covariant RenderObject child) =>
+      child == _box ? -constraints.scrollOffset : 0;
+
+  @override
+  double childCrossAxisPosition(covariant RenderObject child) => 0;
+
+  @override
+  double? childScrollOffset(covariant RenderObject child) => 0;
+
+  @override
+  void applyPaintTransform(covariant RenderObject child, Matrix4 transform) {
+    final box = _box;
+    if (child == box && box != null) {
+      applyPaintTransformForBoxChild(box, transform);
+    }
+  }
+
+  @override
+  void visitChildrenForSemantics(RenderObjectVisitor visitor) {
+    final sliver = _sliver;
+    if (sliver != null) visitor(sliver);
+  }
+}
+
+class _NavTitleText extends StatelessWidget {
+  const _NavTitleText(this.title);
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      title.toUpperCase(),
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: context.nym.textDim,
+        fontSize: 10,
+        letterSpacing: 2,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+}
+
 class _NavSection extends StatelessWidget {
   const _NavSection({
-    super.key,
+    required this.id,
     required this.sectionKey,
     required this.title,
     required this.open,
@@ -1514,18 +1744,21 @@ class _NavSection extends StatelessWidget {
     required this.onLongPressTitle,
     required this.searchHint,
     required this.searchTooltip,
-    required this.children,
+    required this.body,
     required this.reorderMode,
     required this.canMoveUp,
     required this.canMoveDown,
     required this.onMoveUp,
     required this.onMoveDown,
     this.leadingIcon,
+    this.titleText,
     this.isUserList = false,
   });
 
+  final Key id;
   final Key sectionKey;
   final String title;
+  final Widget? titleText;
   final bool open;
   final bool searching;
   final VoidCallback onToggleOpen;
@@ -1534,7 +1767,7 @@ class _NavSection extends StatelessWidget {
   final VoidCallback onLongPressTitle;
   final String searchHint;
   final String searchTooltip;
-  final List<Widget> children;
+  final Widget body;
   final bool reorderMode;
   final bool canMoveUp;
   final bool canMoveDown;
@@ -1549,13 +1782,11 @@ class _NavSection extends StatelessWidget {
     final pad = isUserList
         ? const EdgeInsets.fromLTRB(12, 10, 12, 10)
         : const EdgeInsets.fromLTRB(12, 16, 12, 12);
-    return Container(
-      padding: pad,
-      decoration: isUserList
-          ? null
-          : BoxDecoration(
-              border: Border(bottom: BorderSide(color: c.glassBorder)),
-            ),
+    final border =
+        isUserList ? null : Border(bottom: BorderSide(color: c.glassBorder));
+    final header = Padding(
+      key: id,
+      padding: pad.copyWith(bottom: 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1574,18 +1805,7 @@ class _NavSection extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                   ],
-                  Expanded(
-                    child: Text(
-                      title.toUpperCase(),
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: c.textDim,
-                        fontSize: 10,
-                        letterSpacing: 2,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
+                  Expanded(child: titleText ?? _NavTitleText(title)),
                   const SizedBox(width: 10),
                   if (leadingIcon != null) ...[
                     leadingIcon!,
@@ -1607,7 +1827,6 @@ class _NavSection extends StatelessWidget {
               ),
             ),
           ),
-          // Collapsing hides everything but the title row, including an open search input.
           if (open && searching)
             Padding(
               padding: const EdgeInsets.fromLTRB(0, 0, 0, 10),
@@ -1616,17 +1835,28 @@ class _NavSection extends StatelessWidget {
                 onChanged: onSearchChanged,
               ),
             ),
-          KeyedSubtree(
-            key: sectionKey,
-            child: open
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: children,
-                  )
-                : const SizedBox.shrink(),
-          ),
         ],
       ),
+    );
+    final group = SliverMainAxisGroup(
+      slivers: [
+        SliverToBoxAdapter(child: header),
+        SliverPadding(
+          padding: pad.copyWith(
+              top: 0, bottom: pad.bottom + (border?.bottom.width ?? 0)),
+          sliver: _SliverTarget(
+            targetKey: sectionKey,
+            sliver: open
+                ? body
+                : const SliverToBoxAdapter(child: SizedBox.shrink()),
+          ),
+        ),
+      ],
+    );
+    if (border == null) return group;
+    return DecoratedSliver(
+      decoration: BoxDecoration(border: border),
+      sliver: group,
     );
   }
 }
@@ -1881,23 +2111,10 @@ class _LockedChatsEntry extends StatelessWidget {
   }
 }
 
-class _PmEntry {
-  _PmEntry.pm(PMConversation this.pm)
-      : group = null,
-        lastMessageTime = pm.lastMessageTime;
-  _PmEntry.group(Group g)
-      : pm = null,
-        group = g,
-        lastMessageTime = g.lastMessageTime;
-
-  final PMConversation? pm;
-  final Group? group;
-  final int lastMessageTime;
-}
-
 /// Group row in the PM list; a hold opens the one-item "Leave conversation" menu.
 class _GroupListItem extends ConsumerWidget {
   const _GroupListItem({
+    super.key,
     required this.group,
     required this.active,
     required this.unread,

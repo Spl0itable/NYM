@@ -132,7 +132,13 @@ import flutter_webrtc
     registerPrivacyChannel()
     registerShareChannel()
     registerTranscribeChannel()
+    registerClipboardChannel()
     registerCallChannel()
+    if let messenger = channelMessenger {
+      QrScanner.register(with: messenger)
+      NearbyShare.register(with: messenger)
+      NfcShare.register(with: messenger)
+    }
   }
 
   override func userNotificationCenter(
@@ -212,6 +218,49 @@ import flutter_webrtc
     )
     channel.setMethodCallHandler { call, result in
       Transcriber.handle(call, result: result)
+    }
+  }
+
+  private func registerClipboardChannel() {
+    guard let messenger = channelMessenger else { return }
+    let channel = FlutterMethodChannel(
+      name: "app.nymchat/clipboard",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { call, result in
+      let board = UIPasteboard.general
+      switch call.method {
+      case "hasImage":
+        result(board.hasImages)
+      case "readImage":
+        let asked = (call.arguments as? [String: Any])?["limit"] as? Int ?? 0
+        let limit = asked > 0 ? min(asked, 64 * 1024 * 1024) : 50 * 1024 * 1024
+        let kinds: [(UTType, String)] = [
+          (.png, "image/png"),
+          (.jpeg, "image/jpeg"),
+          (.gif, "image/gif"),
+          (.webP, "image/webp"),
+        ]
+        for (kind, mime) in kinds {
+          if let data = board.data(forPasteboardType: kind.identifier), !data.isEmpty {
+            result([
+              "mimeType": mime,
+              "bytes": FlutterStandardTypedData(bytes: Data(data.prefix(limit + 1))),
+            ])
+            return
+          }
+        }
+        if let image = board.image, let data = image.jpegData(compressionQuality: 0.9) {
+          result([
+            "mimeType": "image/jpeg",
+            "bytes": FlutterStandardTypedData(bytes: Data(data.prefix(limit + 1))),
+          ])
+          return
+        }
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
     }
   }
 

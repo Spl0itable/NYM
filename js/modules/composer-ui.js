@@ -122,6 +122,22 @@
             if (input.style.marginLeft !== shift) input.style.marginLeft = shift === '0px' ? '' : shift;
         },
 
+        _composerBasePlaceholder() {
+            return typeof this._botChatOpen === 'function' && this._botChatOpen()
+                ? 'Message Nymbot, ? for commands...'
+                : 'Message, / for commands, ? for Nymbot...';
+        },
+
+        _syncComposerPlaceholder() {
+            const input = document.getElementById('messageInput');
+            if (!input || this._composerVerifying) return;
+            const want = this._composerBasePlaceholder();
+            if (input.dataset.composerPlaceholder === want) return;
+            input.dataset.composerPlaceholder = want;
+            input.setAttribute('data-placeholder', want);
+            if (typeof this._i18nComposerPlaceholder === 'function') this._i18nComposerPlaceholder(input);
+        },
+
         _composerScheduleRefresh() {
             if (this._composerRefreshQueued) return;
             this._composerRefreshQueued = true;

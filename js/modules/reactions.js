@@ -990,7 +990,7 @@ ${this._emojiSectionsHtml()}`;
 
         if (now < tracker.cooldownUntil) {
             const remaining = Math.ceil((tracker.cooldownUntil - now) / 1000);
-            this.displaySystemMessage(`Slow down! You can react again in ${remaining}s`);
+            this.displaySystemMessage(this.uiText(`Slow down! You can react again in {remaining}s`, { remaining }));
             return false;
         }
 
@@ -1221,6 +1221,32 @@ ${this._emojiSectionsHtml()}`;
         }
     },
 
+    _safeTopInset() {
+        let el = this._safeTopProbe;
+        if (!el || !el.isConnected) {
+            el = document.createElement('div');
+            el.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top, 0px)';
+            document.body.appendChild(el);
+            this._safeTopProbe = el;
+        }
+        return parseFloat(getComputedStyle(el).paddingTop) || 0;
+    },
+
+    _fitEmojiPicker(picker) {
+        if (!picker.classList.contains('active')) {
+            if (picker.style.maxHeight) picker.style.maxHeight = '';
+            return;
+        }
+        const anchor = picker.offsetParent || picker.parentElement;
+        if (!anchor) return;
+        const vv = window.visualViewport;
+        const top = vv ? vv.offsetTop : 0;
+        const gap = parseFloat(getComputedStyle(picker).marginBottom) || 0;
+        const room = anchor.getBoundingClientRect().top - gap - top - this._safeTopInset() - 8;
+        const want = Math.max(120, Math.min(400, Math.floor(room))) + 'px';
+        if (picker.style.maxHeight !== want) picker.style.maxHeight = want;
+    },
+
     setupEmojiPicker() {
         const picker = document.getElementById('emojiPicker');
         if (!picker) return;
@@ -1235,6 +1261,14 @@ ${this._emojiSectionsHtml()}`;
         });
 
         this._indexEmojiSearch(picker, '.emoji-btn', '.emoji-picker-section');
+
+        if (!picker._fitBound) {
+            picker._fitBound = true;
+            const fit = () => this._fitEmojiPicker(picker);
+            new MutationObserver(fit).observe(picker, { attributes: true, attributeFilter: ['class'] });
+            if (window.visualViewport) window.visualViewport.addEventListener('resize', fit);
+            window.addEventListener('resize', fit);
+        }
 
         if (!picker._emojiBound) {
             picker._emojiBound = true;

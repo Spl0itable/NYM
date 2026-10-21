@@ -28,6 +28,11 @@
 		<string>applinks:web.nymchat.app</string>
 		<string>webcredentials:web.nymchat.app</string>
 	</array>
+	<key>com.apple.developer.nfc.readersession.formats</key>
+	<array>
+		<string>NDEF</string>
+		<string>TAG</string>
+	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.com.nym.bar</string>

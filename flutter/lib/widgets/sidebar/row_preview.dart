@@ -68,8 +68,9 @@ RowPreview sidebarRowPreview(WidgetRef ref, String storageKey, String kind) {
       appStateProvider.select((s) => lastPreviewable(s, s.messages[storageKey])));
   final hide = ref.watch(settingsProvider.select((s) => s.hidePreviews));
   ref.watch(chatLockRevisionProvider);
-  ref.watch(rowClockProvider);
   if (last == null) return kNoRowPreview;
+  ref.watch(rowClockProvider.select((_) => relativeTime(
+      DateTime.now().millisecondsSinceEpoch, last.ts, _ui)));
   final live = ref.watch(usersProvider.select((u) => u[last.pubkey]?.nym));
   final lock = ref.read(chatLockProvider);
   final locked = lock.isConversationLocked(storageKey);

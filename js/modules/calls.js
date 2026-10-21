@@ -26,7 +26,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage(this._clRedactText().body);
             return;
         }
-        this.displaySystemMessage('Missed call from ' + this._callPeerName(pubkey, hint) + '#' + this.getPubkeySuffix(pubkey));
+        this.displaySystemMessage(this.uiText('Missed call from {name}', { name: this._callPeerName(pubkey, hint) + '#' + this.getPubkeySuffix(pubkey) }));
     },
 
     _ringTileFace(pubkey) {
@@ -95,7 +95,7 @@ Object.assign(NYM.prototype, {
                 : { audio: true, video: false };
             return await navigator.mediaDevices.getUserMedia(constraints);
         } catch (e) {
-            this.displaySystemMessage('Could not access ' + (kind === 'video' ? 'camera/microphone' : 'microphone') + ': ' + (e.message || e.name || e));
+            this.displaySystemMessage(this.uiText(kind === 'video' ? 'Could not access camera/microphone: {error}' : 'Could not access microphone: {error}', { error: e.message || e.name || e }));
             return null;
         }
     },
@@ -1178,7 +1178,7 @@ Object.assign(NYM.prototype, {
             stream.getTracks().forEach(t => { if (t !== track) { try { t.stop(); } catch (e) { } } });
             return track;
         } catch (e) {
-            this.displaySystemMessage('Could not access camera: ' + (e.message || e.name || e));
+            this.displaySystemMessage(this.uiText('Could not access camera: {error}', { error: e.message || e.name || e }));
             return null;
         }
     },
@@ -1263,7 +1263,7 @@ Object.assign(NYM.prototype, {
         } catch (e) {
             ac.switchingCamera = false;
             this._updateCallControls();
-            this.displaySystemMessage('Could not switch camera: ' + (e.message || e.name || e));
+            this.displaySystemMessage(this.uiText('Could not switch camera: {error}', { error: e.message || e.name || e }));
             return;
         }
         if (!this.activeCall || this.activeCall !== ac) { stream.getTracks().forEach(t => t.stop()); return; }
@@ -1713,7 +1713,7 @@ Object.assign(NYM.prototype, {
         if (!ac || ac.callId !== data.callId || !this._isCallMod() || !this._isCallParticipant(ac, sender)) return;
         ac.presentRequests.add(sender);
         const mask = this._callMask(sender, data.nym);
-        this.displaySystemMessage((mask || (data.nym ? this.parseNymFromDisplay(data.nym) : this._nymForPubkey(sender))) + ' requested to present');
+        this.displaySystemMessage(this.uiText('{name} requested to present', { name: mask || (data.nym ? this.parseNymFromDisplay(data.nym) : this._nymForPubkey(sender)) }));
         this._renderPresenterMenu();
         this._updateCallControls();
     },
@@ -2035,7 +2035,7 @@ Object.assign(NYM.prototype, {
             const read = !!(readers && readers.size > 0);
             el.className = 'call-chat-receipt delivery-status ' + (read ? 'read' : 'sent');
             el.title = read ? 'Read' : 'Sent';
-            el.textContent = read ? '✓✓' : '✓';
+            el.innerHTML = this.deliveryTicksHtml(read ? 'read' : 'sent');
         }
     },
 
@@ -2110,7 +2110,7 @@ Object.assign(NYM.prototype, {
             const receipt = document.createElement('span');
             receipt.className = ac && ac.isGroup ? 'call-chat-readers' : 'call-chat-receipt delivery-status sent';
             receipt.dataset.mid = mid;
-            if (!(ac && ac.isGroup)) { receipt.title = 'Sent'; receipt.textContent = '✓'; }
+            if (!(ac && ac.isGroup)) { receipt.title = 'Sent'; receipt.innerHTML = this.deliveryTicksHtml('sent'); }
             row.appendChild(receipt);
         }
         if (pubkey && this.blockedUsers && this.blockedUsers.has(pubkey)) {
@@ -2653,7 +2653,7 @@ Object.assign(NYM.prototype, {
         const inCall = ac.members.includes(pubkey) || (ac.peers && ac.peers.has(pubkey));
         if (!inCall) return;
         if (!ac.isGroup) {
-            this.displaySystemMessage('Left the call — you blocked ' + this._nymForPubkey(pubkey));
+            this.displaySystemMessage(this.uiText('Left the call — you blocked {name}', { name: this._nymForPubkey(pubkey) }));
             this.hangupCall();
             return;
         }

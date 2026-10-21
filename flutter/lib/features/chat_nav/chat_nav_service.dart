@@ -639,11 +639,10 @@ class ChatNavService {
     } else {
       final r = pinAdd(s, key, _nowMs);
       if (r.error == 'cap') {
+        final isChannel = pinParse(key)!.kind == 'channel';
         _notice(t(
-            pinParse(key)!.kind == 'channel'
-                ? ChatNavStrings.favoriteCap
-                : ChatNavStrings.favoriteChatCap,
-            {'n': ChatNavLimits.pinMax}));
+            isChannel ? ChatNavStrings.favoriteCap : ChatNavStrings.favoriteChatCap,
+            {'n': isChannel ? ChatNavLimits.pinChannelMax : ChatNavLimits.pinMax}));
         return false;
       }
       s = r.state;

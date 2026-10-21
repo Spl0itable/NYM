@@ -56,6 +56,7 @@
         fileTransfer: 0x20,
         authenticatedPeerState: 0x21,
         reaction: 0x70,
+        nymShare: 0x71,
     };
 
     const BROADCAST_RECIPIENT = new Uint8Array(8).fill(0xFF);

@@ -43,6 +43,7 @@ class CustomEmojiState {
   const CustomEmojiState({
     this.codeToUrl = const {},
     this.packs = const [],
+    this.tagged = const {},
   });
 
   /// shortcode -> original (un-proxied) image url.
@@ -50,6 +51,9 @@ class CustomEmojiState {
 
   /// Loaded packs, deduped by [CustomEmojiPack.key].
   final List<CustomEmojiPack> packs;
+
+  /// Shortcodes learned from message or reaction tags; saved ahead of pack emoji.
+  final Set<String> tagged;
 
   bool get isEmpty => codeToUrl.isEmpty;
 
@@ -62,6 +66,7 @@ CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) =>
 
 CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read) {
   final codeToUrl = <String, String>{};
+  final tagged = <String>{};
 
   void register(String? shortcode, String? url) {
     if (shortcode == null || url == null) return;
@@ -79,6 +84,11 @@ CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read) {
         for (final entry in decoded) {
           if (entry is List && entry.length >= 2) {
             register(entry[0] as String?, entry[1] as String?);
+            if (entry.length >= 3 &&
+                entry[2] == 1 &&
+                codeToUrl[entry[0]] == entry[1]) {
+              tagged.add(entry[0] as String);
+            }
           }
         }
       }
@@ -130,8 +140,14 @@ CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read) {
   // Newest first; approximates the PWA order without live ownership info.
   packs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-  return CustomEmojiState(codeToUrl: codeToUrl, packs: packs);
+  return CustomEmojiState(codeToUrl: codeToUrl, packs: packs, tagged: tagged);
 }
+
+/// Set by the live emoji store; receives shortcodes rendered without a known image.
+void Function(String code)? customEmojiMissingSink;
+
+/// Reports a rendered `:code:` with no known image so the store can look it up once.
+void noteMissingCustomEmoji(String code) => customEmojiMissingSink?.call(code);
 
 /// Proxied emoji image URL, or [url] verbatim when no proxy base is configured.
 String proxiedEmojiUrl(String url, String? proxyBase) {

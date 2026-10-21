@@ -19,6 +19,8 @@ String creditFigure(num? value) {
 String tr(String source, [Map<String, Object?>? args]) =>
     LocalizationService.instance.translate(source, args);
 
+String trShown(String shown) => LocalizationService.instance.relocalize(shown);
+
 /// String sugar: `'Settings'.tr()` / `'Hi {name}'.tr({'name': n})`.
 extension TrString on String {
   String tr([Map<String, Object?>? args]) =>

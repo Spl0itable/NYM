@@ -385,6 +385,24 @@
         return 'HTTP ' + status + (why ? ': ' + why : '');
     }
 
+    const PROFILE_IMAGE_LIMITS = Object.freeze({ avatar: 5 * 1024 * 1024, banner: 10 * 1024 * 1024 });
+
+    function profileImageType(head, name, declared) {
+        const b = head || [];
+        const has = (sig, at = 0) => b.length >= at + sig.length && sig.every((v, i) => b[at + i] === v);
+        if (has([0x47, 0x49, 0x46, 0x38])) return 'image/gif';
+        if (has([0x89, 0x50, 0x4E, 0x47])) return 'image/png';
+        if (has([0x52, 0x49, 0x46, 0x46]) && has([0x57, 0x45, 0x42, 0x50], 8)) return 'image/webp';
+        if (has([0xFF, 0xD8, 0xFF])) return 'image/jpeg';
+        const d = String(declared || '').split(';')[0].trim().toLowerCase();
+        if (d.startsWith('image/')) return d;
+        const lower = String(name || '').toLowerCase();
+        if (lower.endsWith('.png')) return 'image/png';
+        if (lower.endsWith('.gif')) return 'image/gif';
+        if (lower.endsWith('.webp')) return 'image/webp';
+        return 'image/jpeg';
+    }
+
     function blossomRejectsType(status, text) {
         const s = Number(status);
         if (s === 402 || s === 415) return true;
@@ -718,7 +736,7 @@
         encodeDescriptor, attachDescriptor, parseDescriptor, parseMediaUrl, findMediaNotes,
         imetaTagsForContent, stripMediaNotes, previewText, plainLabel, onceLabel, onceContent,
         formatClock, formatBytes, nextSpeed, parseSpeed, speedLabel, scaledDimensions,
-        extForMime, baseMime, mimeCodecs, isPortableVoiceMime, voiceDescriptorMime, noteUploadTypes, blossomFailureText, blossomRejectsType, encodeWav, PORTABLE_VOICE_RATE,
+        extForMime, baseMime, mimeCodecs, isPortableVoiceMime, voiceDescriptorMime, noteUploadTypes, blossomFailureText, blossomRejectsType, profileImageType, PROFILE_IMAGE_LIMITS, encodeWav, PORTABLE_VOICE_RATE,
         VOICE_CONVERT, checkPortableVoice, MODEL_DOWNLOAD, modelDownloadStage, voiceProbeSignal, voiceProbeMatches, meshFileName, parseMeshFileName, meshOnceReceiptId, parseMeshOnceReceiptId,
         featureState, meshSizeCheck, preferredMime,
         hexToBytes, bytesToHex, randomHex, newOnceSecret, encryptOnce, decryptOnce,

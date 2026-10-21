@@ -375,6 +375,7 @@ Object.assign(NYM.prototype, {
 
     _saveGroupConversations() {
         if (!this.pubkey) return;
+        if (typeof this._shareSheetGroupChanged === 'function') this._shareSheetGroupChanged();
         try {
             const data = {};
             for (const [groupId, group] of this.groupConversations) {
@@ -758,7 +759,7 @@ Object.assign(NYM.prototype, {
         return new TextDecoder().decode(bytes);
     },
 
-    buildGroupInviteLink(groupId) {
+    _groupInvitePayload(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group) return null;
         if (!group.inviteEnabled) return null;
@@ -766,6 +767,12 @@ Object.assign(NYM.prototype, {
         const payload = { v: 1, g: groupId, n: (group.name || 'Group').slice(0, 80), a: this.pubkey, e: group.inviteEpoch || 0 };
         const cachedSummary = this._gtSummaries && this._gtSummaries.get(groupId);
         if (cachedSummary && cachedSummary.s) payload.s = cachedSummary.s;
+        return payload;
+    },
+
+    buildGroupInviteLink(groupId) {
+        const payload = this._groupInvitePayload(groupId);
+        if (!payload) return null;
         const token = window.NymGroupTools ? window.NymGroupTools.encodeInvite(payload) : this._b64uEncode(JSON.stringify(payload));
         const base = window.location.origin + window.location.pathname;
         return `${base}#gjoin=${token}`;
@@ -827,7 +834,7 @@ Object.assign(NYM.prototype, {
         }
         const name = this.sanitizeGroupName(payload.n || '') || 'this group';
         if (!this._canSendGiftWraps()) {
-            this.displaySystemMessage(`Pick a nym or log in to join "${name}", then you'll be added.`);
+            this.displaySystemMessage(this.uiText(`Pick a nym or log in to join "{name}", then you'll be added.`, { name }));
             const setupModal = document.getElementById('setupModal');
             if (setupModal && !setupModal.classList.contains('active')) setupModal.classList.add('active');
             if (typeof window.updateSetupInviteBanner === 'function') window.updateSetupInviteBanner();
@@ -857,7 +864,7 @@ Object.assign(NYM.prototype, {
         if (pendingJoin && pendingJoin.approval) {
             this.displaySystemMessage(this._gx('Join request sent for "{name}". Waiting for approval from an admin.', { name }));
         } else {
-            this.displaySystemMessage(`Join request sent for "${name}". You'll be added once a member is online.`);
+            this.displaySystemMessage(this.uiText(`Join request sent for "{name}". You'll be added once a member is online.`, { name }));
         }
     },
 
@@ -1322,7 +1329,7 @@ Object.assign(NYM.prototype, {
                     if (unbannedPubkey !== this.pubkey && this.inPMMode && this.currentGroup === groupId) {
                         await this._fetchShownProfile(unbannedPubkey, senderPubkey);
                         await this._fetchShownProfile(senderPubkey);
-                        this.displaySystemMessage(`${this.getNymFromPubkey(unbannedPubkey)} was unbanned by ${this.getNymFromPubkey(senderPubkey)}.`, 'system', { feed: true, people: [unbannedPubkey, senderPubkey] });
+                        this.displaySystemMessage(this.uiText(`{unbannedPubkey} was unbanned by {senderPubkey}.`, { unbannedPubkey: this.getNymFromPubkey(unbannedPubkey), senderPubkey: this.getNymFromPubkey(senderPubkey) }), 'system', { feed: true, people: [unbannedPubkey, senderPubkey] });
                     }
                 }
             }
@@ -1388,7 +1395,7 @@ Object.assign(NYM.prototype, {
                 if (this.inPMMode && this.currentGroup === groupId) {
                     this.openGroup(groupId);
                     await this._fetchShownProfile(senderPubkey);
-                    this.displaySystemMessage(`${this.getNymHtmlFromPubkey(senderPubkey)} left the group.`, 'system', { html: true, feed: true, people: [senderPubkey] });
+                    this.displaySystemMessage(`<span data-no-i18n>${this.getNymHtmlFromPubkey(senderPubkey)}</span> left the group.`, 'system', { html: true, feed: true, people: [senderPubkey] });
                 }
             }
             return;
@@ -1660,13 +1667,13 @@ Object.assign(NYM.prototype, {
                 const shownNew = newMembers.slice();
                 if (shownNew.length > 0) {
                     const addedNames = shownNew.map(pk => this.getNymFromPubkey(pk)).join(', ');
-                    this.displaySystemMessage(`${addedNames} was added by ${inviterName}.`, 'system', { feed: true, people: [senderPubkey, ...shownNew] });
+                    this.displaySystemMessage(this.uiText(`{addedNames} was added by {inviterName}.`, { addedNames, inviterName }), 'system', { feed: true, people: [senderPubkey, ...shownNew] });
                 } else if (newMembers.length === 0) {
                     const named = this._gcNamedInLine(String(rumor.content || ''), memberPubkeys.filter(pk => pk !== senderPubkey));
                     if (named.length > 0) {
                         await Promise.all(named.map(pk => this._fetchShownProfile(pk, senderPubkey)));
                         const addedNames = named.map(pk => this.getNymFromPubkey(pk)).join(', ');
-                        this.displaySystemMessage(`${addedNames} was added by ${inviterName}.`, 'system', { feed: true, people: [senderPubkey, ...named] });
+                        this.displaySystemMessage(this.uiText(`{addedNames} was added by {inviterName}.`, { addedNames, inviterName }), 'system', { feed: true, people: [senderPubkey, ...named] });
                     }
                 }
             }
@@ -1711,7 +1718,7 @@ Object.assign(NYM.prototype, {
                     this.currentGroup = null;
                     this.inPMMode = false;
                     this.switchChannel(this.currentChannel || 'nymchat', this.currentChannel || 'nymchat');
-                    this.displaySystemMessage(`You were removed from "${removedFrom}" by ${removerName}.`, 'system', removerMask ? { kind: 'info' } : { kind: 'info', people: [senderPubkey] });
+                    this.displaySystemMessage(this.uiText(`You were removed from "{removedFrom}" by {removerName}.`, { removedFrom, removerName }), 'system', removerMask ? { kind: 'info' } : { kind: 'info', people: [senderPubkey] });
                 }
                 const titleSelf = banTag ? `Banned from ${removedFrom}` : `Removed from ${removedFrom}`;
                 const bodySelf = banTag
@@ -1738,7 +1745,7 @@ Object.assign(NYM.prototype, {
                     this.updateGroupConversationUI(groupId);
                     if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
                         this.openGroup(groupId);
-                        this.displaySystemMessage(`${removedName} was removed by ${removerName}.`, 'system', { feed: true, people: [removedPubkey, senderPubkey] });
+                        this.displaySystemMessage(this.uiText(`{removedName} was removed by {removerName}.`, { removedName, removerName }), 'system', { feed: true, people: [removedPubkey, senderPubkey] });
                     }
                 }
             }
@@ -1781,7 +1788,7 @@ Object.assign(NYM.prototype, {
                 const targetName = this.getNymFromPubkey(newOwner);
                 const actorName = this.getNymFromPubkey(senderPubkey);
                 if (this.inPMMode && this.currentGroup === groupId) {
-                    this.displaySystemMessage(`${actorName} transferred group ownership to ${targetName}.`, 'system', { feed: true, people: [senderPubkey, newOwner] });
+                    this.displaySystemMessage(this.uiText(`{actorName} transferred group ownership to {targetName}.`, { actorName, targetName }), 'system', { feed: true, people: [senderPubkey, newOwner] });
                     this.openGroup(groupId);
                 }
                 if (newOwner === this.pubkey) {
@@ -1817,7 +1824,7 @@ Object.assign(NYM.prototype, {
                 const actorName = this.getNymFromPubkey(senderPubkey);
                 if (targetAuthor) await this._fetchShownProfile(targetAuthor, senderPubkey);
                 const authorName = targetAuthor ? this.getNymFromPubkey(targetAuthor) : 'a member';
-                this.displaySystemMessage(`${actorName} deleted a message from ${authorName}.`, 'system', { feed: true, people: [senderPubkey, targetAuthor] });
+                this.displaySystemMessage(this.uiText(`{actorName} deleted a message from {authorName}.`, { actorName, authorName }), 'system', { feed: true, people: [senderPubkey, targetAuthor] });
             }
             return;
         }
@@ -2060,7 +2067,7 @@ Object.assign(NYM.prototype, {
 
         const allMembers = [...new Set([...memberPubkeys, this.pubkey])];
         if (allMembers.length > this.MAX_GROUP_MEMBERS) {
-            this.displaySystemMessage(`Groups are limited to ${this.MAX_GROUP_MEMBERS} members (every message is encrypted separately for each member).`);
+            this.displaySystemMessage(this.uiText(`Groups are limited to {MAX_GROUP_MEMBERS} members (every message is encrypted separately for each member).`, { MAX_GROUP_MEMBERS: this.MAX_GROUP_MEMBERS }));
             return null;
         }
 
@@ -2132,7 +2139,7 @@ Object.assign(NYM.prototype, {
             return false;
         }
         if (group.members.length >= this.MAX_GROUP_MEMBERS) {
-            this.displaySystemMessage(`This group is full (${this.MAX_GROUP_MEMBERS} members max).`);
+            this.displaySystemMessage(this.uiText(`This group is full ({MAX_GROUP_MEMBERS} members max).`, { MAX_GROUP_MEMBERS: this.MAX_GROUP_MEMBERS }));
             return false;
         }
         // Banlist: only the owner or a moderator can re-admit a banned user.
@@ -2147,7 +2154,7 @@ Object.assign(NYM.prototype, {
         const addAt = Math.floor(Date.now() / 1000);
         this._gcMerge(group, [newMemberPubkey], addAt, { force: true });
         if (!group.members.includes(newMemberPubkey)) {
-            this.displaySystemMessage(`This group is full (${this.MAX_GROUP_MEMBERS} members max).`);
+            this.displaySystemMessage(this.uiText(`This group is full ({MAX_GROUP_MEMBERS} members max).`, { MAX_GROUP_MEMBERS: this.MAX_GROUP_MEMBERS }));
             return false;
         }
         if (!this._gcLocalAdds) this._gcLocalAdds = new Set();
@@ -2209,7 +2216,7 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         if (this.inPMMode && this.currentGroup === groupId) {
             this.openGroup(groupId);
-            this.displaySystemMessage(addContent, 'system', { feed: true, people: [newMemberPubkey] });
+            this.displaySystemMessage(this.uiText('{name} was added by {inviter}.', { name: newMemberName, inviter: inviterName }), 'system', { feed: true, people: [newMemberPubkey] });
         }
 
         return true;
@@ -2374,7 +2381,7 @@ Object.assign(NYM.prototype, {
             this.openGroup(groupId);
             if (shown > 0) {
                 const sharerName = this.getNymFromPubkey(senderPubkey);
-                this.displaySystemMessage(`${shown} earlier message${shown === 1 ? '' : 's'} shared by ${sharerName}.`, 'system', { feed: true, people: [senderPubkey] });
+                this.displaySystemMessage(this.uiText(`{shown} earlier message{v2} shared by {sharerName}.`, { shown, v2: shown === 1 ? '' : 's', sharerName }), 'system', { feed: true, people: [senderPubkey] });
             }
         }
     },
@@ -3041,7 +3048,7 @@ Object.assign(NYM.prototype, {
         });
         if (matches.length === 1) return matches[0];
         if (matches.length > 1) {
-            this.displaySystemMessage(`Multiple users named @${searchNym} — use @name#xxxx to disambiguate`);
+            this.displaySystemMessage(this.uiText(`Multiple users named @{searchNym} — use @name#xxxx to disambiguate`, { searchNym }));
             return null;
         }
         return null;
@@ -3215,7 +3222,7 @@ Object.assign(NYM.prototype, {
             }
         }
         this.updateGroupConversationUI(groupId);
-        this.displaySystemMessage(`@${targetName} was unbanned. They can be re-invited.`, 'system', { feed: true, people: [pubkey] });
+        this.displaySystemMessage(this.uiText(`@{targetName} was unbanned. They can be re-invited.`, { targetName }), 'system', { feed: true, people: [pubkey] });
     },
 
     async promoteModerator(pubkey) { return this._sendGroupRoleChange('group-promote-mod', pubkey); },
@@ -3232,11 +3239,11 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         const roleWord = spec.list === 'admins' ? 'admin' : 'moderator';
         if (spec.ownerOnly && !this._isGroupOwner(groupId, this.pubkey)) {
-            this.displaySystemMessage(`Only the group owner can ${spec.grant ? 'assign' : 'revoke'} ${roleWord}s.`);
+            this.displaySystemMessage(this.uiText(`Only the group owner can {v1} {roleWord}s.`, { v1: spec.grant ? 'assign' : 'revoke', roleWord }));
             return;
         }
         if (!spec.ownerOnly && !this._canAdminister(groupId, this.pubkey)) {
-            this.displaySystemMessage(`Only the group owner or an admin can ${spec.grant ? 'assign' : 'revoke'} ${roleWord}s.`);
+            this.displaySystemMessage(this.uiText(`Only the group owner or an admin can {v1} {roleWord}s.`, { v1: spec.grant ? 'assign' : 'revoke', roleWord }));
             return;
         }
         if (pubkey === this.pubkey) {
@@ -3249,11 +3256,11 @@ Object.assign(NYM.prototype, {
         }
         const holds = Array.isArray(group[spec.list]) && group[spec.list].includes(pubkey);
         if (spec.grant && holds) {
-            this.displaySystemMessage(`That user is already ${roleWord === 'admin' ? 'an' : 'a'} ${roleWord}.`);
+            this.displaySystemMessage(this.uiText(`That user is already {v1} {roleWord}.`, { v1: roleWord === 'admin' ? 'an' : 'a', roleWord }));
             return;
         }
         if (!spec.grant && !holds) {
-            this.displaySystemMessage(`That user is not ${roleWord === 'admin' ? 'an' : 'a'} ${roleWord}.`);
+            this.displaySystemMessage(this.uiText(`That user is not {v1} {roleWord}.`, { v1: roleWord === 'admin' ? 'an' : 'a', roleWord }));
             return;
         }
         if (!this._roleEventAuthorized(groupId, spec, this.pubkey, pubkey)) {
@@ -3341,7 +3348,7 @@ Object.assign(NYM.prototype, {
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-        this.displaySystemMessage(content, 'system', { feed: true, people: [pubkey] });
+        this.displaySystemMessage(this.uiText('{actor} transferred group ownership to {target}.', { actor: actorName, target: targetName }), 'system', { feed: true, people: [pubkey] });
     },
 
     async _broadcastGroupMetadata(groupId) {
@@ -3549,7 +3556,7 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         if (this.inPMMode && this.currentGroup === groupId) this.openGroup(groupId);
         await this._broadcastGroupMetadata(groupId);
-        this.displaySystemMessage(`Group renamed to "${trimmed}".`);
+        this.displaySystemMessage(this.uiText(`Group renamed to "{trimmed}".`, { trimmed }));
     },
 
     async setGroupDescription(groupId, description) {
@@ -3667,15 +3674,23 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
         if (!this._canAdminister(groupId, this.pubkey)) {
-            this.displaySystemMessage(`Only the group owner can change the ${kind}.`);
+            this.displaySystemMessage(this.uiText(`Only the group owner can change the {kind}.`, { kind }));
+            return;
+        }
+        const MN = window.NymMediaNotes;
+        const cap = MN && MN.PROFILE_IMAGE_LIMITS ? MN.PROFILE_IMAGE_LIMITS[kind === 'avatar' ? 'avatar' : 'banner'] : 0;
+        if (cap && file && file.size > cap) {
+            const text = typeof this.uiText === 'function' ? this.uiText('Image must be under {cap}MB (this image is {actual}MB).') : 'Image must be under {cap}MB (this image is {actual}MB).';
+            this.displaySystemMessage(text.split('{cap}').join(String(cap / (1024 * 1024))).split('{actual}').join((file.size / (1024 * 1024)).toFixed(1)));
             return;
         }
         try {
+            file = await this._profileImageFile(file);
             const { url } = await this._uploadFileWithProgress(file, `Uploading group ${kind}…`);
             await this._applyGroupImage(groupId, kind, url);
-            this.displaySystemMessage(`Group ${kind} updated.`);
+            this.displaySystemMessage(this.uiText(`Group {kind} updated.`, { kind }));
         } catch (error) {
-            if (!(error && error.name === 'AbortError')) this.displaySystemMessage(`Failed to upload ${kind}: ` + (error?.message || error));
+            if (!(error && error.name === 'AbortError')) this.displaySystemMessage(this.uiText('Failed to upload {kind}: {error}', { kind, error: error?.message || error }));
         }
     },
 
@@ -3683,7 +3698,7 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group || !this._canAdminister(groupId, this.pubkey)) return;
         await this._applyGroupImage(groupId, kind, null);
-        this.displaySystemMessage(`Group ${kind} removed.`);
+        this.displaySystemMessage(this.uiText(`Group {kind} removed.`, { kind }));
     },
 
     uploadGroupBanner(groupId, file) { return this._setGroupImage(groupId, 'banner', file); },
@@ -3733,7 +3748,7 @@ Object.assign(NYM.prototype, {
         this._appendModLog(group, { type: 'delete-message', actor: this.pubkey, target: authorPubkey || null, messageId: sharedId });
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-        this.displaySystemMessage(content, 'system', { feed: true, people: authorPubkey ? [authorPubkey] : [] });
+        this.displaySystemMessage(this.uiText('{actor} deleted a message from {author}.', { actor: actorName, author: authorName }), 'system', { feed: true, people: authorPubkey ? [authorPubkey] : [] });
     },
 
     _findGroupMessage(groupId, messageId, authorPubkey = null) {
@@ -5112,7 +5127,7 @@ Object.assign(NYM.prototype, {
             await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
             return true;
         } catch (error) {
-            this.displaySystemMessage('Failed to edit message: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to edit message: {error}', { error: error.message }));
             return false;
         }
     },
@@ -5154,7 +5169,7 @@ Object.assign(NYM.prototype, {
         for (const memberNym of memberNyms) {
             const pubkey = this.resolvePubkeyFromNym(memberNym);
             if (!pubkey) {
-                this.displaySystemMessage(`User @${memberNym} not found. They need to be visible in the current channel first.`);
+                this.displaySystemMessage(this.uiText(`User @{memberNym} not found. They need to be visible in the current channel first.`, { memberNym }));
                 return;
             }
             if (pubkey === this.pubkey) continue; // self is always included
@@ -5173,10 +5188,10 @@ Object.assign(NYM.prototype, {
         const groupName = nameWords.join(' ').trim();
         const shownName = this._groupLabel({ name: groupName });
 
-        this.displaySystemMessage(`Creating group "${shownName}"...`);
+        this.displaySystemMessage(this.uiText(`Creating group "{shownName}"...`, { shownName }));
         const groupId = await this.createGroup(groupName, resolvedMembers);
         if (groupId) {
-            this.displaySystemMessage(`Group "${shownName}" created with ${resolvedMembers.length + 1} members`);
+            this.displaySystemMessage(this.uiText(`Group "{shownName}" created with {v2} members`, { shownName, v2: resolvedMembers.length + 1 }));
         }
     },
 
@@ -5247,7 +5262,7 @@ Object.assign(NYM.prototype, {
             return `<div class="group-info-member" data-pubkey="${safePk}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message"${avatarKey} alt="" decoding="async" loading="lazy"><span class="group-info-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}</span>${labelHtml}</div>`;
         };
         const membersHtml = sorted.map(memberRow).join('');
-        const html = `<div class="group-info-title">Group: "${this.escapeHtml((typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')))}"</div><div class="group-info-count">Members (${sorted.length})</div><div class="group-info-members">${membersHtml}</div>`;
+        const html = `<div class="group-info-title">Group: "<span data-no-i18n>${this.escapeHtml((typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')))}</span>"</div><div class="group-info-count">Members (${sorted.length})</div><div class="group-info-members">${membersHtml}</div>`;
         return { html, fetch: sorted.filter((pk) => !this._maskOf(pk)) };
     },
 

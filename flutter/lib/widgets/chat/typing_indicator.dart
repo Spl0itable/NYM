@@ -34,6 +34,23 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
     super.dispose();
   }
 
+  String _shown = '';
+
+  String _typingSig(AppState s) {
+    final prefix = '${widget.storageKey ?? s.view.storageKey}|';
+    final b = StringBuffer(prefix);
+    for (final pk in _activeTypers(s)) {
+      b
+        ..write(pk)
+        ..write('\u0000')
+        ..write(s.users[pk]?.nym ?? '')
+        ..write('\u0000')
+        ..write(s.typingActivity['$prefix$pk'] ?? '')
+        ..write('\u0001');
+    }
+    return b.toString();
+  }
+
   List<String> _activeTypers(AppState app) {
     final prefix = '${widget.storageKey ?? app.view.storageKey}|';
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -50,14 +67,18 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final app = ref.watch(appStateProvider);
+    ref.watch(appStateProvider.select(_typingSig));
+    final app = ref.read(appStateProvider);
     final pubkeys = _activeTypers(app);
     final active = pubkeys.isNotEmpty;
+    _shown = pubkeys.join(',');
 
     // Tick every second while anyone types so the row hides when the last indicator expires.
     if (active) {
       _ticker ??= Timer.periodic(const Duration(seconds: 1), (_) {
-        if (mounted) setState(() {});
+        if (!mounted) return;
+        final now = _activeTypers(ref.read(appStateProvider)).join(',');
+        if (now != _shown) setState(() {});
       });
     } else {
       _ticker?.cancel();

@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -141,9 +142,12 @@ class GifPicker extends ConsumerStatefulWidget {
     this.onClose,
     this.proxyBase,
     this.tabs,
+    this.maxHeight,
   });
 
   final Widget? tabs;
+
+  final double? maxHeight;
 
   final FavoriteGifsStore favoritesStore;
   final ValueChanged<GifItem> onSelect;
@@ -278,8 +282,12 @@ class _GifPickerState extends ConsumerState<GifPicker>
         ref.watch(settingsProvider.select((s) => s.transparencyEnabled));
     // Pad up by the keyboard via raw `View.viewInsets`; MediaQuery's insets are already consumed under a resizing Scaffold.
     final view = View.of(context);
-    final keyboardInset = view.viewInsets.bottom / view.devicePixelRatio;
-    final maxPanelHeight = keyboardInset > 0
+    final hosted = widget.maxHeight;
+    final keyboardInset =
+        hosted != null ? 0.0 : view.viewInsets.bottom / view.devicePixelRatio;
+    final maxPanelHeight = hosted != null
+        ? math.min(450.0, hosted)
+        : keyboardInset > 0
         // Screen minus keyboard, status bar and the 60px bottom-bar anchor (+8).
         ? (MediaQuery.sizeOf(context).height -
                 keyboardInset -
@@ -312,7 +320,8 @@ class _GifPickerState extends ConsumerState<GifPicker>
           ],
         ),
         padding: const EdgeInsets.all(12),
-        child: MediaQuery.textScalerOf(context).scale(10) > 15
+        child: MediaQuery.textScalerOf(context).scale(10) > 15 ||
+                maxPanelHeight < 300
             ? SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,

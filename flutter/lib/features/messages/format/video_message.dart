@@ -9,6 +9,7 @@ import '../../i18n/i18n.dart';
 import '../../../core/utils/safe_url.dart';
 import 'media_source.dart';
 import 'message_content.dart' show proxiedMedia;
+import '../../layout/pointer_input.dart';
 
 const double _kVideoRadius = 12;
 
@@ -301,10 +302,7 @@ class _VideoMessageState extends State<VideoMessage> {
   }
 
   /// On touch-primary platforms the expand button stays visible.
-  bool _touchPlatform(BuildContext context) {
-    final p = Theme.of(context).platform;
-    return p == TargetPlatform.android || p == TargetPlatform.iOS;
-  }
+  bool _touchPlatform(BuildContext context) => !PointerInput.mouseOf(context);
 
   /// Full-screen dialog reusing the same controller so playback continues.
   void _openFullscreen() {

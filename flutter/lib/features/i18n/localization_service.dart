@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/widgets.dart';
 
 import '../../services/api/api_client.dart';
 import '../../services/storage/key_value_store.dart';
@@ -103,13 +104,76 @@ class LocalizationService {
     }
     _loadCache();
     // Load the bundled pack first; it usually answers the whole sweep.
-    unawaited(_primeFromPack(next));
+    _packReady = _primeFromPack(next);
     // Re-translate anything already rendered so the switch is visible at once.
     for (final s in _seen) {
-      if (!_cache.containsKey(s)) _pending.add(s);
+      if (!_cache.containsKey(s) && sendable(s)) _pending.add(s);
     }
     _scheduleFlush();
     onChanged?.call();
+    _repaintAll();
+  }
+
+  Future<void>? _packReady;
+
+  final Set<String> _shown = {};
+
+  final Map<String, (String, Map<String, Object?>)> _templated = {};
+
+  static final List<RegExp> _rxUserData = [
+    RegExp(r'https?://|www\.', caseSensitive: false),
+    RegExp(r'[\w.+-]+@[\w-]+\.[a-z]{2,}', caseSensitive: false),
+    RegExp(r'\b(?:npub|nsec|note|nevent|nprofile|naddr|lnurl|lnbc)1[02-9ac-hj-np-z]{8,}',
+        caseSensitive: false),
+    RegExp(r'\b[0-9a-f]{12,}\b', caseSensitive: false),
+    RegExp(r'[\p{L}\p{N}_]#[0-9a-f]{4}\b', caseSensitive: false, unicode: true),
+    RegExp(
+        r'\b[\w-]+\.(?:jpe?g|png|gif|webp|heic|heif|avif|mp4|mov|m4v|webm|mkv|pdf|zip|rar|7z|txt|csv|json|docx?|xlsx?|pptx?|mp3|m4a|aac|wav|ogg|opus|flac|apk|ipa|dmg|exe)\b',
+        caseSensitive: false),
+  ];
+
+  static bool sendable(String text) => !_rxUserData.any((r) => r.hasMatch(text));
+
+  String relocalize(String shown) {
+    final t = _templated[shown];
+    if (t != null) return translate(t.$1, t.$2);
+    final source = _sources[shown] ?? shown;
+    if (!_shown.contains(source)) return shown;
+    return translate(source);
+  }
+
+  void _remember(String out, String source, Map<String, Object?> args) {
+    for (final k in {out, _subst(source, args)}) {
+      _templated.remove(k);
+      _templated[k] = (source, args);
+    }
+    while (_templated.length > 400) {
+      _templated.remove(_templated.keys.first);
+    }
+  }
+
+  static WidgetsBinding? _widgetsBinding() {
+    try {
+      return WidgetsBinding.instance;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _repaintAll() {
+    final binding = _widgetsBinding();
+    if (binding == null) return;
+    if (binding.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      binding.addPostFrameCallback((_) => _repaintAll());
+      return;
+    }
+    final root = binding.rootElement;
+    if (root == null) return;
+    void mark(Element e) {
+      e.markNeedsBuild();
+      e.visitChildren(mark);
+    }
+    mark(root);
   }
 
   /// Languages whose pack was already loaded this session.
@@ -144,6 +208,7 @@ class LocalizationService {
       if (added == 0) return;
       _persist();
       onChanged?.call();
+      _repaintAll();
     } catch (_) {
       // Missing or malformed pack: the runtime queues handle it.
     }
@@ -157,26 +222,32 @@ class LocalizationService {
   String translate(String source, [Map<String, Object?>? args]) {
     if (source.isEmpty) return source;
     _seen.add(source);
+    _shown.add(source);
     if (!isActive) return _subst(source, args);
     final hit = _cache[source];
     if (hit != null) {
       final out = _subst(hit, args);
-      if (out != source) {
+      if (args != null && args.isNotEmpty) {
+        _remember(out, source, args);
+      } else if (out != source) {
         _sources.remove(out);
         _sources[out] = source;
         if (_sources.length > 200) _sources.remove(_sources.keys.first);
       }
       return out;
     }
-    if (!_requested.contains(source) && !_failed.contains(source)) {
+    if (!_requested.contains(source) &&
+        !_failed.contains(source) &&
+        sendable(source)) {
       // Rendered strings jump to the top lane; parked failures are skipped so they can't starve the sweep.
       _sweepPending.remove(source);
       _primePending.remove(source);
       _pending.add(source);
       _scheduleFlush();
     }
-    // English fallback until the translation lands.
-    return _subst(source, args);
+    final en = _subst(source, args);
+    if (args != null && args.isNotEmpty) _remember(en, source, args);
+    return en;
   }
 
   /// Queues uncached [sources] in the middle lane before they render, for static overlays like the tutorial.
@@ -185,6 +256,7 @@ class LocalizationService {
       if (s.isEmpty) continue;
       _seen.add(s);
       if (isActive &&
+          sendable(s) &&
           !_cache.containsKey(s) &&
           !_requested.contains(s) &&
           !_pending.contains(s)) {
@@ -202,6 +274,7 @@ class LocalizationService {
       if (s.isEmpty) continue;
       _seen.add(s);
       if (isActive &&
+          sendable(s) &&
           !_cache.containsKey(s) &&
           !_requested.contains(s) &&
           !_pending.contains(s) &&
@@ -266,6 +339,9 @@ class LocalizationService {
     _flushing = true;
     final lang = _lang;
     try {
+      final ready = _packReady;
+      if (ready != null) await ready;
+      if (lang != _lang) return;
       // Drain in chunks by lane priority (on-screen, primed, sweep), persisting and repainting after each.
       while (_anyPending && lang == _lang) {
         final queue = _pending.isNotEmpty
@@ -283,6 +359,9 @@ class LocalizationService {
         if (lang != _lang) return; // language switched mid-flight
         _persist();
         onChanged?.call();
+        if (chunk.any((s) => _shown.contains(s) && _cache.containsKey(s))) {
+          _repaintAll();
+        }
       }
     } finally {
       _flushing = false;

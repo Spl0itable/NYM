@@ -26,6 +26,7 @@ import 'protocol/mesh_message_identity.dart';
 import 'protocol/mesh_diagnostics_packets.dart';
 import 'protocol/mesh_message_type.dart';
 import 'protocol/nostr_carrier_packet.dart';
+import 'protocol/nym_share_payload.dart';
 import 'courier/courier_envelope.dart';
 import 'courier/local_prekeys.dart';
 import 'courier/prekey_bundle.dart';
@@ -90,6 +91,8 @@ class MeshService {
   final _files = StreamController<MeshFileReceived>.broadcast();
   final _typing = StreamController<MeshTypingEvent>.broadcast();
   final _reactions = StreamController<MeshReactionEvent>.broadcast();
+  final _nymShares = StreamController<MeshNymShare>.broadcast();
+  final _niTokens = StreamController<MeshNiToken>.broadcast();
   final _peersChanged = StreamController<List<MeshPeer>>.broadcast();
 
   /// Peers already asked for a profile, so announce beacons don't re-request.
@@ -173,6 +176,8 @@ class MeshService {
   Stream<MeshFileReceived> get onFile => _files.stream;
   Stream<MeshTypingEvent> get onTyping => _typing.stream;
   Stream<MeshReactionEvent> get onReaction => _reactions.stream;
+  Stream<MeshNymShare> get onNymShare => _nymShares.stream;
+  Stream<MeshNiToken> get onNiToken => _niTokens.stream;
 
   Future<void> sendChannelReaction(
       String targetId, String emoji, bool remove) async {
@@ -472,6 +477,21 @@ class MeshService {
     return true;
   }
 
+  Future<bool> sendNymShare(String peerID, String link) async {
+    final plaintext = nymSharePlaintext(link);
+    if (plaintext == null) return false;
+    await _sendOrQueueEncrypted(peerID, plaintext);
+    return true;
+  }
+
+  Future<bool> sendNiToken(String peerID, Uint8List token,
+      {bool replyRequested = false}) async {
+    final plaintext = niTokenPlaintext(token, replyRequested: replyRequested);
+    if (plaintext == null) return false;
+    await _sendOrQueueEncrypted(peerID, plaintext);
+    return true;
+  }
+
   Future<void> sendReadReceipt(String peerID, String messageId) async {
     await _sendOrQueueEncrypted(
         peerID, NoisePayload.readReceipt(messageId).encode());
@@ -485,6 +505,8 @@ class MeshService {
     _files.close();
     _typing.close();
     _reactions.close();
+    _nymShares.close();
+    _niTokens.close();
     _pingResults.close();
     _peersChanged.close();
   }
@@ -772,8 +794,8 @@ class MeshService {
   }
 
   /// Handles a decrypted payload, shared by live sessions and opened courier envelopes.
-  Future<void> _dispatchNoisePayload(
-      String senderPeerID, Uint8List plaintext) async {
+  Future<void> _dispatchNoisePayload(String senderPeerID, Uint8List plaintext,
+      {bool viaCourier = false}) async {
     final noisePayload = NoisePayload.decode(plaintext);
     if (noisePayload == null) return;
 
@@ -851,6 +873,24 @@ class MeshService {
             isRemove: r.isRemove,
             reactorNick: r.reactorNick,
             isDirect: true,
+          ));
+        }
+        break;
+      case NoisePayloadType.nymShare:
+        if (viaCourier) return;
+        final link = decodeNymShare(noisePayload.data);
+        if (link != null) {
+          _nymShares.add(MeshNymShare(senderPeerID: senderPeerID, link: link));
+        }
+        break;
+      case NoisePayloadType.nymNiToken:
+        if (viaCourier) return;
+        final t = decodeNiToken(noisePayload.data);
+        if (t != null) {
+          _niTokens.add(MeshNiToken(
+            senderPeerID: senderPeerID,
+            token: t.token,
+            replyRequested: t.replyRequested,
           ));
         }
         break;
@@ -1360,7 +1400,7 @@ class MeshService {
       final originPeerID = _peerIdForNoiseKey(senderStatic);
       debugLog?.call('courier envelope OPENED from $originPeerID '
           '(carried by $senderPeerID)');
-      await _dispatchNoisePayload(originPeerID, plaintext);
+      await _dispatchNoisePayload(originPeerID, plaintext, viaCourier: true);
       return;
     } catch (_) {
       // Not ours: carry it.

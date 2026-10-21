@@ -3,6 +3,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { contextFor, glossaryText, protect, restore, validateEntry } from './guard.mjs';
+
 const PROXY = process.env.NYM_TRANSLATE_PROXY || 'https://web.nymchat.app/api/proxy';
 const BUILD_TOKEN = (process.env.NYM_BUILD_TOKEN || '').trim();
 const proxyHeaders = () => ({
@@ -52,11 +54,11 @@ export async function saveCache(lang, map, dir = CACHE_DIR) {
 }
 
 // Used when a batch comes back short, so one bad string costs only itself.
-async function viaProxy(text, target) {
+async function viaProxy(text, target, context) {
   const res = await fetch(`${PROXY}?action=translate`, {
     method: 'POST',
     headers: proxyHeaders(),
-    body: JSON.stringify({ text, source: 'en', target }),
+    body: JSON.stringify({ text, source: 'en', target, context, glossary: glossaryText(), tokens: 'keep' }),
     signal: signal(),
   });
   if (!res.ok) throw new Error(`proxy ${res.status}`);
@@ -66,11 +68,11 @@ async function viaProxy(text, target) {
 }
 
 // Positional results; null is a per-string failure, a wrong-length response throws.
-async function viaProxyBatch(texts, target) {
+async function viaProxyBatch(texts, target, contexts) {
   const res = await fetch(`${PROXY}?action=translate`, {
     method: 'POST',
     headers: proxyHeaders(),
-    body: JSON.stringify({ texts, source: 'en', target }),
+    body: JSON.stringify({ texts, source: 'en', target, contexts, glossary: glossaryText(), tokens: 'keep' }),
     signal: signal(),
   });
   if (!res.ok) throw new Error(`proxy ${res.status}`);
@@ -124,9 +126,9 @@ async function withRetries(attempt) {
   throw new Error('unreachable');
 }
 
-async function translateOne(text, target) {
+async function translateOne(text, target, context) {
   return withRetries(async () => {
-    const out = await viaProxy(text, target);
+    const out = await viaProxy(text, target, context);
     if (!out.trim()) throw new Error('empty translation');
     return out;
   });
@@ -154,22 +156,22 @@ function batches(texts) {
 let batchUnsupported = false;
 
 // Malformed batches retry string by string, sequentially after any cooldown; reasons are recorded per string.
-async function translateGroup(texts, target, reasons) {
+async function translateGroup(texts, target, reasons, contexts = []) {
   await pickRoute();
-  const one = async (text) => {
-    try { return await translateOne(text, target); }
+  const one = async (text, i) => {
+    try { return await translateOne(text, target, contexts[i]); }
     catch (err) { reasons.set(text, err.message || String(err)); return null; }
   };
   if (texts.length === 1 || batchUnsupported) {
     const out = [];
-    for (const text of texts) out.push(await one(text));
+    for (let i = 0; i < texts.length; i++) out.push(await one(texts[i], i));
     return out;
   }
   try {
-    const out = await withRetries(() => viaProxyBatch(texts, target));
+    const out = await withRetries(() => viaProxyBatch(texts, target, contexts));
     // Retry just the holes, sequentially.
     for (let i = 0; i < out.length; i++) {
-      if (out[i] === null) out[i] = await one(texts[i]);
+      if (out[i] === null) out[i] = await one(texts[i], i);
     }
     return out;
   } catch (err) {
@@ -183,7 +185,7 @@ async function translateGroup(texts, target, reasons) {
     if (isThrottled(err)) cooldownUntil = Math.max(cooldownUntil, Date.now() + THROTTLE_MS);
     // Return null per failed string so the rest of the batch survives.
     const out = [];
-    for (const text of texts) out.push(await one(text));
+    for (let i = 0; i < texts.length; i++) out.push(await one(texts[i], i));
     return out;
   }
 }
@@ -201,9 +203,23 @@ function prune(cache, sources) {
 }
 
 // The prune deletes every key outside `sources`, so unrelated source sets need their own cacheDir.
-export async function translateMissing(lang, sources, { onProgress, cacheDir = CACHE_DIR } = {}) {
+export function prepare(source, contexts = new Map()) {
+  const { masked, tokens } = protect(source);
+  const keep = tokens.map((t, i) => `\u27e6${i}\u27e7 = ${t}`).join(', ');
+  return { source, masked, tokens, context: contextFor(contexts, source) + (keep ? `; keep tokens exactly: ${keep}` : '') };
+}
+
+export function accept(source, prepared, translated) {
+  if (typeof translated !== 'string') return { error: null };
+  const restored = restore(translated, prepared.tokens);
+  if (restored === null) return { error: 'rejected: protected tokens lost' };
+  const problems = validateEntry(source, restored);
+  return problems.length ? { error: `rejected: ${problems.join(', ')}` } : { value: restored };
+}
+
+export async function translateMissing(lang, sources, { onProgress, cacheDir = CACHE_DIR, contexts = new Map(), redo = null } = {}) {
   const cache = await loadCache(lang, cacheDir);
-  const missing = sources.filter((s) => typeof cache[s] !== 'string');
+  const missing = sources.filter((s) => typeof cache[s] !== 'string' || (redo && redo(s)));
   if (missing.length === 0) {
     // Still prune: copy may have been removed since the last run.
     const kept = prune(cache, sources);
@@ -226,10 +242,12 @@ export async function translateMissing(lang, sources, { onProgress, cacheDir = C
     while (index < queue.length) {
       const group = queue[index++];
       try {
-        const translated = await translateGroup(group, lang, reasons);
+        const prepared = group.map((source) => prepare(source, contexts));
+        const translated = await translateGroup(prepared.map((p) => p.masked), lang, reasons, prepared.map((p) => p.context));
         group.forEach((source, i) => {
-          if (typeof translated[i] === 'string') cache[source] = translated[i];
-          else failures.push({ source, error: reasons.get(source) || 'no translation returned' });
+          const { value, error } = accept(source, prepared[i], translated[i]);
+          if (value !== undefined) cache[source] = value;
+          else failures.push({ source, error: error || reasons.get(prepared[i].masked) || 'no translation returned' });
         });
       } catch (err) {
         for (const source of group) failures.push({ source, error: String(err.message || err) });

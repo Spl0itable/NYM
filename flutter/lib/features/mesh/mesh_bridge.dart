@@ -78,6 +78,7 @@ class MeshBridge {
 
   /// Lowercase mesh-backed channel keys, for the sidebar glyph and send routing.
   final Set<String> _meshChannelKeys = {kMeshNearbyChannel};
+  final Set<String> _meshGroupKeys = {kMeshNearbyChannel};
 
   /// Pubkeys whose PM conversation is mesh-backed.
   final Set<String> _meshPmPubkeys = {};
@@ -90,13 +91,15 @@ class MeshBridge {
 
   bool isMeshChannelKey(String key) =>
       _meshChannelKeys.contains(key.toLowerCase());
+  bool isMeshGroupKey(String key) =>
+      _meshGroupKeys.contains(key.toLowerCase());
   bool isMeshPmPubkey(String pubkey) =>
       _meshPmPubkeys.contains(pubkey.toLowerCase());
 
   Set<String> get meshChannelKeys => _meshChannelKeys;
   Set<String> get meshPmPubkeys => _meshPmPubkeys;
 
-  bool get _online => _appState.connectedRelays > 0;
+  bool get _online => _appState.relayLinked;
 
   /// Channels can always broadcast; a DM needs the peer in radio range.
   bool _canSendToView(ChatView view) {
@@ -316,6 +319,7 @@ class MeshBridge {
     final name = channel.startsWith('#') ? channel.substring(1) : channel;
     if (name.isEmpty) return;
     _meshChannelKeys.add(name.toLowerCase());
+    _meshGroupKeys.add(name.toLowerCase());
     _app.addChannel(name);
   }
 

@@ -11,7 +11,7 @@ import {
   hasD1,
   replica,
   shopGet,
-  shopPut,
+  shopPutActive,
   shopGetActiveMany,
   invoiceGet,
   invoiceHas,
@@ -343,12 +343,16 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   }
 
   if (body.action === "shop-get") {
-    var rec = await shopGet(env.DB_SHOP, userPubkey);
+    var rec;
+    try { rec = await shopGet(env.DB_SHOP, userPubkey, true); }
+    catch (e) { return json({ error: "Shop is temporarily unavailable." }, 503); }
     return json({ owned: rec.owned, active: rec.active, updatedAt: rec.updatedAt });
   }
 
   if (body.action === "shop-set-active") {
-    var rec = await shopGet(env.DB_SHOP, userPubkey);
+    var rec;
+    try { rec = await shopGet(env.DB_SHOP, userPubkey, true); }
+    catch (e) { return json({ error: "Shop is temporarily unavailable." }, 503); }
     var want = (body.active && typeof body.active === "object") ? body.active : {};
     var nextStyle = null;
     if (typeof want.style === "string" && rec.owned[want.style] &&
@@ -373,7 +377,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       supporter: !!want.supporter && !!rec.owned["supporter-badge"],
       editions: nextEditions
     };
-    await shopPut(env.DB_SHOP, userPubkey, rec);
+    await shopPutActive(env.DB_SHOP, userPubkey, rec);
     readCachePut(context, "/shop-status/" + userPubkey, { st: { active: rec.active, updatedAt: rec.updatedAt } }, SHOP_READ_TTL);
     return json({ active: rec.active, updatedAt: rec.updatedAt });
   }

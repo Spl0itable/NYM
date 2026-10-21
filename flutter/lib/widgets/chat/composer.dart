@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderEditable;
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -79,6 +81,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../context_menu/interaction_hooks.dart';
+import 'clipboard_image_paste.dart';
 import 'composer_format.dart';
 import 'composer_markdown.dart';
 import 'message_row.dart' show GroupInfoMember, encodeGroupInfoSystemMessage;
@@ -138,7 +141,8 @@ class Composer extends ConsumerStatefulWidget {
   ConsumerState<Composer> createState() => _ComposerState();
 }
 
-class _ComposerState extends ConsumerState<Composer> {
+class _ComposerState extends ConsumerState<Composer>
+    with WidgetsBindingObserver {
   final _controller = EmojiSentinelController();
   final _focus = FocusNode();
   final _sendMenuFocus = FocusNode(debugLabel: 'sendMenuBtn');
@@ -184,6 +188,13 @@ class _ComposerState extends ConsumerState<Composer> {
     _controller.selection =
         TextSelection.collapsed(offset: _controller.text.length);
     // Recompute popout and autocomplete state for the restored text.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _activeDraftKey == key) _onInputChanged();
+      });
+      return;
+    }
     _onInputChanged();
   }
 
@@ -199,6 +210,15 @@ class _ComposerState extends ConsumerState<Composer> {
   final _translatePortal = OverlayPortalController();
   final _translateAnchor = LayerLink();
   final _translateSearchController = TextEditingController();
+  final _translateSearchFocus = FocusNode(debugLabel: 'translateSearch');
+  final _translateBtnKey = GlobalKey();
+  final _fieldEmojiKey = GlobalKey();
+  ui.FlutterView? _view;
+  double _keyboardInset = 0;
+  bool _keyboardClosed = false;
+  double? _pickerAnchorUsed;
+  double? _translateMaxUsed;
+  bool _overlaySyncQueued = false;
   String _translateQuery = '';
   bool _translating = false;
 
@@ -497,7 +517,7 @@ class _ComposerState extends ConsumerState<Composer> {
       _overlayActive ||
       _pendingEdit != null ||
       _pendingQuote != null ||
-      _pillWanted ||
+      _toolbarWanted(context) ||
       _attachments.isNotEmpty ||
       composerMediaMatches(_controller.text, knownMedia: _uploadedMedia)
           .isNotEmpty;
@@ -525,6 +545,7 @@ class _ComposerState extends ConsumerState<Composer> {
     _voiceActivity = null;
     _endActivity(_videoActivity);
     _videoActivity = null;
+    WidgetsBinding.instance.removeObserver(this);
     _focus.removeListener(_onFocusChanged);
     if (identical(ComposerShortcutHooks.focus, _focus)) {
       ComposerShortcutHooks.focus = null;
@@ -534,6 +555,7 @@ class _ComposerState extends ConsumerState<Composer> {
     _sendMenuFocus.dispose();
     _fieldScroll.dispose();
     _translateSearchController.dispose();
+    _translateSearchFocus.dispose();
     super.dispose();
   }
 
@@ -572,6 +594,11 @@ class _ComposerState extends ConsumerState<Composer> {
         _controller.text = existing + needsSpace + text;
         _controller.selection =
             TextSelection.collapsed(offset: _controller.text.length);
+      case ReplaceTextAction(:final text):
+        _controller.value = TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        );
       case ShareFilesAction(:final paths):
         final files = [for (final p in paths) XFile(p)];
         if (files.isNotEmpty) {
@@ -651,6 +678,7 @@ class _ComposerState extends ConsumerState<Composer> {
         owner: _draftOwner);
     // Rebuild on focus change for the focus fill and ring.
     _focus.addListener(_onFocusChanged);
+    WidgetsBinding.instance.addObserver(this);
     ComposerShortcutHooks.focus = _focus;
     // Register hooks so slash commands that open UI surfaces actually fire.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -836,7 +864,35 @@ class _ComposerState extends ConsumerState<Composer> {
   void _onFocusChanged() {
     // Markers follow the caret, and an unfocused field has no caret.
     _controller.composerFocused = _focus.hasFocus;
+    _keyboardClosed = false;
     if (mounted) setState(() {});
+  }
+
+  @override
+  void didChangeMetrics() {
+    final view = _view;
+    if (!mounted || view == null) return;
+    final kb = view.viewInsets.bottom / view.devicePixelRatio;
+    final closed = kb > 0
+        ? false
+        : _keyboardClosed || (_keyboardInset > 0 && _focus.hasFocus);
+    _keyboardInset = kb;
+    if (closed != _keyboardClosed || _emojiPortal.isShowing ||
+        _translatePortal.isShowing) {
+      setState(() => _keyboardClosed = closed);
+    }
+  }
+
+  bool _toolbarWanted(BuildContext context) {
+    final focused = _focus.hasFocus;
+    return formatToolbarVisible(
+        draft: _pillWanted,
+        focused: focused && !_keyboardClosed,
+        overlay: _emojiPortal.isShowing ||
+            _translatePortal.isShowing ||
+            (_pillWanted &&
+                !focused &&
+                !(ModalRoute.isCurrentOf(context) ?? true)));
   }
 
   void _onSystemMessage(String text) => showToast(text);
@@ -1630,6 +1686,24 @@ class _ComposerState extends ConsumerState<Composer> {
     await _uploadAttachment(a);
   }
 
+  static const _maxUploadBytes = 50 * 1024 * 1024;
+
+  void _pasteImage(PastedImage image) {
+    if (!mounted) return;
+    final item = _attachModel().where((i) => i.id == 'photo').firstOrNull;
+    if (item == null) return;
+    if (!item.enabled) {
+      if (item.detail.isNotEmpty) _onSystemMessage(tr(item.detail));
+      return;
+    }
+    if (hasPendingUploads) return;
+    if (!_canUpload && _currentMediaRoute(_chatView()) != 'mesh') {
+      _onSystemMessage(tr(MediaNoteReasons.hdOffline));
+      return;
+    }
+    unawaited(_pickAndUploadImage(preselected: [image.file]));
+  }
+
   /// Picks one or more media and uploads each to Blossom.
   Future<void> _pickAndUploadImage({List<XFile>? preselected}) async {
     List<XFile> picked;
@@ -1675,8 +1749,6 @@ class _ComposerState extends ConsumerState<Composer> {
       }
       return;
     }
-    const maxUpload = 50 * 1024 * 1024;
-
     if (!mounted) return;
     _uploadCancelled = false;
 
@@ -1689,7 +1761,7 @@ class _ComposerState extends ConsumerState<Composer> {
       } catch (_) {
         continue;
       }
-      if (bytes.length > maxUpload) {
+      if (bytes.length > _maxUploadBytes) {
         _onSystemMessage(tr('Files must be under 50MB.'));
         continue;
       }
@@ -1763,6 +1835,10 @@ class _ComposerState extends ConsumerState<Composer> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    final view = _view = View.maybeOf(context);
+    if (view != null) {
+      _keyboardInset = view.viewInsets.bottom / view.devicePixelRatio;
+    }
     // Send is gated on connection, not input content; empty-input guards live in the send paths.
     final sendEnabled = ref.watch(
           appStateProvider.select((s) => s.connectedRelays > 0),
@@ -2405,14 +2481,16 @@ class _ComposerState extends ConsumerState<Composer> {
         mq.viewInsets.bottom -
         _composerRowBase -
         8;
+    final visible = math.max(
+        0.0, mq.size.height - mq.padding.top - mq.viewInsets.bottom);
     final popoutMaxHeight = math.max(
       _composerRowBase,
-      math.min(math.min(mq.size.height * 0.4, 360.0), available),
+      math.min(math.min(visible * 0.4, 360.0), available),
     );
     // Grow to fill that box and no further.
     final popoutLineHeight = mq.textScaler.scale(fontSize) * 1.5;
     final popoutMaxLines = math.max(
-      3,
+      1,
       ((popoutMaxHeight - 20) / popoutLineHeight).floor(),
     );
     final flatFill = c.isLight
@@ -2432,11 +2510,19 @@ class _ComposerState extends ConsumerState<Composer> {
     );
     // Custom emoji render inline via single PUA sentinel chars painted as images; see [EmojiSentinelController].
     final incog = ref.watch(incognitoFieldFlagsProvider);
-    final field = TextField(
+    final field = ImagePasteScope(
+      limit: _maxUploadBytes,
+      onImage: _pasteImage,
+      child: TextField(
       // Reparent rather than remount across the popout flip, or the keyboard closes.
       key: _fieldKey,
       controller: _controller,
       focusNode: _focus,
+      contentInsertionConfiguration:
+          ImagePasteScope.keyboardInsertion(_pasteImage),
+      contextMenuBuilder: (context, state) => ImagePasteScope.contextMenu(
+          context, state,
+          limit: _maxUploadBytes, onImage: _pasteImage),
       enableIMEPersonalizedLearning: incog.imeLearning,
       autocorrect: incog.autocorrect,
       enableSuggestions: incog.suggestions,
@@ -2480,7 +2566,9 @@ class _ComposerState extends ConsumerState<Composer> {
         // Inside an open thread the composer replies into it, so the placeholder says so.
         hintText: ref.watch(activeThreadProvider) != null
             ? tr('Reply in thread...')
-            : tr('Message, / for commands, ? for Nymbot...'),
+            : _isBotDm(ref.watch(currentViewProvider))
+                ? tr('Message Nymbot, ? for commands...')
+                : tr('Message, / for commands, ? for Nymbot...'),
         // One line with ellipsis, or longer translated hints wrap and push the buttons down.
         hintMaxLines: 1,
         hintStyle: TextStyle(
@@ -2496,6 +2584,7 @@ class _ComposerState extends ConsumerState<Composer> {
         enabledBorder: border,
         focusedBorder: border,
       ),
+    ),
     );
 
     Widget stack = Stack(
@@ -2506,6 +2595,7 @@ class _ComposerState extends ConsumerState<Composer> {
             right: 8,
             bottom: 10,
             child: CompositedTransformTarget(
+              key: _fieldEmojiKey,
               link: _emojiAnchor,
               child: EmojiInputButton(
                 key: const ValueKey('emojiInputBtn'),
@@ -2554,14 +2644,17 @@ class _ComposerState extends ConsumerState<Composer> {
 
   Widget _translateButton(BuildContext context) {
     final hasText = _controller.text.trim().isNotEmpty;
-    return CompositedTransformTarget(
-      key: const ValueKey('translateInputBtn'),
-      link: _translateAnchor,
-      child: _TranslateInputButton(
-        glyphKey: _translateGlyphKey,
-        enabled: hasText && !_translating,
-        translating: _translating,
-        onTap: _toggleTranslateDropdown,
+    return KeyedSubtree(
+      key: _translateBtnKey,
+      child: CompositedTransformTarget(
+        key: const ValueKey('translateInputBtn'),
+        link: _translateAnchor,
+        child: _TranslateInputButton(
+          glyphKey: _translateGlyphKey,
+          enabled: hasText && !_translating,
+          translating: _translating,
+          onTap: _toggleTranslateDropdown,
+        ),
       ),
     );
   }
@@ -2706,13 +2799,7 @@ class _ComposerState extends ConsumerState<Composer> {
       ));
     }
 
-    final focused = _focus.hasFocus;
-    if (formatToolbarVisible(
-        draft: _pillWanted,
-        focused: focused,
-        overlay: _pillWanted &&
-            !focused &&
-            !(ModalRoute.isCurrentOf(context) ?? true))) {
+    if (_toolbarWanted(context)) {
       panels.add(_ToolbarEntrance(
         child: FormatToolbar(
           onTool: _applyFormatTool,
@@ -2749,7 +2836,7 @@ class _ComposerState extends ConsumerState<Composer> {
 
   Future<void> _toggleTranslateDropdown() async {
     if (_translatePortal.isShowing) {
-      _translatePortal.hide();
+      _hideTranslate();
       return;
     }
     if (_controller.text.trim().isEmpty || _translating) return;
@@ -2778,12 +2865,20 @@ class _ComposerState extends ConsumerState<Composer> {
     final langs = order
         .where((e) => q.isEmpty || languageSearchKey(e.key, e.value).contains(q))
         .toList();
+    final btn = globalRectOf(_translateBtnKey);
+    final maxHeight = btn == null
+        ? 320.0
+        : (btn.top - 9 - MediaQuery.paddingOf(context).top - 8)
+            .clamp(0.0, 320.0)
+            .toDouble();
+    _translateMaxUsed = maxHeight;
+    _queueOverlaySync();
     return Stack(
       children: [
         Positioned.fill(
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
-            onTap: _translatePortal.hide,
+            onTap: _hideTranslate,
           ),
         ),
         CompositedTransformFollower(
@@ -2798,7 +2893,7 @@ class _ComposerState extends ConsumerState<Composer> {
               type: MaterialType.transparency,
               child: Container(
                 width: 230,
-                constraints: const BoxConstraints(maxHeight: 320),
+                constraints: BoxConstraints(maxHeight: maxHeight),
                 decoration: BoxDecoration(
                   color: c.isLight
                       ? Colors.white.withValues(alpha: 0.98)
@@ -2830,6 +2925,7 @@ class _ComposerState extends ConsumerState<Composer> {
                       // Not autofocused: grabbing focus would pull the IME away from the message input.
                       child: TextField(
                         controller: _translateSearchController,
+                        focusNode: _translateSearchFocus,
                         onChanged: (v) => setState(() => _translateQuery = v),
                         style: TextStyle(color: c.inputText, fontSize: 13),
                         cursorColor: c.isLight ? Colors.black : Colors.white,
@@ -2879,9 +2975,53 @@ class _ComposerState extends ConsumerState<Composer> {
     );
   }
 
+  void _hideTranslate() {
+    final refocus = _translateSearchFocus.hasFocus;
+    _translatePortal.hide();
+    if (!mounted) return;
+    if (refocus) _focus.requestFocus();
+    setState(() {});
+  }
+
+  double? _pickerAnchorTop() {
+    double? top;
+    for (final key in [_rootKey, if (_popout) _popoutBoxKey]) {
+      final box = _liveBox(key);
+      if (box == null || !box.hasSize) continue;
+      final y = box.localToGlobal(Offset.zero).dy;
+      top = top == null ? y : math.min(top, y);
+    }
+    return top;
+  }
+
+  void _queueOverlaySync() {
+    if (_overlaySyncQueued) return;
+    _overlaySyncQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _overlaySyncQueued = false;
+      if (!mounted) return;
+      var stale = false;
+      if (_emojiPortal.isShowing) {
+        final top = _pickerAnchorTop();
+        final used = _pickerAnchorUsed;
+        stale = top != null && (used == null || (top - used).abs() > 0.5);
+      }
+      if (!stale && _translatePortal.isShowing) {
+        final btn = globalRectOf(_translateBtnKey);
+        final used = _translateMaxUsed;
+        if (btn != null && used != null) {
+          final want = (btn.top - 9 - MediaQuery.paddingOf(context).top - 8)
+              .clamp(0.0, 320.0);
+          stale = (want - used).abs() > 0.5;
+        }
+      }
+      if (stale) setState(() {});
+    });
+  }
+
   /// Replaces the input with the translation; quote/edit chips are preserved.
   Future<void> _translateDraft(String targetLang) async {
-    _translatePortal.hide();
+    _hideTranslate();
     // Expand sentinels before the external service sees the draft.
     final text = _draftText().trim();
     if (text.isEmpty) return;
@@ -3299,7 +3439,34 @@ class _ComposerState extends ConsumerState<Composer> {
   Widget _pickerOverlay(BuildContext context) {
     final tabs = PickerTabs(active: _pickerTab, onSelect: _switchPickerTab);
     final gif = _pickerTab == 'gif' && _prefs != null;
+    final media = MediaQuery.of(context);
+    final isPhone = media.size.width <= NymDimens.mobileBreakpoint;
+    final inBar = _pillWanted ? globalRectOf(_toolbarEmojiKey) : null;
+    final view = View.of(context);
+    final keyboard = view.viewInsets.bottom / view.devicePixelRatio;
+    final screenBottom = media.size.height - keyboard;
+    final double bottom;
+    final double? maxHeight;
+    if (isPhone) {
+      final anchor = _pickerAnchorTop();
+      _pickerAnchorUsed = anchor;
+      _queueOverlaySync();
+      final limit = math.min(anchor ?? screenBottom - 60, screenBottom) - 8;
+      bottom = media.size.height - limit;
+      maxHeight = math.max(0.0, limit - media.padding.top - 8);
+    } else {
+      final button = inBar ?? globalRectOf(_fieldEmojiKey);
+      bottom = 0;
+      maxHeight = button == null
+          ? null
+          : math.max(0.0,
+              button.top - (inBar != null ? 10 : 8) - media.padding.top - 8);
+    }
     return _popover(
+      media: media,
+      isPhone: isPhone,
+      inBar: inBar != null,
+      bottom: bottom,
       link: _emojiAnchor,
       onDismiss: _hideEmojiPicker,
       phoneWidthFactor: gif ? 0.9 : null,
@@ -3310,6 +3477,7 @@ class _ComposerState extends ConsumerState<Composer> {
               onSelect: _onGifSelected,
               onClose: _hideEmojiPicker,
               tabs: tabs,
+              maxHeight: maxHeight,
             )
           : EmojiPicker(
               key: const ValueKey('emojiPicker'),
@@ -3317,26 +3485,23 @@ class _ComposerState extends ConsumerState<Composer> {
               onSelect: _onEmojiSelected,
               onClose: _hideEmojiPicker,
               tabs: tabs,
+              maxHeight: maxHeight,
             ),
     );
   }
 
   /// Picker above its anchor with a tap-out barrier; [phoneWidthFactor] sets a viewport fraction on phones.
   Widget _popover({
+    required MediaQueryData media,
+    required bool isPhone,
+    required bool inBar,
+    required double bottom,
     required LayerLink link,
     required VoidCallback onDismiss,
     required Widget child,
     double? phoneWidthFactor,
   }) {
-    final media = MediaQuery.of(context);
-    // Phones center the picker above the input bar instead of anchoring to the button.
-    final isPhone = media.size.width <= NymDimens.mobileBreakpoint;
     final picker = Material(type: MaterialType.transparency, child: child);
-    final inBar = _pillWanted ? globalRectOf(_toolbarEmojiKey) : null;
-    final phoneBottom = inBar == null
-        ? 60 + media.viewInsets.bottom
-        : math.max(60 + media.viewInsets.bottom,
-            media.size.height - inBar.top + 8);
     return Stack(
       children: [
         Positioned.fill(
@@ -3350,8 +3515,7 @@ class _ComposerState extends ConsumerState<Composer> {
           Positioned(
             left: 0,
             right: 0,
-            // Lifted above the keyboard when open.
-            bottom: phoneBottom,
+            bottom: bottom,
             child: Align(
               alignment: Alignment.bottomCenter,
               child: phoneWidthFactor != null
@@ -3372,15 +3536,12 @@ class _ComposerState extends ConsumerState<Composer> {
         else
           CompositedTransformFollower(
             link: link,
-            targetAnchor:
-                inBar != null ? Alignment.topLeft : Alignment.topRight,
-            followerAnchor:
-                inBar != null ? Alignment.bottomLeft : Alignment.bottomRight,
-            offset: Offset(0, inBar != null ? -10 : -8),
+            targetAnchor: inBar ? Alignment.topLeft : Alignment.topRight,
+            followerAnchor: inBar ? Alignment.bottomLeft : Alignment.bottomRight,
+            offset: Offset(0, inBar ? -10 : -8),
             showWhenUnlinked: false,
             child: Align(
-              alignment:
-                  inBar != null ? Alignment.bottomLeft : Alignment.bottomRight,
+              alignment: inBar ? Alignment.bottomLeft : Alignment.bottomRight,
               child: picker,
             ),
           ),
@@ -4620,8 +4781,7 @@ class _ComposerConnHintState extends ConsumerState<_ComposerConnHint> {
   Widget build(BuildContext context) {
     final phone = widget.phone;
     final anchor = widget.anchor;
-    final open =
-        ref.watch(appStateProvider.select((s) => s.connectedRelays > 0));
+    final open = ref.watch(appStateProvider.select((s) => s.relayLinked));
     final view = ref.watch(appStateProvider.select((s) => s.view));
     ref.watch(meshControllerProvider);
     ref.watch(connNoticeGateProvider);

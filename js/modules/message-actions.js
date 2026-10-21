@@ -32,6 +32,46 @@
         return out;
     }
 
+    const HOVER_ACTIONS = Object.freeze(['react', 'reply', 'replyPrivately', 'thread', 'copy', 'translate', 'save', 'keep',
+        'zap', 'edit', 'delete', 'editHistory', 'eventDetails', 'report']);
+    const HOVER_DEFAULTS = Object.freeze(['react', 'reply', 'thread']);
+    const HOVER_SLOTS = 3;
+    const HOVER_VARIANTS = Object.freeze({ save: Object.freeze(['save', 'unsave']), keep: Object.freeze(['keep', 'unkeep']) });
+
+    function normalizeHoverActions(v) {
+        if (!Array.isArray(v) || v.length !== HOVER_SLOTS) return HOVER_DEFAULTS.slice();
+        const out = [];
+        for (const id of v) {
+            if (typeof id !== 'string' || HOVER_ACTIONS.indexOf(id) < 0 || out.indexOf(id) >= 0) return HOVER_DEFAULTS.slice();
+            out.push(id);
+        }
+        return out;
+    }
+
+    function pickHoverAction(slots, index, id) {
+        const cur = normalizeHoverActions(slots);
+        const i = Number(index);
+        if (!Number.isInteger(i) || i < 0 || i >= HOVER_SLOTS || HOVER_ACTIONS.indexOf(id) < 0) return cur;
+        const j = cur.indexOf(id);
+        if (j >= 0) cur[j] = cur[i];
+        cur[i] = id;
+        return cur;
+    }
+
+    function resolveHoverActions(slots, available) {
+        const have = Array.isArray(available) ? available : [];
+        const offered = (id) => (HOVER_VARIANTS[id] || [id]).find((c) => have.indexOf(c) >= 0) || null;
+        const chosen = normalizeHoverActions(slots);
+        const spare = HOVER_DEFAULTS.concat(HOVER_ACTIONS)
+            .filter((id, i, all) => all.indexOf(id) === i && chosen.indexOf(id) < 0 && offered(id));
+        const out = [];
+        for (const id of chosen) {
+            const c = offered(id) || (spare.length ? offered(spare.shift()) : null);
+            if (c) out.push(c);
+        }
+        return out;
+    }
+
     function swipeThresholdPx(n) {
         const v = Number(n);
         const t = Number.isFinite(v) ? Math.round(v) : 60;
@@ -87,5 +127,7 @@
     G.NymMessageActions = {
         ORDER, FOLLOW_CAP, TONES, actionTone,
         buildMessageActions, swipeThresholdPx, swipeActionApplies, sheetPreview,
+        HOVER_ACTIONS, HOVER_DEFAULTS, HOVER_SLOTS, HOVER_VARIANTS,
+        normalizeHoverActions, pickHoverAction, resolveHoverActions,
     };
 })();

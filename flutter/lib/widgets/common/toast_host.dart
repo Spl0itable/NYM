@@ -295,7 +295,7 @@ class _ToastCardState extends State<_ToastCard> {
                   child: hasNymSuffix(t.text)
                       ? Text.rich(
                           dimNymSuffixes(
-                            t.text,
+                            trShown(t.text),
                             nymSuffixStyle(
                                 TextStyle(color: fg, fontSize: 13, height: 1.4),
                                 contrast: context.highContrast),
@@ -304,7 +304,7 @@ class _ToastCardState extends State<_ToastCard> {
                               TextStyle(color: fg, fontSize: 13, height: 1.4),
                         )
                       : Text(
-                          t.text,
+                          trShown(t.text),
                           style:
                               TextStyle(color: fg, fontSize: 13, height: 1.4),
                         ),
@@ -333,7 +333,7 @@ class _ToastCardState extends State<_ToastCard> {
                               border: Border.all(color: c?.primary ?? accent),
                             ),
                             child: Text(
-                              t.action!,
+                              trShown(t.action!),
                               style: TextStyle(
                                 color: c?.primary ?? accent,
                                 fontSize: 12,

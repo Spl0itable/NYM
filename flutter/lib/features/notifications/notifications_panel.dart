@@ -42,7 +42,7 @@ import '../../widgets/common/nym_label.dart'
     show knownNymSuffix, mergeNymRanges, nymSuffixRanges;
 import '../../core/theme/nym_a11y.dart';
 
-List<NotificationEntry> _listedEntries(
+List<NotificationEntry> listedNotificationEntries(
     Set<String> blocked, List<NotificationEntry> all) {
   final cutoff24h = DateTime.now().millisecondsSinceEpoch - 24 * 60 * 60 * 1000;
   return [
@@ -51,7 +51,10 @@ List<NotificationEntry> _listedEntries(
           !blocked.contains(e.senderPubkey ?? '') &&
           NotificationHistoryNotifier.hiddenEntry?.call(e) != true)
         e,
-  ]..sort((a, b) => b.ts.compareTo(a.ts));
+  ]..sort((a, b) {
+      final d = b.readTs.compareTo(a.readTs);
+      return d != 0 ? d : b.ts.compareTo(a.ts);
+    });
 }
 
 String _rowKey(NotificationEntry e) {
@@ -62,7 +65,7 @@ String _rowKey(NotificationEntry e) {
 
 Future<void> showNotificationsPanel(BuildContext context) {
   final container = ProviderScope.containerOf(context);
-  final entries = _listedEntries(container.read(appStateProvider).blockedUsers,
+  final entries = listedNotificationEntries(container.read(appStateProvider).blockedUsers,
       container.read(notificationHistoryProvider).entries);
   final viewedAtOpen = [for (final e in entries) e.viewed];
   container
@@ -129,7 +132,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
   void _sync(List<NotificationEntry> all) {
     if (!mounted) return;
     final listed =
-        _listedEntries(ref.read(appStateProvider).blockedUsers, all);
+        listedNotificationEntries(ref.read(appStateProvider).blockedUsers, all);
     final arrived = [for (final e in listed) if (!e.viewed) e];
     for (final e in arrived) {
       _newKeys.add(_rowKey(e));
@@ -214,7 +217,8 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
             r.entry.type, r.entry.route ?? '', r.entry.senderPubkey ?? ''),
     ];
     final out = <Widget>[];
-    for (final g in groupNotifications(keys)) {
+    final activity = [for (final r in _rows) r.entry.readTs];
+    for (final g in groupNotifications(keys, activity)) {
       final unread = g.items.where((i) => !_rows[i].viewed).length;
       out.add(Padding(
         key: ValueKey('notifGroup-${g.key}'),

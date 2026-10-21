@@ -17,6 +17,7 @@ window.loadScriptOnce = function (url) {
 // Vendored libs, served same-origin and covered by the build manifest.
 window.NYM_CDN = {
     qrcode: '/js/vendor/qrcode.min.js',
+    jsqr: '/js/vendor/jsqr.min.js',
     webtorrent: '/js/vendor/webtorrent.min.js'
 };
 
@@ -265,6 +266,7 @@ window.nymHaptic = function (kind) {
         'openShop':                   function () { nym().openShop(); },
         'openVaultSettings':          function () { nym().openVaultSettings(); },
         'closeShop':                  function () { nym().closeShop(); },
+        'retryShopRecord':            function () { nym().retryShopRecord(); },
         'openShopAndCloseSidebar':    function () { nym().openShop(); nym().closeSidebar(); },
         'showSettingsAndCloseSidebar':function () { window.showSettings(); nym().closeSidebar(); },
         'showAboutAndCloseSidebar':   function () { window.showAbout(); nym().closeSidebar(); },
@@ -681,6 +683,10 @@ window.nymHaptic = function (kind) {
         'groupCtxRemoveAvatar':       function () { nym().groupCtxRemoveAvatar(); },
         'groupCtxAddMembers':         function () { nym().groupCtxAddMembers(); },
         'groupCtxCopyInviteLink':     function () { nym().groupCtxCopyInviteLink(); },
+        'groupCtxShareGroup':         function () { nym().groupCtxShareGroup(); },
+        'openShareScanner':           function () { nym().openShareScanner(); },
+        'openShareApp':               function () { if (typeof window.closeModal === 'function' && document.getElementById('aboutModal')) window.closeModal('aboutModal'); nym().openShareApp(); },
+        'shareRunAction':             function (_e, t) { nym().shareRunAction(t.dataset.shareAction); },
         'joinGroupFromInvite':        function (_e, t) { nym().handleGroupInviteFromUrl(t.dataset.invite); },
         'groupCtxToggleInvites':      function () { nym().groupCtxToggleInvites(); },
         'groupCtxToggleShareHistory': function () { nym().groupCtxToggleShareHistory(); },
@@ -753,6 +759,7 @@ window.nymHaptic = function (kind) {
 
         'unblockChannelFromSettings': function (_e, t) { nym().unblockChannelFromSettings(t.dataset.channelKey); },
         'unhideChannelFromSettings':  function (_e, t) { nym().unhideChannelFromSettings(t.dataset.channelKey); },
+        'unfavoriteChannelFromSettings': function (_e, t) { nym().unfavoriteChannelFromSettings(t.dataset.channelKey); },
 
         'openPMItem':                 function (_e, t) { nym().openPM(t.dataset.nym, t.dataset.pubkey); },
         'openGroupItem':              function (_e, t) { nym().openGroup(t.dataset.groupId); },

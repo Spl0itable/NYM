@@ -47,8 +47,8 @@ class _UserListItemState extends ConsumerState<UserListItem> {
     final isBot = controller.isVerifiedBot(user.pubkey);
     // Verified bots always show the online dot, as in the PWA.
     final status = user.effectiveStatus(isVerifiedBot: isBot);
-    final app = ref.watch(appStateProvider);
-    final isFriend = app.isFriend(user.pubkey);
+    final (isFriend, selfPubkey) = ref.watch(appStateProvider
+        .select((a) => (a.isFriend(user.pubkey), a.selfPubkey)));
     final bitchatTheme =
         ref.watch(settingsProvider.select((s) => s.theme)) ==
         NymThemeKey.bitchat;
@@ -57,7 +57,7 @@ class _UserListItemState extends ConsumerState<UserListItem> {
     final base = stripPubkeySuffix(user.nym);
     final displayNym = base.length > 20 ? '${base.substring(0, 20)}...' : base;
     final suffix = getPubkeySuffix(user.pubkey);
-    final hueColor = bitchatTheme && user.pubkey != app.selfPubkey
+    final hueColor = bitchatTheme && user.pubkey != selfPubkey
         ? bitchatUserColor(user.pubkey, isLight: c.isLight)
         : null;
     final nymColor = hueColor ?? (_hover ? c.text : c.textDim);

@@ -136,6 +136,18 @@ abstract final class NotifyView {
   static int readTs(int ts, int receivedAt, bool live) =>
       live && receivedAt > ts ? receivedAt : ts;
 
+  static bool shownSeen(NotifyViewState view, NotifyEvent ev, int tsMs,
+      String key, num atSec) {
+    if (!view.focused ||
+        key.isEmpty ||
+        ev.key != key ||
+        ev.root.isNotEmpty ||
+        !(atSec > 0)) {
+      return false;
+    }
+    return (tsMs / 1000).floor() <= atSec;
+  }
+
   static final RegExp _pubkeyRe = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
   static final RegExp _ws = RegExp(r'\s+');
   static final RegExp _quoteLine = RegExp(r'^\s*>');

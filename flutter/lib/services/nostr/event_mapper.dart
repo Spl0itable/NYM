@@ -149,7 +149,7 @@ class EventMapper {
       id: e.id,
       author: author,
       pubkey: e.pubkey,
-      content: e.content,
+      content: channelDisplayContent(e.content, e.tags),
       createdAt: createdAt,
       originalCreatedAt: e.createdAt,
       ms: ms,
@@ -171,6 +171,37 @@ class EventMapper {
   }
 
   /// NIP-10 thread root: the first 'root' marked `e` tag, else 'reply'; only 64-hex ids count.
+  static final RegExp _rxQuoteBlankRun = RegExp(r'\n{3,}');
+
+  static String channelDisplayContent(
+      String content, List<List<String>> tags) {
+    List<String>? tag;
+    for (final t in tags) {
+      if (t.isNotEmpty && t[0] == 'nymquote') {
+        tag = t;
+        break;
+      }
+    }
+    if (tag == null || tag.length < 3 || tag[1].isEmpty || tag[2].isEmpty) {
+      return content;
+    }
+    final author = tag[1];
+    final userMessage = content
+        .replaceFirst(RegExp('^@${RegExp.escape(author)}\\s*'), '')
+        .trim();
+    final stripped = tag[2]
+        .split('\n')
+        .where((line) => !line.startsWith('>'))
+        .join('\n')
+        .replaceAll(_rxQuoteBlankRun, '\n\n')
+        .trim();
+    final lines = stripped.split('\n');
+    final quote = lines.length > 1
+        ? '> @$author: ${lines.first}\n${lines.skip(1).map((l) => '> $l').join('\n')}'
+        : '> @$author: ${lines.first}';
+    return userMessage.isEmpty ? quote : '$quote\n\n$userMessage';
+  }
+
   static String? threadRootFromTags(List<List<String>> tags) {
     String? root;
     String? reply;

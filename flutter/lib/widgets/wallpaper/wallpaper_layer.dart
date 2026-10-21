@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -108,13 +109,14 @@ class WallpaperLayer extends ConsumerWidget {
     }
 
     return IgnorePointer(
-      child: CustomPaint(
-        size: Size.infinite,
+      child: _PatternImage(
         painter: WallpaperPatternPainter(
           type: pattern.type,
           primary: c.primary,
           isLight: c.isLight,
         ),
+        ratio: MediaQuery.devicePixelRatioOf(context),
+        extent: MediaQuery.sizeOf(context),
       ),
     );
   }
@@ -419,4 +421,119 @@ class WallpaperPatternPainter extends CustomPainter {
       old.primary != primary ||
       old.isLight != isLight ||
       old.preview != preview;
+}
+
+class _PatternImage extends LeafRenderObjectWidget {
+  const _PatternImage({
+    required this.painter,
+    required this.ratio,
+    required this.extent,
+  });
+
+  final WallpaperPatternPainter painter;
+  final double ratio;
+  final Size extent;
+
+  @override
+  RenderWallpaperImage createRenderObject(BuildContext context) =>
+      RenderWallpaperImage(painter, ratio, extent);
+
+  @override
+  void updateRenderObject(
+      BuildContext context, RenderWallpaperImage renderObject) {
+    renderObject
+      ..painter = painter
+      ..ratio = ratio
+      ..extent = extent;
+  }
+}
+
+class RenderWallpaperImage extends RenderBox {
+  RenderWallpaperImage(this._painter, this._ratio, [this._extent = Size.zero]);
+
+  static const int maxPixels = 12 * 1024 * 1024;
+
+  WallpaperPatternPainter _painter;
+  double _ratio;
+  Size _extent;
+  ui.Image? _image;
+  Size? _imageSize;
+
+  bool get hasCachedImage => _image != null;
+
+  set painter(WallpaperPatternPainter value) {
+    if (!value.shouldRepaint(_painter)) return;
+    _painter = value;
+    _drop();
+    markNeedsPaint();
+  }
+
+  set ratio(double value) {
+    if (value == _ratio) return;
+    _ratio = value;
+    _drop();
+    markNeedsPaint();
+  }
+
+  set extent(Size value) => _extent = value;
+
+  void _drop() {
+    _image?.dispose();
+    _image = null;
+    _imageSize = null;
+  }
+
+  @override
+  bool get sizedByParent => true;
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) => constraints.biggest;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (!size.isFinite || size.isEmpty) return;
+    final w = (size.width * _ratio).ceil();
+    final h = (size.height * _ratio).ceil();
+    final cached = _imageSize;
+    final fits = _image != null &&
+        cached != null &&
+        cached.width == size.width &&
+        cached.height >= size.height;
+    var target = size;
+    if (!fits && _extent.height > size.height) {
+      final tall = Size(size.width, _extent.height);
+      if (w * (tall.height * _ratio).ceil() <= maxPixels) target = tall;
+    }
+    if (!fits && w * h > maxPixels) {
+      final canvas = context.canvas
+        ..save()
+        ..translate(offset.dx, offset.dy);
+      _painter.paint(canvas, size);
+      canvas.restore();
+      return;
+    }
+    var image = _image;
+    if (!fits || image == null) {
+      _drop();
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder)..scale(_ratio);
+      _painter.paint(canvas, target);
+      final picture = recorder.endRecording();
+      image = _image = picture.toImageSync(w, (target.height * _ratio).ceil());
+      picture.dispose();
+      _imageSize = target;
+    }
+    context.canvas.drawImageRect(
+      image,
+      Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+      offset & Size(w / _ratio, h / _ratio),
+      Paint()..filterQuality = FilterQuality.low,
+    );
+  }
+
+  @override
+  void dispose() {
+    _drop();
+    super.dispose();
+  }
 }

@@ -1336,7 +1336,7 @@
                 console.warn('[media-note] send failed:', (err && err.message) || err);
                 this._lastFailedNote = { desc, bytes, target, once, label };
                 const msg = this.escapeHtml(this._mt("Couldn't send: {error}", { error: (err && err.message) || 'upload failed' }));
-                const html = msg + ' <button type="button" class="nym-retry-note" data-action="nymRetryNote">' + this.escapeHtml(this._mt('Retry')) + '</button>';
+                const html = `<span data-no-i18n>${msg}</span> <button type="button" class="nym-retry-note" data-action="nymRetryNote">${this.escapeHtml(this._mt('Retry'))}</button>`;
                 if (typeof this.showToast === 'function') this.showToast(html, { html: true, kind: 'error' });
                 this.displaySystemMessage(html, 'system', { html: true, feed: true });
             } finally {

@@ -8,6 +8,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Resources
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -61,6 +63,7 @@ class MainActivity : FlutterFragmentActivity() {
             setTurnScreenOn(true)
         }
         super.onCreate(savedInstanceState)
+        NfcShare.onCreate(this)
         handleCallIntent(intent)
     }
 
@@ -69,6 +72,9 @@ class MainActivity : FlutterFragmentActivity() {
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, Transcriber.CHANNEL)
             .setMethodCallHandler { call, result -> Transcriber.handle(applicationContext, call, result) }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BluetoothName.CHANNEL)
+            .setMethodCallHandler { call, result -> BluetoothName.handle(applicationContext, call, result) }
 
         val share = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_CHANNEL)
         share.setMethodCallHandler { call, result ->
@@ -204,6 +210,21 @@ class MainActivity : FlutterFragmentActivity() {
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
+            CLIPBOARD_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "hasImage" -> result.success(clipboardHasImage())
+                "readImage" -> {
+                    val asked = call.argument<Number>("limit")?.toInt() ?: 0
+                    val limit = if (asked > 0) minOf(asked, MAX_CLIPBOARD_BYTES) else MAX_CLIPBOARD_BYTES
+                    result.success(clipboardImage(limit))
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
             SECURE_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -273,16 +294,22 @@ class MainActivity : FlutterFragmentActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             PASSKEY_BACKUP_CHANNEL,
         ).setMethodCallHandler { call, result -> PasskeyBackup.handle(this, call, result) }
+
+        QrDecoder.register(flutterEngine.dartExecutor.binaryMessenger)
+        NfcShare.register(this, flutterEngine.dartExecutor.binaryMessenger)
+        AppShare.register(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     override fun onResume() {
         super.onResume()
         NymRing.foreground = true
         NymRing.cancel(applicationContext)
+        NfcShare.onResume(this)
     }
 
     override fun onPause() {
         NymRing.foreground = false
+        NfcShare.onPause(this)
         super.onPause()
     }
 
@@ -388,6 +415,49 @@ class MainActivity : FlutterFragmentActivity() {
             null
         }
         return owner?.packageName != packageName
+    }
+
+    private fun clipboardHasImage(): Boolean = try {
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        manager.primaryClipDescription?.hasMimeType("image/*") == true
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun clipboardImage(limit: Int): Map<String, Any?>? = try {
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = manager.primaryClip
+        val uri = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).uri else null
+        if (uri == null || !clipboardHasImage() || !foreignContent(uri)) {
+            null
+        } else {
+            val type = contentResolver.getType(uri)?.lowercase() ?: ""
+            val bytes = contentResolver.openInputStream(uri)?.use { stream ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                var total = 0
+                while (total <= limit) {
+                    val n = stream.read(buffer)
+                    if (n < 0) break
+                    total += n
+                    out.write(buffer, 0, n)
+                }
+                out.toByteArray()
+            } ?: ByteArray(0)
+            when {
+                bytes.isEmpty() -> null
+                type in CLIPBOARD_IMAGE_TYPES || bytes.size > limit ->
+                    mapOf("mimeType" to (if (type in CLIPBOARD_IMAGE_TYPES) type else "image/jpeg"), "bytes" to bytes)
+                else -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { bitmap ->
+                    val out = java.io.ByteArrayOutputStream()
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                    bitmap.recycle()
+                    mapOf("mimeType" to "image/jpeg", "bytes" to out.toByteArray())
+                }
+            }
+        }
+    } catch (e: Exception) {
+        null
     }
 
     private fun sharedFile(uri: Uri): Map<String, Any?>? = if (!foreignContent(uri)) null else try {
@@ -665,6 +735,9 @@ class MainActivity : FlutterFragmentActivity() {
         private const val BUILD_INTEGRITY_CHANNEL = "app.nymchat/build_integrity"
         private const val ATTEST_CHANNEL = "app.nymchat/attest"
         private const val SECURE_CHANNEL = "app.nymchat/secure"
+        private const val CLIPBOARD_CHANNEL = "app.nymchat/clipboard"
+        private const val MAX_CLIPBOARD_BYTES = 64 * 1024 * 1024
+        private val CLIPBOARD_IMAGE_TYPES = setOf("image/png", "image/jpeg", "image/gif", "image/webp")
         private const val PRIVACY_CHANNEL = "app.nymchat/privacy"
         private const val VAULT_KEY_CHANNEL = "app.nymchat/vault_key"
         private const val PASSKEY_BACKUP_CHANNEL = "app.nymchat/passkey_backup"

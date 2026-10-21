@@ -28,6 +28,8 @@ class IsolateVerifier {
   /// Called when a new id verifies, so the owner can persist [snapshotVerifiedIds].
   void Function()? onNewVerified;
 
+  static const int _presenceKind = 20001;
+
   /// Ids whose signature already verified; an id binds its content, so a replay needs only the sha256 recheck.
   final LinkedHashSet<String> _verifiedIds = LinkedHashSet<String>();
 
@@ -79,7 +81,7 @@ class IsolateVerifier {
     // Web has no real `compute` isolate, so verify inline.
     if (kIsWeb) {
       final ok = schnorr.verifyEvent(event);
-      if (ok) {
+      if (ok && event.kind != _presenceKind) {
         _rememberVerified(computedId);
         onNewVerified?.call();
       }
@@ -121,7 +123,7 @@ class IsolateVerifier {
       var anyNew = false;
       for (var i = 0; i < waiters.length; i++) {
         final ok = i < results.length && results[i] == true;
-        if (ok) {
+        if (ok && batch[i].kind != _presenceKind) {
           _rememberVerified(ids[i]);
           anyNew = true;
         }

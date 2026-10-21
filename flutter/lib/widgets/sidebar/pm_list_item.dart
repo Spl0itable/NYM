@@ -48,13 +48,16 @@ class PMListItem extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final controller = ref.read(nostrControllerProvider);
-    final appState = ref.watch(appStateProvider);
-    final picture = appState.users[pubkey]?.profile?.picture;
+    final (picture, liveNym, isFriend) = ref.watch(appStateProvider.select(
+        (a) => (
+              a.users[pubkey]?.profile?.picture,
+              a.users[pubkey]?.nym,
+              a.isFriend(pubkey),
+            )));
     final isDev = controller.isVerifiedDeveloper(pubkey);
     final isBot = controller.isVerifiedBot(pubkey);
-    final isFriend = appState.isFriend(pubkey);
     final isSupport = ref.watch(pmSupportPeersProvider).contains(pubkey);
-    final base = pickDisplayNym(appState.users[pubkey]?.nym, nym);
+    final base = pickDisplayNym(liveNym, nym);
     final suffix = getPubkeySuffix(pubkey);
     ref.watch(chatNavRevisionProvider);
     final pinned = !active &&

@@ -37,6 +37,7 @@
         eventDetails: 'Event details',
         report: 'Report',
     };
+    window.NymMessageActionUi = { ICONS, LABELS };
     const SHEET_MAX = 768;
     const HEX64 = /^[0-9a-f]{64}$/i;
 
@@ -120,13 +121,13 @@
                     return () => this.toggleKeepMessage(x.toolId);
                 case 'zap':
                     return async () => {
-                        this.displaySystemMessage(`Checking if @${x.baseNym} can receive zaps...`);
+                        this.displaySystemMessage(this.uiText(`Checking if @{baseNym} can receive zaps...`, { baseNym: x.baseNym }));
                         try {
                             const lnAddress = await this.fetchLightningAddressForUser(x.pubkey);
                             if (lnAddress) this.showZapModal(x.messageId, x.pubkey, x.baseNym);
-                            else this.displaySystemMessage(`@${x.baseNym} cannot receive zaps (no lightning address set)`);
+                            else this.displaySystemMessage(this.uiText(`@{baseNym} cannot receive zaps (no lightning address set)`, { baseNym: x.baseNym }));
                         } catch (_) {
-                            this.displaySystemMessage(`Failed to check if @${x.baseNym} can receive zaps`);
+                            this.displaySystemMessage(this.uiText(`Failed to check if @{baseNym} can receive zaps`, { baseNym: x.baseNym }));
                         }
                     };
                 case 'edit':

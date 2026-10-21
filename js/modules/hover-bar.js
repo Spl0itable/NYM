@@ -15,15 +15,61 @@
         return n > 0 ? n * BUTTON.width + (n - 1) * BUTTON.gap : 0;
     }
 
-    function buttons(sheetActions, hasId, availablePx) {
+    function fit(full, availablePx) {
+        const ids = Array.isArray(full) && full.length ? full : ['more'];
+        if (barWidth(ids.length) <= availablePx) return ids.slice();
+        return ids.length > 1 ? [ids[0], 'more'] : ['more'];
+    }
+
+    function buttons(sheetActions, hasId, availablePx, slots) {
         const acts = Array.isArray(sheetActions) ? sheetActions : [];
-        const full = [];
-        if (hasId) full.push('react');
-        if (acts.indexOf('reply') >= 0) full.push('reply');
-        if (acts.indexOf('thread') >= 0) full.push('thread');
-        full.push('more');
-        if (barWidth(full.length) <= availablePx) return full;
-        return hasId ? ['react', 'more'] : ['more'];
+        const A = window.NymMessageActions;
+        const offered = hasId ? ['react'].concat(acts) : acts.slice();
+        return fit(A.resolveHoverActions(slots, offered).concat('more'), availablePx);
+    }
+
+    function slotsOf(nym) {
+        const A = window.NymMessageActions;
+        return A.normalizeHoverActions(nym && nym.settings ? nym.settings.hoverActions : null);
+    }
+
+    function labelOf(id) {
+        const ui = window.NymMessageActionUi;
+        return LABELS[id] || (ui && ui.LABELS[id]) || id;
+    }
+
+    function iconOf(id) {
+        const ui = window.NymMessageActionUi;
+        if (id === 'more') return window.NymMenuDotsIcon.svg();
+        return ICONS[id] || (ui && ui.ICONS[id]) || '';
+    }
+
+    function btnHtml(nym, id, reactionId) {
+        const t = (s) => (nym && typeof nym.uiText === 'function' ? (nym.uiText(s) || s) : s);
+        const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const label = esc(t(labelOf(id)));
+        const action = id === 'react' ? 'reactionShowPicker' : 'hoverBarAction';
+        const extra = id === 'react' ? ` data-message-id="${esc(reactionId)}"` : '';
+        return `<button type="button" class="hover-bar-btn${id === 'react' ? ' reaction-btn' : ''}" data-hb="${id}" data-action="${action}"${extra} aria-label="${label}" title="${label}">${iconOf(id)}</button>`;
+    }
+
+    function refresh(row) {
+        const bar = barOf(row);
+        const nym = window.nym;
+        if (!bar || !bar.hasAttribute('data-hb-full') || !nym || typeof nym._msgActionContext !== 'function' || bar.contains(document.activeElement)) return;
+        const msgEl = row.matches('[data-message-id]') ? row : row.closest('.message[data-message-id]');
+        if (!msgEl) return;
+        let ids;
+        try {
+            const facts = nym._msgActionContext(msgEl).facts;
+            ids = buttons(sheetActionsFor(facts), !!facts.id, Infinity, slotsOf(nym));
+        } catch (_) {
+            return;
+        }
+        const key = ids.join(' ');
+        if (bar.dataset.hbFull === key) return;
+        bar.dataset.hbFull = key;
+        bar.innerHTML = ids.map((id) => btnHtml(nym, id, bar.dataset.hbRid || msgEl.dataset.messageId || '')).join('');
     }
 
     function sheetActionsFor(facts) {
@@ -131,7 +177,7 @@
         const clip0 = clipRect(row);
         const ids = (bar.dataset.hbFull || '').split(' ').filter(Boolean);
         if (ids.length) {
-            const keep = buttons(ids, ids.indexOf('react') >= 0, clip0.right - clip0.left - 2 * EDGE);
+            const keep = fit(ids, clip0.right - clip0.left - 2 * EDGE);
             bar.querySelectorAll('[data-hb]').forEach((b) => { b.hidden = keep.indexOf(b.dataset.hb) < 0; });
         }
         const bw = bar.offsetWidth;
@@ -171,6 +217,7 @@
         if (active) active.classList.remove('msg-hover-active');
         active = row && row.isConnected ? row : null;
         if (active) {
+            refresh(active);
             place(active);
             active.classList.add('msg-hover-active');
         }
@@ -209,7 +256,10 @@
 
     function onFocusIn(e) {
         const row = rowOf(e.target);
-        if (row && row !== active) place(row);
+        if (row && row !== active) {
+            refresh(row);
+            place(row);
+        }
     }
 
     function onMouseDown(e) {
@@ -224,16 +274,9 @@
     }
 
     function barHtml(nym, reactionId, facts) {
-        const t = (s) => (nym && typeof nym.uiText === 'function' ? (nym.uiText(s) || s) : s);
         const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-        const ids = buttons(sheetActionsFor(Object.assign({ id: true }, facts || {})), true, Infinity);
-        const btn = (id) => {
-            const label = esc(t(LABELS[id]));
-            const action = id === 'react' ? 'reactionShowPicker' : 'hoverBarAction';
-            const extra = id === 'react' ? ` data-message-id="${esc(reactionId)}"` : '';
-            return `<button type="button" class="hover-bar-btn${id === 'react' ? ' reaction-btn' : ''}" data-hb="${id}" data-action="${action}"${extra} aria-label="${label}" title="${label}">${id === 'more' ? window.NymMenuDotsIcon.svg() : ICONS[id]}</button>`;
-        };
-        return `<div class="msg-hover-buttons" data-hb-full="${ids.join(' ')}">${ids.map(btn).join('')}</div>`;
+        const ids = buttons(sheetActionsFor(Object.assign({ id: true }, facts || {})), true, Infinity, slotsOf(nym));
+        return `<div class="msg-hover-buttons" data-hb-full="${ids.join(' ')}" data-hb-rid="${esc(reactionId)}">${ids.map((id) => btnHtml(nym, id, reactionId)).join('')}</div>`;
     }
 
     function run(nym, btn) {
@@ -257,7 +300,7 @@
         });
     }
 
-    window.NymHoverBar = { HIDE_DELAY_MS, BUTTON, ABOVE, OVERLAP_X, EDGE, barWidth, buttons, spot, place, activate, get active() { return active; } };
+    window.NymHoverBar = { HIDE_DELAY_MS, BUTTON, ABOVE, OVERLAP_X, EDGE, barWidth, buttons, fit, refresh, spot, place, activate, get active() { return active; } };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install);
     else install();
 })();

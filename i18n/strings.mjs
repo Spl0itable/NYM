@@ -3,6 +3,10 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
+import path from 'node:path';
+
+import { buildContexts, hasWords, isFragment, joinAdjacent, listFiles, scanLiterals } from './guard.mjs';
+
 const HTML = new URL('../index.html', import.meta.url);
 const COMMANDS = new URL('../js/modules/commands.js', import.meta.url);
 const COMMAND_I18N = new URL('../js/modules/command-i18n.js', import.meta.url);
@@ -46,7 +50,7 @@ export const flutterCatalogPath = () => catalogCandidates()[0].path;
 const SKIP_ELEMENTS = ['script', 'style', 'svg', 'pre', 'code', 'kbd', 'samp'];
 
 // Same list the runtime translates (`NYM_I18N_ATTRS`).
-const TEXT_ATTRIBUTES = ['placeholder', 'data-placeholder', 'title', 'aria-label'];
+const TEXT_ATTRIBUTES = ['placeholder', 'data-placeholder', 'title', 'aria-label', 'aria-description'];
 
 // Mirrors the runtime's `_i18nTextTranslatable`: real words, not just digits or punctuation.
 export function isTranslatable(text) {
@@ -66,17 +70,9 @@ export function parseDartCatalog(source) {
   const body = source.slice(start, end);
 
   const out = [];
-  // A single-quoted Dart literal, honoring \' escapes; comment lines fall out for free.
-  const rx = /'((?:[^'\\]|\\.)*)'/g;
-  let m;
-  while ((m = rx.exec(body)) !== null) {
-    const literal = m[1]
-      .replace(/\\'/g, "'")
-      .replace(/\\"/g, '"')
-      .replace(/\\n/g, '\n')
-      .replace(/\\t/g, '\t')
-      .replace(/\\\\/g, '\\');
-    if (isTranslatable(literal)) out.push(literal);
+  for (const lit of joinAdjacent(scanLiterals(body, 'dart'), body)) {
+    if (lit.interpolated || isFragment(lit.value)) continue;
+    if (isTranslatable(lit.value)) out.push(lit.value);
   }
   return out;
 }
@@ -238,6 +234,22 @@ export function packEntry(source, translated) {
 }
 
 // Deduped and sorted for stable diffs; without a Flutter catalog, markup strings only (`counts.dartKind`).
+export async function loadContexts({ catalogPath } = {}) {
+  const files = [];
+  const candidates = catalogPath ? [{ path: catalogPath }] : catalogCandidates();
+  for (const candidate of candidates) {
+    const lib = path.resolve(path.dirname(candidate.path), '../..');
+    const dart = (await listFiles(lib, '.dart')).filter((f) => !f.endsWith('app_strings_catalog.dart'));
+    if (dart.length === 0) continue;
+    for (const f of dart) files.push({ file: path.relative(path.dirname(lib), f), text: await readFile(f, 'utf8') });
+    break;
+  }
+  files.push({ file: 'index.html', text: await readFile(HTML, 'utf8') });
+  const modules = fileURLToPath(new URL('../js/modules/', import.meta.url));
+  for (const f of await listFiles(modules, '.js')) files.push({ file: `js/modules/${path.relative(modules, f)}`, text: await readFile(f, 'utf8') });
+  return buildContexts(files);
+}
+
 export async function loadSources({ catalogPath } = {}) {
   const candidates = catalogPath
     ? [{ kind: 'override', path: catalogPath }]
@@ -262,7 +274,7 @@ export async function loadSources({ catalogPath } = {}) {
   const fromDart = dartSrc ? parseDartCatalog(dartSrc) : [];
   const fromHtml = parseHtml(htmlSrc);
   const fromCommands = await loadCommandVocabulary();
-  const all = new Set([...fromDart, ...fromHtml, ...fromCommands]);
+  const all = new Set([...fromDart, ...fromHtml, ...fromCommands].filter((s) => hasWords(s) && !isFragment(s)));
   return {
     sources: [...all].sort(),
     counts: {

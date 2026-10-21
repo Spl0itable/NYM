@@ -95,10 +95,12 @@ class StorageKeys {
   static const cachePms = 'nym_cache_pms';
   static const syncMlsHistory = 'nym_sync_mls_history';
   static const showStatus = 'nym_show_status';
+  static const channelCounts = 'nym_channel_counts';
   static const gesturesEnabled = 'nym_gestures_enabled';
   static const swipeLeftAction = 'nym_swipe_left_action';
   static const swipeRightAction = 'nym_swipe_right_action';
   static const swipeThreshold = 'nym_swipe_threshold';
+  static const hoverActions = 'nym_hover_actions';
   static const swipeReactEmoji = 'nym_swipe_react_emoji';
 
   /// Unix seconds of the last local [swipeReactEmoji] pick, so stale synced blobs can't clobber it.

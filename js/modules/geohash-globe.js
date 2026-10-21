@@ -2318,7 +2318,7 @@ Object.assign(NYM.prototype, {
             const set = this.channelUsers && this.channelUsers.get(gh);
             if (set) for (const pk of set) {
                 const u = this.users && this.users.get(pk);
-                if (u && now - u.lastSeen < 300000 && !(typeof this.isPersonHidden === 'function' && this.isPersonHidden(pk, u.nym))) local.push(pk);
+                if (u && this._seenActive(u.lastSeen, now) && !(typeof this.isPersonHidden === 'function' && this.isPersonHidden(pk, u.nym))) local.push(pk);
             }
             summary = window.NymGeoExplore.summarizePeek(ok, {
                 geohash: gh, nowSec: Math.floor(now / 1000), blocked: [...(this.blockedUsers || [])], localOnline: local,
@@ -2492,7 +2492,7 @@ Object.assign(NYM.prototype, {
                 this.saveUserChannels();
                 this._debouncedNostrSettingsSave(5000, { wanted: true });
 
-                this.displaySystemMessage(`Joined geohash channel #${geohash}`);
+                this.displaySystemMessage(this.uiText(`Joined geohash channel #{geohash}`, { geohash }));
             }, 100);
         }
     },

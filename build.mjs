@@ -251,6 +251,7 @@ async function run() {
     'js/modules/init.js', 'js/modules/build-verify.js', 'js/modules/canary-verify.js',
     'js/modules/columns.js', 'js/modules/threads.js', 'js/modules/key-backup.js',
     'js/modules/passkey-backup.js',
+    'js/vendor/qrcode.min.js', 'images/nym-qr-mark.png', 'js/vendor/jsqr.min.js',
   ];
   const precache = criticalSources
     .map((rel) => assetMap.get(rel))

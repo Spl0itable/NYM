@@ -3,7 +3,6 @@ import 'dart:typed_data';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../core/constants/event_kinds.dart';
 import '../../core/crypto/bech32_codec.dart' as bech32;
 import '../../core/crypto/keys.dart' as keys;
 import '../../core/utils/nym_utils.dart';
@@ -12,7 +11,6 @@ import '../../services/api/api_client.dart';
 import '../../services/api/storage_sync.dart';
 import '../../services/attest/attest_service.dart';
 import '../../services/nostr/event_signer.dart';
-import '../../services/nostr/nostr_service.dart';
 import '../../services/storage/key_value_store.dart';
 import '../accounts/account_host.dart';
 import '../accounts/account_logic.dart';
@@ -101,7 +99,6 @@ class SendAsService {
     this.badgeWait = const Duration(seconds: 8),
     this.budget = const Duration(seconds: 20),
     this.panicEvery = const Duration(minutes: 5),
-    this.presenceEvery = const Duration(seconds: 60),
     int Function()? nowMs,
   })  : _transport = transport ?? _defaultTransport,
         _attest = attest ?? ((kv) => AttestService(kv: kv)),
@@ -124,12 +121,10 @@ class SendAsService {
   final Duration badgeWait;
   final Duration budget;
   final Duration panicEvery;
-  final Duration presenceEvery;
   final int Function() _nowMs;
 
   final Map<String, _Lane> _lanes = {};
   final Map<String, int> _panicCheckedAt = {};
-  final Map<String, int> _presenceAt = {};
   bool _closed = false;
   int inFlight = 0;
 
@@ -326,29 +321,6 @@ class SendAsService {
     return _serial<void>(s, (lane) => lane.transport.publishPlain(event));
   }
 
-  Future<void> presence(SendAsSender s) async {
-    final stash = s.stash;
-    final mode = stash.statusMode;
-    if (mode == PresenceStatusMode.disabled || stash.away) return;
-    final now = _nowMs();
-    final last = _presenceAt[s.id];
-    if (last != null && now - last < presenceEvery.inMilliseconds) return;
-    _presenceAt[s.id] = now;
-    final signed = await s.signer.sign(UnsignedEvent(
-      pubkey: s.pubkey,
-      createdAt: now ~/ 1000,
-      kind: EventKind.appData,
-      tags: PresencePayload(
-        nym: s.nym,
-        status: 'online',
-        mode: mode,
-        avatarUrl: stash.avatar,
-      ).tags(),
-      content: '',
-    ));
-    await publishPlain(s, signed);
-  }
-
   Stream<Map<String, dynamic>> botChannelLines(
       Map<String, dynamic> body) async* {
     final api = _api();
@@ -389,7 +361,6 @@ class SendAsService {
         await l.transport.close();
       } catch (_) {}
     }
-    _presenceAt.clear();
     _panicCheckedAt.clear();
   }
 }

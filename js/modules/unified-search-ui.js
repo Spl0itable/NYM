@@ -530,6 +530,7 @@
             }
             if (this.activeThread && typeof this.closeThreadView === 'function') this.closeThreadView();
             requestAnimationFrame(() => {
+                if (!isPM && typeof this._chWinJumpTo === 'function') this._chWinJumpTo(key, msg.id);
                 const shown = isPM ? this.getFilteredPMMessages(key) : this.getFilteredMessages(key);
                 const idx = shown.findIndex((x) => x === msg || x.id === msg.id);
                 const startMap = isPM ? this.pmRenderedStart : this.channelRenderedStart;
@@ -538,7 +539,7 @@
                     while (safety-- > 0) {
                         const start = startMap.get(key) || 0;
                         if (start <= idx) break;
-                        const advanced = isPM ? this.loadOlderPMMessages(key) : this.loadOlderChannelMessages(key);
+                        const advanced = isPM ? this.loadOlderPMMessages(key, msg.id) : this.loadOlderChannelMessages(key, msg.id);
                         if (!advanced) break;
                     }
                 }

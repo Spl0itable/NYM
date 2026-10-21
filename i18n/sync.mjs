@@ -1,12 +1,14 @@
 // Fills i18n/cache/<lang>.json for every language the app offers.
 
 import { loadLanguages } from './languages.mjs';
-import { loadSources } from './strings.mjs';
+import { isShortLabel } from './guard.mjs';
+import { loadContexts, loadSources } from './strings.mjs';
 import { activeRoute, loadCache, onNotice, translateMissing } from './translate.mjs';
 
 const args = process.argv.slice(2);
 const only = (args.find((a) => a.startsWith('--only=')) || '').slice('--only='.length);
 const listOnly = args.includes('--list');
+const redoLabels = args.includes('--redo-labels');
 const wanted = only ? new Set(only.split(',').map((s) => s.trim())) : null;
 
 const { sources, counts, unknownEntities } = await loadSources();
@@ -52,6 +54,8 @@ if (listOnly) {
 }
 
 // Hours-long and rate-limited, so progress and slow phases must be visible.
+const contexts = await loadContexts();
+
 console.log(`\ntranslating (${targets.length} languages, ~${sources.length} strings each)\n`);
 
 let line = '';
@@ -81,7 +85,7 @@ async function runLang(lang, i) {
   const label = `${lang.code.padEnd(7)}${lang.name}`;
   const started = Date.now();
   try {
-    const { translated } = await translateMissing(lang.code, sources);
+    const { translated } = await translateMissing(lang.code, sources, { contexts, redo: redoLabels ? isShortLabel : null });
     const took = Math.round((Date.now() - started) / 1000);
     done_++;
     draw(`  ${at} ${label}  ${translated === 0 ? 'cached' : `+${translated} in ${took}s`}`);

@@ -141,12 +141,19 @@
         return peer ? 'pm:' + peer.toLowerCase() : 'other';
     }
 
-    function groupNotifications(keys) {
+    function groupNotifications(keys, at) {
+        const list = keys || [];
+        const idx = list.map((_, i) => i);
+        if (Array.isArray(at)) {
+            const t = (i) => (typeof at[i] === 'number' && isFinite(at[i]) ? at[i] : 0);
+            idx.sort((p, q) => (t(q) - t(p)) || (p - q));
+        }
         const order = [];
-        const at = {};
-        (keys || []).forEach((k, i) => {
-            if (!(k in at)) { at[k] = order.length; order.push({ key: k, items: [] }); }
-            order[at[k]].items.push(i);
+        const pos = new Map();
+        idx.forEach((i) => {
+            const k = list[i];
+            if (!pos.has(k)) { pos.set(k, order.length); order.push({ key: k, items: [] }); }
+            order[pos.get(k)].items.push(i);
         });
         return order;
     }
@@ -193,6 +200,7 @@
     }
 
     const HEADER_MIN_TITLE = 96;
+    const HEADER_BACK_MIN_TITLE = 24;
     const HEADER_ESSENTIAL = Object.freeze(['bell', 'more', 'rejoin']);
     const HEADER_PRIORITY = Object.freeze({
         channel: Object.freeze(['share', 'favorite']),
@@ -235,9 +243,18 @@
         return { moved, room, more: shown };
     }
 
+    function headerBackPlan(o) {
+        const x = Object.assign({}, o || {});
+        const base = Number(x.base) || 0;
+        const step = Number(x.step) || 0;
+        const withBack = headerOverflow(Object.assign({}, x, { base: base - step }));
+        if (withBack.room >= HEADER_BACK_MIN_TITLE) return Object.assign({ back: true }, withBack);
+        return Object.assign({ back: false }, headerOverflow(Object.assign({}, x, { base })));
+    }
+
     G.NymLayoutModel = {
         MAX, DOCK_MIN, SETTINGS_TWO_PANE_MIN, DOCK_WIDTH, READ_CH, CH_EM, PREVIEW_BODY_MIN_EM,
         stripMarkdown, rowPreview, rowPreviewParts, mentionSuffixRanges, relativeTime, infoPanelMode, settingsMode, chatHeaderHeight, CHAT_HEADER_H_COMPACT, CHAT_HEADER_H_WIDE, readWidthPx, notifGroupKey, groupNotifications, formatToolbarVisible, ROLE_SECTIONS, memberSections, presenceClass, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_DEFAULT, clampSidebarWidth, COLUMN_MIN, COLUMN_MAX, COLUMN_DEFAULT, ADD_RAIL, clampColumnWidth,
-        HEADER_MIN_TITLE, HEADER_ESSENTIAL, HEADER_PRIORITY, HEADER_KINDS, headerActionMetrics, headerOverflow
+        HEADER_MIN_TITLE, HEADER_BACK_MIN_TITLE, HEADER_ESSENTIAL, HEADER_PRIORITY, HEADER_KINDS, headerActionMetrics, headerOverflow, headerBackPlan
     };
 })();

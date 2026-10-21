@@ -1,5 +1,7 @@
 // Composer emoji picker: search header, recents, custom NIP-30 packs, then default categories; 6 columns, 5 at ≤480px.
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -32,9 +34,12 @@ class EmojiPicker extends ConsumerStatefulWidget {
     this.onClose,
     this.proxyBase,
     this.tabs,
+    this.maxHeight,
   });
 
   final Widget? tabs;
+
+  final double? maxHeight;
 
   /// Most-recent-first unicode chars and/or `:code:` tokens.
   final List<String> recents;
@@ -255,8 +260,12 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
 
     // Pad up by the keyboard via raw `View.viewInsets`; MediaQuery's insets are already consumed under a resizing Scaffold.
     final view = View.of(context);
-    final keyboardInset = view.viewInsets.bottom / view.devicePixelRatio;
-    final maxPanelHeight = keyboardInset > 0
+    final hosted = widget.maxHeight;
+    final keyboardInset =
+        hosted != null ? 0.0 : view.viewInsets.bottom / view.devicePixelRatio;
+    final maxPanelHeight = hosted != null
+        ? math.min(400.0, hosted)
+        : keyboardInset > 0
         // Screen minus keyboard, status bar and the 60px bottom-bar anchor (+8).
         ? (MediaQuery.sizeOf(context).height -
                 keyboardInset -
@@ -298,7 +307,9 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
                 ],
               ),
               padding: const EdgeInsets.all(12),
-              child: Column(
+              child: _fitShort(
+                height,
+                Column(
                 mainAxisSize: MainAxisSize.max,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -316,12 +327,19 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
                   ),
                 ],
               ),
+              ),
             );
           }),
         ),
       ),
     );
   }
+
+  Widget _fitShort(double height, Widget column) => height < 240
+      ? SingleChildScrollView(
+          child: SizedBox(height: 240 - 26, child: column),
+        )
+      : column;
 
   Widget _header(NymColors c) {
     return Container(

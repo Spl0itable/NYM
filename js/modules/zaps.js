@@ -322,7 +322,7 @@ Object.assign(NYM.prototype, {
 
         if (!lnAddress) {
             const recipHtml = recipientPubkey ? this.getNymHtmlFromPubkey(recipientPubkey) : this.dimNymSuffix(recipientNym);
-            this.displaySystemMessage(`${recipHtml} doesn't have a lightning address set`, 'system', { html: true });
+            this.displaySystemMessage(`<span data-no-i18n>${recipHtml}</span> doesn't have a lightning address set`, 'system', { html: true });
             return;
         }
 
@@ -830,19 +830,19 @@ Object.assign(NYM.prototype, {
                     if (data.giftEvent) {
                         try { this.sendDMToRelays(['EVENT', data.giftEvent]); } catch (e) { }
                     }
-                    this.displaySystemMessage(`Gifted +${data.credited} Nymbot ${isPro ? 'Pro ' : ''}credits to @${recipientNym || 'user'}.`);
+                    this.displaySystemMessage(this.uiText(`Gifted +{credited} Nymbot {v2}credits to @{v3}.`, { credited: data.credited, v2: isPro ? 'Pro ' : '', v3: recipientNym || 'user' }));
                 } else if (isPro) {
                     this._setBotProCreditDisplay(data.balance);
-                    this.displaySystemMessage(`Nymbot Pro credits added: +${data.credited}. Pro balance: ${data.balance}. Pick a model with ?model in the Nymbot chat.`);
+                    this.displaySystemMessage(this.uiText(`Nymbot Pro credits added: +{credited}. Pro balance: {balance}. Pick a model with ?model in the Nymbot chat.`, { credited: data.credited, balance: data.balance }));
                 } else {
                     this._setBotCreditDisplay(data.balance);
-                    this.displaySystemMessage(`Nymbot credits added: +${data.credited}. New balance: ${data.balance} private message${data.balance === 1 ? '' : 's'}.`);
+                    this.displaySystemMessage(this.uiText(`Nymbot credits added: +{credited}. New balance: {balance} private message{v3}.`, { credited: data.credited, balance: data.balance, v3: data.balance === 1 ? '' : 's' }));
                 }
                 this._removePendingPurchase(invoiceId);
                 return true;
             }
             if (status === 409) { this._removePendingPurchase(invoiceId); return true; }
-            this.displaySystemMessage('Nymbot credit purchase: ' + ((data && data.error) || 'could not confirm credit'));
+            this.displaySystemMessage(this.uiText('Nymbot credit purchase: {error}', { error: (data && data.error) || this.uiText('could not confirm credit') }));
             return false;
         } catch (e) {
             this.displaySystemMessage('Nymbot credit purchase failed to confirm. Your payment went through — run ?balance shortly.');
@@ -1865,7 +1865,7 @@ Object.assign(NYM.prototype, {
     async handleQuickZap(messageId, pubkey, messageEl) {
         const author = messageEl.dataset.author;
 
-        this.displaySystemMessage(`Checking if @${author} can receive zaps...`);
+        this.displaySystemMessage(this.uiText(`Checking if @{author} can receive zaps...`, { author }));
 
         try {
             const lnAddress = await this.fetchLightningAddressForUser(pubkey);
@@ -1873,10 +1873,10 @@ Object.assign(NYM.prototype, {
             if (lnAddress) {
                 this.showZapModal(messageId, pubkey, author);
             } else {
-                this.displaySystemMessage(`@${author} cannot receive zaps (no lightning address set)`);
+                this.displaySystemMessage(this.uiText(`@{author} cannot receive zaps (no lightning address set)`, { author }));
             }
         } catch (error) {
-            this.displaySystemMessage(`Failed to check if @${author} can receive zaps`);
+            this.displaySystemMessage(this.uiText(`Failed to check if @{author} can receive zaps`, { author }));
         }
     },
 
@@ -2012,14 +2012,14 @@ Object.assign(NYM.prototype, {
 
             const targetNym = this.getNymFromPubkey(targetPubkey);
             const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
-            this.displaySystemMessage(`Checking if @${displayNym} can receive zaps...`, 'system', { html: true });
+            this.displaySystemMessage(`Checking if @<span data-no-i18n>${displayNym}</span> can receive zaps...`, 'system', { html: true });
 
             const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
 
             if (lnAddress) {
                 this.showProfileZapModal(targetPubkey, targetNym, lnAddress);
             } else {
-                this.displaySystemMessage(`@${displayNym} cannot receive zaps (no lightning address set)`, 'system', { html: true });
+                this.displaySystemMessage(`@<span data-no-i18n>${displayNym}</span> cannot receive zaps (no lightning address set)`, 'system', { html: true });
             }
             return;
         }
@@ -2048,7 +2048,7 @@ Object.assign(NYM.prototype, {
         });
 
         if (matches.length === 0) {
-            this.displaySystemMessage(`User ${targetInput} not found`);
+            this.displaySystemMessage(this.uiText(`User {targetInput} not found`, { targetInput }));
             return;
         }
 
@@ -2056,7 +2056,7 @@ Object.assign(NYM.prototype, {
             const matchList = matches.map(m =>
                 `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
             ).join(', ');
-            this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true, feed: true });
+            this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(searchNym)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
             this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
             return;
         }
@@ -2070,14 +2070,14 @@ Object.assign(NYM.prototype, {
         }
 
         const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
-        this.displaySystemMessage(`Checking if @${displayNym} can receive zaps...`, 'system', { html: true });
+        this.displaySystemMessage(`Checking if @<span data-no-i18n>${displayNym}</span> can receive zaps...`, 'system', { html: true });
 
         const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
 
         if (lnAddress) {
             this.showProfileZapModal(targetPubkey, targetNym, lnAddress);
         } else {
-            this.displaySystemMessage(`@${displayNym} cannot receive zaps (no lightning address set)`, 'system', { html: true });
+            this.displaySystemMessage(`@<span data-no-i18n>${displayNym}</span> cannot receive zaps (no lightning address set)`, 'system', { html: true });
         }
     },
 

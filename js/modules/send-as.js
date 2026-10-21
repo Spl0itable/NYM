@@ -13,7 +13,6 @@
     const IDLE_MS = 60000;
     const ATTEMPTS = 3;
     const REUSE_MS = 10 * 60 * 1000;
-    const PRESENCE_MS = 60000;
     const PANIC_CHECK_MS = 5 * 60 * 1000;
     const BADGE_WAIT_MS = 8000;
     const RENEW_BEFORE_MS = 7 * 24 * 3600 * 1000;
@@ -534,7 +533,7 @@
             return t;
         },
 
-        _sendAsPublishOnce(t, ev, geo, pre) {
+        _sendAsPublishOnce(t, ev, geo) {
             return new Promise((resolve) => {
                 if (t.dead) { resolve({ ok: false, reason: 'closed', transport: true }); return; }
                 const timer = setTimeout(() => w.done({ ok: false, reason: 'timeout' }), OK_MS);
@@ -558,7 +557,6 @@
                     if (!t.waiters.has(ev.id)) return;
                     if (this._panicking || this._remotePanicWiping) { w.done({ ok: false, reason: 'panic', abort: true }); return; }
                     const put = typeof t.publish === 'function' ? t.publish : t.send;
-                    for (const f of pre || []) put(f);
                     if (!put(frame)) { w.done({ ok: false, reason: 'closed', transport: true }); return; }
                     if (geoFrame) resend.push(setTimeout(() => { if (t.waiters.has(ev.id)) t.send(geoFrame); }, GEO_RESEND_MS));
                 });
@@ -572,13 +570,7 @@
                 if (!this._sendAsSafe(sender.id)) return { ok: false, reason: 'gone', abort: true };
                 const t = this._sendAsTransport(sender, cfg);
                 if (job) job.transport = t;
-                const pre = job && job.presence ? [JSON.stringify(['EVENT', job.presence])] : null;
-                last = await this._sendAsPublishOnce(t, ev, cfg.geo, pre);
-                if (pre && last.ok) {
-                    if (!this._sendAsPresenceAt) this._sendAsPresenceAt = new Map();
-                    this._sendAsPresenceAt.set(sender.pubkey, Date.now());
-                    job.presence = null;
-                }
+                last = await this._sendAsPublishOnce(t, ev, cfg.geo);
                 if (last.ok || !last.transport) return last;
                 if (job && job.echoed) return { ok: true };
                 if (t && !t.dead) t.close();
@@ -667,21 +659,6 @@
             } finally {
                 clearTimeout(timer);
             }
-        },
-
-        _sendAsPresence(sender) {
-            if (sender.statusMode === 'disabled' || sender.away) return null;
-            if (!this._sendAsPresenceAt) this._sendAsPresenceAt = new Map();
-            if (Date.now() - (this._sendAsPresenceAt.get(sender.pubkey) || 0) < PRESENCE_MS) return null;
-            try {
-                return sender.sign({
-                    kind: 30078,
-                    created_at: Math.floor(Date.now() / 1000),
-                    tags: [['d', 'nym-presence'], ['t', 'nym-presence'], ['n', sender.nym], ['status', sender.statusMode === 'enabled' ? 'online' : 'hidden']],
-                    content: '',
-                    pubkey: sender.pubkey,
-                });
-            } catch (_) { return null; }
         },
 
         _sendAsContainer(snap) {
@@ -918,7 +895,6 @@
             if (!this._sendAsSafe(sender.id) || !sender.alive()) throw Object.assign(new Error('gone'), { abort: true });
             job.signed = sender.sign(event);
             job.signedAt = Date.now();
-            job.presence = this._sendAsPresence(sender);
             if (job.sender.cosmetics.includes('cosmetic-redacted')) job.redactKey = sender.keep();
             if (!this._sendAsEchoes) this._sendAsEchoes = new Map();
             this._sendAsEchoes.set(job.signed.id, job);
@@ -969,7 +945,6 @@
             this._sendAsTakeBack(job);
             this._sendAsJobs && this._sendAsJobs.delete(job);
             if (this._sendAsFailed) this._sendAsFailed.delete(job);
-            job.presence = null;
             if (window.nymHaptic) window.nymHaptic('light');
             if (typeof this.showToast === 'function') this.showToast(this._sa('sentAs', job.label), { kind: 'success' });
             if (job.tempId) this._sendAsMark(job, 'sent');
@@ -982,7 +957,6 @@
             this._sendAsJobs && this._sendAsJobs.delete(job);
             if (job.signed && this._sendAsEchoes) this._sendAsEchoes.delete(job.signed.id);
             if (job.redactKey) { job.redactKey.fill(0); job.redactKey = null; }
-            job.presence = null;
             if (job.silent || (res && res.abort && (this._panicking || this._remotePanicWiping || this._acctGoing))) return;
             if (res && res.abort) {
                 this._sendAsDropBubble(job);
@@ -1043,7 +1017,6 @@
             if (job.signed) {
                 if (!this._sendAsEchoes) this._sendAsEchoes = new Map();
                 this._sendAsEchoes.set(job.signed.id, job);
-                job.presence = this._sendAsPresence(sender);
                 if (sender.cosmetics.includes('cosmetic-redacted')) job.redactKey = sender.keep();
             }
             if (!job.tempId) this._sendAsBubble(job);
@@ -1223,7 +1196,7 @@
                 let last = { ok: false, reason: 'closed' };
                 for (let i = 0; i < ATTEMPTS && !lane.dead; i++) {
                     const t = open();
-                    last = await this._sendAsPublishOnce(t, ev, cfg.geo, null);
+                    last = await this._sendAsPublishOnce(t, ev, cfg.geo);
                     if (last.ok || !last.transport || last.abort) return last;
                     if (!t.dead) t.close();
                 }
@@ -1250,6 +1223,7 @@
         },
 
         _sendAsShutdown() {
+            if (typeof this._stopAllAnonPresence === 'function') this._stopAllAnonPresence();
             for (const lane of [...(this._anonLanes || [])]) { try { lane.kill(); } catch (_) { } }
             for (const t of [...((this._sendAsTransports && this._sendAsTransports.values()) || [])]) { try { t.close(); } catch (_) { } }
             if (this._sendAsTransports) this._sendAsTransports.clear();

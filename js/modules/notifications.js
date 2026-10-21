@@ -980,6 +980,36 @@ Object.assign(NYM.prototype, {
         if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
     },
 
+    _notifListed() {
+        const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+        return (this.notificationHistory || []).filter(n => {
+            if (!n || n.timestamp <= cutoff24h) return false;
+            if (this._notifEntryHidden(n)) return false;
+            return true;
+        }).sort((a, b) => (this._notifReadTs(a) - this._notifReadTs(b)) || ((a.timestamp || 0) - (b.timestamp || 0)));
+    },
+
+    _markShownNotificationsSeen(convKey, atSec) {
+        const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
+        if (!convKey || !V || typeof V.shownSeen !== 'function' || !Array.isArray(this.notificationHistory)) return;
+        const view = this._notifView();
+        let changed = false;
+        for (const n of this.notificationHistory) {
+            if (!n || n.viewed || !n.channelInfo || n.channelInfo.type === 'reaction') continue;
+            if (!V.shownSeen(view, this._notifEvent(n.channelInfo), n.timestamp || 0, convKey, atSec)) continue;
+            n.viewed = true;
+            this._rememberNotificationSeen(n, false);
+            changed = true;
+        }
+        if (changed) {
+            this._saveSeenNotificationKeys();
+            this._saveNotificationHistory();
+            this._updateNotificationBadge();
+            this._refreshNotificationsModalIfOpen();
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(4000);
+        }
+    },
+
     _markConversationNotificationsSeen(convKey, tsSec) {
         if (!convKey) return;
         const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
@@ -1156,13 +1186,7 @@ Object.assign(NYM.prototype, {
             notifSound.value = this.settings.sound;
         }
 
-        // Sort ascending since replay and sync merges can leave the array out of order.
-        const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-        const recent = this.notificationHistory.filter(n => {
-            if (n.timestamp <= cutoff24h) return false;
-            if (this._notifEntryHidden(n)) return false;
-            return true;
-        }).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        const recent = this._notifListed();
         for (const n of recent) {
             if (!n.viewed) newKeys.add(this._notifNewKey(n));
         }

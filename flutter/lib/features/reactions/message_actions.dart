@@ -185,6 +185,27 @@ String msgActionSvg(MsgAction a) {
   }
 }
 
+MsgAction? msgActionById(String id) {
+  for (final a in MsgAction.values) {
+    if (a.id == id) return a;
+  }
+  return null;
+}
+
+String hoverActionLabel(String id) {
+  if (id == 'react') return tr('React');
+  if (id == 'more') return tr('More');
+  final a = msgActionById(id);
+  return a == null ? id : msgActionLabel(a);
+}
+
+String hoverActionSvg(String id) {
+  if (id == 'react') return NymIcons.addReaction;
+  if (id == 'more') return NymIcons.rowMenu;
+  final a = msgActionById(id);
+  return a == null ? '' : msgActionSvg(a);
+}
+
 const double kSwipeFollowCap = 100;
 
 double swipeThresholdPx(int setting) =>

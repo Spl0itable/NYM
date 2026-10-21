@@ -364,6 +364,7 @@ Object.assign(NYM.prototype, {
     },
 
     _cacheShopRecord() {
+        if (!this._shopRecordLoaded) return;
         try {
             const owned = {};
             this.userPurchases.forEach((p, id) => {
@@ -394,22 +395,66 @@ Object.assign(NYM.prototype, {
             const raw = localStorage.getItem('nym_shop_record');
             if (!raw) return;
             const cache = JSON.parse(raw);
-            if (cache && typeof cache === 'object') this._applyOwnShopRecord(cache);
+            if (cache && typeof cache === 'object' && cache.owned && typeof cache.owned === 'object') this._applyOwnShopRecord(cache);
         } catch (e) {}
     },
 
     async loadShopFromServer() {
         if (!this.pubkey) return;
+        const pubkey = this.pubkey;
+        const gen = this._shopRecordGen || 0;
+        this._shopRecordFailed = false;
+        let data = null;
         try {
-            const data = await this._shopApiRequest('shop-get', {});
-            this._applyOwnShopRecord(data);
+            data = await this._shopApiRequest('shop-get', {});
         } catch (e) {}
+        if (this.pubkey !== pubkey || (this._shopRecordGen || 0) !== gen) return;
+        if (data && data.owned && typeof data.owned === 'object') {
+            this._applyOwnShopRecord(data);
+            return;
+        }
+        this._shopRecordFailed = true;
+        this._rerenderOpenShop();
+    },
+
+    retryShopRecord() {
+        this._shopRecordFailed = false;
+        this._rerenderOpenShop();
+        this.loadShopFromServer();
+    },
+
+    _rerenderOpenShop() {
+        const modal = document.getElementById('shopModal');
+        if (modal && modal.classList.contains('active') && this.activeShopTab) {
+            this.switchShopTab(this.activeShopTab);
+        }
+    },
+
+    _shopRecordPendingHtml() {
+        const t = (s) => this.escapeHtml(typeof this.uiText === 'function' ? this.uiText(s) : s);
+        if (this._shopRecordFailed) {
+            return `
+<div class="shop-loading">
+    <div class="shop-loading-text">${t("Couldn't load your purchases.")}</div>
+    <button class="shop-buy-btn" type="button" data-action="retryShopRecord">${t('Retry')}</button>
+</div>
+`;
+        }
+        return `
+<div class="shop-loading">
+    <div class="shop-loading-spinner"></div>
+    <div class="shop-loading-text">${t('Loading your purchases…')}</div>
+</div>
+`;
     },
 
     applyCachedShopItemsToNewIdentity() {
         if (!this.pubkey) return;
         // Purchases are bound to a pubkey server-side.
         this.userPurchases.clear();
+        this._shopRecordLoaded = false;
+        this._shopRecordFailed = false;
+        this._shopRecordGen = (this._shopRecordGen || 0) + 1;
         this.activeMessageStyle = null;
         this.localActiveStyle = null;
         this.activeFlairs = new Set();
@@ -421,6 +466,9 @@ Object.assign(NYM.prototype, {
     _applyOwnShopRecord(data) {
         if (!data || typeof data !== 'object') return;
         if (data.owned && typeof data.owned === 'object') {
+            this._shopRecordLoaded = true;
+            this._shopRecordFailed = false;
+            this._shopRecordGen = (this._shopRecordGen || 0) + 1;
             this.userPurchases.clear();
             Object.entries(data.owned).forEach(([id, info]) => {
                 info = info || {};
@@ -445,10 +493,7 @@ Object.assign(NYM.prototype, {
         }
         this._cacheShopRecord();
         this.applyShopStylesToOwnMessages();
-        const modal = document.getElementById('shopModal');
-        if (modal && modal.classList.contains('active') && this.activeShopTab) {
-            this.switchShopTab(this.activeShopTab);
-        }
+        this._rerenderOpenShop();
     },
 
     _buildActiveItemsPayload() {
@@ -461,6 +506,7 @@ Object.assign(NYM.prototype, {
     },
 
     async publishActiveShopItems() {
+        if (!this._shopRecordLoaded) return;
         this._cacheShopRecord();
         if (!this.pubkey) return;
         try {
@@ -630,10 +676,10 @@ Object.assign(NYM.prototype, {
 
         if (this.activeCosmetics.has(itemId)) {
             this.activeCosmetics.delete(itemId);
-            this.displaySystemMessage(`Deactivated ${item.name}`);
+            this.displaySystemMessage(this.uiText(`Deactivated {name}`, { name: item.name }));
         } else {
             this.activeCosmetics.add(itemId);
-            this.displaySystemMessage(`Activated ${item.name}`);
+            this.displaySystemMessage(this.uiText(`Activated {name}`, { name: item.name }));
         }
         this.publishActiveShopItems();
         this.applyShopStylesToOwnMessages();
@@ -649,11 +695,11 @@ Object.assign(NYM.prototype, {
         if (this.activeMessageStyle === styleId) {
             this.activeMessageStyle = null;
             this.localActiveStyle = null;
-            this.displaySystemMessage(`Deactivated ${this.getShopItemById(styleId).name}`);
+            this.displaySystemMessage(this.uiText(`Deactivated {name}`, { name: this.getShopItemById(styleId).name }));
         } else {
             this.activeMessageStyle = styleId;
             this.localActiveStyle = styleId;
-            this.displaySystemMessage(`Activated ${this.getShopItemById(styleId).name}`);
+            this.displaySystemMessage(this.uiText(`Activated {name}`, { name: this.getShopItemById(styleId).name }));
         }
         this.publishActiveShopItems();
         this.renderInventoryTab(document.getElementById('shopBody'));
@@ -666,11 +712,11 @@ Object.assign(NYM.prototype, {
         if (!this.activeFlairs) this.activeFlairs = new Set();
         if (this.activeFlairs.has(flairId)) {
             this.activeFlairs.delete(flairId);
-            this.displaySystemMessage(`Deactivated ${item.name}`);
+            this.displaySystemMessage(this.uiText(`Deactivated {name}`, { name: item.name }));
         } else {
             this.activeFlairs.clear();
             this.activeFlairs.add(flairId);
-            this.displaySystemMessage(`Activated ${item.name}`);
+            this.displaySystemMessage(this.uiText(`Activated {name}`, { name: item.name }));
         }
         this.publishActiveShopItems();
         this.renderInventoryTab(document.getElementById('shopBody'));
@@ -736,6 +782,10 @@ Object.assign(NYM.prototype, {
         if (activeTab && typeof activeTab.scrollIntoView === 'function') activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
         const shopBody = document.getElementById('shopBody');
+        if (!this._shopRecordLoaded) {
+            shopBody.innerHTML = this._shopRecordPendingHtml();
+            return;
+        }
         switch (tab) {
             case 'styles': this.renderStylesTab(shopBody); break;
             case 'flair': this.renderFlairTab(shopBody); break;
@@ -1476,14 +1526,12 @@ TRANSFER TO PUBKEY
         this._applyShopClaim(data, item);
         const name = item ? item.name : 'item';
         if (data.gift) {
-            this.displaySystemMessage(`Gift purchase completed: ${name}.`);
+            this.displaySystemMessage(this.uiText(`Gift purchase completed: {name}.`, { name }));
         } else {
-            let msg = `Purchase completed: ${name}`;
-            if (data.edition && data.edition.n) msg += ` #${data.edition.n}/${data.edition.max}`;
-            msg += '.';
-            if (Array.isArray(data.bundle) && data.bundle.length) msg += ` Unlocked ${data.bundle.length} items.`;
-            else if (data.code) msg += ` Recovery code: ${data.code}`;
-            this.displaySystemMessage(msg);
+            const shown = data.edition && data.edition.n ? `${name} #${data.edition.n}/${data.edition.max}` : name;
+            if (Array.isArray(data.bundle) && data.bundle.length) this.displaySystemMessage(this.uiText('Purchase completed: {name}. Unlocked {count} items.', { name: shown, count: data.bundle.length }));
+            else if (data.code) this.displaySystemMessage(this.uiText('Purchase completed: {name}. Recovery code: {code}', { name: shown, code: data.code }));
+            else this.displaySystemMessage(this.uiText('Purchase completed: {name}.', { name: shown }));
         }
     },
 
@@ -1719,7 +1767,7 @@ ${bundleCodes || (code ? `
             }
             return true;
         } catch (e) {
-            this.displaySystemMessage('❌ Restore failed: ' + e.message);
+            this.displaySystemMessage(this.uiText('❌ Restore failed: {error}', { error: e.message }));
             return false;
         }
     },
@@ -1799,7 +1847,7 @@ ${bundleCodes || (code ? `
             const modal = document.getElementById('transferModal');
             if (modal) modal.remove();
 
-            this.displaySystemMessage(`${item.name} transferred to ${recipientPubkey.substring(0, 8)}...`);
+            this.displaySystemMessage(this.uiText(`{name} transferred to {v2}...`, { name: item.name, v2: recipientPubkey.substring(0, 8) }));
             if (this.activeShopTab === 'inventory') {
                 this.renderInventoryTab(document.getElementById('shopBody'));
             }
@@ -1872,7 +1920,7 @@ ${bundleCodes || (code ? `
             await this._sendGiftWrapsAsync([recipientPubkey], rumor, null);
 
             input.value = '';
-            this.displaySystemMessage(`Settings transfer sent to ${recipientPubkey.substring(0, 8)}...!`);
+            this.displaySystemMessage(this.uiText(`Settings transfer sent to {v1}...!`, { v1: recipientPubkey.substring(0, 8) }));
         } catch (error) {
             errorEl.textContent = 'Failed to send settings transfer. Please try again.';
             errorEl.style.display = 'block';
@@ -1906,7 +1954,7 @@ ${bundleCodes || (code ? `
                 transferredAt: data.transferredAt || event.created_at
             });
 
-            this.displaySystemMessage(`Settings received from ${data.fromPubkey.substring(0, 8)}...! Approve from settings modal.`);
+            this.displaySystemMessage(this.uiText(`Settings received from {v1}...! Approve from settings modal.`, { v1: data.fromPubkey.substring(0, 8) }));
 
             this.renderPendingSettingsTransfers();
         } catch (e) {
@@ -2025,7 +2073,7 @@ ${bundleCodes || (code ? `
             }
         }
 
-        this.displaySystemMessage(`Settings from ${this.dimNymSuffix(transfer.fromNym)} applied successfully!`, 'system', { html: true });
+        this.displaySystemMessage(`Settings from <span data-no-i18n>${this.dimNymSuffix(transfer.fromNym)}</span> applied successfully!`, 'system', { html: true });
     },
 
     rejectSettingsTransfer(eventId) {
@@ -2034,7 +2082,7 @@ ${bundleCodes || (code ? `
         this.renderPendingSettingsTransfers();
         this.dismissTransferEvent(eventId);
         if (transfer) {
-            this.displaySystemMessage(`Settings transfer from ${this.dimNymSuffix(transfer.fromNym)} rejected.`, 'system', { html: true });
+            this.displaySystemMessage(`Settings transfer from <span data-no-i18n>${this.dimNymSuffix(transfer.fromNym)}</span> rejected.`, 'system', { html: true });
         }
     },
 

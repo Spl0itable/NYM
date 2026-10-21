@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -179,11 +180,42 @@ class ChatNavListBinding with WidgetsBindingObserver {
     if (di == null || id == null || !nav.shouldLand(_key)) return;
     nav.markLanded(_key);
     _landing = true;
+    _watchUserScroll();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_disposed) return;
-      unawaited(_landAt(scroller, di, id, animate: false)
-          .whenComplete(() => _landing = false));
+      if (_disposed) {
+        _unwatchUserScroll();
+        return;
+      }
+      unawaited(_landAt(scroller, di, id, animate: false).whenComplete(() {
+        _landing = false;
+        _unwatchUserScroll();
+      }));
     });
+  }
+
+  bool _userScrolled = false;
+  bool _watching = false;
+
+  void _noteUserScroll(PointerEvent e) {
+    if (e is PointerScrollEvent ||
+        e is PointerPanZoomStartEvent ||
+        e is PointerPanZoomUpdateEvent ||
+        (e is PointerMoveEvent && e.delta.dy.abs() > 0 && e.down)) {
+      _userScrolled = true;
+    }
+  }
+
+  void _watchUserScroll() {
+    _userScrolled = false;
+    if (_watching) return;
+    _watching = true;
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_noteUserScroll);
+  }
+
+  void _unwatchUserScroll() {
+    if (!_watching) return;
+    _watching = false;
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_noteUserScroll);
   }
 
   void _queue() {
@@ -233,6 +265,12 @@ class ChatNavListBinding with WidgetsBindingObserver {
 
   Future<void> _landAt(MessageListScroller scroller, int index, String id,
       {required bool animate}) async {
+    final watch = !animate && _watching;
+    if (watch && _userScrolled) {
+      _landing = false;
+      update();
+      return;
+    }
     await scroller.animateTo(
       index: index,
       alignment: 0.45,
@@ -240,6 +278,7 @@ class ChatNavListBinding with WidgetsBindingObserver {
     );
     for (var i = 0; i < 2 && !_disposed; i++) {
       await WidgetsBinding.instance.endOfFrame;
+      if (watch && _userScrolled) break;
       final p = _at(index);
       if (p == null) break;
       final shift = _landLine - _topOf(p, id);
@@ -323,6 +362,7 @@ class ChatNavListBinding with WidgetsBindingObserver {
       if (n.effAt(_messages[j]) == at) ids.add(_messages[j].id);
     }
     n.advance(_key, at, ids);
+    ref.read(notificationHistoryProvider.notifier).markShownSeen(_key, at);
   }
 
   Map<int, List<Message>> _membersByIndex() {
@@ -358,9 +398,21 @@ class ChatNavListBinding with WidgetsBindingObserver {
     return idx > maxVis ? 'up' : 'down';
   }
 
+  Object? _unseenMark;
+  List<Message>? _unseenList;
+  String? _unseenKey;
+
   void _refresh(Iterable<ItemPosition> pos) {
     final n = nav;
-    _unseen = n.unseenFor(_key, _messages);
+    final mark = n.markFor(_key);
+    if (!identical(mark, _unseenMark) ||
+        !identical(_messages, _unseenList) ||
+        _key != _unseenKey) {
+      _unseen = n.unseenFor(_key, _messages);
+      _unseenMark = mark;
+      _unseenList = _messages;
+      _unseenKey = _key;
+    }
     final count = _unseen.length;
     final mentions = n.mentionCountFor(_key);
     final down = count == 0 || _dirFor(_unseen.first, pos) == 'down';
@@ -467,6 +519,7 @@ class ChatNavListBinding with WidgetsBindingObserver {
 
   void dispose() {
     _disposed = true;
+    _unwatchUserScroll();
     WidgetsBinding.instance.removeObserver(this);
     fabs.dispose();
   }
@@ -700,8 +753,12 @@ class ChatNavRowBadges extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(chatNavRevisionProvider);
     final alias = chatNavAlias(storageKey);
-    ref.watch(appStateProvider.select((s) =>
-        (s.displayRev, s.unreadCounts[storageKey], s.unreadCounts[alias])));
+    ref.watch(appStateProvider.select((s) => (
+          s.viewRevOf(storageKey),
+          s.viewRevOf(alias),
+          s.unreadCounts[storageKey],
+          s.unreadCounts[alias],
+        )));
     final nav = ref.read(chatNavProvider);
     final pinned = nav.pinIndexOfChat(storageKey) >= 0;
     final mention = nav.hasUnreadMention(storageKey, aliases: [alias]);

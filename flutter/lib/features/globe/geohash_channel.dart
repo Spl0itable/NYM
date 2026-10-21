@@ -40,10 +40,21 @@ const List<String> kGlobeSeedGeohashes = [
 /// Minimum heat for a geohash D1 reports active in-window but that has no hourly buckets, so it still plots.
 const int kD1ActiveHeatFloor = 1;
 
+bool geohashCellNameHidden(AppState state, String gh,
+    {String Function(String gh)? placeLabel}) {
+  final key = gh.toLowerCase();
+  if (key.isEmpty) return false;
+  if (state.pinnedChannels.any((k) => k.toLowerCase() == key)) return false;
+  if (state.hasBlockedKeyword(key)) return true;
+  final label = placeLabel?.call(key) ?? '';
+  return label.isNotEmpty && state.hasBlockedKeyword(label);
+}
+
 /// Plotted channels whose heat is the sum over the window of `max(local[i], d1[i])` per hour.
 List<GeohashChannelPoint> buildGeohashChannels(
   AppState state, {
   required int windowHours,
+  String Function(String gh)? placeLabel,
 }) {
   final nowMs = DateTime.now().millisecondsSinceEpoch;
   final cutoffMs = nowMs - windowHours * 3600 * 1000;
@@ -79,7 +90,9 @@ List<GeohashChannelPoint> buildGeohashChannels(
     candidates.add(name);
   });
 
-  candidates.removeWhere(state.isChannelHidden);
+  candidates.removeWhere((gh) =>
+      state.isChannelHidden(gh) ||
+      geohashCellNameHidden(state, gh, placeLabel: placeLabel));
   if (candidates.isEmpty) return const [];
 
   final n = math.max(1, math.min(24, windowHours));

@@ -178,10 +178,10 @@ Object.assign(NYM.prototype, {
                 }
             } else if (isNoop) {
                 this._forgetManualTranslation(messageId);
-                this.displaySystemMessage(`Nothing to translate (already in ${this._languageName(targetLang)}).`);
+                this.displaySystemMessage(this.uiText(`Nothing to translate (already in {targetLang}).`, { targetLang: this._languageName(targetLang) }));
             } else {
                 this._forgetManualTranslation(messageId);
-                this.displaySystemMessage(`Translation: ${translatedText}`, 'system', { feed: true });
+                this.displaySystemMessage(this.uiText(`Translation: {translatedText}`, { translatedText }), 'system', { feed: true });
             }
         } catch (err) {
             // Failures aren't recorded so the user can ask again.
@@ -189,7 +189,7 @@ Object.assign(NYM.prototype, {
             const row = rowFor();
             const translationEl = row && row.querySelector('.message-translation');
             if (translationEl) translationEl.innerHTML = '<span class="translation-error">Translation failed</span>';
-            this.displaySystemMessage('Translation failed: ' + (err.message || 'Unknown error'));
+            this.displaySystemMessage(this.uiText('Translation failed: {error}', { error: err.message || this.uiText('Unknown error') }));
         }
     },
 
@@ -351,7 +351,7 @@ Object.assign(NYM.prototype, {
             }
         } catch (err) {
             if (translationEl) translationEl.innerHTML = '<span class="translation-error">Translation failed</span>';
-            this.displaySystemMessage('Translation failed: ' + (err.message || 'Unknown error'));
+            this.displaySystemMessage(this.uiText('Translation failed: {error}', { error: err.message || this.uiText('Unknown error') }));
         }
     },
 
@@ -400,7 +400,7 @@ Object.assign(NYM.prototype, {
             input.value = translatedText;
             this.autoResizeTextarea(input);
         } catch (err) {
-            this.displaySystemMessage('Translation failed: ' + (err.message || 'Unknown error'));
+            this.displaySystemMessage(this.uiText('Translation failed: {error}', { error: err.message || this.uiText('Unknown error') }));
         } finally {
             if (btn) btn.classList.remove('translating');
         }

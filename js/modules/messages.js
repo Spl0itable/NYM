@@ -491,6 +491,7 @@ Object.assign(NYM.prototype, {
         const idx = arr.findIndex(m => m && m.id === tempId);
         if (idx < 0) return;
         const msg = arr[idx];
+        if (!isPM && typeof this._claimChannelCopy === 'function') this._claimChannelCopy(signedEvent);
         const oldCreated = msg.created_at || 0;
         msg.id = signedEvent.id;
         msg.created_at = signedEvent.created_at;
@@ -552,7 +553,7 @@ Object.assign(NYM.prototype, {
         const el = document.querySelector(`[data-message-id="${tempId.replace(/"/g, '\\"')}"]`);
         if (el) el.classList.add('optimistic-failed');
         if (typeof this.displaySystemMessage === 'function') {
-            this.displaySystemMessage('Failed to send message: ' + (err && err.message || err));
+            this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: (err && err.message) || err }));
         }
     },
 
@@ -1146,7 +1147,7 @@ Object.assign(NYM.prototype, {
                 const seen = !arrivedHidden && this._cvMarkColumnRead(storageKey);
                 if (!seen) {
                     this._countArrivedUnread(storageKey, message, exists);
-                } else if (!message.isOwn && !message.isHistorical && message.geohash &&
+                } else if (!this._bulkContainer && !message.isOwn && !message.isHistorical && message.geohash &&
                     message.id && /^[0-9a-f]{64}$/i.test(message.id) && this._channelReceiptOk(message) &&
                     typeof this.sendChannelReadReceipt === 'function') {
                     this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);
@@ -1171,7 +1172,7 @@ Object.assign(NYM.prototype, {
                 }
 
                 // Public read receipts (kind 24421) only for messages the user can actually see.
-                const canBeSeen = !document.hidden && !this.userScrolledUp;
+                const canBeSeen = !document.hidden && !this.userScrolledUp && !this._bulkContainer;
                 if (canBeSeen && !message.isOwn && !message.isHistorical && message.geohash &&
                     message.id && /^[0-9a-f]{64}$/i.test(message.id) && this._channelReceiptOk(message) &&
                     typeof this.sendChannelReadReceipt === 'function') {
@@ -1197,11 +1198,16 @@ Object.assign(NYM.prototype, {
         const _dedupeId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
         if (_threadRender) {
             if (_threadTarget.querySelector(`[data-message-id="${_dedupeId}"]`)) return;
-        } else if (document.querySelector(`[data-message-id="${_dedupeId}"]`)) {
+        } else if (this._bulkDomIds ? this._bulkDomIds.has(_dedupeId) : document.querySelector(`[data-message-id="${_dedupeId}"]`)) {
             return;
         }
 
         const container = _threadTarget || _cvContainer || document.getElementById('messagesContainer');
+
+        if (!_threadRender && !_cvContainer && !this._bulkAppending && !message.isPM && !this.inPMMode &&
+            this._chWinDetached(container.dataset.virtualScrollKey) && this._chWinHolds(container.dataset.virtualScrollKey, message)) {
+            return;
+        }
 
         // An open thread view owns its container; conversation messages stay stored-only until it closes.
         if (!_threadRender && typeof this._threadViewOccupies === 'function' &&
@@ -1242,7 +1248,7 @@ Object.assign(NYM.prototype, {
         if (message.isOwn) {
             if (keywordHit || this.blockedUsers.has(message.pubkey)) {
                 const reason = keywordHit ? 'matched one of your blocked keywords' : 'matched a block rule';
-                this.displaySystemMessage(`Your message ${reason} and was hidden locally. It was still sent.`);
+                this.displaySystemMessage(this.uiText(`Your message {reason} and was hidden locally. It was still sent.`, { reason }));
                 return;
             }
             if (spamHit) {
@@ -1437,13 +1443,13 @@ Object.assign(NYM.prototype, {
                     deliveryCheckmark = `<span class="group-readers" data-nym-msg-id="${message.nymMessageId}">${avatarHtml}</span>`;
                 } else if (message.deliveryStatus) {
                     if (message.deliveryStatus === 'read') {
-                        deliveryCheckmark = '<span class="delivery-status read" title="Read">✓✓</span>';
+                        deliveryCheckmark = `<span class="delivery-status read" title="Read">${this.deliveryTicksHtml('read')}</span>`;
                     } else if (message.deliveryStatus === 'delivered') {
-                        deliveryCheckmark = '<span class="delivery-status delivered" title="Delivered">✓</span>';
+                        deliveryCheckmark = `<span class="delivery-status delivered" title="Delivered">${this.deliveryTicksHtml('delivered')}</span>`;
                     } else if (message.deliveryStatus === 'failed') {
                         deliveryCheckmark = `<span class="delivery-status failed nm-pointer" title="Failed to send - click to retry" data-retry-event-id="${message.id}">!</span>`;
                     } else if (message.deliveryStatus === 'sent') {
-                        deliveryCheckmark = '<span class="delivery-status sent" title="Sent">✓</span>';
+                        deliveryCheckmark = `<span class="delivery-status sent" title="Sent">${this.deliveryTicksHtml('sent')}</span>`;
                     }
                 }
             }
@@ -1629,6 +1635,7 @@ Object.assign(NYM.prototype, {
         // Bulk render is pre-sorted, so just append; a per-message querySelectorAll would be O(N²).
         if (this._bulkAppending) {
             (this._bulkContainer || container).appendChild(messageEl);
+            if (this._bulkDomIds) this._bulkDomIds.add(_dedupeId);
         } else {
             const msgCreatedAt = this._orderAt(message);
             const msgOrderMs = this._orderMs(message);
@@ -1844,7 +1851,9 @@ Object.assign(NYM.prototype, {
     },
 
     _readMoreThreshold() {
-        return window.innerWidth <= 768 ? 400 : 600;
+        if (!this._readMoreMq && typeof window.matchMedia === 'function') this._readMoreMq = window.matchMedia('(max-width: 768px)');
+        const narrow = this._readMoreMq ? this._readMoreMq.matches : window.innerWidth <= 768;
+        return narrow ? 400 : 600;
     },
 
     // Passes that need the formatted HTML in the DOM; runs inline or after the worker swap.
@@ -2071,6 +2080,7 @@ Object.assign(NYM.prototype, {
     },
 
     formatMessage(content) {
+        if (typeof this.noteMissingCustomEmojiIn === 'function') this.noteMissingCustomEmojiIn(content);
         return window.NymFormat.format(content, this._mainFormatCtx(content));
     },
 
@@ -2643,7 +2653,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        this._syncAllAvatarOffsets(container.querySelectorAll(':scope > .message-group'));
+        if (!this._groupResizeObserver) this._syncAllAvatarOffsets(container.querySelectorAll(':scope > .message-group'));
     },
 
     // Batched read-then-write so N groups cost one reflow instead of N.
@@ -2908,7 +2918,7 @@ Object.assign(NYM.prototype, {
 
             return true;
         } catch (error) {
-            this.displaySystemMessage('Failed to edit message: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to edit message: {error}', { error: error.message }));
             return false;
         }
     },
@@ -3025,16 +3035,16 @@ Object.assign(NYM.prototype, {
                         return;
                     }
                     const baseNym = this.stripPubkeySuffix(msgEl.dataset.author || 'nym');
-                    this.displaySystemMessage(`Checking if @${baseNym} can receive zaps...`);
+                    this.displaySystemMessage(this.uiText(`Checking if @{baseNym} can receive zaps...`, { baseNym }));
                     try {
                         const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
                         if (lnAddress) {
                             this.showZapModal(messageId, targetPubkey, baseNym);
                         } else {
-                            this.displaySystemMessage(`@${baseNym} cannot receive zaps (no lightning address set)`);
+                            this.displaySystemMessage(this.uiText(`@{baseNym} cannot receive zaps (no lightning address set)`, { baseNym }));
                         }
                     } catch (_) {
-                        this.displaySystemMessage(`Failed to check if @${baseNym} can receive zaps`);
+                        this.displaySystemMessage(this.uiText(`Failed to check if @{baseNym} can receive zaps`, { baseNym }));
                     }
                 }
             },
@@ -3657,6 +3667,11 @@ Object.assign(NYM.prototype, {
         if (!container) return;
         const previousKey = container.dataset.lastChannel;
         if (!previousKey || container.children.length === 0) return;
+        if (this._chWinDetached(previousKey)) {
+            this.channelWindowEnd.delete(previousKey);
+            this.channelDOMCache.delete(previousKey);
+            return;
+        }
 
         // Track ids in DOM order to locate the cached slice on restore, robust to truncation and dedup.
         const renderedIds = [];
@@ -3879,11 +3894,12 @@ Object.assign(NYM.prototype, {
                 }
                 if (targetIdx >= 0) {
                     const targetMsg = store[targetIdx];
+                    if (!isPM && container.id === 'messagesContainer') this._chWinJumpTo(storageKey, targetMsg.id);
                     let safety = 60;
                     while (safety-- > 0) {
                         const currentStart = startMap.get(storageKey) || 0;
                         if (currentStart <= targetIdx) break;
-                        const advanced = isPM ? this.loadOlderPMMessages(storageKey) : this.loadOlderChannelMessages(storageKey);
+                        const advanced = isPM ? this.loadOlderPMMessages(storageKey, targetMsg.id) : this.loadOlderChannelMessages(storageKey, targetMsg.id);
                         if (!advanced) break;
                     }
                     // Resolve by id rather than the fuzzy scan, which could lose it to a mismatch.
@@ -4214,6 +4230,7 @@ Object.assign(NYM.prototype, {
     // isPM: uses pmMessages with conversationKey instead of messages with storageKey.
     renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false) {
         const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
+        if (!isPM && this.channelWindowEnd) this.channelWindowEnd.delete(storageKey);
 
         container.dataset.virtualScrollKey = storageKey;
         container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
@@ -4282,11 +4299,34 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    loadOlderChannelMessages(storageKey) {
+    _olderPageStart(messages, currentStart, size, targetId) {
+        let pages = 1;
+        if (targetId) {
+            for (let i = currentStart - 1; i >= 0; i--) {
+                const m = messages[i];
+                if (m && (m.id === targetId || m.nymMessageId === targetId)) {
+                    pages = Math.max(1, Math.ceil((currentStart - i) / size));
+                    break;
+                }
+            }
+        }
+        return Math.max(0, currentStart - pages * size);
+    },
+
+    _bulkDomIdSet() {
+        return new Set(Array.from(document.querySelectorAll('[data-message-id]'), (el) => el.dataset.messageId));
+    },
+
+    loadOlderChannelMessages(storageKey, targetId) {
         if (this.activeThread) return false;
         const container = this._cvLoadCtx?.container || document.getElementById('messagesContainer');
         const scroller = this._cvLoadCtx?.scroller || this._getMessagesScroller();
         if (!container || !scroller) return false;
+        const windowed = !this._cvLoadCtx && container.id === 'messagesContainer';
+        if (windowed && targetId) {
+            const jumped = this._chWinJumpTo(storageKey, targetId);
+            if (jumped !== null) return jumped;
+        }
 
         const currentStart = this.channelRenderedStart.get(storageKey);
         if (currentStart === undefined || currentStart <= 0) return false;
@@ -4294,7 +4334,7 @@ Object.assign(NYM.prototype, {
         const messages = this.getFilteredMessages(storageKey);
         if (messages.length === 0) return false;
 
-        const newStart = Math.max(0, currentStart - this.channelLoadMoreSize);
+        const newStart = this._olderPageStart(messages, currentStart, this.channelLoadMoreSize, targetId);
         if (newStart === currentStart) return false;
 
         this.channelRenderedStart.set(storageKey, newStart);
@@ -4302,12 +4342,15 @@ Object.assign(NYM.prototype, {
 
         const olderMessages = messages.slice(newStart, currentStart);
         const scrollTopBefore = scroller.scrollTop;
+        const anchor = windowed ? this._chWinAnchor(container, scroller) : null;
+        if (windowed) this._chWinHold(scroller);
 
         this.virtualScroll.suppressAutoScroll = true;
         this._suppressSound = true;
         this._suppressBubbleRewrap = true;
         const frag = document.createDocumentFragment();
         this._bulkContainer = frag;
+        this._bulkDomIds = this._bulkDomIdSet();
         this._bulkAppending = true;
 
         for (let i = 0; i < olderMessages.length; i++) {
@@ -4315,6 +4358,7 @@ Object.assign(NYM.prototype, {
         }
 
         this._bulkAppending = false;
+        this._bulkDomIds = null;
         this._bulkContainer = null;
         this._suppressSound = false;
         this._suppressBubbleRewrap = false;
@@ -4329,7 +4373,15 @@ Object.assign(NYM.prototype, {
             container.insertBefore(notice, container.firstChild);
         }
 
-        this._recomputeAllBubbleGrouping(container);
+        if (windowed) this._chWinTrim(storageKey, container, true);
+
+        if (!this._olderRegroupLater) this._recomputeAllBubbleGrouping(container);
+
+        if (windowed) {
+            this._chWinRestore(scroller, anchor);
+            requestAnimationFrame(() => this._chWinRestore(scroller, anchor));
+            return true;
+        }
 
         scroller.scrollTop = scrollTopBefore;
         requestAnimationFrame(() => { scroller.scrollTop = scrollTopBefore; });
@@ -4337,9 +4389,204 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
+    _chWinHolds(key, message) {
+        if (message.isOwn) {
+            this.collapseChannelToLatest(key);
+            return true;
+        }
+        const list = this.messages.get(key) || [];
+        const end = this._chWinIndex(list, this.channelWindowEnd.get(key));
+        if (end >= 0 && this._compareMessages(message, list[end]) < 0) return false;
+        if (!this._suppressSound && !message.isHistorical && !message.isBot && this.settings.sound && this.isMentioned(message.content)) {
+            this.playSound(this.settings.sound);
+        }
+        return true;
+    },
+
+    _chWinIndex(messages, id) {
+        if (!id) return -1;
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m && (m.id === id || m.nymMessageId === id)) return i;
+        }
+        return -1;
+    },
+
+    _chWinDetached(key) {
+        return !!(key && this.channelWindowEnd && this.channelWindowEnd.has(key));
+    },
+
+    _chWinAnchor(container, scroller) {
+        if (!container || !scroller) return null;
+        const top = scroller.getBoundingClientRect().top;
+        for (const el of container.querySelectorAll('.message[data-message-id]')) {
+            const r = el.getBoundingClientRect();
+            if (r.bottom > top) return { el, top: r.top };
+        }
+        return null;
+    },
+
+    _chWinHold(scroller) {
+        if (scroller._cnKeep) return;
+        scroller.style.overflowAnchor = 'none';
+        const token = this._chWinHoldToken = (this._chWinHoldToken || 0) + 1;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            if (this._chWinHoldToken === token) scroller.style.overflowAnchor = '';
+        }));
+    },
+
+    _chWinRestore(scroller, anchor) {
+        if (!scroller || !anchor || scroller._cnKeep || !anchor.el.isConnected) return;
+        const delta = anchor.el.getBoundingClientRect().top - anchor.top;
+        if (Math.abs(delta) >= 1) scroller.scrollTop += delta;
+    },
+
+    _chWinPrune(container, fromEnd, count) {
+        const rows = container.querySelectorAll('.message[data-message-id]');
+        const n = Math.min(count, rows.length);
+        for (let i = 0; i < n; i++) {
+            const el = rows[fromEnd ? rows.length - 1 - i : i];
+            const prev = el.previousElementSibling;
+            if (prev && prev.classList.contains('cn-divider')) prev.remove();
+            const stack = el.parentElement;
+            this._revokeNodeBlobs(el);
+            el.remove();
+            if (stack && stack !== container && !stack.querySelector('.message')) {
+                const group = stack.closest('.message-group');
+                const shell = group && group.parentElement === container ? group : stack;
+                const before = shell.previousElementSibling;
+                if (before && before.classList.contains('cn-divider')) before.remove();
+                if (shell.parentElement === container) shell.remove();
+            }
+        }
+        let edge = fromEnd ? container.lastElementChild : container.firstElementChild;
+        while (edge && !edge.matches('.message[data-message-id]') && !edge.querySelector('.message[data-message-id]')) {
+            const next = fromEnd ? edge.previousElementSibling : edge.nextElementSibling;
+            if (edge.matches('.day-separator, .cn-divider, .channel-history-limit')) edge.remove();
+            edge = next;
+        }
+    },
+
+    _chWinTrim(key, container, fromEnd) {
+        const over = container.querySelectorAll('.message[data-message-id]').length - (this.channelWindowSize || 150);
+        if (over <= 0) return false;
+        this._chWinPrune(container, fromEnd, over);
+        const rows = container.querySelectorAll('.message[data-message-id]');
+        if (!rows.length) return true;
+        if (fromEnd) {
+            this.channelWindowEnd.set(key, rows[rows.length - 1].dataset.messageId);
+            this.userScrolledUp = true;
+        } else {
+            const at = this._chWinIndex(this.getFilteredMessages(key), rows[0].dataset.messageId);
+            if (at >= 0) this.channelRenderedStart.set(key, at);
+            this._settleBubbleHeadAfterPrune(container, rows[0]);
+        }
+        this.channelDOMCache.delete(key);
+        return true;
+    },
+
+    _chWinFill(container, list) {
+        this.virtualScroll.suppressAutoScroll = true;
+        this._suppressSound = true;
+        this._suppressBubbleRewrap = true;
+        this._bulkAppending = true;
+        try {
+            for (let i = 0; i < list.length; i++) this.displayMessage(list[i]);
+        } finally {
+            this._bulkAppending = false;
+            this._suppressSound = false;
+            this._suppressBubbleRewrap = false;
+            this.virtualScroll.suppressAutoScroll = false;
+        }
+    },
+
+    _chWinDivider(key) {
+        if (typeof this._cnEntries !== 'function' || typeof this._cnPlaceDivider !== 'function') return;
+        const entry = this._cnEntries().get(key);
+        const container = document.getElementById('messagesContainer');
+        if (!entry || !entry.info || !entry.placed || !container || container.querySelector('.cn-divider')) return;
+        if (!container.querySelector('.message' + this._cnSelector(entry.info.id))) return;
+        this._cnPlaceDivider(key);
+    },
+
+    _chWinJumpTo(key, targetId) {
+        const container = document.getElementById('messagesContainer');
+        if (!container || this.inPMMode || container.dataset.virtualScrollKey !== key) return null;
+        const messages = this.getFilteredMessages(key);
+        const ti = this._chWinIndex(messages, targetId);
+        if (ti < 0) return null;
+        const start = this.channelRenderedStart.get(key) || 0;
+        const end = this._chWinDetached(key) ? this._chWinIndex(messages, this.channelWindowEnd.get(key)) : messages.length - 1;
+        if (end >= 0 && ti <= end && ti >= start - (this.channelLoadMoreSize || 50)) return null;
+        const half = this.channelPageSize || 50;
+        const from = Math.max(0, ti - half);
+        const to = Math.min(messages.length, ti + half);
+        this._chWinRender(key, container, messages, from, to);
+        const scroller = this._getMessagesScroller();
+        const row = container.querySelector('.message' + this._cnSelector(messages[ti].id));
+        if (scroller && row) {
+            const v = scroller.getBoundingClientRect();
+            const r = row.getBoundingClientRect();
+            scroller.scrollTop += r.top - (v.top + Math.max(0, (v.height - r.height) / 2));
+        }
+        return true;
+    },
+
+    _chWinRender(key, container, messages, from, to) {
+        container.querySelectorAll('[data-message-id]').forEach((el) => this._revokeNodeBlobs(el));
+        container.innerHTML = '';
+        this.channelDOMCache.delete(key);
+        this.channelRenderedStart.set(key, from);
+        if (to < messages.length) this.channelWindowEnd.set(key, messages[to - 1].id);
+        else this.channelWindowEnd.delete(key);
+        this._chWinFill(container, messages.slice(from, to));
+        if (from === 0) {
+            const notice = document.createElement('div');
+            notice.className = 'system-message channel-history-limit';
+            notice.textContent = 'You\'ve reached the edge of this channel\'s history.';
+            container.insertBefore(notice, container.firstChild);
+        }
+        this._applyDirectHistoryNote(container);
+        this._recomputeAllBubbleGrouping(container);
+        if (to < messages.length) this.userScrolledUp = true;
+    },
+
+    loadNewerChannelMessages(storageKey) {
+        if (this.activeThread || this.inPMMode || this._cvActive || !this._chWinDetached(storageKey)) return false;
+        const container = document.getElementById('messagesContainer');
+        const scroller = this._getMessagesScroller();
+        if (!container || !scroller || container.dataset.virtualScrollKey !== storageKey) return false;
+        const messages = this.getFilteredMessages(storageKey);
+        const end = this._chWinIndex(messages, this.channelWindowEnd.get(storageKey));
+        if (end < 0) {
+            this.channelWindowEnd.delete(storageKey);
+            this.renderMessagesWithVirtualScroll(container, storageKey, true);
+            return true;
+        }
+        const next = messages.slice(end + 1, end + 1 + (this.channelLoadMoreSize || 50));
+        const anchor = this._chWinAnchor(container, scroller);
+        this._chWinHold(scroller);
+        this._chWinFill(container, next);
+        if (end + next.length >= messages.length - 1) this.channelWindowEnd.delete(storageKey);
+        else this.channelWindowEnd.set(storageKey, messages[end + next.length].id);
+        this._chWinTrim(storageKey, container, false);
+        this._recomputeAllBubbleGrouping(container);
+        this._chWinRestore(scroller, anchor);
+        requestAnimationFrame(() => this._chWinRestore(scroller, anchor));
+        this._chWinDivider(storageKey);
+        this.channelDOMCache.delete(storageKey);
+        return true;
+    },
+
     collapseChannelToLatest(storageKey) {
         const container = document.getElementById('messagesContainer');
         if (!container) return false;
+        if (this._chWinDetached(storageKey)) {
+            this.channelWindowEnd.delete(storageKey);
+            if (container.dataset.virtualScrollKey !== storageKey) return false;
+            this.renderMessagesWithVirtualScroll(container, storageKey, true);
+            return true;
+        }
         const msgEls = container.querySelectorAll('.message');
         const excess = msgEls.length - this.channelPageSize;
         if (excess <= 0) return false;

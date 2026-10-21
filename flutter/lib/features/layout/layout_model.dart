@@ -194,10 +194,20 @@ String notifGroupKey(String type, String route, String sender) {
   return peer.isNotEmpty ? 'pm:${peer.toLowerCase()}' : 'other';
 }
 
-List<({String key, List<int> items})> groupNotifications(List<String> keys) {
+List<({String key, List<int> items})> groupNotifications(List<String> keys,
+    [List<num>? activity]) {
+  final idx = [for (var i = 0; i < keys.length; i++) i];
+  if (activity != null) {
+    num t(int i) =>
+        i < activity.length && activity[i].isFinite ? activity[i] : 0;
+    idx.sort((p, q) {
+      final d = t(q).compareTo(t(p));
+      return d != 0 ? d : p.compareTo(q);
+    });
+  }
   final order = <({String key, List<int> items})>[];
   final at = <String, int>{};
-  for (var i = 0; i < keys.length; i++) {
+  for (final i in idx) {
     final k = keys[i];
     final idx = at.putIfAbsent(k, () {
       order.add((key: k, items: <int>[]));

@@ -114,6 +114,10 @@ class _NymAvatarState extends State<NymAvatar> {
               height: widget.size,
               fit: BoxFit.cover,
               gaplessPlayback: true,
+              cacheWidth: (widget.size *
+                      MediaQuery.devicePixelRatioOf(context) *
+                      1.5)
+                  .ceil(),
               errorBuilder: (_, _, _) => fallback,
             ),
           );

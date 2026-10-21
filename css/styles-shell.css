@@ -2003,6 +2003,11 @@ header.chat-header .uh-mid {
 .uh-mid.uh-clickable:hover .uh-info {
     color: var(--primary);
 }
+@media (max-width: 360px) {
+    .uh-mid.uh-clickable .uh-info {
+        display: none;
+    }
+}
 
 .uh-sub {
     display: block;
@@ -2073,6 +2078,18 @@ header.chat-header .mobile-header-actions > button:focus-visible,
 
 header.chat-header .uh-phone-menu {
     display: none;
+}
+
+header.chat-header .uh-phone-back[hidden] {
+    display: none;
+}
+
+header.chat-header.uh-back-off .uh-phone-back {
+    display: none;
+}
+
+header.chat-header .uh-left > .uh-phone-back {
+    margin-left: calc(var(--uh-gap, 2px) - 2px);
 }
 
 header.chat-header .uh-actions > button:disabled {

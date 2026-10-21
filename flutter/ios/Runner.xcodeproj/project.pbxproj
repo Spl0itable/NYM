@@ -19,6 +19,9 @@
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		A1C0DE0000000000000A7751 /* AppAttest.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0DE0000000000000A7752 /* AppAttest.swift */; };
 		B7C0DE0000000000000A7761 /* PasskeyBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C0DE0000000000000A7762 /* PasskeyBackup.swift */; };
+		5A4E0C0DE000000000000001 /* QrScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4E0C0DE000000000000002 /* QrScanner.swift */; };
+		5A4E0C0DE000000000000003 /* NearbyShare.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4E0C0DE000000000000004 /* NearbyShare.swift */; };
+		5A4E0C0DE000000000000005 /* NfcShare.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4E0C0DE000000000000006 /* NfcShare.swift */; };
 		C4C0DE0000000000000A7771 /* CloudKitBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4C0DE0000000000000A7772 /* CloudKitBackup.swift */; };
 /* End PBXBuildFile section */
 
@@ -80,8 +83,11 @@
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1C0DE0000000000000A7752 /* AppAttest.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppAttest.swift; sourceTree = "<group>"; };
 		B7C0DE0000000000000A7762 /* PasskeyBackup.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PasskeyBackup.swift; sourceTree = "<group>"; };
-		C4C0DE0000000000000A7772 /* CloudKitBackup.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CloudKitBackup.swift; sourceTree = "<group>"; };
+		5A4E0C0DE000000000000002 /* QrScanner.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = QrScanner.swift; sourceTree = "<group>"; };
+		5A4E0C0DE000000000000004 /* NearbyShare.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = NearbyShare.swift; sourceTree = "<group>"; };
+		5A4E0C0DE000000000000006 /* NfcShare.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = NfcShare.swift; sourceTree = "<group>"; };
 		C13A6157D02C0161EC90756F /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
+		C4C0DE0000000000000A7772 /* CloudKitBackup.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CloudKitBackup.swift; sourceTree = "<group>"; };
 		F4271BE05C7DF7EA2A3F7094 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -171,6 +177,9 @@
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				A1C0DE0000000000000A7752 /* AppAttest.swift */,
 				B7C0DE0000000000000A7762 /* PasskeyBackup.swift */,
+				5A4E0C0DE000000000000002 /* QrScanner.swift */,
+				5A4E0C0DE000000000000004 /* NearbyShare.swift */,
+				5A4E0C0DE000000000000006 /* NfcShare.swift */,
 				C4C0DE0000000000000A7772 /* CloudKitBackup.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
@@ -188,46 +197,48 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-97C146ED1CF9000F007C117D /* Runner */ = {
-isa = PBXNativeTarget;
-buildConfigurationList = 97C147051CF9000F007C117D /* Build configuration list for PBXNativeTarget "Runner" */;
-buildPhases = (
-9740EEB61CF901F6004384FC /* Run Script */,
-97C146EA1CF9000F007C117D /* Sources */,
-97C146EB1CF9000F007C117D /* Frameworks */,
-97C146EC1CF9000F007C117D /* Resources */,
-9705A1C41CF9048500538489 /* Embed Frameworks */,
-5E4A0E0000000000000A8817 /* Embed Foundation Extensions */,
-3B06AD1E1E4923F5004D2608 /* Thin Binary */,
-5E4A0E0000000000000A8830 /* WebRTC dSYM */,
-);
-buildRules = (
-);
-dependencies = (
-5E4A0E0000000000000A8819 /* PBXTargetDependency */,
-);
-name = Runner;
-productName = Runner;
-productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
-productType = "com.apple.product-type.application";
-};
-5E4A0E0000000000000A8812 /* ShareExtension */ = {
-isa = PBXNativeTarget;
-buildConfigurationList = 5E4A0E0000000000000A8813 /* Build configuration list for PBXNativeTarget "ShareExtension" */;
-buildPhases = (
-5E4A0E0000000000000A8809 /* Sources */,
-5E4A0E0000000000000A8810 /* Frameworks */,
-5E4A0E0000000000000A8811 /* Resources */,
-);
-buildRules = (
-);
-dependencies = (
-);
-name = ShareExtension;
-productName = ShareExtension;
-productReference = 5E4A0E0000000000000A8801 /* ShareExtension.appex */;
-productType = "com.apple.product-type.app-extension";
-};
+		5E4A0E0000000000000A8812 /* ShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5E4A0E0000000000000A8813 /* Build configuration list for PBXNativeTarget "ShareExtension" */;
+			buildPhases = (
+				5E4A0E0000000000000A8809 /* Sources */,
+				5E4A0E0000000000000A8810 /* Frameworks */,
+				5E4A0E0000000000000A8811 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ShareExtension;
+			productName = ShareExtension;
+			productReference = 5E4A0E0000000000000A8801 /* ShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		97C146ED1CF9000F007C117D /* Runner */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 97C147051CF9000F007C117D /* Build configuration list for PBXNativeTarget "Runner" */;
+			buildPhases = (
+				AF5170344B03E42E9FE23B01 /* [CP] Check Pods Manifest.lock */,
+				9740EEB61CF901F6004384FC /* Run Script */,
+				97C146EA1CF9000F007C117D /* Sources */,
+				97C146EB1CF9000F007C117D /* Frameworks */,
+				97C146EC1CF9000F007C117D /* Resources */,
+				9705A1C41CF9048500538489 /* Embed Frameworks */,
+				5E4A0E0000000000000A8817 /* Embed Foundation Extensions */,
+				3B06AD1E1E4923F5004D2608 /* Thin Binary */,
+				5E4A0E0000000000000A8830 /* WebRTC dSYM */,
+				6D82AB586EDC8B54D51F3DC0 /* [CP] Embed Pods Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				5E4A0E0000000000000A8819 /* PBXTargetDependency */,
+			);
+			name = Runner;
+			productName = Runner;
+			productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -256,7 +267,7 @@ productType = "com.apple.product-type.app-extension";
 			);
 			mainGroup = 97C146E51CF9000F007C117D;
 			packageReferences = (
-				781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage" */,
+				781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "FlutterGeneratedPluginSwiftPackage" */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
 			projectDirPath = "";
@@ -290,51 +301,90 @@ productType = "com.apple.product-type.app-extension";
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-3B06AD1E1E4923F5004D2608 /* Thin Binary */ = {
-isa = PBXShellScriptBuildPhase;
-alwaysOutOfDate = 1;
-buildActionMask = 2147483647;
-files = (
-);
-inputPaths = (
-);
-name = "Thin Binary";
-outputPaths = (
-);
-runOnlyForDeploymentPostprocessing = 0;
-shellPath = /bin/sh;
-shellScript = "/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" embed_and_thin";
-};
-9740EEB61CF901F6004384FC /* Run Script */ = {
-isa = PBXShellScriptBuildPhase;
-alwaysOutOfDate = 1;
-buildActionMask = 2147483647;
-files = (
-);
-inputPaths = (
-);
-name = "Run Script";
-outputPaths = (
-);
-runOnlyForDeploymentPostprocessing = 0;
-shellPath = /bin/sh;
-shellScript = "/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" build";
-};
-5E4A0E0000000000000A8830 /* WebRTC dSYM */ = {
-isa = PBXShellScriptBuildPhase;
-alwaysOutOfDate = 1;
-buildActionMask = 2147483647;
-files = (
-);
-inputPaths = (
-);
-name = "WebRTC dSYM";
-outputPaths = (
-);
-runOnlyForDeploymentPostprocessing = 0;
-shellPath = /bin/sh;
-shellScript = "if [ \"${CONFIGURATION}\" = \"Debug\" ]; then exit 0; fi\nsrc=$(find \"${PODS_XCFRAMEWORKS_BUILD_DIR}\" \"${BUILT_PRODUCTS_DIR}\" -path \"*/WebRTC.framework/WebRTC\" -type f 2>/dev/null | head -n 1)\nif [ -z \"${src}\" ]; then exit 0; fi\nmkdir -p \"${DWARF_DSYM_FOLDER_PATH}\"\nxcrun dsymutil \"${src}\" -o \"${DWARF_DSYM_FOLDER_PATH}/WebRTC.framework.dSYM\" || true\n";
-};
+		3B06AD1E1E4923F5004D2608 /* Thin Binary */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Thin Binary";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" embed_and_thin";
+		};
+		5E4A0E0000000000000A8830 /* WebRTC dSYM */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "WebRTC dSYM";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"${CONFIGURATION}\" = \"Debug\" ]; then exit 0; fi\nsrc=$(find \"${PODS_XCFRAMEWORKS_BUILD_DIR}\" \"${BUILT_PRODUCTS_DIR}\" -path \"*/WebRTC.framework/WebRTC\" -type f 2>/dev/null | head -n 1)\nif [ -z \"${src}\" ]; then exit 0; fi\nmkdir -p \"${DWARF_DSYM_FOLDER_PATH}\"\nxcrun dsymutil \"${src}\" -o \"${DWARF_DSYM_FOLDER_PATH}/WebRTC.framework.dSYM\" || true\n";
+		};
+		6D82AB586EDC8B54D51F3DC0 /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		9740EEB61CF901F6004384FC /* Run Script */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Run Script";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" build";
+		};
+		AF5170344B03E42E9FE23B01 /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-Runner-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -353,6 +403,9 @@ shellScript = "if [ \"${CONFIGURATION}\" = \"Debug\" ]; then exit 0; fi\nsrc=$(f
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				A1C0DE0000000000000A7751 /* AppAttest.swift in Sources */,
 				B7C0DE0000000000000A7761 /* PasskeyBackup.swift in Sources */,
+				5A4E0C0DE000000000000001 /* QrScanner.swift in Sources */,
+				5A4E0C0DE000000000000003 /* NearbyShare.swift in Sources */,
+				5A4E0C0DE000000000000005 /* NfcShare.swift in Sources */,
 				C4C0DE0000000000000A7771 /* CloudKitBackup.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);
@@ -735,7 +788,7 @@ shellScript = "if [ \"${CONFIGURATION}\" = \"Debug\" ]; then exit 0; fi\nsrc=$(f
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage" */ = {
+		781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "FlutterGeneratedPluginSwiftPackage" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage;
 		};

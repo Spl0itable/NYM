@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState, WidgetsBinding;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/crypto/bech32_codec.dart' as bech32;
@@ -25,6 +26,8 @@ import '../core/utils/nym_utils.dart';
 import '../features/ai_consent/ai_consent.dart';
 import '../features/away/away_status.dart';
 import '../features/away/away_sync.dart';
+import '../features/presence/geo_presence.dart';
+import '../features/presence/presence_activity.dart';
 import '../features/toasts/event_toast_center.dart';
 import '../features/toasts/event_toasts.dart';
 import '../features/toasts/event_toast_settings_store.dart';
@@ -75,6 +78,7 @@ import '../features/notifications/notify_view.dart';
 import '../services/attest/attest_service.dart';
 import '../features/composer/send_as_model.dart';
 import '../features/send_as/anon_lane.dart';
+import '../features/presence/nyms_online.dart';
 import '../features/send_as/send_as_service.dart';
 import '../features/send_as/send_as_transport.dart';
 import '../features/settings/settings_helpers.dart' show LandingChannel;
@@ -88,6 +92,7 @@ import '../features/nymbot/nymbot_threads.dart';
 import '../features/nymbot/anon_channel_bot.dart';
 import '../features/p2p/p2p_models.dart';
 import '../features/p2p/p2p_service.dart';
+import '../features/pms/last_seen.dart';
 import '../features/pms/pm_logic.dart';
 import '../features/pms/pm_support_tokens.dart';
 import '../features/pms/upload_activity.dart';
@@ -119,6 +124,7 @@ import '../features/chat_nav/chat_nav.dart';
 import '../features/chat_nav/chat_nav_service.dart';
 import '../features/chat_nav/chat_nav_providers.dart';
 import '../features/sync/pref_stamps.dart';
+import '../features/reactions/hover_actions.dart' show normalizeHoverActions;
 import '../features/sync/sync_rows.dart' show SyncRowMode;
 import '../features/sync/sync_merge.dart'
     show kStampedPrefs, prefApply, prefGate, prefRowStamp;
@@ -984,8 +990,7 @@ class NostrController {
       // The boot channel skips [switchChannel], so subscribe its typing/receipt feed here.
       _subscribeActiveChannelTyping();
 
-      // Presence is event-driven only (no heartbeat), so idle users decay to offline.
-      recordOwnActivity();
+      recordOwnActivity('connect');
 
       // Seed the sidebar with the common channels.
       discoverChannels();
@@ -1124,6 +1129,9 @@ class NostrController {
     final wasOffline = _ref.read(appStateProvider).connectedRelays == 0;
     _ref.read(appStateProvider.notifier).setConnectedRelays(count);
     final svc = _service;
+    _ref
+        .read(appStateProvider.notifier)
+        .setPoolLinked(svc?.relayLinked ?? false);
     if (svc != null) {
       _ref.read(appStateProvider.notifier).setProxyMode(svc.isProxyMode);
     }
@@ -1754,8 +1762,11 @@ class NostrController {
     _lastOnlineTrackingStarted = false;
     _keyResyncReplyMs.clear();
     _pendingGroupHistory.clear();
-    _lastPresenceBroadcast = 0;
+    _presenceGate.reset();
     _presenceTimestamps.clear();
+    _presenceStatuses.clear();
+    _stopGeoPresenceSend();
+    _stopAllAnonPresence();
     _typingThrottle.clear();
     for (final t in _typingStartTimers.values) {
       t.cancel();
@@ -2161,6 +2172,10 @@ class NostrController {
     // Ephemeral channel typing from the active channel's sub.
     if (event.kind == EventKind.channelTyping) {
       _onChannelTypingEvent(event, appState);
+      return;
+    }
+    if (event.kind == EventKind.geoPresence) {
+      _onGeoPresence(event);
       return;
     }
     // Ephemeral channel read receipt from the active channel's sub.
@@ -3621,6 +3636,7 @@ class NostrController {
     final lastTs = _presenceTimestamps[e.pubkey] ?? 0;
     if (e.createdAt < lastTs) return;
     _presenceTimestamps[e.pubkey] = e.createdAt;
+    _presenceStatuses[e.pubkey] = e.tagValue('status') ?? '';
 
     final statusStr = e.tagValue('status');
     final nym = e.tagValue('n');
@@ -3632,14 +3648,16 @@ class NostrController {
     if (hasShopUpdate) {
       _ref.read(otherUsersShopProvider.notifier).invalidate(e.pubkey);
     }
+    final activeMs = presenceActivityMs(statusStr, e.createdAt * 1000);
+    final known = _ref.read(appStateProvider).users.containsKey(e.pubkey);
+    if (!GeoPresence.listsFromPresence(known, statusStr)) return;
     _ref.read(appStateProvider.notifier).setUserPresence(
           pubkey: e.pubkey,
           status: userStatusFromString(statusStr),
           nym: nym,
           awayMessage: away,
-          // Presence isn't activity, so it must not stamp lastSeen.
-          lastSeenMs: e.createdAt * 1000,
-          stampLastSeen: false,
+          lastSeenMs: activeMs,
+          stampLastSeen: activeMs > 0,
           avatarUrl: avatar,
           hasAvatarTag: avatar != null,
         );
@@ -3650,6 +3668,7 @@ class NostrController {
 
   /// Newest presence timestamp per pubkey so older replays can't clobber newer ones.
   final Map<String, int> _presenceTimestamps = {};
+  final Map<String, String> _presenceStatuses = {};
 
   // Web of trust ("nym-vouch"), kind 30078 `['t','nym-vouches']`.
 
@@ -3703,6 +3722,14 @@ class NostrController {
         ..clear()
         ..addAll(keep);
     }
+  }
+
+  bool isOwnShareExcludedKey(String pubkey) {
+    final key = pubkey.toLowerCase();
+    if (key.isEmpty) return false;
+    return _isOwnOtherKey(key) ||
+        _isAnonBotPubkey(key) ||
+        (_groups?.allEphemeralPubkeys().contains(key) ?? false);
   }
 
   bool _isOwnOtherKey(String pubkey) {
@@ -4233,12 +4260,15 @@ class NostrController {
 
     final nym = _tagValue(tags, 'n');
     final away = _tagValue(tags, 'away');
+    final activeMs = presenceActivityMs(
+        status, ((rumor['created_at'] as num?)?.toInt() ?? 0) * 1000);
     appState.setUserPresence(
       pubkey: pubkey,
       status: userStatusFromString(status),
       nym: nym,
       awayMessage: status == 'away' ? away : null,
-      lastSeenMs: DateTime.now().millisecondsSinceEpoch,
+      lastSeenMs: activeMs,
+      stampLastSeen: activeMs > 0,
     );
     // Resolve the friend's profile so their avatar loads.
     _maybeBackfillProfiles(pubkey);
@@ -5272,12 +5302,18 @@ class NostrController {
             UploadActivity.expiryMs(info.ttlSec),
         activity: info.activity,
       );
+      appState.notePeerActivity(
+          info.pubkey!, ((rumor['created_at'] as num?)?.toInt() ?? 0) * 1000);
       return;
     }
     if (PmLogic.isReceipt(rumor)) {
       final info = PmLogic.parseReceipt(rumor);
       if (info != null) {
         appState.applyReceipt(info);
+        if (info.receiptType == 'read') {
+          appState.notePeerActivity(rumor['pubkey'] as String? ?? '',
+              ((rumor['created_at'] as num?)?.toInt() ?? 0) * 1000);
+        }
         // A receipt acks the PM, so drop it from the retry queue.
         _pendingDms.remove(info.messageId);
       }
@@ -5337,6 +5373,7 @@ class NostrController {
     // The reacted message's author; group reactions also carry `g` for routing.
     final targetAuthor = _tagValue(tags, 'p') ?? '';
     final groupId = _tagValue(tags, 'g');
+    if (groupId == null) appState.notePeerActivity(pubkey, ts * 1000);
     if (groupId != null) {
       final group = appState.groupById(groupId);
       if (group == null || !GroupLogic.isMember(group, pubkey)) return;
@@ -5717,6 +5754,7 @@ class NostrController {
   }
 
   void _closeAnonLanes() {
+    _stopAllAnonPresence();
     final lanes = _anonLanes.toList();
     _anonLanes.clear();
     for (final lane in lanes) {
@@ -5729,7 +5767,6 @@ class NostrController {
     if (text.isNotEmpty) showToast(tr(text));
   }
 
-  /// Publishes one pseudonymous channel message; never records presence, which would link it to the user.
   Future<({String nym, String pubkey})?> _sendChannelPseudonymous(
       String content, AnonLane lane) async {
     final appState = _ref.read(appStateProvider.notifier);
@@ -5793,6 +5830,7 @@ class NostrController {
           return null;
         }
       }
+      _startAnonPresence(view, ephemeralSigner);
       return (nym: anonNym, pubkey: ephemeralSigner.pubkey);
     } catch (_) {
       if (echo != null) appState.markOptimisticFailed(echo.id);
@@ -6053,12 +6091,7 @@ class NostrController {
 
   Future<void> _afterSendAs(SendAsSender sender, _SendAsRetry job) async {
     final svc = sendAsService;
-    try {
-      await svc.presence(sender);
-    } catch (_) {
-    } finally {
-      sender.wipe();
-    }
+    sender.wipe();
     final request = job.request;
     if (request == null) return;
     final storageKey = job.view.storageKey;
@@ -8615,7 +8648,7 @@ class NostrController {
     final now = DateTime.now().millisecondsSinceEpoch;
     final names = state.users.values
         .where((u) => u.channels.contains(key))
-        .where((u) => now - u.lastSeen < kActiveThresholdMs)
+        .where((u) => lastSeenIsActive(u.lastSeen, now))
         .where((u) =>
             u.pubkey == state.selfPubkey ||
             !state.isPersonHidden(u.pubkey, u.nym))
@@ -10244,6 +10277,12 @@ class NostrController {
     final identity = _identity;
     final view = state.view;
 
+    if (view.kind == ViewKind.pm && anonSuppressSendTo(view.id)) {
+      _emitSystemMessage(tr(
+          'Editing is off in the anonymous Nymbot chat — an edit would be signed by your real key. Send a new message instead.'));
+      return false;
+    }
+
     // Local rewrite first (optimistic).
     appState.applyLocalEdit(messageId, trimmed);
     _markDirty(view.storageKey);
@@ -10408,10 +10447,420 @@ class NostrController {
 
   // Presence / typing / receipts.
 
-  /// Last public presence broadcast (ms), throttled to ≤1/60s.
-  int _lastPresenceBroadcast = 0;
+  late final PresenceActivityGate _presenceGate = PresenceActivityGate(
+    clock: () => DateTime.now().millisecondsSinceEpoch,
+    foreground: _presenceForeground,
+    mode: () => _statusMode.name,
+    away: () => _away.isAway,
+    hasIdentity: () => _identity != null,
+    connected: () =>
+        _service != null &&
+        _ref.read(appStateProvider).connectedRelays > 0,
+    publish: () => unawaited(publishPresence('online')),
+    publishFriends: () => unawaited(_sendFriendPresence('online')),
+  );
 
-  static const int _presenceBroadcastThrottleMs = 60000;
+  bool _presenceForeground() {
+    try {
+      final s = WidgetsBinding.instance.lifecycleState;
+      if (s != null) return s == AppLifecycleState.resumed;
+    } catch (_) {}
+    return _appInForeground;
+  }
+
+  void notePresenceActivity(String kind) {
+    _presenceGate.note(kind);
+    _syncGeoPresenceSend();
+  }
+
+  final Random _geoPresenceRng = Random.secure();
+  Timer? _geoPresenceTimer;
+  String? _geoPresenceSending;
+  ProviderSubscription<ChatView>? _geoPresenceViewSub;
+
+  int _geoPresenceLastAt = 0;
+  int _geoPresenceNextAt = 0;
+  ProviderSubscription<String>? _presenceSettingsSub;
+  final Map<String, _AnonPresence> _anonPresence = {};
+  final Set<_AnonPresence> _anonPresenceLive = {};
+
+  @visibleForTesting
+  Future<void> Function(NostrEvent event)? anonPresencePublishForTest;
+
+  ({String type, String id})? _presenceChannelOf(
+      ChatView view, AppState state) {
+    if (view.kind != ViewKind.channel) return null;
+    final key = view.id.toLowerCase();
+    for (final c in state.channels) {
+      if (c.key != key) continue;
+      if (GeoPresence.isGeohash(key)) return (type: 'geohash', id: key);
+      if (!c.isGeohash && GeoPresence.isChannelName(key)) {
+        return (type: 'named', id: key);
+      }
+      return null;
+    }
+    return null;
+  }
+
+  ({String type, String id})? _presenceChannel(AppState state) =>
+      _presenceChannelOf(state.view, state);
+
+  int _channelPresenceCount(AppState state, ({String type, String id})? ch) {
+    if (ch == null || ch.type != 'named') return 0;
+    return channelOnlineNymsCount(state.users.values, ch.id,
+        nowMs: DateTime.now().millisecondsSinceEpoch,
+        selfPubkey: state.selfPubkey,
+        isPersonHidden: (u) => state.isPersonHidden(u.pubkey, u.nym));
+  }
+
+  bool _geoPresenceRotatingKey() {
+    final id = _identity;
+    if (id == null || id.loginMethod != null) return false;
+    return _ref.read(settingsProvider.notifier).keypairMode == 'hardcore';
+  }
+
+  @visibleForTesting
+  GeoPresenceSendPlan geoPresencePlanForTest() =>
+      GeoPresence.sendPlan(_geoPresenceInput(_ref.read(appStateProvider)));
+
+  GeoPresenceSendInput _geoPresenceInput(AppState state,
+      [({String type, String id})? target]) {
+    final cur = _presenceChannel(state);
+    final ch = target ?? cur;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final fg = _presenceForeground();
+    final last = _presenceGate.lastInputMs;
+    final since = now - last;
+    final mode = _statusMode;
+    final status = _away.isAway
+        ? 'away'
+        : mode == PresenceStatusMode.enabled
+            ? 'online'
+            : mode == PresenceStatusMode.friends
+                ? 'friends'
+                : 'hidden';
+    bool mesh = false;
+    try {
+      if (ch != null && _ref.exists(meshControllerProvider)) {
+        mesh = _ref
+                .read(meshControllerProvider.notifier)
+                .bridge
+                ?.shouldSendOverMesh(ChatView.channel(ch.id)) ??
+            false;
+      }
+    } catch (_) {}
+    return GeoPresenceSendInput(
+      type: ch?.type ?? 'none',
+      geohash: ch != null && ch.type == 'geohash' ? ch.id : null,
+      name: ch != null && ch.type == 'named' ? ch.id : null,
+      onScreen: ch != null && cur == ch,
+      foreground: fg,
+      focused: fg,
+      idle: last <= 0 || since < 0 || since >= PresenceActivity.idleMs,
+      presence: _identity != null && mode != PresenceStatusMode.disabled,
+      status: status,
+      connected: _service != null && state.connectedRelays > 0,
+      meshOnly: mesh,
+      locked: false,
+      rotatingKey: _geoPresenceRotatingKey(),
+      showInCounts: _ref.read(settingsProvider).channelCounts,
+    );
+  }
+
+  String? _geoPresenceSendKey(AppState state) {
+    final ch = _presenceChannel(state);
+    final pk = _service?.selfPubkey ?? _identity?.pubkey;
+    if (ch == null || pk == null || pk.isEmpty) return null;
+    return '${ch.type}:${ch.id}|$pk';
+  }
+
+  void _syncGeoPresence() {
+    final state = _ref.read(appStateProvider);
+    final ch = _presenceChannel(state);
+    final service = _service;
+    if (ch == null) {
+      if (service?.channelPresenceSubscribedKey != null) {
+        service?.closeGeoPresence();
+      }
+      _ref.read(appStateProvider.notifier).clearGeoPresence();
+    } else if (service?.channelPresenceSubscribedKey != '${ch.type}:${ch.id}') {
+      _ref.read(appStateProvider.notifier).clearGeoPresence();
+      service?.subscribeChannelPresence(ch.type, ch.id);
+    }
+    _syncGeoPresenceSend();
+  }
+
+  void _syncGeoPresenceSend() {
+    _syncAnonPresence();
+    final state = _ref.read(appStateProvider);
+    final plan = GeoPresence.sendPlan(_geoPresenceInput(state));
+    final key = _geoPresenceSendKey(state);
+    if (!plan.send || key == null) {
+      _stopGeoPresenceSend();
+      return;
+    }
+    if (_geoPresenceTimer != null && _geoPresenceSending == key) return;
+    _stopGeoPresenceSend();
+    _geoPresenceSending = key;
+    _scheduleGeoPresence('first');
+  }
+
+  void _scheduleGeoPresence(String phase, [int atMs = 0]) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final state = _ref.read(appStateProvider);
+    final ch = _presenceChannel(state);
+    final ms = atMs > 0
+        ? (atMs > now ? atMs - now : 0)
+        : phase == 'loop'
+            ? GeoPresence.loopMs(ch?.type ?? 'geohash',
+                _channelPresenceCount(state, ch), _geoPresenceRng.nextDouble())
+            : GeoPresence.delayMs(phase, _geoPresenceRng.nextDouble());
+    _geoPresenceNextAt = now + ms;
+    _geoPresenceTimer = Timer(Duration(milliseconds: ms), () {
+      unawaited(_fireGeoPresence());
+    });
+  }
+
+  List<int> _anonPresenceTimes() => [
+        for (final e in _anonPresenceLive) ...[
+          if (e.lastAt > 0) e.lastAt,
+          if (e.nextAt > 0) e.nextAt,
+        ],
+      ];
+
+  Future<void> _fireGeoPresence() async {
+    _geoPresenceTimer = null;
+    _geoPresenceNextAt = 0;
+    final state = _ref.read(appStateProvider);
+    final plan = GeoPresence.sendPlan(_geoPresenceInput(state));
+    final key = _geoPresenceSendKey(state);
+    final ch = _presenceChannel(state);
+    if (!plan.send || key == null || ch == null || key != _geoPresenceSending) {
+      _stopGeoPresenceSend();
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final at = GeoPresence.spacedAtMs(now, _anonPresenceTimes());
+    if (at > now) {
+      _scheduleGeoPresence('loop', at);
+      return;
+    }
+    _geoPresenceLastAt = now;
+    _scheduleGeoPresence('loop');
+    try {
+      await _service?.publishChannelPresence(ch.type, ch.id,
+          beforeSend: () => _identityPresenceSpaced(key));
+    } catch (_) {}
+  }
+
+  Future<bool> _identityPresenceSpaced(String key) async {
+    final signedAt = DateTime.now().millisecondsSinceEpoch;
+    final sendAt = GeoPresence.spacedAtMs(signedAt, _anonPresenceTimes());
+    _geoPresenceLastAt = sendAt;
+    if (sendAt > signedAt) {
+      await Future<void>.delayed(Duration(milliseconds: sendAt - signedAt));
+    }
+    return _geoPresenceSendKey(_ref.read(appStateProvider)) == key;
+  }
+
+  @visibleForTesting
+  Future<int> identityPresenceSpacedForTest() async {
+    await _identityPresenceSpaced('');
+    return _geoPresenceLastAt;
+  }
+
+  void _stopGeoPresenceSend() {
+    _geoPresenceTimer?.cancel();
+    _geoPresenceTimer = null;
+    _geoPresenceNextAt = 0;
+    _geoPresenceSending = null;
+  }
+
+  void _startAnonPresence(ChatView view, LocalSigner signer) {
+    final state = _ref.read(appStateProvider);
+    final ch = _presenceChannelOf(view, state);
+    final owner = _service?.selfPubkey ?? _identity?.pubkey;
+    if (ch == null || owner == null || owner.isEmpty) return;
+    final e = _AnonPresence('${ch.type}:${ch.id}', ch.type, ch.id, signer,
+        owner, _openAnonLane(), _channelPresenceCount(state, ch));
+    _anonPresence[e.key] = e;
+    _anonPresenceLive.add(e);
+    _scheduleAnonPresence(
+        e,
+        DateTime.now().millisecondsSinceEpoch +
+            GeoPresence.delayMs('first', _geoPresenceRng.nextDouble()));
+  }
+
+  void _scheduleAnonPresence(_AnonPresence e, int atMs) {
+    e.timer?.cancel();
+    e.nextAt = atMs;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    e.timer = Timer(Duration(milliseconds: atMs > now ? atMs - now : 0), () {
+      unawaited(_tickAnonPresence(e));
+    });
+  }
+
+  GeoPresenceAnonTick _anonPresenceVerdict(_AnonPresence e, int now) {
+    final state = _ref.read(appStateProvider);
+    final cur = _presenceChannel(state);
+    final ch = (type: e.type, id: e.id);
+    if (cur == ch) {
+      e.stopAtMs = 0;
+      e.online = _channelPresenceCount(state, cur);
+    } else if (e.stopAtMs == 0) {
+      e.stopAtMs = now + GeoPresence.delayMs('tail', _geoPresenceRng.nextDouble());
+    }
+    final self = _service?.selfPubkey ?? _identity?.pubkey;
+    return GeoPresence.anonTick(GeoPresenceAnonInput(
+      gate: _geoPresenceInput(state, ch),
+      pubkey: e.signer?.pubkey ?? '',
+      newest: _anonPresence[e.key]?.signer?.pubkey ?? '',
+      signedIn: self != null && self == e.owner,
+      nowMs: now,
+      stopAtMs: e.stopAtMs,
+      identityMs: [_geoPresenceLastAt, _geoPresenceNextAt],
+    ));
+  }
+
+  Future<void> _tickAnonPresence(_AnonPresence e) async {
+    e.timer = null;
+    e.nextAt = 0;
+    if (!_anonPresenceLive.contains(e)) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final v = _anonPresenceVerdict(e, now);
+    if (v.action == 'stop') {
+      _stopAnonPresence(e);
+      return;
+    }
+    if (v.action == 'defer') {
+      _scheduleAnonPresence(e, v.atMs);
+      return;
+    }
+    final next =
+        now + GeoPresence.loopMs(e.type, e.online, _geoPresenceRng.nextDouble());
+    _scheduleAnonPresence(
+        e, e.stopAtMs > 0 && e.stopAtMs < next ? e.stopAtMs : next);
+    if (v.action != 'send') return;
+    final nowSec = now ~/ 1000;
+    final t = e.type == 'named'
+        ? GeoPresence.namedTemplate(e.id, nowSec)
+        : GeoPresence.template(e.id, nowSec);
+    final signer = e.signer;
+    final lane = e.lane;
+    if (t == null || signer == null) return;
+    try {
+      final signed = await signer.sign(UnsignedEvent(
+        pubkey: signer.pubkey,
+        createdAt: nowSec,
+        kind: EventKind.geoPresence,
+        tags: [
+          for (final tag in t['tags'] as List) List<String>.from(tag as List)
+        ],
+        content: '',
+      ));
+      e.lastAt = DateTime.now().millisecondsSinceEpoch;
+      final hook = anonPresencePublishForTest;
+      if (hook != null) {
+        await hook(signed);
+        return;
+      }
+      if (lane == null) return;
+      await lane.publish(signed, geoRelays: _sendAsGeoRelays(signed));
+    } catch (_) {}
+  }
+
+  void _syncAnonPresence() {
+    if (_anonPresenceLive.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final e in _anonPresenceLive.toList()) {
+      final v = _anonPresenceVerdict(e, now);
+      if (v.action == 'stop') {
+        _stopAnonPresence(e);
+      } else if (e.stopAtMs > 0 && e.nextAt > e.stopAtMs) {
+        _scheduleAnonPresence(e, e.stopAtMs);
+      }
+    }
+  }
+
+  void _stopAnonPresence(_AnonPresence e) {
+    e.timer?.cancel();
+    e.timer = null;
+    e.nextAt = 0;
+    _anonPresenceLive.remove(e);
+    if (identical(_anonPresence[e.key], e)) _anonPresence.remove(e.key);
+    e.signer = null;
+    final lane = e.lane;
+    e.lane = null;
+    if (lane != null) _closeAnonLane(lane);
+  }
+
+  void _stopAllAnonPresence() {
+    for (final e in _anonPresenceLive.toList()) {
+      _stopAnonPresence(e);
+    }
+  }
+
+  @visibleForTesting
+  List<({String pubkey, String channel, int stopAtMs})> anonPresenceForTest() =>
+      [
+        for (final e in _anonPresenceLive)
+          (
+            pubkey: e.signer?.pubkey ?? '',
+            channel: e.key,
+            stopAtMs: e.stopAtMs,
+          ),
+      ];
+
+  @visibleForTesting
+  Future<void> tickAnonPresenceForTest() async {
+    for (final e in _anonPresenceLive.toList()) {
+      await _tickAnonPresence(e);
+    }
+  }
+
+  @visibleForTesting
+  void startAnonPresenceForTest(LocalSigner signer) =>
+      _startAnonPresence(_ref.read(appStateProvider).view, signer);
+
+  List<String> _geoPresenceOwnKeys() {
+    final own = <String>{..._anonOwnKeys};
+    final a = _service?.selfPubkey;
+    final b = _identity?.pubkey;
+    if (a != null) own.add(a);
+    if (b != null) own.add(b);
+    return own.toList(growable: false);
+  }
+
+  void _onGeoPresence(NostrEvent e) {
+    final state = _ref.read(appStateProvider);
+    final ch = _presenceChannel(state);
+    if (ch == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final excluded = state.blockedUsers.contains(e.pubkey) ||
+        state.isPersonHidden(e.pubkey);
+    final verdict = GeoPresence.accept(e.toJson(), {
+      'type': ch.type,
+      'channel': ch.id,
+      'nowMs': now,
+      'verified': true,
+      'own': _geoPresenceOwnKeys(),
+      'excluded': excluded ? [e.pubkey] : const <String>[],
+    });
+    if (!verdict.ok) return;
+    final act = GeoPresence.activity(
+      geoAtMs: verdict.atMs,
+      nowMs: now,
+      prevSeenMs: state.users[e.pubkey]?.lastSeen ?? 0,
+      status: _presenceStatuses[e.pubkey],
+      statusAtMs: (_presenceTimestamps[e.pubkey] ?? 0) * 1000,
+    );
+    if (!act.counts) return;
+    _ref.read(appStateProvider.notifier).noteGeoPresence(
+          pubkey: e.pubkey,
+          geohash: ch.id,
+          seenMs: act.seenMs,
+        );
+  }
 
   PresenceStatusMode get _statusMode =>
       presenceStatusModeFrom(_ref.read(settingsProvider).showStatus);
@@ -10432,7 +10881,7 @@ class NostrController {
       avatarUrl: (avatar != null && avatar.isNotEmpty) ? avatar : null,
       shopUpdate: shopUpdate,
     );
-    _lastPresenceBroadcast = DateTime.now().millisecondsSinceEpoch;
+    _presenceGate.lastBroadcastMs = DateTime.now().millisecondsSinceEpoch;
 
     // Friends-only: the public event went out as hidden; deliver the real status privately to friends.
     if (_statusMode == PresenceStatusMode.friends) {
@@ -10459,8 +10908,7 @@ class NostrController {
     );
   }
 
-  /// Records local activity and broadcasts presence (≤1/60s); no heartbeat, skipped while away or disabled.
-  void recordOwnActivity() {
+  void recordOwnActivity([String kind = 'send']) {
     final identity = _identity;
     if (identity == null) return;
     final appState = _ref.read(appStateProvider.notifier);
@@ -10476,12 +10924,7 @@ class NostrController {
       lastSeenMs: now,
     );
 
-    // Disabled: never re-assert presence (a routine send would undo 'hidden').
-    if (_statusMode == PresenceStatusMode.disabled) return;
-    // Throttle to ≤1/60s; skip while away (cmdSetAway/cmdBack handle those).
-    if (now - _lastPresenceBroadcast < _presenceBroadcastThrottleMs) return;
-    if (away) return;
-    unawaited(publishPresence('online'));
+    _presenceGate.note(kind);
   }
 
   void _armTypingStop(String key, ChatView view) {
@@ -10520,6 +10963,7 @@ class NostrController {
   }
 
   Future<void> sendTypingStart() async {
+    notePresenceActivity('type');
     final service = _service;
     final identity = _identity;
     if (service == null || identity == null) return;
@@ -11410,6 +11854,14 @@ class NostrController {
     return ok;
   }
 
+  bool unfavoriteChannel(String key) {
+    final nav = _ref.read(chatNavProvider);
+    final pk = pinKey('channel', key);
+    if (pk.isEmpty || !nav.isChatPinned(pk)) return false;
+    nav.togglePin(pk);
+    return true;
+  }
+
   bool togglePin(String key) {
     final nav = _ref.read(chatNavProvider);
     final pk = pinKey('channel', key);
@@ -11902,6 +12354,15 @@ class NostrController {
   }
 
   void _subscribeActiveChannelTyping() {
+    _geoPresenceViewSub ??= _ref.listen<ChatView>(
+      appStateProvider.select((s) => s.view),
+      (_, _) => _syncGeoPresence(),
+    );
+    _presenceSettingsSub ??= _ref.listen<String>(
+      settingsProvider.select((s) => '${s.channelCounts}|${s.showStatus}'),
+      (_, _) => _syncGeoPresenceSend(),
+    );
+    _syncGeoPresence();
     final state = _ref.read(appStateProvider);
     if (state.view.kind != ViewKind.channel) return;
     final entry =
@@ -12653,6 +13114,7 @@ class NostrController {
     unawaited(checkRemotePanic());
     _service?.probePool();
     _appInForeground = true;
+    notePresenceActivity('visible');
     _onViewOpened(_ref.read(appStateProvider).view);
     _markOpenThreadSeen();
     // Re-pull the full D1 backlog on every resume, even if the socket never dropped; throttled and idempotent.
@@ -12669,6 +13131,9 @@ class NostrController {
   /// Pauses the geo-relay keep-alive unless [keepConnectionsAlive], and flushes a pending settings publish.
   void onAppPaused({bool keepConnectionsAlive = false}) {
     _appInForeground = false;
+    _stopGeoPresenceSend();
+    _stopAllAnonPresence();
+    if (_botChannelRuns.isNotEmpty) _botChannelRunsSave();
     _liveGap.note();
     if (!keepConnectionsAlive) {
       _service?.stopGeoRelayKeepAlive();
@@ -12992,7 +13457,7 @@ class NostrController {
       localOnline: [
         for (final u in state.users.values)
           if (u.channels.contains(gh) &&
-              nowMs - u.lastSeen < kActiveThresholdMs &&
+              lastSeenIsActive(u.lastSeen, nowMs) &&
               !state.isPersonHidden(u.pubkey, u.nym))
             u.pubkey,
       ],
@@ -13971,6 +14436,7 @@ class NostrController {
     str('chatViewMode', c.setChatViewMode);
     boolean('columnsWallpaper', c.setColumnsWallpaper);
     boolean('threadsEnabled', c.setThreadsEnabled);
+    boolean('channelCounts', c.setChannelCounts);
     str('nickStyle', c.setNickStyle);
     str('wallpaperType', c.setWallpaperType);
     // Out-of-range text sizes (outside 12–28) are ignored, not clamped.
@@ -14032,6 +14498,12 @@ class NostrController {
       'hug',
       'none',
     ];
+    final hover = p['hoverActions'];
+    if (hover is List) {
+      try {
+        c.setHoverActions(normalizeHoverActions(hover));
+      } catch (_) {}
+    }
     final swipeLeft = p['swipeLeftAction'];
     if (swipeLeft is String && validSwipeActions.contains(swipeLeft)) {
       try {
@@ -15526,10 +15998,16 @@ class NostrController {
   }
 
   /// Hydrates custom emoji from D1, verifying each event and routing through the live ingest handlers; best-effort.
-  Future<void> _restoreEmojiFromD1(StorageSync sync) async {
+  Future<void> _restoreEmojiFromD1(StorageSync sync,
+      {bool force = false}) async {
+    if (_ownerGone) return;
+    _ref.read(liveCustomEmojiProvider.notifier).onLookup =
+        () => unawaited(_restoreEmojiFromD1(sync, force: true));
     try {
       final events = await sync.emojiGet(
-          heldPacks: _ref.read(liveCustomEmojiProvider).packs.isNotEmpty);
+          force: force,
+          heldPacks:
+              !force && _ref.read(liveCustomEmojiProvider).packs.isNotEmpty);
       final parsed = <NostrEvent>[];
       for (final raw in events) {
         try {
@@ -16427,6 +16905,7 @@ class NostrController {
             if (limit is num && limit > 0 && limit <= 600000) {
               _botChannelRunExtend(run, limit.toInt());
             }
+            if (!run.ended && !run.anon) _botChannelRunsSave();
             _paintBotThinking(storageKey);
           } else if (state == 'failed') {
             final status = line['status'];
@@ -16545,9 +17024,7 @@ class NostrController {
   void _botChannelRunArm(_BotChannelRun run) {
     if (run.ended) return;
     run.timer?.cancel();
-    final wait = run.deadline +
-        _kBotChannelRunGraceMs -
-        DateTime.now().millisecondsSinceEpoch;
+    final wait = run.endAt - DateTime.now().millisecondsSinceEpoch;
     run.timer = Timer(Duration(milliseconds: wait < 0 ? 0 : wait), () {
       run.timedOut = true;
       run.onTimeout?.call();
@@ -16639,7 +17116,7 @@ class NostrController {
     final now = DateTime.now().millisecondsSinceEpoch;
     var until = 0;
     for (final r in _botChannelRuns[storageKey] ?? const <_BotChannelRun>{}) {
-      final end = r.deadline + _kBotChannelRunGraceMs;
+      final end = r.endAt;
       if (end > until) until = end;
     }
     final remote = _botTypingRuns[storageKey];
@@ -16673,6 +17150,7 @@ class NostrController {
   }
 
   void _botChannelRunsSave() {
+    final now = DateTime.now().millisecondsSinceEpoch;
     final out = <Map<String, Object>>[];
     for (final set in _botChannelRuns.values) {
       for (final r in set) {
@@ -16681,6 +17159,7 @@ class NostrController {
             'key': r.key,
             'startedAt': r.startedAt,
             'deadline': r.deadline,
+            'seenAt': r.goneAt ?? now,
             'runId': ?r.remoteId,
           });
         }
@@ -16718,14 +17197,16 @@ class NostrController {
       final startedAt = r['startedAt'];
       final deadline = r['deadline'];
       final runId = _botRunIdOf(r['runId']?.toString());
+      final seen = r['seenAt'];
+      final goneAt = seen is num && seen > 0 && seen <= now ? seen.toInt() : now;
       if (key is String &&
           key.isNotEmpty &&
           runId.isNotEmpty &&
           deadline is num &&
-          deadline + _kBotChannelRunGraceMs > now &&
+          _botChannelEndAt(deadline.toInt(), goneAt) > now &&
           deadline <= now + _kBotChannelRunMaxMs) {
-        _botChannelRunRestore(key,
-            startedAt is num ? startedAt.toInt() : now, deadline.toInt(), runId);
+        _botChannelRunRestore(key, startedAt is num ? startedAt.toInt() : now,
+            deadline.toInt(), runId, goneAt);
       } else if (startedAt is num && startedAt > since) {
         lost = true;
       }
@@ -16737,9 +17218,10 @@ class NostrController {
   }
 
   void _botChannelRunRestore(
-      String key, int startedAt, int deadline, String runId) {
+      String key, int startedAt, int deadline, String runId, int goneAt) {
     final run = _BotChannelRun(key, false, startedAt, deadline)
-      ..remoteId = runId;
+      ..remoteId = runId
+      ..goneAt = goneAt;
     run.onTimeout = () {
       _botChannelRunEnd(run);
       _botChannelFailureNotice(
@@ -16988,6 +17470,11 @@ class NostrController {
 
   Future<void> dispose() async {
     _answersClosed = true;
+    _stopGeoPresenceSend();
+    _geoPresenceViewSub?.close();
+    _geoPresenceViewSub = null;
+    _presenceSettingsSub?.close();
+    _presenceSettingsSub = null;
     _flushTimer?.cancel();
     _clearChatActivities();
     _liveInboundTimer?.cancel();
@@ -17338,6 +17825,14 @@ class _SendAsRetry {
 
 const int _kBotChannelRunMaxMs = 150000;
 const int _kBotChannelRunGraceMs = 15000;
+const int _kBotChannelDetachedMs = 35000;
+
+int _botChannelEndAt(int deadline, int? goneAt) {
+  final end = deadline + _kBotChannelRunGraceMs;
+  if (goneAt == null) return end;
+  final cut = goneAt + _kBotChannelDetachedMs;
+  return cut < end ? cut : end;
+}
 const String _kBotChannelRunsKey = 'nym_bot_channel_runs';
 
 class _BotChannelRun {
@@ -17351,7 +17846,10 @@ class _BotChannelRun {
   bool timedOut = false;
   bool landed = false;
   String? remoteId;
+  int? goneAt;
   void Function()? onTimeout;
+
+  int get endAt => _botChannelEndAt(deadline, goneAt);
 }
 
 class _BotChannelOutcome {
@@ -17413,4 +17911,20 @@ class _TrayPost {
         eventId: eventId,
         ts: ts.toInt());
   }
+}
+
+class _AnonPresence {
+  _AnonPresence(this.key, this.type, this.id, this.signer, this.owner,
+      this.lane, this.online);
+  final String key;
+  final String type;
+  final String id;
+  LocalSigner? signer;
+  final String owner;
+  AnonLane? lane;
+  int online;
+  Timer? timer;
+  int nextAt = 0;
+  int lastAt = 0;
+  int stopAtMs = 0;
 }

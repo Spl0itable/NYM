@@ -11,13 +11,13 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
-import '../../features/channels/channel_share.dart' show kNymchatShareHost;
 import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/groups/group_logic.dart';
-import '../../features/group_tools/group_tools.dart';
 import '../../features/group_tools/group_tools_providers.dart';
 import '../../features/group_tools/group_tools_ui.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/share/share_links.dart' show groupInviteLink;
+import '../../features/share/share_sheet.dart';
 import '../../features/pms/new_pm_modal.dart' show resolveRecipientPubkey;
 import '../../features/settings/settings_widgets.dart' show SettingsToggleRow;
 import '../../features/toasts/toast_center.dart';
@@ -40,6 +40,7 @@ import '../common/nym_tooltip.dart';
 import '../common/hit_slop.dart';
 import '../common/dialog_button.dart';
 import '../../core/theme/nym_a11y.dart';
+import '../../features/media_notes/profile_image.dart';
 
 /// Right-side group context-menu panel: header, role-gated owner/member controls, invite link, and member list.
 class GroupContextMenuPanel extends ConsumerStatefulWidget {
@@ -407,27 +408,13 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     ];
   }
 
-  /// Builds the `#gjoin=<token>` invite URL like the PWA; null unless invites are enabled and self can add members.
-  String? _buildInviteLink(Group group, String self) {
-    if (!group.inviteEnabled) return null;
-    if (!group.canAddMembers(self)) return null;
-    final name = group.name.isEmpty ? 'Group' : group.name;
-    final payload = <String, dynamic>{
-      'v': 1,
-      'g': group.id,
-      'n': name.length > 80 ? name.substring(0, 80) : name,
-      'a': self,
-      'e': group.inviteEpoch,
-    };
-    final summary = ref.read(groupToolsProvider).cachedSummary(group.id);
-    final token = GroupTools.encodeInvite(InvitePayload(
-      g: payload['g'] as String,
-      n: payload['n'] as String,
-      a: self,
-      e: group.inviteEpoch,
-      s: summary,
-    ));
-    return '$kNymchatShareHost/#gjoin=$token';
+  String? _buildInviteLink(Group group, String self) => groupInviteLink(
+      group, self, ref.read(groupToolsProvider).cachedSummary(group.id));
+
+  void _shareGroup(Group group) {
+    final nav = Navigator.of(context, rootNavigator: true);
+    widget.onClose();
+    unawaited(ShareSheet.openGroup(nav.context, group.id));
   }
 
   Widget _defaultGroupIcon(NymColors c) {
@@ -443,6 +430,13 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final self = ref.read(appStateProvider).selfPubkey;
     final canAdd = group.canAddMembers(self);
     final rows = <Widget>[];
+
+    rows.add(_ActionRow(
+      svg: NymIcons.shareNodes,
+      label: tr('Share group'),
+      color: c.text,
+      onTap: () => _shareGroup(group),
+    ));
 
     if (iCanAdminister) {
       rows.add(_ActionRow(
@@ -642,9 +636,23 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       final file = await picker.pickImage(source: ImageSource.gallery);
       if (file == null) return;
       bytes = await File(file.path).readAsBytes();
-      contentType = _contentTypeFor(file.path);
+      contentType = profileImageContentType(bytes,
+          path: file.path, declared: file.mimeType ?? '');
     } catch (_) {
       // Picker unavailable (tests/desktop).
+      return;
+    }
+    final cap = profileImageMaxBytes(avatar: avatar);
+    if (bytes.length > cap) {
+      if (!mounted) return;
+      await showAppAlert(
+        context,
+        tr('{label} must be under {cap}MB (this image is {actual}MB).', {
+          'label': avatar ? tr('Avatar') : tr('Banner'),
+          'cap': cap ~/ (1024 * 1024),
+          'actual': (bytes.length / (1024 * 1024)).toStringAsFixed(1),
+        }),
+      );
       return;
     }
     final url = await controller.uploadImage(bytes, contentType: contentType);
@@ -749,13 +757,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     await controller.leaveGroup(group.id);
   }
 
-  static String _contentTypeFor(String path) {
-    final lower = path.toLowerCase();
-    if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.gif')) return 'image/gif';
-    if (lower.endsWith('.webp')) return 'image/webp';
-    return 'image/jpeg';
-  }
 
   int _roleRank(Group group, String pubkey) =>
       GroupLogic.roleRank(group, pubkey);

@@ -392,6 +392,9 @@ class _ShopModalState extends ConsumerState<ShopModal> {
 
   Widget _body(NymColors c) {
     final state = ref.watch(shopControllerProvider);
+    if (!state.loaded) {
+      return _recordPendingBody(c, state);
+    }
     if (_tab == ShopTab.inventory) {
       return _inventoryBody(c, state);
     }
@@ -405,6 +408,45 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: _cardWrap(c, state, items),
+    );
+  }
+
+  Widget _recordPendingBody(NymColors c, ShopState state) {
+    final identity = _shopIdentity(ref);
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!state.loadFailed) ...[
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: c.primary,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          Text(
+            state.loadFailed
+                ? tr("Couldn't load your purchases.")
+                : tr('Loading your purchases…'),
+            textAlign: TextAlign.center,
+            style: TextStyle(color: c.textDim),
+          ),
+          if (state.loadFailed && identity != null) ...[
+            const SizedBox(height: 16),
+            _OrangePillButton(
+              label: tr('Retry'),
+              onTap: () => unawaited(ref
+                  .read(shopControllerProvider.notifier)
+                  .loadFromServer(identity)),
+            ),
+          ],
+        ],
+      ),
     );
   }
 

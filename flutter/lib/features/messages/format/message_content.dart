@@ -31,6 +31,7 @@ import '../../../widgets/context_menu/context_menu_actions.dart';
 import '../../../widgets/context_menu/context_menu_panel.dart';
 import '../../commands/command_handler.dart' show resolveTarget;
 import '../../group_tools/group_tools_ui.dart' show GroupToolIcons, joinCallLinkFlow;
+import '../../emoji/custom_emoji.dart' show noteMissingCustomEmoji;
 import '../../groups/group_invite_confirm.dart';
 import '../../i18n/i18n.dart';
 import '../../media_notes/media_note_view.dart' show audioOrMediaNote;
@@ -116,24 +117,23 @@ class MessageContent extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.watch(settingsProvider);
-    final view = ref.watch(currentViewProvider);
+    final textSize = ref.watch(settingsProvider.select((s) => s.textSize));
+    final channel = ref.watch(currentViewProvider.select(
+        (v) => v.kind == ViewKind.channel ? v.id.toLowerCase() : null));
     final c = ref.watch(nymColorsProvider);
 
     final ctx = FormatContext(
-      currentChannel:
-          view.kind == ViewKind.channel ? view.id.toLowerCase() : null,
-      currentGeohash:
-          view.kind == ViewKind.channel ? view.id.toLowerCase() : null,
-      // Live NIP-30 custom emoji so `:shortcode:` renders as images.
-      customEmojis: ref.watch(liveCustomEmojiProvider).codeToUrl,
+      currentChannel: channel,
+      currentGeohash: channel,
+      customEmojis:
+          ref.watch(liveCustomEmojiProvider.select((s) => s.codeToUrl)),
       commonMark: commonMark,
     );
 
     final shown = ref.watch(
         appStateProvider.select((s) => s.stripBlockedQuotes(content, quoted)));
     final blocks = NymFormat.format(shown, ctx);
-    final size = fontSize ?? settings.textSize.toDouble();
+    final size = fontSize ?? textSize.toDouble();
     final color = baseColor ?? c.text;
 
     // 1–6 emoji and nothing else render enlarged, unicode or custom.
@@ -1280,8 +1280,12 @@ class _MentionChip extends ConsumerWidget {
     );
 
     // Resolve the mention to decorate it with avatar and flair; unresolved mentions render plain.
-    final users = ref.watch(usersProvider);
     final raw = node.suffix != null ? '${node.base}#${node.suffix}' : node.base;
+    ref.watch(usersProvider.select((u) {
+      final hit = resolveTarget(raw, u);
+      return (hit?.pubkey, hit?.nym, u[hit?.pubkey]?.profile?.picture);
+    }));
+    final users = ref.read(usersProvider);
     final t = resolveTarget(raw, users);
     final chipHidden = t != null &&
         ref.watch(appStateProvider
@@ -4043,7 +4047,10 @@ class InlineEmojiText extends ConsumerWidget {
       // An image only when the whole text is a known custom code.
       final code = _rxWholeToken.firstMatch(text)?.group(1);
       final url = code == null ? null : codeToUrl[code];
-      if (url == null) return plainText();
+      if (url == null) {
+        if (code != null) noteMissingCustomEmoji(code);
+        return plainText();
+      }
       return Text.rich(
         emojiSpan(code!, url),
         maxLines: maxLines,
@@ -4078,6 +4085,7 @@ class InlineEmojiText extends ConsumerWidget {
       // Only known custom codes are replaced; built-in and unknown codes stay literal.
       final url = codeToUrl[code];
       if (url == null) {
+        noteMissingCustomEmoji(code);
         continue; // unknown code → leave the literal `:code:` in trailing text
       }
       if (m.start > last) addText(last, m.start);

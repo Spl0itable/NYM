@@ -1,6 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../core/constants/storage_keys.dart';
+import '../features/reactions/hover_actions.dart';
 import '../core/theme/nym_colors.dart';
 import '../services/platform/background_connectivity.dart';
 import '../services/storage/key_value_store.dart';
@@ -45,11 +48,13 @@ class Settings {
     this.swipeRightAction = 'translate',
     this.swipeThreshold = 60,
     this.swipeReactEmoji = '❤️',
+    this.hoverActions = kHoverActionDefaults,
     this.acceptPMs = 'enabled',
     this.acceptCalls = 'enabled',
     this.cachePMs = true,
     this.syncMLSHistory = true,
     this.showStatus = 'true',
+    this.channelCounts = true,
     this.wallpaperType = 'geometric',
     this.notificationsEnabled = true,
     this.hideNonPinned = false,
@@ -99,12 +104,14 @@ class Settings {
   final String swipeLeftAction;
   final String swipeRightAction;
   final int swipeThreshold;
+  final List<String> hoverActions;
   final String swipeReactEmoji;
   final String acceptPMs;
   final String acceptCalls;
   final bool cachePMs;
   final bool syncMLSHistory;
   final String showStatus; // 'true' | 'false' | 'friends'
+  final bool channelCounts;
   final String wallpaperType;
   final bool notificationsEnabled;
 
@@ -171,11 +178,13 @@ class Settings {
     String? swipeRightAction,
     int? swipeThreshold,
     String? swipeReactEmoji,
+    List<String>? hoverActions,
     String? acceptPMs,
     String? acceptCalls,
     bool? cachePMs,
     bool? syncMLSHistory,
     String? showStatus,
+    bool? channelCounts,
     String? wallpaperType,
     bool? notificationsEnabled,
     bool? hideNonPinned,
@@ -219,12 +228,14 @@ class Settings {
       swipeLeftAction: swipeLeftAction ?? this.swipeLeftAction,
       swipeRightAction: swipeRightAction ?? this.swipeRightAction,
       swipeThreshold: swipeThreshold ?? this.swipeThreshold,
+      hoverActions: hoverActions ?? this.hoverActions,
       swipeReactEmoji: swipeReactEmoji ?? this.swipeReactEmoji,
       acceptPMs: acceptPMs ?? this.acceptPMs,
       acceptCalls: acceptCalls ?? this.acceptCalls,
       cachePMs: cachePMs ?? this.cachePMs,
       syncMLSHistory: syncMLSHistory ?? this.syncMLSHistory,
       showStatus: showStatus ?? this.showStatus,
+      channelCounts: channelCounts ?? this.channelCounts,
       wallpaperType: wallpaperType ?? this.wallpaperType,
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
       hideNonPinned: hideNonPinned ?? this.hideNonPinned,
@@ -322,6 +333,7 @@ class Settings {
       swipeRightAction:
           kv.getString(StorageKeys.swipeRightAction) ?? 'translate',
       swipeThreshold: kv.getInt(StorageKeys.swipeThreshold, defaultValue: 60),
+      hoverActions: _hoverActionsFrom(kv.getString(StorageKeys.hoverActions)),
       swipeReactEmoji: kv.getString(StorageKeys.swipeReactEmoji) ?? '❤️',
       acceptPMs: kv.getString(StorageKeys.acceptPms) ?? 'enabled',
       acceptCalls: kv.getString(StorageKeys.acceptCalls) ?? 'enabled',
@@ -329,6 +341,7 @@ class Settings {
       syncMLSHistory:
           kv.getBool(StorageKeys.syncMlsHistory, defaultValue: true),
       showStatus: kv.getString(StorageKeys.showStatus) ?? 'true',
+      channelCounts: kv.getBool(StorageKeys.channelCounts, defaultValue: true),
       wallpaperType: kv.getString(StorageKeys.wallpaperType) ?? 'geometric',
       notificationsEnabled:
           (kv.getString(StorageKeys.notificationsEnabled) ?? 'true') != 'false',
@@ -362,4 +375,13 @@ bool shouldApplySyncedSwipeReactEmoji({
 }) {
   if (!isValidSwipeReactEmoji(value)) return false;
   return remoteTs >= localTs;
+}
+
+List<String> _hoverActionsFrom(String? raw) {
+  if (raw == null || raw.isEmpty) return normalizeHoverActions(null);
+  try {
+    return normalizeHoverActions(jsonDecode(raw));
+  } catch (_) {
+    return normalizeHoverActions(null);
+  }
 }

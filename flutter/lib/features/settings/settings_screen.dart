@@ -39,6 +39,9 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../layout/layout_model.dart';
+import '../layout/pointer_input.dart';
+import '../reactions/hover_actions.dart';
+import '../reactions/message_actions.dart' show hoverActionLabel;
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_avatar.dart' show proxiedAvatarUrl;
 import '../../widgets/nym_icons.dart';
@@ -69,6 +72,7 @@ import 'settings_helpers.dart';
 import 'settings_widgets.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/common/dialog_button.dart';
+import '../layout/slide_out_list.dart';
 
 /// Post-quantum status line, named so a test can hold the translation catalog to it.
 const String kPqStatusFull = 'Active for messages with other Nymchat users.';
@@ -127,8 +131,9 @@ class SettingsScreen extends ConsumerStatefulWidget {
     bool focusLanding = false,
     String? initialSection,
   }) {
-    final solidUi =
-        ProviderScope.containerOf(context).read(settingsProvider).solidUi;
+    final container = ProviderScope.containerOf(context);
+    final solidUi = container.read(settingsProvider).solidUi;
+    container.read(slideOutListCloseProvider.notifier).state++;
     final isLight = context.nym.isLight;
     return showNymSheet<void>(
       context,
@@ -605,6 +610,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         border: Border(right: BorderSide(color: c.glassBorder)),
       ),
       child: ListView(
+        primary: false,
         children: [
           for (final sec in sections)
             Padding(
@@ -1792,6 +1798,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
         ),
+        _toggleSpec(
+          key: 'channelCounts',
+          label: tr('Show me in channel online counts'),
+          hint: tr("While a public channel is open and you're active, Nymchat tells the relays you're there, so you count as online in that channel even when you don't post. Turn this off to stay out of channel online counts. You still see who else is online, and Show Status Indicators set to Disabled turns this off too."),
+          value: s.channelCounts,
+          onChanged: ctrl.setChannelCounts,
+        ),
       ],
       safety: <_GroupSpec>[
         _toggleSpec(
@@ -2127,7 +2140,88 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ctrl.setAutoscroll(v);
         },
       ),
+      if (PointerInput.mouseOf(context)) _hoverActionsSpec(s, ctrl),
     ];
+  }
+
+  _GroupSpec _hoverActionsSpec(Settings s, SettingsController ctrl) {
+    final slots = normalizeHoverActions(s.hoverActions);
+    final items = [
+      for (final id in kHoverActionIds) (value: id, label: hoverActionLabel(id)),
+    ];
+    final names = [
+      tr('First button'),
+      tr('Second button'),
+      tr('Third button'),
+    ];
+    final atDefaults = slots.join(' ') == kHoverActionDefaults.join(' ');
+    final label = tr('Message hover actions');
+    final hint = tr('The three buttons shown when you point at a message, '
+        'from left to right. More always opens the full menu.');
+    final reset = tr('Reset to defaults');
+    final selects = [
+      for (var i = 0; i < kHoverActionSlots; i++)
+        Semantics(
+          label: names[i],
+          child: FormSelect<String>(
+            key: ValueKey('setting-hoverActions.$i'),
+            value: slots[i],
+            items: items,
+            onChanged: (v) => ctrl.pickHoverAction(i, v),
+          ),
+        ),
+    ];
+    return _GroupSpec(
+      text: '$label $hint $reset',
+      child: FormGroup(
+        label: label,
+        hint: hint,
+        footer: Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Semantics(
+              enabled: !atDefaults,
+              child: ExcludeFocus(
+                excluding: atDefaults,
+                child: IgnorePointer(
+                  ignoring: atDefaults,
+                  child: Opacity(
+                    opacity: atDefaults ? 0.5 : 1,
+                    child: NymOutlineButton(
+                      key: const ValueKey('setting-resetHoverActions'),
+                      label: reset,
+                      uppercase: false,
+                      onPressed: ctrl.resetHoverActions,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        child: LayoutBuilder(
+          builder: (context, box) => box.maxWidth <= 480
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var i = 0; i < selects.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 8),
+                      selects[i],
+                    ],
+                  ],
+                )
+              : Row(
+                  children: [
+                    for (var i = 0; i < selects.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 8),
+                      Expanded(child: selects[i]),
+                    ],
+                  ],
+                ),
+        ),
+      ),
+    );
   }
 
   List<_GroupSpec> _channels(Settings s, SettingsController ctrl) {
@@ -2170,6 +2264,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'in the sidebar'),
           value: s.hideNonPinned,
           onChanged: ctrl.setHideNonPinned,
+        ),
+        _GroupSpec(
+          text: tr('Favorite Channels Unfavorite {list}', {
+            'list': _favoriteChannels(state.pinnedChannels)
+                .map((k) => '#$k')
+                .join(' ')
+          }),
+          child: FormGroup(
+            label: tr('Favorite Channels'),
+            child: KeyedSubtree(
+              key: const ValueKey('favoriteChannelsList'),
+              child: _removableList(
+              entries: _favoriteChannels(state.pinnedChannels),
+              emptyText: '',
+              buttonLabel: tr('Unfavorite'),
+              labelFor: (key) => '#$key',
+              fixed: (key) => key == 'nymchat',
+              fixedLabel: tr('Always favorited'),
+              onRemove: (key) =>
+                  ref.read(nostrControllerProvider).unfavoriteChannel(key),
+              ),
+            ),
+          ),
         ),
         _GroupSpec(
           text: tr('Hidden Channels Unhide {list}', {
@@ -2708,6 +2825,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   /// Moderation list with a trailing remove button per row, or the empty placeholder.
+  List<String> _favoriteChannels(Iterable<String> pinned) =>
+      ['nymchat', ...pinned.where((k) => k != 'nymchat')];
+
   Widget _removableList({
     required Iterable<String> entries,
     required String emptyText,
@@ -2715,10 +2835,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     required String Function(String entry) labelFor,
     TextSpan Function(String entry)? labelSpanFor,
     required void Function(String entry) onRemove,
+    bool Function(String entry)? fixed,
+    String fixedLabel = '',
   }) {
     final items = entries.toList();
     if (items.isEmpty) return _emptyListBox(emptyText);
     final c = context.nym;
+    final large = MediaQuery.textScalerOf(context).scale(10) > 15;
     return _listBox(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2730,30 +2853,52 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 top: i == 0 ? 0 : 4,
                 bottom: 4,
               ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: labelSpanFor != null
-                        ? Text.rich(
-                            labelSpanFor(items[i]),
-                            overflow: TextOverflow.ellipsis,
-                          )
-                        : Text(
-                            labelFor(items[i]),
-                            style: TextStyle(color: c.text, fontSize: 13),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                  ),
-                  const SizedBox(width: 8),
-                  DangerPillButton(
-                    label: buttonLabel,
-                    onPressed: () => onRemove(items[i]),
-                  ),
-                ],
+              child: _entryRow(
+                large,
+                labelSpanFor != null
+                    ? Text.rich(
+                        labelSpanFor(items[i]),
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : Text(
+                        labelFor(items[i]),
+                        style: TextStyle(color: c.text, fontSize: 13),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                fixed != null && fixed(items[i])
+                    ? Text(
+                        fixedLabel,
+                        textAlign: TextAlign.end,
+                        style: TextStyle(color: c.textDim, fontSize: 12),
+                      )
+                    : DangerPillButton(
+                        label: buttonLabel,
+                        onPressed: () => onRemove(items[i]),
+                      ),
               ),
             ),
         ],
       ),
+    );
+  }
+
+  Widget _entryRow(bool large, Widget label, Widget trailing) {
+    if (large) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          label,
+          const SizedBox(height: 4),
+          Align(alignment: AlignmentDirectional.centerEnd, child: trailing),
+        ],
+      );
+    }
+    return Row(
+      children: [
+        Expanded(child: label),
+        const SizedBox(width: 8),
+        trailing,
+      ],
     );
   }
 

@@ -42,10 +42,172 @@
         return n && typeof n.navigationIndex === 'number' ? n.navigationIndex : -1;
     }
 
+    function navId() {
+        var n = window.nym;
+        var e = n && n.navigationHistory ? n.navigationHistory[n.navigationIndex] : null;
+        return e ? e._navId : null;
+    }
+
+    function depth() {
+        var s = history.state;
+        return s && typeof s === 'object' && s._nym_phone ? (s._nym_depth || 1) : 0;
+    }
+
+    var gesture = false;
+    var pendingKind = null;
+
+    function wanted(kind) {
+        if (!phone()) return false;
+        if (kind === 'modal') return openLayers().length > 0 && pageState() !== 'modal';
+        if (kind === 'info') return groupOpen() && pageState() !== 'info';
+        return !listOpen() && pageState() !== 'chat';
+    }
+
+    function noteGesture(e) {
+        if (!e.isTrusted) return;
+        gesture = true;
+        if (!pendingKind) return;
+        var kind = pendingKind;
+        pendingKind = null;
+        if (wanted(kind)) pushPage(kind);
+    }
+
     function pushPage(kind) {
         var base = history.state && typeof history.state === 'object' ? history.state : {};
-        var next = Object.assign({}, base, { _nym_nav: navIndex(), _nym_phone: kind });
-        try { history.pushState(next, ''); } catch (_) { }
+        var fields = { _nym_nav: navIndex(), _nym_nav_id: navId(), _nym_phone: kind };
+        if (!gesture) {
+            if (pageState() === kind) {
+                try { history.replaceState(Object.assign({}, base, fields, { _nym_depth: depth() || 1 }), ''); } catch (_) { }
+            } else {
+                pendingKind = kind;
+            }
+            return;
+        }
+        gesture = false;
+        pendingKind = null;
+        try { history.pushState(Object.assign({}, base, fields, { _nym_depth: depth() + 1 }), ''); } catch (_) { }
+    }
+
+    function popToBase() {
+        var d = depth();
+        if (d < 1) return;
+        ignorePops++;
+        try { history.go(-d); } catch (_) { ignorePops--; }
+    }
+
+    var pendingJump = null;
+
+    function jumpBack(n, i) {
+        if (!n || i < 0 || i >= n.navigationIndex) return;
+        var target = n.navigationHistory[i];
+        if (!target) return;
+        if (pageState() !== 'chat') { pendingJump = target._navId; return; }
+        var steps = n.navigationIndex - i;
+        var d = depth();
+        if (steps <= d - 1) {
+            try { history.go(-steps); } catch (_) { }
+            return;
+        }
+        pendingJump = target._navId;
+        try { history.go(-d); } catch (_) { pendingJump = null; }
+    }
+
+    function syncChatEntry() {
+        var n = window.nym;
+        if (!n || !phone() || listOpen() || pageState() !== 'chat') return;
+        if (pendingJump) {
+            var want = pendingJump;
+            pendingJump = null;
+            var idx = n.navigationHistory.findIndex(function (e) { return e && e._navId === want; });
+            if (idx >= 0) { jumpBack(n, idx); return; }
+        }
+        if (navId() && history.state._nym_nav_id !== navId()) pushPage('chat');
+    }
+
+    function stepFromBase(n) {
+        var want = pendingJump;
+        pendingJump = null;
+        var list = n.navigationHistory || [];
+        var idx = want ? list.findIndex(function (e) { return e && e._navId === want; }) : n.navigationIndex - 1;
+        if (idx < 0 || idx >= n.navigationIndex || !list[idx]) return false;
+        n.navigationIndex = idx;
+        n._navigateTo(list[idx]);
+        if (typeof n._updateNavButtons === 'function') n._updateNavButtons();
+        return true;
+    }
+
+    function navKey(e) {
+        return [e.type, e.channel || '', e.geohash || '', e.pubkey || '', e.groupId || '', e.rootId || ''].join(':');
+    }
+
+    function recentIndexes(n) {
+        var list = n.navigationHistory || [];
+        var cur = list[n.navigationIndex];
+        var ck = cur ? navKey(cur) : '';
+        var seen = {};
+        var out = [];
+        for (var i = n.navigationIndex - 1; i >= 0 && out.length < 10; i--) {
+            var e = list[i];
+            if (!e || e.type === 'mesh') continue;
+            var k = navKey(e);
+            if (k === ck || seen[k]) continue;
+            seen[k] = 1;
+            out.push(i);
+        }
+        return out;
+    }
+
+    function navLabel(n, e) {
+        var c = e.type === 'thread' && e.ctx ? e.ctx : e;
+        var t = e.type === 'thread' ? (c.type || 'channel') : e.type;
+        var label;
+        if (t === 'pm') {
+            label = c.nym || (typeof n.getNymFromPubkey === 'function' ? n.getNymFromPubkey(c.pubkey) : 'nym');
+            if (typeof n.stripPubkeySuffix === 'function') label = n.stripPubkeySuffix(label);
+        } else if (t === 'group') {
+            var g = n.groupConversations ? n.groupConversations.get(c.groupId) : null;
+            label = g ? (typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || ui('Group'))) : ui('Group');
+        } else {
+            label = '#' + (c.geohash || c.channel || '');
+        }
+        return e.type === 'thread' ? label + ' · ' + ui('Thread') : label;
+    }
+
+    function showRecent() {
+        var n = window.nym;
+        if (!n) return;
+        var idx = recentIndexes(n);
+        if (!idx.length) return;
+        showActionSheet([{ head: ui('Recent chats') }].concat(idx.map(function (i) {
+            return { label: navLabel(n, n.navigationHistory[i]), run: function () { jumpBack(n, i); } };
+        })), 'Recent chats');
+    }
+
+    function armBackButton(btn) {
+        var timer = 0;
+        var held = false;
+        var clear = function () { if (timer) { clearTimeout(timer); timer = 0; } };
+        btn.addEventListener('pointerdown', function (e) {
+            if (e.button > 0) return;
+            held = false;
+            clear();
+            timer = setTimeout(function () { timer = 0; held = true; showRecent(); }, 500);
+        });
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (t) { btn.addEventListener(t, clear); });
+        btn.addEventListener('contextmenu', function (e) {
+            e.preventDefault();
+            clear();
+            if (held) return;
+            held = true;
+            showRecent();
+        });
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (held) { held = false; return; }
+            var n = window.nym;
+            if (n && typeof n.navigateBack === 'function') n.navigateBack();
+        });
     }
 
     function popPage() {
@@ -73,7 +235,7 @@
         syncInert();
         if (!phone() || was === null || was === open) return;
         if (open) {
-            if (pageState() === 'chat') popPage();
+            if (pageState() === 'chat') popToBase();
         } else if (pageState() !== 'chat') {
             pushPage('chat');
         }
@@ -138,6 +300,7 @@
         if (!phone()) return false;
         if (ignorePops > 0) {
             ignorePops--;
+            setTimeout(syncChatEntry, 0);
             return true;
         }
         var n = window.nym;
@@ -157,6 +320,16 @@
             return true;
         }
         if (n && n._meshPageOpen && typeof n.closeMeshPage === 'function') n.closeMeshPage();
+        else if (n && !listOpen()) {
+            if (pageState() === 'chat') {
+                if (!n._navPop(history.state)) syncChatEntry();
+                return true;
+            }
+            if (pendingJump && stepFromBase(n)) {
+                pushPage('chat');
+                return true;
+            }
+        }
         if (!listOpen()) {
             listWasOpen = true;
             openList();
@@ -615,7 +788,20 @@
                 history.pushState = function (state, title) {
                     var base = history.state && typeof history.state === 'object' ? history.state : {};
                     var merged = Object.assign({}, state || {});
-                    if (base._nym_phone) merged._nym_phone = base._nym_phone;
+                    if (base._nym_phone === 'chat' && !listOpen()) {
+                        merged._nym_phone = 'chat';
+                        if (!gesture) {
+                            merged._nym_depth = depth() || 1;
+                            return history.replaceState(merged, title);
+                        }
+                        gesture = false;
+                        merged._nym_depth = depth() + 1;
+                        return push.call(history, merged, title);
+                    }
+                    if (base._nym_phone) {
+                        merged._nym_phone = base._nym_phone;
+                        merged._nym_depth = base._nym_depth || 1;
+                    }
                     return history.replaceState(merged, title);
                 };
                 return orig.apply(this, arguments);
@@ -625,16 +811,31 @@
         };
         wrapped._phone = true;
         NYM.prototype._pushNavigation = wrapped;
+        var back = NYM.prototype.navigateBack;
+        if (typeof back === 'function') {
+            NYM.prototype.navigateBack = function () {
+                if (!phone() || listOpen() || pageState() !== 'chat') return back.apply(this, arguments);
+                jumpBack(this, this.navigationIndex - 1);
+            };
+        }
         NYM.prototype._phonePop = function () { return onPop(); };
         NYM.prototype._restoreLastView = restoreLastView;
         NYM.prototype._isPhoneLayout = phone;
         NYM.prototype._closeChatList = closeToPlace;
+        NYM.prototype._closeChatListNow = function () {
+            if (!listOpen()) return;
+            if (phone()) closeList();
+            else if (typeof this.closeSidebar === 'function') this.closeSidebar();
+        };
     }
 
     function start() {
         wrapNav();
         wrapMenus();
         window.nymActionSheet = { show: showActionSheet, close: closeActionSheet, phone: phone };
+        ['pointerdown', 'keydown', 'touchend', 'mousedown', 'click'].forEach(function (t) { window.addEventListener(t, noteGesture, true); });
+        var pb = document.getElementById('phoneBackBtn');
+        if (pb) armBackButton(pb);
         var s = sidebar();
         if (s) {
             listWasOpen = listOpen();

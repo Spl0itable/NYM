@@ -1,3 +1,5 @@
+import '../features/pms/last_seen.dart';
+
 enum UserStatus { online, away, offline, hidden }
 
 UserStatus userStatusFromString(String? s) {
@@ -14,7 +16,7 @@ UserStatus userStatusFromString(String? s) {
 }
 
 /// Active-presence threshold in ms.
-const int kActiveThresholdMs = 300000;
+const int kActiveThresholdMs = kLastSeenActiveMs;
 
 /// A seen user merged with kind-0 profile data.
 class User {
@@ -64,7 +66,7 @@ class User {
     final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
     if (awayMessage != null && awayMessage!.isNotEmpty) return UserStatus.away;
     if (status == UserStatus.away) return UserStatus.away;
-    if (now - lastSeen < kActiveThresholdMs) return UserStatus.online;
+    if (lastSeenIsActive(lastSeen, now)) return UserStatus.online;
     return UserStatus.offline;
   }
 }

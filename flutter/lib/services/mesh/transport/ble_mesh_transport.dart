@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
 import 'package:flutter/foundation.dart';
 
 import '../mesh_constants.dart';
+import 'bluetooth_name_repair.dart';
 import 'mesh_transport.dart';
 
 /// Production BLE transport running both GATT roles at once, bitchat's dual-role flood; frames are opaque here.
@@ -62,6 +62,22 @@ class BleMeshTransport implements MeshTransport {
   bool _peripheralStarting = false;
 
   final String _advertisedNameString;
+
+  @visibleForTesting
+  static Advertisement meshAdvertisement({
+    required TargetPlatform platform,
+    required String peerID,
+    required UUID serviceUuid,
+  }) =>
+      Advertisement(
+        name: platform == TargetPlatform.android ? null : peerID,
+        serviceUUIDs: [serviceUuid],
+      );
+
+  @visibleForTesting
+  static bool acceptsDiscovered(Advertisement advertisement, UUID serviceUuid) =>
+      advertisement.serviceUUIDs.isEmpty ||
+      advertisement.serviceUUIDs.contains(serviceUuid);
 
   @override
   MeshTransportAvailability get availability => _availability;
@@ -256,6 +272,7 @@ class BleMeshTransport implements MeshTransport {
   }
 
   Future<void> _onDiscovered(DiscoveredEventArgs e) async {
+    if (!acceptsDiscovered(e.advertisement, _serviceUuid)) return;
     final id = e.peripheral.uuid.toString();
     if (_centralLinks.containsKey(id) || _connecting.contains(id)) return;
     final until = _cooldownUntil[id];
@@ -390,6 +407,7 @@ class BleMeshTransport implements MeshTransport {
     if (_advertising || _peripheralStarting) return;
     _peripheralStarting = true;
     try {
+      await BluetoothNameRepair().run();
       await _peripheral.removeAllServices();
       final characteristic = GATTCharacteristic.mutable(
         uuid: _characteristicUuid,
@@ -412,12 +430,16 @@ class BleMeshTransport implements MeshTransport {
         includedServices: [],
         characteristics: [characteristic],
       ));
-      await _peripheral.startAdvertising(Advertisement(
-        name: _advertisedNameString,
-        serviceUUIDs: [_serviceUuid],
-      ));
+      final advertisement = meshAdvertisement(
+        platform: defaultTargetPlatform,
+        peerID: _advertisedNameString,
+        serviceUuid: _serviceUuid,
+      );
+      await _peripheral.startAdvertising(advertisement);
       _advertising = true;
-      _log('advertising mesh service as "$_advertisedNameString"');
+      _log(advertisement.name == null
+          ? 'advertising mesh service'
+          : 'advertising mesh service as "${advertisement.name}"');
     } catch (e) {
       _log('startAdvertising failed: $e');
     } finally {

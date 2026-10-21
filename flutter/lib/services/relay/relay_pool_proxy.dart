@@ -19,6 +19,31 @@ import 'relay_pool.dart';
 import 'relay_stats.dart';
 
 /// One role-keyed shard: stable id, relay set and (for critical) DM relays, as `_shardRelaysByRole`.
+
+int utf8ByteLength(String s) {
+  var n = 0;
+  final len = s.length;
+  for (var i = 0; i < len; i++) {
+    final c = s.codeUnitAt(i);
+    if (c < 0x80) {
+      n += 1;
+    } else if (c < 0x800) {
+      n += 2;
+    } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < len) {
+      final d = s.codeUnitAt(i + 1);
+      if (d >= 0xDC00 && d <= 0xDFFF) {
+        n += 4;
+        i++;
+      } else {
+        n += 3;
+      }
+    } else {
+      n += 3;
+    }
+  }
+  return n;
+}
+
 class RelayShard {
   RelayShard({
     required this.id,
@@ -422,6 +447,7 @@ class _ShardSocket {
     required this.onConnected,
     required this.onClosed,
     this.onLost,
+    this.onLinked,
     this.reqFilter,
     this.confirmTimeout = const Duration(seconds: 12),
     DateTime Function()? now,
@@ -430,6 +456,10 @@ class _ShardSocket {
   final String? Function(String frame)? reqFilter;
 
   final void Function(_ShardSocket sock, DateTime? lastLiveAt)? onLost;
+
+  final void Function(_ShardSocket sock)? onLinked;
+
+  bool linked = false;
 
   DateTime? openedAt;
 
@@ -513,6 +543,14 @@ class _ShardSocket {
     try {
       final ch = channelFactory(Uri.parse(url));
       _channel = ch;
+      linked = false;
+      try {
+        unawaited(ch.ready.then((_) {
+          if (!identical(_channel, ch) || !_open || linked) return;
+          linked = true;
+          onLinked?.call(this);
+        }, onError: (Object _) {}));
+      } catch (_) {}
       _sub = ch.stream.listen(
         _onData,
         onError: (Object _) => _onDone(),
@@ -547,7 +585,7 @@ class _ShardSocket {
   void _onData(dynamic data) {
     // Count inbound UTF-8 byte length, as the PWA's relayStats does.
     if (data is String) {
-      stats.bytesReceived += utf8.encode(data).length;
+      stats.bytesReceived += utf8ByteLength(data);
     } else if (data is List<int>) {
       stats.bytesReceived += data.length;
     }
@@ -595,6 +633,7 @@ class _ShardSocket {
       failuresSinceFrame++;
     }
     connectedRelays = const [];
+    linked = false;
     _cleanup();
     onClosed(this);
     if (wasLive && !_closedByUser) onLost?.call(this, lastLiveAt);
@@ -640,7 +679,7 @@ class _ShardSocket {
     }
     try {
       ch.sink.add(out);
-      stats.bytesSent += utf8.encode(out).length;
+      stats.bytesSent += utf8ByteLength(out);
       return true;
     } catch (_) {
       return false;
@@ -739,12 +778,17 @@ class RelayPoolProxy implements PoolTransport {
   void Function()? onConnectedChanged;
 
   int _notedCount = 0;
+  bool _notedLinked = false;
+
+  bool get linked => _sockets.any((s) => s.isOpen && s.linked);
 
   void _noteCount() {
     if (_disposed) return;
     final n = connectedCount;
-    if (n == _notedCount) return;
+    final l = linked;
+    if (n == _notedCount && l == _notedLinked) return;
     _notedCount = n;
+    _notedLinked = l;
     onConnectedChanged?.call();
   }
 
@@ -1103,6 +1147,7 @@ class RelayPoolProxy implements PoolTransport {
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
         onLost: _onShardLost,
+        onLinked: (_) => _noteCount(),
         reqFilter: _addedFrame,
         confirmTimeout: confirmTimeout,
         now: _now,
@@ -1327,6 +1372,7 @@ class RelayPoolProxy implements PoolTransport {
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
         onLost: _onShardLost,
+        onLinked: (_) => _noteCount(),
         reqFilter: _addedFrame,
         confirmTimeout: confirmTimeout,
         now: _now,
@@ -1518,7 +1564,7 @@ class RelayPoolProxy implements PoolTransport {
           _stats.eventsPerRelay[sourceRelay] =
               (_stats.eventsPerRelay[sourceRelay] ?? 0) + 1;
           _stats.recordRelayKind(sourceRelay, event.kind,
-              utf8.encode(jsonEncode(event.toJson())).length);
+              utf8ByteLength(jsonEncode(event.toJson())));
         }
         final sub = _subscriptions[eventSubId];
         if (sub != null) unawaited(sub.onEvent(sock.shard.id, event));

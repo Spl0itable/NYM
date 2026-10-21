@@ -336,6 +336,7 @@ Object.assign(NYM.prototype, {
   async panicWipe(opts) {
     if (this._panicking) return;
     this._panicking = true;
+    try { if (typeof this._stopAllAnonPresence === 'function') this._stopAllAnonPresence(); } catch (e) {}
     try { if (typeof this._resetAppBadge === 'function') this._resetAppBadge(); } catch (e) {}
     const localOnly = !!(opts && opts.localOnly);
     const startedAt = Date.now();

@@ -952,7 +952,7 @@ export async function onRequest(context) {
 
   // Fails open on an unloaded directory or undecodable geohash.
   function geoOriginAllowsFrame(raw, kind, relayUrl) {
-    if (kind !== 20000) return true;
+    if (kind !== 20000 && kind !== 20001) return true;
     if (!geoDirectory || typeof relayUrl !== 'string' || !relayUrl) return true;
     const geohash = extractTagValue(raw, 'g');
     if (!geohash) return true;

@@ -6,11 +6,9 @@ const NYMBOT_TURN_OUT = 700;
 Object.assign(NYM.prototype, {
 
     _pmHeaderAvatarHtml(pubkey, avatarSrc, safePk) {
-        const status = (typeof this.getEffectiveUserStatus === 'function')
-            ? this.getEffectiveUserStatus(pubkey) : 'offline';
-        const isHidden = status === 'hidden';
-        const dotStatus = isHidden ? 'offline' : status;
-        return `<span class="user-avatar-wrap pm-header-avatar${isHidden ? ' no-status' : ''}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="user-status-dot status-${dotStatus}"></span></span>`;
+        const dotStatus = this._pmHeaderDotStatus(pubkey);
+        const isHidden = dotStatus === 'hidden';
+        return `<span class="user-avatar-wrap pm-header-avatar${isHidden ? ' no-status' : ''}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="user-status-dot status-${isHidden ? 'offline' : dotStatus}"></span></span>`;
     },
 
     refreshPMHeaderStatus() {
@@ -19,13 +17,11 @@ Object.assign(NYM.prototype, {
         if (!channelEl) return;
         const dot = channelEl.querySelector('.pm-header-avatar .user-status-dot');
         if (dot) {
-            const status = (typeof this.getEffectiveUserStatus === 'function')
-                ? this.getEffectiveUserStatus(this.currentPM) : 'offline';
-            const isHidden = status === 'hidden';
-            const dotStatus = isHidden ? 'offline' : status;
+            const dotStatus = this._pmHeaderDotStatus(this.currentPM);
+            const isHidden = dotStatus === 'hidden';
             const wrap = dot.parentElement;
             if (wrap) wrap.classList.toggle('no-status', isHidden);
-            dot.className = `user-status-dot status-${dotStatus}`;
+            dot.className = `user-status-dot status-${isHidden ? 'offline' : dotStatus}`;
         }
         const seenEl = channelEl.querySelector('.pm-last-seen .loc-country');
         if (seenEl) {
@@ -33,18 +29,50 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Live status when active/away, otherwise the relative time we last saw them.
-    _pmLastSeenText(pubkey) {
-        if (this.isVerifiedBot(pubkey)) return 'Always at your service';
+    _pmPeerActivityMs(pubkey) {
+        const key = typeof this.getPMConversationKey === 'function' ? this.getPMConversationKey(pubkey) : null;
+        const list = key && this.pmMessages ? this.pmMessages.get(key) : null;
+        let newest = 0;
+        if (Array.isArray(list)) {
+            for (const m of list) {
+                if (!m || m.isOwn || m.pubkey !== pubkey) continue;
+                const ms = (m.created_at || 0) * 1000;
+                if (ms > newest) newest = ms;
+            }
+        }
+        return newest;
+    },
+
+    _pmSeenView(pubkey) {
         const status = (typeof this.getEffectiveUserStatus === 'function')
             ? this.getEffectiveUserStatus(pubkey) : 'offline';
-        if (status === 'hidden') return '';
-        if (status === 'online') return 'Active now';
-        if (status === 'away') return 'Away';
         const user = this.users.get(pubkey);
-        const lastSeen = user ? (user.lastSeen || 0) : 0;
-        if (lastSeen > 0 && typeof this._formatRelativeTime === 'function') {
-            return `Last seen ${this._formatRelativeTime(lastSeen)}`;
+        const input = {
+            nowMs: Date.now(),
+            bot: this.isVerifiedBot(pubkey),
+            hidden: status === 'hidden',
+            away: status === 'away',
+            seenMs: [user ? (user.lastSeen || 0) : 0, this._pmPeerActivityMs(pubkey)]
+        };
+        return { status, view: self.NymLastSeen.view(input) };
+    },
+
+    _pmHeaderDotStatus(pubkey) {
+        const { status, view } = this._pmSeenView(pubkey);
+        if (view.state === 'bot') return status === 'hidden' ? 'hidden' : status;
+        if (view.state === 'hidden') return 'hidden';
+        if (view.state === 'away') return 'away';
+        return view.state === 'active' ? 'online' : 'offline';
+    },
+
+    _pmLastSeenText(pubkey) {
+        const { view } = this._pmSeenView(pubkey);
+        if (view.state === 'bot') return 'Always at your service';
+        if (view.state === 'hidden') return '';
+        if (view.state === 'active') return 'Active now';
+        if (view.state === 'away') return 'Away';
+        if (view.state === 'seen' && typeof this._formatRelativeTime === 'function') {
+            return `Last seen ${this._formatRelativeTime(view.atMs)}`;
         }
         return 'Last seen unknown';
     },
@@ -70,7 +98,14 @@ Object.assign(NYM.prototype, {
         }
         statusEl.className = `delivery-status ${receiptType}`;
         statusEl.title = receiptType.charAt(0).toUpperCase() + receiptType.slice(1);
-        statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
+        statusEl.innerHTML = this.deliveryTicksHtml(receiptType);
+    },
+
+    deliveryTicksHtml(type) {
+        const d = type === 'read'
+            ? 'M18 7l-1.41-1.41-6.34 6.34 1.41 1.41L18 7zm4.24-1.41L11.66 16.17 7.48 12l-1.41 1.41L11.66 19l12-12-1.42-1.41zM.41 13.41L6 19l1.41-1.41L1.83 12 .41 13.41z'
+            : 'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z';
+        return `<svg class="delivery-ticks" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="${d}"/></svg>`;
     },
 
     // Keyed by uppercased nym/bitchat message id, keeping the highest status per id.
@@ -1057,6 +1092,7 @@ Object.assign(NYM.prototype, {
                 const UA = window.NymUploadActivity;
                 if (UA ? UA.isStale(rumorAge, parsed && parsed.ttl) : rumorAge > this._typingExpireMs / 1000) return;
                 this.handleTypingIndicatorEvent(parsed, senderPubkey, senderVerified);
+                if (!isOwn && parsed) this.recordUserActivity(senderPubkey, (rumor.created_at || 0) * 1000);
                 return;
             }
 
@@ -1077,7 +1113,7 @@ Object.assign(NYM.prototype, {
                 const receiptIds = (nymReceipt && nymReceipt.messageIds) || [];
                 if (nymReceipt && receiptIds.length) {
                     const receiptType = nymReceipt.receiptType;
-                    if (receiptType === 'read') this.recordUserActivity(senderPubkey);
+                    if (receiptType === 'read') this.recordUserActivity(senderPubkey, (rumor.created_at || 0) * 1000);
                     for (const rawId of receiptIds) {
                     const receiptId = rawId.toUpperCase();
 
@@ -1126,7 +1162,7 @@ Object.assign(NYM.prototype, {
                     const receiptType = parsedEarly.type === 0x02 ? 'read' : 'delivered';
                     const receiptId = parsedEarly.messageId?.toUpperCase();
 
-                    if (receiptType === 'read') this.recordUserActivity(senderPubkey);
+                    if (receiptType === 'read') this.recordUserActivity(senderPubkey, (rumor.created_at || 0) * 1000);
 
                     if (receiptId) {
                         let receiptMatched = false;
@@ -1188,6 +1224,7 @@ Object.assign(NYM.prototype, {
 
             if (rumor.kind === 7) {
                 if (!senderVerified) return;
+                if (!isOwn) this.recordUserActivity(senderPubkey, (rumor.created_at || 0) * 1000);
                 const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
                 if (eTag) {
                     const reactionMessageId = eTag[1];
@@ -1514,6 +1551,7 @@ Object.assign(NYM.prototype, {
             this.movePMToTop(peerPubkey, tsSec * 1000);
 
             if (!isOwn) {
+                if (senderVerified) this.recordUserActivity(senderPubkey, tsSec * 1000);
                 const convTypers = this.typingUsers.get(conversationKey);
                 if (convTypers && convTypers.has(senderPubkey)) {
                     const entry = convTypers.get(senderPubkey);
@@ -2407,7 +2445,7 @@ Object.assign(NYM.prototype, {
             if (this.isVerifiedBot(recipientPubkey) && this.botAnonEnabled && this.botAnonEnabled()) {
                 const blocked = this.botAnonBlockedReason();
                 if (blocked) {
-                    this.displaySystemMessage('Anonymous Nymbot chat: ' + blocked);
+                    this.displaySystemMessage(this.uiText('Anonymous Nymbot chat: {reason}', { reason: blocked }));
                     return false;
                 }
             }
@@ -2755,7 +2793,7 @@ Object.assign(NYM.prototype, {
         let targetPubkey = this.normalizePubkeyInput(targetArg);
         if (!targetPubkey) targetPubkey = this.resolvePubkeyFromNym(targetArg);
         if (!targetPubkey) {
-            this.displaySystemMessage(`Could not resolve "${targetArg}". Try ?transfer with a full nym (e.g. ?transfer @friend#a1b2 confirm), an npub, or a 64-char hex pubkey.`);
+            this.displaySystemMessage(this.uiText(`Could not resolve "{targetArg}". Try ?transfer with a full nym (e.g. ?transfer @friend#a1b2 confirm), an npub, or a 64-char hex pubkey.`, { targetArg }));
             return;
         }
         if (targetPubkey === this.pubkey) {
@@ -2774,7 +2812,7 @@ Object.assign(NYM.prototype, {
             const parts = [];
             if (have > 0) parts.push(this._creditWord(have, 'credit'));
             if (havePro > 0) parts.push(this._creditWord(havePro, 'Pro credit'));
-            this.displaySystemMessage(`Transfer ALL ${parts.join(' and ')} to @${targetNym}? This empties your balance. To confirm, type: ?transfer @${targetNym}#${this.getPubkeySuffix(targetPubkey)} confirm`, 'system', { feed: true });
+            this.displaySystemMessage(this.uiText(`Transfer ALL {v1} to @{targetNym}? This empties your balance. To confirm, type: ?transfer @{targetNym2}#{targetPubkey} confirm`, { v1: parts.join(' and '), targetNym, targetNym2: targetNym, targetPubkey: this.getPubkeySuffix(targetPubkey) }), 'system', { feed: true });
             return;
         }
         try {
@@ -2782,7 +2820,7 @@ Object.assign(NYM.prototype, {
             if (!apiHost) return;
             const { status, data } = await this._botMoneyRequest('transfer-credits', { targetPubkey });
             if (status >= 400 || !data || data.error) {
-                this.displaySystemMessage('Transfer failed: ' + ((data && data.error) || 'request failed'));
+                this.displaySystemMessage(this.uiText('Transfer failed: {error}', { error: (data && data.error) || this.uiText('request failed') }));
                 return;
             }
             this._setBotCreditDisplay(0);
@@ -2790,7 +2828,7 @@ Object.assign(NYM.prototype, {
             const moved = [];
             if (data.transferred > 0) moved.push(`${data.transferred} credit${data.transferred === 1 ? '' : 's'}`);
             if (data.proTransferred > 0) moved.push(`${data.proTransferred} Pro credit${data.proTransferred === 1 ? '' : 's'}`);
-            this.displaySystemMessage(`Transferred ${moved.join(' and ') || '0 credits'} to @${targetNym}. Your balance is now 0.`);
+            this.displaySystemMessage(this.uiText(`Transferred {v1} to @{targetNym}. Your balance is now 0.`, { v1: moved.join(' and ') || '0 credits', targetNym }));
         } catch (e) {
             this.displaySystemMessage('Transfer failed. Please try again.');
         }
@@ -3146,11 +3184,11 @@ Object.assign(NYM.prototype, {
         const resolved = this._botProResolveKey(arg) || arg;
         const picked = this._botProModelList().find(m => m.key === resolved);
         if (!picked) {
-            this.displaySystemMessage(`Unknown model "${arg}". Type ?model to see the available Pro models.`);
+            this.displaySystemMessage(this.uiText(`Unknown model "{arg}". Type ?model to see the available Pro models.`, { arg }));
             return;
         }
         this._setBotProModel(picked.key);
-        this.displaySystemMessage(`Nymbot Pro model set to ${picked.label} — every reply now uses it (${this._botProPriceLabel(picked)}). Type ?model off to switch back.`);
+        this.displaySystemMessage(this.uiText(`Nymbot Pro model set to {label} — every reply now uses it ({picked}). Type ?model off to switch back.`, { label: picked.label, picked: this._botProPriceLabel(picked) }));
     },
 
     _botCheckSvg() {
@@ -3197,6 +3235,113 @@ Object.assign(NYM.prototype, {
             anonBtn.setAttribute('data-tip', anonOn
                 ? 'Anonymous: Nymbot sees a throwaway key, not your nym'
                 : 'Chat from a throwaway key Nymbot cannot link to your nym');
+        }
+        this._renderBotChip(isPro);
+    },
+
+    _botChipNow() {
+        return Date.now();
+    },
+
+    _botChipKey(anon) {
+        const useAnon = typeof anon === 'boolean' ? anon : (typeof this.botAnonReady === 'function' && this.botAnonReady());
+        if (!useAnon) return this.pubkey || null;
+        return typeof this.botAnonPubkey === 'function' ? this.botAnonPubkey() : null;
+    },
+
+    _botFreeSet(key, free) {
+        if (!key || !free || typeof free !== 'object' || !Number.isFinite(Number(free.left))) return;
+        if (!(this._botFree instanceof Map)) this._botFree = new Map();
+        this._botFree.delete(key);
+        this._botFree.set(key, {
+            left: Number(free.left),
+            limit: Number.isFinite(Number(free.limit)) && free.limit != null ? Number(free.limit) : null,
+            resetsAt: Number.isFinite(Number(free.resetsAt)) && free.resetsAt != null ? Number(free.resetsAt) : null
+        });
+        if (this._botFree.size > 8) this._botFree.delete(this._botFree.keys().next().value);
+        this._refreshBotControlBar();
+    },
+
+    _botChipView(s) {
+        const DAY = 86400000;
+        const noBuy = !!s.purchasesDisabled;
+        const buyTip = noBuy ? 'Nymbot credits' : 'Buy Nymbot credits';
+        const bal = typeof s.balance === 'number' && Number.isFinite(s.balance) ? s.balance : null;
+        if (bal !== null && bal > 0) return { label: null, figure: bal, tip: buyTip };
+        const f = s.free;
+        if (s.tier !== 'pro' && f && f.left != null && Number.isFinite(Number(f.left))) {
+            let left = Math.max(0, Math.floor(Number(f.left)));
+            const limit = f.limit != null && Number.isFinite(Number(f.limit)) ? Math.max(0, Math.floor(Number(f.limit))) : null;
+            let at = f.resetsAt != null && Number.isFinite(Number(f.resetsAt)) ? Number(f.resetsAt) : null;
+            const now = Number(s.now);
+            if (at !== null && limit !== null && Number.isFinite(now) && now >= at) {
+                at += Math.ceil((now - at + 1) / DAY) * DAY;
+                left = limit;
+            }
+            if (left > 0) {
+                return at !== null
+                    ? { label: '{n} free', n: left, tip: 'Free replies left today. Resets at {time}', at }
+                    : { label: '{n} free', n: left, tip: 'Free replies left today' };
+            }
+            if (!noBuy) return { label: 'Buy', tip: buyTip };
+            return at !== null
+                ? { label: '{n} free', n: 0, tip: 'Free replies reset at {time}', at }
+                : { label: '{n} free', n: 0, tip: 'Free replies left today' };
+        }
+        if (s.tier === 'pro' && bal !== null) return noBuy ? { label: null, figure: 0, tip: buyTip } : { label: 'Buy', tip: buyTip };
+        return { label: noBuy ? 'Free' : 'Buy', tip: buyTip };
+    },
+
+    _renderBotChip(isPro) {
+        const btn = document.getElementById('botBuyBtn');
+        if (!btn) return;
+        const key = this._botChipKey();
+        const free = this._botFree instanceof Map && key ? (this._botFree.get(key) || null) : null;
+        const now = this._botChipNow();
+        const v = this._botChipView({
+            tier: isPro ? 'pro' : 'standard',
+            balance: isPro ? this._lastBotProCredits : this._lastBotCredits,
+            free,
+            now,
+            purchasesDisabled: false
+        });
+        let label;
+        if (v.label === '{n} free') label = this.uiText('{n} free', { n: String(v.n) });
+        else if (v.label === 'Free') label = this.uiText('Free');
+        else if (v.label === 'Buy') label = this.uiText('Buy');
+        else label = this._creditFigure(v.figure);
+        const span = btn.querySelector('.bot-ctrl-label');
+        if (span) {
+            span.textContent = label;
+            span.toggleAttribute('data-no-i18n', true);
+        }
+        let time = '';
+        if (v.at) {
+            try {
+                const lang = typeof this.getUiLanguage === 'function' ? this.getUiLanguage() : undefined;
+                time = new Date(v.at).toLocaleTimeString(lang || undefined, { hour: 'numeric', minute: '2-digit' });
+            } catch (_) {
+                time = new Date(v.at).toLocaleTimeString();
+            }
+        }
+        let tip;
+        if (v.tip === 'Free replies left today. Resets at {time}') tip = this.uiText('Free replies left today. Resets at {time}', { time });
+        else if (v.tip === 'Free replies reset at {time}') tip = this.uiText('Free replies reset at {time}', { time });
+        else if (v.tip === 'Free replies left today') tip = this.uiText('Free replies left today');
+        else if (v.tip === 'Nymbot credits') tip = this.uiText('Nymbot credits');
+        else tip = this.uiText('Buy Nymbot credits');
+        btn.setAttribute('data-tip', tip);
+        if (this._botChipTimer) clearTimeout(this._botChipTimer);
+        this._botChipTimer = null;
+        let wake = null;
+        if (free && free.resetsAt !== null && free.limit !== null) {
+            wake = free.resetsAt > now ? free.resetsAt : free.resetsAt + Math.ceil((now - free.resetsAt + 1) / 86400000) * 86400000;
+        }
+        if (wake !== null) {
+            this._botChipTimer = setTimeout(() => {
+                this._botChipTimer = null;
+                this._refreshBotControlBar();
+            }, Math.min(2147483647, Math.max(0, wake - now) + 50));
         }
     },
 
@@ -3386,7 +3531,7 @@ Object.assign(NYM.prototype, {
         if (key && !picked) return;
         this._setBotProModel(picked ? picked.key : null);
         if (picked) {
-            this.displaySystemMessage(`Nymbot Pro model set to ${picked.label} — every reply now uses it (${this._botProPriceLabel(picked)}). Type ?model off to switch back.`);
+            this.displaySystemMessage(this.uiText(`Nymbot Pro model set to {label} — every reply now uses it ({picked}). Type ?model off to switch back.`, { label: picked.label, picked: this._botProPriceLabel(picked) }));
         } else if (prev) {
             this.displaySystemMessage('Nymbot Pro off — back to standard multi-model routing (standard credits).');
         }
@@ -3485,7 +3630,7 @@ Object.assign(NYM.prototype, {
             }
             const giftPubkey = this.resolvePubkeyFromNym(arg);
             if (!giftPubkey) {
-                this.displaySystemMessage(`Could not find user "${arg}". Try ?gift with their full nym (e.g. ?gift @cyber_wolf#a3f2).`);
+                this.displaySystemMessage(this.uiText(`Could not find user "{arg}". Try ?gift with their full nym (e.g. ?gift @cyber_wolf#a3f2).`, { arg }));
                 return;
             }
             const giftNym = this.stripPubkeySuffix(this.getNymFromPubkey(giftPubkey));
@@ -3546,15 +3691,17 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return null;
+            const key = this._botChipKey();
             const { status, data } = await this._botMoneyRequest('balance', {});
             if (status >= 400 || !data || data.error) {
-                if (display) this.displaySystemMessage('Nymbot: ' + ((data && data.error) || 'could not check balance'));
+                if (display) this.displaySystemMessage(this.uiText('Nymbot: {error}', { error: (data && data.error) || this.uiText('could not check balance') }));
                 return null;
             }
             this._setBotCreditDisplay(
                 data.balanceCredits != null ? data.balanceCredits : data.balance);
             const proLeft = data.proBalanceCredits != null ? data.proBalanceCredits : data.proBalance;
             if (typeof proLeft === 'number') this._setBotProCreditDisplay(proLeft);
+            this._botFreeSet(key, data.free);
             if (display) {
                 const b = (data.balanceCredits != null ? data.balanceCredits : data.balance) || 0;
                 const p = (data.proBalanceCredits != null ? data.proBalanceCredits : data.proBalance) || 0;
@@ -4317,7 +4464,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 
             return true;
         } catch (error) {
-            this.displaySystemMessage('Failed to edit message: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to edit message: {error}', { error: error.message }));
             return false;
         }
     },
@@ -4368,7 +4515,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         });
 
         if (matches.length === 0) {
-            this.displaySystemMessage(`User ${targetInput} not found`);
+            this.displaySystemMessage(this.uiText(`User {targetInput} not found`, { targetInput }));
             return;
         }
 
@@ -4376,7 +4523,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             const matchList = matches.map(m =>
                 `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
             ).join(', ');
-            this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true, feed: true });
+            this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(searchNym)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
             this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
             return;
         }
@@ -4539,7 +4686,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
                 }
             } catch (error) {
                 if (!(error && error.name === 'AbortError')) {
-                    this.displaySystemMessage('Failed to upload image: ' + (error?.message || error));
+                    this.displaySystemMessage(this.uiText('Failed to upload image: {error}', { error: error?.message || error }));
                 }
             }
         };
@@ -4777,7 +4924,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             const groupOpts = { avatar: this._newGroupAvatar || null, banner: this._newGroupBanner || null, description: groupDesc, allowMemberInvites };
             this._newGroupAvatar = null;
             this._newGroupBanner = null;
-            this.displaySystemMessage(`Creating group "${groupName}"...`);
+            this.displaySystemMessage(this.uiText(`Creating group "{groupName}"...`, { groupName }));
             const groupId = await this.createGroup(groupName, memberPubkeys, groupOpts);
             if (groupId && initialMsg) {
                 this.sendGroupMessage(initialMsg, groupId);
@@ -4813,7 +4960,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         }).sort((a, b) => this._compareMessages(a, b));
     },
 
-    loadOlderPMMessages(conversationKey) {
+    loadOlderPMMessages(conversationKey, targetId) {
         if (this.activeThread) return false;
         const container = this._cvLoadCtx?.container || document.getElementById('messagesContainer');
         const scroller = this._cvLoadCtx?.scroller || this._getMessagesScroller();
@@ -4825,7 +4972,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         const messages = this.getFilteredPMMessages(conversationKey);
         if (messages.length === 0) return false;
 
-        const newStart = Math.max(0, currentStart - this.pmLoadMoreSize);
+        const newStart = this._olderPageStart(messages, currentStart, this.pmLoadMoreSize, targetId);
         if (newStart === currentStart) return false;
 
         this.pmRenderedStart.set(conversationKey, newStart);
@@ -4839,6 +4986,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         this._suppressBubbleRewrap = true;
         const frag = document.createDocumentFragment();
         this._bulkContainer = frag;
+        this._bulkDomIds = this._bulkDomIdSet();
         this._bulkAppending = true;
 
         for (let i = 0; i < olderMessages.length; i++) {
@@ -4846,6 +4994,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         }
 
         this._bulkAppending = false;
+        this._bulkDomIds = null;
         this._bulkContainer = null;
         this._suppressSound = false;
         this._suppressBubbleRewrap = false;
@@ -4860,7 +5009,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             container.insertBefore(topNotice, container.firstChild);
         }
 
-        this._recomputeAllBubbleGrouping(container);
+        if (!this._olderRegroupLater) this._recomputeAllBubbleGrouping(container);
 
         scroller.scrollTop = scrollTopBefore;
         requestAnimationFrame(() => { scroller.scrollTop = scrollTopBefore; });

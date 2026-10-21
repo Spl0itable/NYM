@@ -49,7 +49,7 @@ object BuildIntegrity {
     }
 
     /** SHA-256 of the signing certificate, which separates Play installs from repackaged sideloads. */
-    private fun signingCertSha256(pm: PackageManager, pkg: String): String? {
+    internal fun signingCertSha256(pm: PackageManager, pkg: String): String? {
         return try {
             @Suppress("DEPRECATION")
             val certs: Array<android.content.pm.Signature>? =
@@ -68,7 +68,7 @@ object BuildIntegrity {
         }
     }
 
-    private fun installerPackage(pm: PackageManager, pkg: String): String? {
+    internal fun installerPackage(pm: PackageManager, pkg: String): String? {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 pm.getInstallSourceInfo(pkg).installingPackageName
@@ -81,13 +81,13 @@ object BuildIntegrity {
         }
     }
 
-    private fun versionName(pm: PackageManager, pkg: String): String? = try {
+    internal fun versionName(pm: PackageManager, pkg: String): String? = try {
         pm.getPackageInfo(pkg, 0).versionName
     } catch (_: Throwable) {
         null
     }
 
-    private fun versionCode(pm: PackageManager, pkg: String): Long? = try {
+    internal fun versionCode(pm: PackageManager, pkg: String): Long? = try {
         val info = pm.getPackageInfo(pkg, 0)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             info.longVersionCode

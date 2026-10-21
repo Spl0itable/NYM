@@ -21,6 +21,7 @@ import {
   buildPqGiftWrappedDMPair
 } from "./_pq.js";
 export { NymLedger } from "./_ledger.js";
+import { atRestSplit, atRestJoin } from "./_atrest.js";
 export { suppliedWraps, wrapsFor, wrapsToCache, scopeLabelInThread,
   botCachedWraps, fetchGiftWrapsByIds };
 import {
@@ -86,7 +87,7 @@ import { filterSet, rowHit } from "./_filters.js";
 import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runTurnsRecent, runTurnAdd, runResultPut,
   runResultGet, runGet, runCountLive, runStart, runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent,
   runSteerAdd, runSteerList, runSteerMark, runSteerMiss, runSteerStatus, runSweep, RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS,
-  RUN_STEER_CHARS } from "./_runs.js";
+  RUN_STEER_CHARS, RUN_RESULT_KEEP_MS } from "./_runs.js";
 
 
 // Unwraps pq2, pq1 or plain NIP-44, independently at the wrap and seal layers.
@@ -301,6 +302,7 @@ function aiSafeValue(value) {
 }
 
 function aiRun(ai, model, input, options) {
+  if (options && options.gateway) options = Object.assign({}, options, { gateway: Object.assign({}, options.gateway, { collectLog: false }) });
   return options ? ai.run(model, aiSafeValue(input), options) : ai.run(model, aiSafeValue(input));
 }
 
@@ -1937,6 +1939,7 @@ function proErrorDetail(data) {
 }
 
 async function proHttpChat(url, headers, body, shape) {
+  if (!/^https:\/\/api\.cloudflare\.com\//.test(String(url))) headers = Object.assign({}, headers, { "cf-aig-collect-log": "false" });
   var res = await fetch(url, { method: "POST", headers: headers, body: JSON.stringify(aiSafeValue(body)) });
   var raw = await res.text();
   var data = null;
@@ -3262,6 +3265,37 @@ function botSteerWhy(no) {
   return "gone";
 }
 
+function botLogLine(label, e) {
+  var kind = e && typeof e === "object" ? String(e.name || (e.constructor && e.constructor.name) || "Error") : typeof e;
+  var code = e && typeof e === "object" ? Number(e.status || e.httpStatus) : 0;
+  return label + ": " + kind.slice(0, 60) + (Number.isFinite(code) && code > 0 ? " status " + code : "");
+}
+
+function botLogCause(e) {
+  return (/^(?:HTTP \d{3}|blocked)\b/.exec(String((e && e.message) || "")) || [/^(?:Abort|Timeout)Error$/.test(String(e && e.name)) ? "timeout" : "error"])[0];
+}
+
+async function botResultPut(env, pk, keys, result, at) {
+  var parts = atRestSplit(result && result.body);
+  if (parts.side) {
+    var ids = (keys || []).filter(Boolean).map(function (k) { return "r:" + pk + ":" + k; });
+    var ttl = Math.ceil(((Number(at) || Date.now()) + RUN_RESULT_KEEP_MS - Date.now()) / 1000);
+    if (ids.length && ttl > 0) {
+      try { await ledgerCall(env, { op: "side-put", keys: ids, side: parts.side, ttl: ttl }); } catch (e) { }
+    }
+  }
+  return runResultPut(env.DB_BOT, pk, keys, parts.side ? Object.assign({}, result, { body: parts.rest }) : result, at);
+}
+
+async function botResultGet(env, pk, key) {
+  var row = await runResultGet(env.DB_BOT, pk, key);
+  if (!row || !row.body || typeof row.body !== "object") return row;
+  var got = null;
+  try { got = await ledgerCall(env, { op: "side-get", key: "r:" + pk + ":" + key }); } catch (e) { got = null; }
+  if (!got || !got.side) return row;
+  return Object.assign({}, row, { body: atRestJoin(row.body, got.side) });
+}
+
 async function botEarlyClaim(env, pk, eventId, json) {
   var key = botTurnKey(pk, eventId);
   var p = null;
@@ -3273,7 +3307,7 @@ async function botEarlyClaim(env, pk, eventId, json) {
     if (waited.pending) return json({ pending: true, message: BOT_PENDING_TEXT }, 202);
     return null;
   }
-  var stored = await runResultGet(env.DB_BOT, String(pk).toLowerCase(), "e:" + String(eventId).toLowerCase());
+  var stored = await botResultGet(env, String(pk).toLowerCase(), "e:" + String(eventId).toLowerCase());
   if (stored && stored.body) return json(stored.body, stored.status || 200);
   return null;
 }
@@ -3964,7 +3998,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         (heard.result && heard.result.text))) || "").trim();
     } catch (e) {
       var ref = errorRef();
-      console.error("nymbot transcribe failed ref " + ref, e);
+      console.error(botLogLine("nymbot transcribe failed ref " + ref, e));
       return json({ error: "Transcription failed. Please try again. (ref " + ref + ")" }, 502);
     }
     return json({ text: said });
@@ -4205,7 +4239,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       return json(claimPoll.result.body, claimPoll.result.status || 200);
     }
     if (claimPoll && claimPoll.state === "running") return json({ pending: true, state: "running" }, 202);
-    var claimStored = await runResultGet(env.DB_BOT, String(userPubkey).toLowerCase(), "e:" + String(body.eventId).toLowerCase());
+    var claimStored = await botResultGet(env, String(userPubkey).toLowerCase(), "e:" + String(body.eventId).toLowerCase());
     if (claimStored && claimStored.body) return json(claimStored.body, claimStored.status || 200);
     return json({ unknown: true, error: "Nothing is stored or running for that message." }, 404);
   }
@@ -4432,7 +4466,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       await holdDrop();
       var storeKeys = ["e:" + String(currentId).toLowerCase()];
       if (isHex64(msgId)) storeKeys.push("x:" + String(msgId).toLowerCase());
-      await runResultPut(env.DB_BOT, runPk, storeKeys, { body: obj, status: status || 200 }, Date.now());
+      await botResultPut(env, runPk, storeKeys, { body: obj, status: status || 200 }, Date.now());
       var keys = turnKeys;
       turnKeys = [];
       for (var i = 0; i < keys.length; i++) await botTurnFinish(env, keys[i], obj, status);
@@ -4561,7 +4595,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         await freeGiveBack();
         return msgClaimed;
       }
-      var msgStored = await runResultGet(env.DB_BOT, runPk, "x:" + String(msgId).toLowerCase());
+      var msgStored = await botResultGet(env, runPk, "x:" + String(msgId).toLowerCase());
       if (msgStored && msgStored.body) {
         var msgReplay = json(msgStored.body, msgStored.status || 200);
         await turnRelease();
@@ -4857,7 +4891,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       } catch (e) {
         // Nothing is charged when generation or upload fails.
         var ref = errorRef();
-        console.error("nymbot media generation failed ref " + ref, e);
+        console.error(botLogLine("nymbot media generation failed ref " + ref, e));
         return await turnFail({ error: "Nymbot could not create that. Please try again. (ref " + ref + ")" }, 500);
       }
       var mediaSpend = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: mediaCost, ts: Date.now(), tier: mediaTier, hold: holdId || undefined });
@@ -4976,7 +5010,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     } catch (e) {
       if (!(e && e.botStopped) && !(runCtl && runCtl.cancel)) {
         var ref = errorRef();
-        console.error("nymbot chat failed ref " + ref, e);
+        console.error(botLogLine("nymbot chat failed ref " + ref, e));
         return await turnFail({ error: "Nymbot hit an error. Please try again. (ref " + ref + ")" }, 500);
       }
       chatResult = botStoppedResult(e);
@@ -5224,7 +5258,7 @@ async function onRequest(context) {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
       await botReleaseStrandedTurn(context);
-      console.error("bot PM action error:", e);
+      console.error(botLogLine("bot PM action error", e));
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
         headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
@@ -5240,7 +5274,8 @@ async function onRequest(context) {
     return botChannelStream(context, body, privkey, pubkey);
   }
 
-  const { command, args, geohash, conversation, senderNym, publishedContent, activeUsers, lang, threadRoot } = body;
+  const { command, args, geohash, conversation, publishedContent, activeUsers, lang, threadRoot } = body;
+  const senderNym = botSenderNym(body.senderNym);
   const channelMessages = Array.isArray(body.channelMessages)
     ? body.channelMessages.filter(function (m) {
         return !m || typeof m.channel !== "string" || isValidChannelTag(m.channel.replace(/^#/, ""));
@@ -5341,7 +5376,7 @@ async function onRequest(context) {
         });
     }
   } catch (e) {
-    console.error("command processing error:", e);
+    console.error(botLogLine("command processing error", e));
     response = "Sorry, something went wrong processing that command.";
   }
 
@@ -5382,11 +5417,10 @@ async function onRequest(context) {
   // Quote the user's full message on ?ask replies so swipe-replies continue the thread.
   var quoteTag = null;
   if (command.toLowerCase() === "ask" && senderNym) {
-    var userMsg = (publishedContent || args || "").replace(/@nymbot(?:#[a-f0-9]{4})?/gi, "").trim();
-    if (userMsg) {
-      // Inside a thread the root reference already identifies the question, so skip the quote block.
-      if (!replyThreadRoot) {
-        // Quote data in the nymquote tag for Nymchat clients to reconstruct.
+    var asked = botAskedText(args);
+    if (asked) {
+      var userMsg = botQuoteText(publishedContent, asked);
+      if (!replyThreadRoot && userMsg) {
         quoteTag = ["nymquote", senderNym, userMsg];
       }
       // Drop a mention the model wrote itself, or it ends up doubled.
@@ -5431,6 +5465,9 @@ async function onRequest(context) {
     pubkey: pubkey
   };
 
+  if (context.botRunCut && context.botRunCut.timedOut) {
+    return botJsonResponse(504, { error: "Timed out" });
+  }
   var signed = signEvent(event, privkey);
   var shared = botPublishChannelReply(signed, channelKey).catch(function () { return false; });
   if (context && typeof context.waitUntil === "function") context.waitUntil(shared);
@@ -5458,9 +5495,36 @@ function botAskerTag(askerPubkey, senderNym) {
   if (typeof askerPubkey !== "string") return null;
   var pk = askerPubkey.trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(pk)) return null;
-  var m = typeof senderNym === "string" ? senderNym.trim().match(/#([0-9a-f]{4})$/i) : null;
+  var nym = botSenderNym(senderNym);
+  var m = nym ? nym.match(/#([0-9a-f]{4})$/i) : null;
   if (!m || m[1].toLowerCase() !== pk.slice(-4)) return null;
   return ["asker", pk];
+}
+
+var BOT_NYM_MAX = 20;
+var BOT_NYM_MENTION_RE = /@nymbot(?:#[a-f0-9]{4})?/gi;
+
+function botSenderNym(senderNym) {
+  if (typeof senderNym !== "string" || senderNym.length > BOT_NYM_MAX + 5) return undefined;
+  var m = senderNym.match(/^([\s\S]*)#[0-9a-f]{4}$/i);
+  if (!m) return undefined;
+  var base = m[1];
+  if (!base || base.length > BOT_NYM_MAX || base.trim() !== base) return undefined;
+  if (/[\p{C}\p{Z}]/u.test(base.replace(/ /g, ""))) return undefined;
+  return senderNym;
+}
+
+function botAskedText(args) {
+  return typeof args === "string" ? args.replace(BOT_NYM_MENTION_RE, "").replace(/\s+/g, " ").trim() : "";
+}
+
+function botQuoteText(publishedContent, asked) {
+  if (typeof publishedContent !== "string" || !publishedContent.trim()) return asked;
+  var shown = publishedContent.replace(BOT_NYM_MENTION_RE, "").trim();
+  var flat = shown.replace(/\s+/g, " ");
+  if (flat === asked) return shown;
+  var m = flat.match(/^\?[\p{L}\p{N}_-]{1,32} ([\s\S]*)$/u);
+  return m && m[1] === asked ? shown : "";
 }
 
 async function botPublicRefusal(context, body) {
@@ -5520,6 +5584,7 @@ function botChannelStream(context, body, privkey, pubkey) {
     return send(Object.assign({ state: "thinking" }, typing ? { typing: typing } : {}, extra || {}));
   }
   var deadline = Date.now() + BOT_CHANNEL_RUN_MAX_MS;
+  var cut = { timedOut: false };
   var work = (async function () {
     thinking({ deadline: deadline, limitMs: BOT_CHANNEL_RUN_MAX_MS });
     var beat = setInterval(thinking, BOT_CHANNEL_KEEPALIVE_MS);
@@ -5527,17 +5592,17 @@ function botChannelStream(context, body, privkey, pubkey) {
     var outcome;
     try {
       outcome = await Promise.race([
-        onRequest(Object.assign({}, context, { request: innerRequest, botRateTaken: true, botRunId: runId })).then(async function (res) {
+        onRequest(Object.assign({}, context, { request: innerRequest, botRateTaken: true, botRunId: runId, botRunCut: cut })).then(async function (res) {
           var data = null;
           try { data = await res.json(); } catch (e) { data = null; }
           return { status: res.status, data: data };
         }),
         new Promise(function (resolve) {
-          limit = setTimeout(function () { resolve({ timedOut: true }); }, BOT_CHANNEL_RUN_MAX_MS);
+          limit = setTimeout(function () { cut.timedOut = true; resolve({ timedOut: true }); }, BOT_CHANNEL_RUN_MAX_MS);
         })
       ]);
     } catch (e) {
-      console.error("nymbot channel stream failed:", e);
+      console.error(botLogLine("nymbot channel stream failed", e));
       outcome = { status: 500, data: null };
     }
     clearInterval(beat);
@@ -7096,9 +7161,9 @@ async function runSearchSources(sources) {
     // Promise.resolve().then contains a source that throws synchronously.
     return Promise.resolve().then(source.run).then(function (results) {
       collected[i] = Array.isArray(results) ? results : [];
-      if (!collected[i].length) console.warn("nymbot web search: " + source.name + " returned no results");
+      if (!collected[i].length) console.warn("nymbot web search: " + source.name.split(":")[0] + " returned no results");
     }, function (e) {
-      console.warn("nymbot web search: " + source.name + " failed — " + ((e && e.message) || e));
+      console.warn("nymbot web search: " + source.name.split(":")[0] + " failed — " + botLogCause(e));
     });
   });
   var deadline;
@@ -7114,7 +7179,7 @@ async function webSearch(query, geohash, env) {
   // Weather questions try the dedicated live weather source first.
   if (/\b(weather|forecast|temperature)\b/i.test(query)) {
     var weatherResults = await searchWeather(query, geohash).catch(function (e) {
-      console.warn("nymbot web search: weather failed — " + ((e && e.message) || e));
+      console.warn("nymbot web search: weather failed — " + botLogCause(e));
       return [];
     });
     if (weatherResults.length > 0) return weatherResults;
@@ -7166,8 +7231,7 @@ async function webSearch(query, geohash, env) {
   if (dropped) console.warn("nymbot web search: dropped " + dropped + " off-topic results");
   if (!merged.length) {
     // Nothing came back at all, or nothing about the question.
-    console.warn("nymbot web search: " + (reachable ? "nothing on topic" : "every source came back empty") +
-      (narrow ? " (narrow: " + narrow + ")" : ""));
+    console.warn("nymbot web search: " + (reachable ? "nothing on topic" : "every source came back empty"));
     if (!reachable && !(env && env.BRAVE_SEARCH_API_KEY)) {
       // Scraped engines block datacenter egress, so without a search API key no source works.
       console.warn("nymbot web search: no BRAVE_SEARCH_API_KEY is set, and the " +
@@ -7468,7 +7532,7 @@ async function attachPageContent(results) {
     return fetchResultPage(url).then(function (text) {
       if (text && text.length > 120) pages.push({ url: url, text: text });
     }, function (e) {
-      console.warn("nymbot page read failed — " + ((e && e.message) || e));
+      console.warn("nymbot page read failed — " + botLogCause(e));
       if (/HTTP 4\d\d/.test(String((e && e.message) || ""))) dead[url] = true;
     });
   });
@@ -7679,7 +7743,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     return "(Nymbot returned an empty response)";
   } catch (e) {
     var ref = errorRef();
-    console.error("nymbot command failed ref " + ref, e);
+    console.error(botLogLine("nymbot command failed ref " + ref, e));
     return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
@@ -7729,7 +7793,7 @@ async function handleSummarize(context, channelMessages, geohash) {
     return "(Nymbot returned an empty response)";
   } catch (e) {
     var ref = errorRef();
-    console.error("nymbot command failed ref " + ref, e);
+    console.error(botLogLine("nymbot command failed ref " + ref, e));
     return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
@@ -8039,7 +8103,7 @@ async function handleTrivia(args, context) {
     return "Couldn't generate a trivia question — try again!";
   } catch (e) {
     var ref = errorRef();
-    console.error("nymbot command failed ref " + ref, e);
+    console.error(botLogLine("nymbot command failed ref " + ref, e));
     return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
@@ -8064,7 +8128,7 @@ async function handleJoke(context) {
     return "\u{1F602} I tried to think of a joke but my circuits got crossed. Try again!";
   } catch (e) {
     var ref = errorRef();
-    console.error("nymbot command failed ref " + ref, e);
+    console.error(botLogLine("nymbot command failed ref " + ref, e));
     return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
@@ -8098,7 +8162,7 @@ async function handleRiddle(context) {
     return "Couldn't generate a riddle — try again!";
   } catch (e) {
     var ref = errorRef();
-    console.error("nymbot command failed ref " + ref, e);
+    console.error(botLogLine("nymbot command failed ref " + ref, e));
     return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
@@ -8284,7 +8348,7 @@ async function handleDefine(word, context) {
     return "Could not define that word.";
   } catch (e) {
     var ref = errorRef();
-    console.error("nymbot define failed ref " + ref, e);
+    console.error(botLogLine("nymbot define failed ref " + ref, e));
     return "Nymbot hit an error. Please try again. (ref " + ref + ")";
   }
 }
@@ -8950,6 +9014,10 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 }
 
 export {
+  botResultPut,
+  botResultGet,
+  botLogLine,
+  runSearchSources,
   onRequest,
   handleBotPMAction,
   botMediaBytes,

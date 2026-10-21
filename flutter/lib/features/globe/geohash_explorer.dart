@@ -443,7 +443,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
 
   List<GeohashChannelPoint> _channels() {
     final state = ref.read(appStateProvider);
-    return buildGeohashChannels(state, windowHours: _activeWindowHours);
+    return buildGeohashChannels(state,
+        windowHours: _activeWindowHours, placeLabel: _placeLabel);
   }
 
   /// Changes the window and forces an immediate redraw; no D1 refetch.

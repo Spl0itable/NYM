@@ -74,6 +74,9 @@ Object.assign(NYM.prototype, {
                 if (F.channelHidden(ctx, g)) allGeohashes.delete(g);
             }
         }
+        for (const g of [...allGeohashes]) {
+            if (this._gxCellNameHidden(g)) allGeohashes.delete(g);
+        }
 
         const windowHours = window.NymGeoExplore
             ? window.NymGeoExplore.normalizeWindowHours(this._geohashActiveWindowHours) : 24;
@@ -222,6 +225,16 @@ Object.assign(NYM.prototype, {
 
     _channelNameHidden(name) {
         return typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword(String(name || ''), '', '');
+    },
+
+    _gxCellNameHidden(gh) {
+        const key = String(gh || '').toLowerCase();
+        if (!key) return false;
+        const saved = this.pinnedChannels ? [...this.pinnedChannels].some((x) => String(x).toLowerCase() === key) : false;
+        if (saved) return false;
+        if (this._channelNameHidden(key)) return true;
+        const label = this._gxPlaces && typeof this._gxPlaceLabel === 'function' ? this._gxPlaceLabel(key) : '';
+        return !!label && this._channelNameHidden(label);
     },
 
     _discoveryRefreshForFilters() {
@@ -466,7 +479,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             const locationInfoItem = document.getElementById('locationInfoItem');
             if (locationInfoItem) {
-                locationInfoItem.innerHTML = `<strong>Location:</strong> ${this.escapeHtml(locationInfo)}`;
+                locationInfoItem.innerHTML = `<strong>Location:</strong> <span data-no-i18n>${this.escapeHtml(locationInfo)}</span>`;
             }
         } catch (error) {
             const locationInfoItem = document.getElementById('locationInfoItem');
@@ -478,17 +491,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     shareChannel(channelOverride) {
-        const baseUrl = window.location.origin + window.location.pathname;
         const channel = (typeof channelOverride === 'string' && channelOverride) || this.currentChannel || 'nymchat';
-        const shareUrl = `${baseUrl}#${channel}`;
-
-        document.getElementById('shareUrlInput').value = shareUrl;
-
-        document.getElementById('shareModal').classList.add('active');
-
-        setTimeout(() => {
-            document.getElementById('shareUrlInput').select();
-        }, 100);
+        this.openShareSheet(this._shareTargetChannel(channel));
     },
 
     copyShareUrl() {
@@ -717,6 +721,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const fwdBtn = document.getElementById('channelForwardBtn');
         if (backBtn) backBtn.disabled = this.navigationIndex <= 0;
         if (fwdBtn) fwdBtn.disabled = this.navigationIndex >= this.navigationHistory.length - 1;
+        const phoneBack = document.getElementById('phoneBackBtn');
+        if (phoneBack && phoneBack.hidden !== this.navigationIndex <= 0) phoneBack.hidden = this.navigationIndex <= 0;
     },
 
     discoverChannels() {
@@ -1124,6 +1130,33 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
+    updateFavoriteChannelsList() {
+        const container = document.getElementById('favoriteChannelsList');
+        if (!container) return;
+        const ui = (s) => (typeof this.uiText === 'function' ? this.uiText(s) : s);
+        const keys = ['nymchat'].concat([...(this.pinnedChannels || [])].filter((k) => k && k !== 'nymchat'));
+        container.innerHTML = keys.map((key) => {
+            const location = key === 'nymchat' ? '' : this.getGeohashLocation(key);
+            const label = location ? `${this.escapeHtml('#' + key)} (${this.escapeHtml(location)})` : this.escapeHtml('#' + key);
+            const control = key === 'nymchat'
+                ? `<span class="nm-dim12">${this.escapeHtml(ui('Always favorited'))}</span>`
+                : `<button class="unblock-btn" data-action="unfavoriteChannelFromSettings" data-channel-key="${this.escapeHtml(key)}">${this.escapeHtml(ui('Unfavorite'))}</button>`;
+            return `
+        <div class="blocked-item">
+            <span>${label}</span>
+            ${control}
+        </div>
+    `;
+        }).join('');
+    },
+
+    unfavoriteChannelFromSettings(key) {
+        const N = window.NymChatNav;
+        const pinKey = N ? N.pinKey('channel', key) : '';
+        if (!pinKey || typeof this.isChatPinned !== 'function' || !this.isChatPinned(pinKey)) return;
+        this.togglePinChat(pinKey);
+    },
+
     unhideChannelFromSettings(key) {
         this.hiddenChannels.delete(key);
         this.saveHiddenChannels();
@@ -1514,6 +1547,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     _restoreDraftForContext() {
+        if (typeof this._syncComposerPlaceholder === 'function') this._syncComposerPlaceholder();
         const input = document.getElementById('messageInput');
         if (!input || !input._richInit) return;
         if (!this._inputDrafts) this._inputDrafts = new Map();
@@ -1709,6 +1743,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     switchChannel(channel, geohash = '') {
+        if (typeof this._syncGeoPresenceSend === 'function') setTimeout(() => this._syncGeoPresenceSend(), 0);
         if (this._cvActive) { this._cvOpenConversation({ type: 'channel', channel, geohash: geohash || '' }); return; }
         if (typeof this._closeThreadViewOnSwitch === 'function') this._closeThreadViewOnSwitch();
         this._saveCurrentDraft();
@@ -2120,7 +2155,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.saveUserChannels();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
-        const left = `Left channel ${geohash ? '#' + geohash : '#' + channel}`;
+        const left = this.uiText('Left channel {name}', { name: '#' + (geohash || channel) });
         if (typeof this.showUndoToast === 'function') {
             const text = (typeof this.uiText === 'function' ? this.uiText('Left channel #{channel}') : 'Left channel #{channel}').replace('{channel}', key);
             this.showUndoToast(text, () => this.restoreLeftChannel(channel, geohash, wasCurrent, wasJoined));

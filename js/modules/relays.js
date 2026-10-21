@@ -1383,7 +1383,7 @@ Object.assign(NYM.prototype, {
 
         } catch (error) {
             this.updateConnectionStatus('Connection Failed');
-            this.displaySystemMessage('Failed to connect to relays: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to connect to relays: {error}', { error: error.message }));
 
             if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
         } finally {
@@ -1550,6 +1550,7 @@ Object.assign(NYM.prototype, {
         if (!channelKey) return;
         const isCurrent = channelKey === this.currentChannel || channelKey === this.currentGeohash;
         if (!isCurrent && !force) return;
+        this._ensureGeoPresenceSub(channelKey, channelType);
         if (!this._channelTypingSubs) this._channelTypingSubs = new Map();
         if (this._channelTypingSubs.has(channelKey)) return;
 
@@ -1560,6 +1561,20 @@ Object.assign(NYM.prototype, {
         this._channelTypingSubs.set(channelKey, typingSubId);
         this.channelSubscriptions.set(channelKey, typingSubId);
         this._sendChannelReq(typingSubId, typingFilter, channelKey, channelType);
+    },
+
+    _ensureGeoPresenceSub(channelKey, channelType) {
+        const G = (typeof self !== 'undefined' && self.NymGeoPresence) || null;
+        if (!G || !channelKey || channelType === 'group' || channelType === 'pm') return;
+        if (!this._geoPresenceSubs) this._geoPresenceSubs = new Map();
+        if (this._geoPresenceSubs.has(channelKey)) return;
+        const key = String(channelKey).toLowerCase();
+        const nowSec = Math.floor(Date.now() / 1000);
+        const filter = this.isValidGeohash(channelKey) ? G.filter(key, nowSec) : G.namedFilter(key, nowSec);
+        if (!filter) return;
+        const subId = Math.random().toString(36).substring(2);
+        this._geoPresenceSubs.set(channelKey, subId);
+        this._sendChannelReq(subId, [filter], channelKey, channelType);
     },
 
     // Kind 20000 is ephemeral and not stored, so only open a typing sub for the viewed channel.
@@ -3787,6 +3802,7 @@ Object.assign(NYM.prototype, {
         this.channelLoadedFromRelays.clear();
         this.channelSubscriptions.clear();
         if (this._channelTypingSubs) this._channelTypingSubs.clear();
+        if (this._geoPresenceSubs) this._geoPresenceSubs.clear();
 
         // Typing kinds (24420/24421) aren't in the global subscription.
         const current = this.currentChannel || this.currentGeohash;
@@ -5485,6 +5501,10 @@ Object.assign(NYM.prototype, {
         if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
     },
 
+    _noteVerifiedRelayEvent(event) {
+        if (event && event.kind !== 20001) this._noteVerifiedEventId(event.id);
+    },
+
     _verifyRelayEvent(event) {
         try {
             const NT = window.NostrTools;
@@ -5492,7 +5512,7 @@ Object.assign(NYM.prototype, {
             const cached = this._verifiedIdCheck(event);
             if (cached !== undefined) return cached;
             if (NT.verifyEvent(event) !== true) return false;
-            this._noteVerifiedEventId(event.id);
+            this._noteVerifiedRelayEvent(event);
             return true;
         } catch (_) {
             return false;
@@ -5505,7 +5525,7 @@ Object.assign(NYM.prototype, {
         if (!this._getVerifyWorker()) return this._verifyRelayEvent(event);
         const ok = await this._workerVerify(event);
         if (ok === null) return this._verifyRelayEvent(event);
-        if (ok === true) this._noteVerifiedEventId(event.id);
+        if (ok === true) this._noteVerifiedRelayEvent(event);
         return ok === true;
     },
 
@@ -5602,7 +5622,7 @@ Object.assign(NYM.prototype, {
 
     // Kind 20000 only: bitchat uses a geohash's nearest relays (iOS ∪ Android), so other sources sprayed the tag.
     _geoOriginAllows(event, relayUrl) {
-        if (!event || event.kind !== 20000) return true;
+        if (!event || (event.kind !== 20000 && event.kind !== 20001)) return true;
         if (typeof relayUrl !== 'string' || !relayUrl) return true;
         const tags = Array.isArray(event.tags) ? event.tags : [];
         const tag = tags.find(t => Array.isArray(t) && t[0] === 'g');
@@ -5653,7 +5673,7 @@ Object.assign(NYM.prototype, {
                 entry.ready = false;
                 this._workerVerify(ev).then((ok) => {
                     if (ok === null) ok = this._verifyRelayEvent(ev);
-                    else if (ok === true) this._noteVerifiedEventId(ev.id);
+                    else if (ok === true) this._noteVerifiedRelayEvent(ev);
                     entry.ok = ok === true;
                     entry.ready = true;
                     this._drainRelayMessageQueue();
@@ -5872,6 +5892,7 @@ Object.assign(NYM.prototype, {
             this._renderConnectionStatus(status);
         } finally {
             if (typeof this._syncComposerConnHint === 'function') this._syncComposerConnHint();
+            if (this.connected && typeof this.notePresenceActivity === 'function') this.notePresenceActivity('connect');
         }
     },
 
@@ -6226,6 +6247,11 @@ Object.assign(NYM.prototype, {
         if (this._channelTypingSubs && this._channelTypingSubs.has(channelKey)) {
             subIds.push(this._channelTypingSubs.get(channelKey));
             this._channelTypingSubs.delete(channelKey);
+        }
+        if (this._geoPresenceSubs && this._geoPresenceSubs.has(channelKey)) {
+            subIds.push(this._geoPresenceSubs.get(channelKey));
+            this._geoPresenceSubs.delete(channelKey);
+            if (this._geoPresenceMembers) this._geoPresenceMembers.delete(String(channelKey).toLowerCase());
         }
         if (this.channelSubscriptions.has(channelKey)) {
             const sid = this.channelSubscriptions.get(channelKey);

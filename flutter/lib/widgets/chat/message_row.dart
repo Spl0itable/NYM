@@ -38,6 +38,7 @@ import '../../features/reactions/quick_context_items.dart';
 import '../../features/threads/thread_view.dart' show openMessageThread;
 import '../../features/reactions/quick_react_popup.dart';
 import '../../features/reactions/message_action_sheet.dart';
+import '../../features/reactions/hover_actions.dart';
 import '../../features/reactions/message_actions.dart';
 import '../../core/utils/haptics.dart';
 import '../common/nym_sheet.dart';
@@ -61,6 +62,7 @@ import '../common/nym_avatar.dart';
 import '../../features/accounts/account_host.dart' show accountsProvider;
 import '../nym_icons.dart';
 import 'hover_bar_controller.dart';
+import '../../features/layout/pointer_input.dart';
 import 'bitchat_user_color.dart';
 import 'crypto_pq_badge.dart';
 import 'crypto_verified_badge.dart';
@@ -288,16 +290,21 @@ class MessageRow extends ConsumerStatefulWidget {
   ConsumerState<MessageRow> createState() => _MessageRowState();
 }
 
-class _MessageRowState extends ConsumerState<MessageRow> {
+class _MessageRowState extends ConsumerState<MessageRow>
+    implements MessageHoverOwner {
+  @override
+  String get hoverMessageId => widget.message.id;
+
   /// Held in app state because lazy list rows don't keep State across scrolling or inserts.
   String get _translateKey =>
       widget.message.nymMessageId ?? widget.message.id;
 
   bool get _showTranslation =>
-      ref.watch(translatedMessagesProvider).containsKey(_translateKey);
+      ref.watch(translatedMessagesProvider
+          .select((m) => m.containsKey(_translateKey)));
 
   String? get _translateLangOverride =>
-      ref.watch(translatedMessagesProvider)[_translateKey];
+      ref.watch(translatedMessagesProvider.select((m) => m[_translateKey]));
 
   void _showTranslated({String? lang}) => ref
       .read(translatedMessagesProvider.notifier)
@@ -331,6 +338,15 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     super.initState();
     _barPortal.show();
     HoverBarController.instance.addListener(_onHoverBarChange);
+    PointerInput.instance.addListener(_onPointerMode);
+  }
+
+  void _onPointerMode() {
+    if (!mounted) return;
+    setState(() {
+      if (!PointerInput.instance.value) _hovered = false;
+    });
+    if (!PointerInput.instance.value) HoverBarController.instance.release(this);
   }
 
   void _onHoverBarChange() {
@@ -338,7 +354,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (on == _barActive || !mounted) return;
     setState(() {
       _barActive = on;
-      if (on) _barPos = _computeBarPos();
+      if (on) {
+        _refreshBar();
+        _barPos = _computeBarPos();
+      }
     });
   }
 
@@ -382,7 +401,6 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     var anchor = MatrixUtils.transformRect(
         anchorObj.getTransformTo(host), Offset.zero & anchorObj.size);
     if (!bubbles) anchor = _firstLineRect(anchorObj, host) ?? anchor;
-    final bw = math.min(barObj.size.width, hoverBarWidth(_barButtons.length));
     final bh = barObj.size.height;
     var clip = host.globalToLocal(Offset.zero) & MediaQuery.sizeOf(context);
     final scrollBox = Scrollable.maybeOf(context)?.context.findRenderObject();
@@ -393,6 +411,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     }
     const edge = kHoverBarEdge;
     _barAvailablePx = clip.width - 2 * edge;
+    final bw = hoverBarWidth(_barButtons.length);
     final top = math.max(clip.top + edge, 0.0);
     final lineObj = !bubbles && widget.columnsMode
         ? _barLineKey.currentContext?.findRenderObject()
@@ -428,16 +447,23 @@ class _MessageRowState extends ConsumerState<MessageRow> {
 
   double _barAvailablePx = double.infinity;
 
-  List<String> get _barButtons => hoverBarButtons(
-        buildMessageActions(MsgActionFacts(
-          isSelf: message.isOwn,
-          hasId: true,
-          hasContent: message.content.isNotEmpty,
-          threadable: _barThreadable,
-        )).map((a) => a.id).toList(),
-        hasId: true,
-        availablePx: _barAvailablePx,
-      );
+  List<String>? _barFull;
+  List<String>? _barSlots;
+
+  void _refreshBar() {
+    _barSlots = settings.hoverActions;
+    _barFull = [
+      ...resolveHoverActions(_barSlots, [
+        if (widget.onReactionPicker != null) 'react',
+        for (final item in _sheetItems(context))
+          if (item.id case final String id) id,
+      ]),
+      'more',
+    ];
+  }
+
+  List<String> get _barButtons =>
+      fitHoverBar(_barFull ?? const ['more'], _barAvailablePx);
 
   void _hoverEnter() {
     setState(() => _hovered = true);
@@ -452,6 +478,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   @override
   void dispose() {
     HoverBarController.instance.removeListener(_onHoverBarChange);
+    PointerInput.instance.removeListener(_onPointerMode);
     HoverBarController.instance.release(this);
     _spoilers.dispose();
     if (_relativeTickerSubscribed) {
@@ -530,8 +557,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (m.threadRoot != null || m.isSystemRow || m.isMeAction) return 0;
     final key =
         widget.scrollKey ?? ref.read(appStateProvider).view.storageKey;
-    final counts = ref.watch(threadCountsProvider(key));
-    return counts[threadKeyForMessage(m)] ?? 0;
+    final thread = threadKeyForMessage(m);
+    return ref.watch(
+        threadCountsProvider(key).select((counts) => counts[thread] ?? 0));
   }
 
   bool get _threadTapEligible =>
@@ -544,7 +572,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         widget.scrollKey ?? ref.read(appStateProvider).view.storageKey;
     final root = threadKeyForMessage(message);
     if (key.isEmpty || root.isEmpty) return false;
-    return ref.watch(threadNewRepliesProvider).contains('$key|$root');
+    return ref.watch(
+        threadNewRepliesProvider.select((s) => s.contains('$key|$root')));
   }
 
   Widget _threadIndicator(BuildContext context, int count) {
@@ -842,13 +871,14 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (message.isMeAction) return _buildActionMessage(context);
     Widget row =
         settings.useBubbles ? _buildBubble(context) : _buildIrc(context);
-    final p = Theme.of(context).platform;
-    final touchPlatform =
-        p == TargetPlatform.android || p == TargetPlatform.iOS;
-    if (!touchPlatform) {
+    if (PointerInput.mouseOf(context)) {
       final withButtons = _hoverButtonsEligible(context);
       Widget hoverChild = row;
       if (withButtons) {
+        if ((_barActive || _barFocused) &&
+            !identical(_barSlots, settings.hoverActions)) {
+          _refreshBar();
+        }
         final pos = (_barActive || _barFocused) ? _barPos : null;
         final bar = AnimatedOpacity(
           key: _barKey,
@@ -861,17 +891,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
               if (v == _barFocused) return;
               setState(() {
                 _barFocused = v;
-                if (v && !_barActive) _barPos = _computeBarPos();
+                if (v && !_barActive) {
+                  _refreshBar();
+                  _barPos = _computeBarPos();
+                }
               });
             },
-            onReact: widget.onReactionPicker == null
-                ? null
-                : () => widget.onReactionPicker!.call(message),
-            onReply: () => _runSheetAction(context, MsgAction.reply),
-            onThread: _barThreadable
-                ? () => openMessageThread(ref, message,
-                    storageKey: widget.scrollKey)
-                : null,
+            onAction: (id) => _runBarAction(context, id),
             onMore: (r) => _onMessageLongPress(context, r.center),
           ),
         );
@@ -901,7 +927,11 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       row = MouseRegion(
         onEnter: (_) => _hoverEnter(),
         onExit: (_) => _hoverExit(),
-        child: hoverChild,
+        child: MessageHover(
+          messageId: message.id,
+          hovered: _hovered || _barActive || _barFocused,
+          child: hoverChild,
+        ),
       );
     }
     // Dim live flooding senders only; PMs and historical backlog are never dimmed.
@@ -1001,7 +1031,11 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   Widget _groupInfoBlock(
       BuildContext context, GroupInfoPayload info, double size) {
     final c = context.nym;
-    final users = ref.watch(usersProvider);
+    ref.watch(usersProvider.select((u) => [
+          for (final m in info.members)
+            '${u[m.pubkey]?.nym}\u0000${u[m.pubkey]?.profile?.picture}',
+        ].join('\u0001')));
+    final users = ref.read(usersProvider);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1037,7 +1071,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   ) {
     final c = context.nym;
     final pk = member.pubkey;
-    final mask = ref.watch(appStateProvider).personMaskLabel(pk);
+    final mask =
+        ref.watch(appStateProvider.select((s) => s.personMaskLabel(pk)));
     final baseNym = mask.isNotEmpty ? mask : pickDisplayNym(users[pk]?.nym, null);
     final suffix = getPubkeySuffix(pk);
     final nymStyle = TextStyle(color: c.textDim, fontSize: size, height: 1.3);
@@ -1555,6 +1590,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     );
   }
 
+  static Color _ghostSelfPlate(NymColors c) => c.solidUi
+      ? (c.isLight ? const Color(0xFFBBBBBB) : const Color(0xFF444444))
+      : (c.isLight ? const Color(0x24000000) : const Color(0x2EFFFFFF));
+
   Widget _buildBubble(BuildContext context) {
     final c = context.nym;
     final fontSize = settings.textSize.toDouble();
@@ -1600,6 +1639,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       bubbleColor = auraStyledFill;
     } else {
       bubbleColor = deco?.contentBackgroundFor(bubble: true) ??
+          (self && _cosmetics.styleId == 'style-ghost'
+              ? _ghostSelfPlate(c)
+              : null) ??
           (_styleClassActive || self ? null : lastAura?.background) ??
           (self ? c.bubbleSelfBg : c.bubbleOtherBg);
     }
@@ -1642,28 +1684,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         if (message.viaMesh) _MeshBadge(color: context.nym.primary),
       ],
     );
-    // A hidden copy of the time line reserves space; the visible one is pinned so the bubble shrink-wraps.
-    final innerContent = Stack(
-      children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _bodyContent(context, _bodyColor(c), fontSize,
-                deco: deco, bubble: true),
-            const SizedBox(height: 4),
-            ExcludeSemantics(
-              child: IgnorePointer(
-                child: Opacity(opacity: 0, child: timeLine),
-              ),
-            ),
-          ],
-        ),
-        Positioned(
-            right: 0,
-            bottom: 0,
-            child: timeLine),
-      ],
+    final innerContent = _TimeFoot(
+      body: _bodyContent(context, _bodyColor(c), fontSize,
+          deco: deco, bubble: true),
+      time: timeLine,
     );
 
     _ensureRelativeTimer();
@@ -1964,7 +1988,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final visible = entries.take(maxVisible).toList();
     final overflow = entries.length - visible.length;
     final c = context.nym;
-    final users = ref.watch(usersProvider);
+    ref.watch(usersProvider.select((u) => [
+          for (final e in visible) '${u[e.key]?.profile?.picture}',
+        ].join('\u0001')));
+    final users = ref.read(usersProvider);
     // The Builder wraps only the avatars, since the modal anchors to its context's render box.
     return Padding(
       padding: const EdgeInsets.only(top: 3, right: 4),
@@ -2145,9 +2172,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
             : null,
       );
 
-  void _runSheetAction(BuildContext context, MsgAction action) {
+  void _runBarAction(BuildContext context, String id) {
+    if (id == 'react') {
+      widget.onReactionPicker?.call(message);
+      return;
+    }
     for (final item in _sheetItems(context)) {
-      if (item.id == action.id) {
+      if (item.id == id) {
         item.onTap();
         return;
       }
@@ -3071,64 +3102,75 @@ class _ScrollFlashOverlay extends StatefulWidget {
 
 class _ScrollFlashOverlayState extends State<_ScrollFlashOverlay>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    duration: const Duration(milliseconds: 1800),
-    vsync: this,
-  );
+  AnimationController? _controller;
+  Animation<double>? _opacity;
 
-  // Keyframe opacity: 0 at 0%, 1 from 8% to 45%, 0 at 100%.
-  late final Animation<double> _opacity = TweenSequence<double>([
-    TweenSequenceItem(
-      tween:
-          Tween(begin: 0.0, end: 1.0).chain(CurveTween(curve: Curves.easeOut)),
-      weight: 8,
-    ),
-    TweenSequenceItem(tween: ConstantTween(1.0), weight: 37),
-    TweenSequenceItem(
-      tween:
-          Tween(begin: 1.0, end: 0.0).chain(CurveTween(curve: Curves.easeOut)),
-      weight: 55,
-    ),
-  ]).animate(_controller);
+  void _flash() {
+    final controller = _controller ??= AnimationController(
+      duration: const Duration(milliseconds: 1800),
+      vsync: this,
+    )..addStatusListener(_onStatus);
+    _opacity ??= TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween(begin: 0.0, end: 1.0)
+            .chain(CurveTween(curve: Curves.easeOut)),
+        weight: 8,
+      ),
+      TweenSequenceItem(tween: ConstantTween(1.0), weight: 37),
+      TweenSequenceItem(
+        tween: Tween(begin: 1.0, end: 0.0)
+            .chain(CurveTween(curve: Curves.easeOut)),
+        weight: 55,
+      ),
+    ]).animate(controller);
+    controller.forward(from: 0);
+  }
+
+  void _onStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed && mounted) setState(() {});
+  }
 
   @override
   void initState() {
     super.initState();
-    if (widget.active) _controller.forward(from: 0);
+    if (widget.active) _flash();
   }
 
   @override
   void didUpdateWidget(_ScrollFlashOverlay old) {
     super.didUpdateWidget(old);
-    if (widget.active && !old.active) _controller.forward(from: 0);
+    if (widget.active && !old.active) _flash();
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final opacity = _opacity;
+    final showing = opacity != null && (_controller?.isAnimating ?? false);
     final c = context.nym;
     return Stack(
       children: [
         widget.child,
-        Positioned.fill(
-          child: IgnorePointer(
-            child: FadeTransition(
-              opacity: _opacity,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: c.primaryA(0.18),
-                  border: Border.all(color: c.primaryA(0.5)),
-                  borderRadius: NymRadius.rsm,
+        if (showing)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: FadeTransition(
+                opacity: opacity,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: c.primaryA(0.18),
+                    border: Border.all(color: c.primaryA(0.5)),
+                    borderRadius: NymRadius.rsm,
+                  ),
                 ),
               ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -3140,59 +3182,39 @@ Color hoverBarFill(NymColors c) =>
 class _MsgHoverButtons extends StatelessWidget {
   const _MsgHoverButtons({
     required this.buttons,
-    required this.onReact,
-    required this.onReply,
-    required this.onThread,
+    required this.onAction,
     required this.onMore,
     this.onFocusChange,
   });
 
   final List<String> buttons;
   final ValueChanged<bool>? onFocusChange;
-  final VoidCallback? onReact;
-  final VoidCallback? onReply;
-  final VoidCallback? onThread;
+  final ValueChanged<String> onAction;
   final ValueChanged<Rect> onMore;
 
   @override
   Widget build(BuildContext context) {
     Widget button(String id) {
-      switch (id) {
-        case 'react':
-          return _HoverActionButton(
-            svg: NymIcons.addReaction,
-            onTap: onReact,
-            tooltip: tr('React'),
-            onFocusChange: onFocusChange,
-          );
-        case 'reply':
-          return _HoverActionButton(
-            svg: msgActionSvg(MsgAction.reply),
-            onTap: onReply,
-            tooltip: tr('Reply'),
-            onFocusChange: onFocusChange,
-          );
-        case 'thread':
-          return _HoverActionButton(
-            svg: NymIcons.thread,
-            onTap: onThread,
-            tooltip: tr('Reply in Thread'),
-            onFocusChange: onFocusChange,
-          );
-        default:
-          return Builder(
-            builder: (ctx) => _HoverActionButton(
-              svg: NymIcons.rowMenu,
-              tooltip: tr('More'),
-              onFocusChange: onFocusChange,
-              onTap: () {
-                final box = ctx.findRenderObject();
-                if (box is! RenderBox || !box.hasSize) return;
-                onMore(box.localToGlobal(Offset.zero) & box.size);
-              },
-            ),
-          );
+      if (id != 'more') {
+        return _HoverActionButton(
+          svg: hoverActionSvg(id),
+          onTap: () => onAction(id),
+          tooltip: hoverActionLabel(id),
+          onFocusChange: onFocusChange,
+        );
       }
+      return Builder(
+        builder: (ctx) => _HoverActionButton(
+          svg: hoverActionSvg(id),
+          tooltip: hoverActionLabel(id),
+          onFocusChange: onFocusChange,
+          onTap: () {
+            final box = ctx.findRenderObject();
+            if (box is! RenderBox || !box.hasSize) return;
+            onMore(box.localToGlobal(Offset.zero) & box.size);
+          },
+        ),
+      );
     }
 
     return Row(
@@ -4302,128 +4324,180 @@ class _StickyGroupAvatar extends ConsumerStatefulWidget {
 
 class _StickyGroupAvatarState extends ConsumerState<_StickyGroupAvatar> {
   static const double _avatar = 32;
-  double? _seenHintTop;
-  double _seenOverhang = 0;
 
-  /// Value unused; bumps only drive the rebuild.
-  final ValueNotifier<int> _tick = ValueNotifier<int>(0);
+  @override
+  Widget build(BuildContext context) {
+    final position = Scrollable.maybeOf(context)?.position;
+    return Consumer(
+      builder: (context, ref, child) => _StickyAvatarTrack(
+        position: position,
+        bubbleKey: widget.bubbleKey,
+        hintTop: ref.watch(composerHintTopProvider),
+        overhang: ref.watch(composerOverhangProvider),
+        child: child,
+      ),
+      child: RepaintBoundary(
+        child: GestureDetector(
+          excludeFromSemantics: true,
+          onTap: widget.onTap,
+          child: NymAvatar(
+            seed: widget.pubkey,
+            size: _avatar,
+            imageUrl: widget.imageUrl,
+            localOnly: widget.localOnly,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StickyAvatarTrack extends SingleChildRenderObjectWidget {
+  const _StickyAvatarTrack({
+    required this.position,
+    required this.bubbleKey,
+    required this.hintTop,
+    required this.overhang,
+    required super.child,
+  });
+
+  final ScrollPosition? position;
+  final GlobalKey? bubbleKey;
+  final double? hintTop;
+  final double overhang;
+
+  @override
+  RenderStickyAvatarTrack createRenderObject(BuildContext context) =>
+      RenderStickyAvatarTrack(position, bubbleKey, hintTop, overhang);
+
+  @override
+  void updateRenderObject(
+      BuildContext context, RenderStickyAvatarTrack renderObject) {
+    renderObject
+      ..position = position
+      ..bubbleKey = bubbleKey
+      ..hintTop = hintTop
+      ..overhang = overhang;
+  }
+}
+
+class RenderStickyAvatarTrack extends RenderProxyBox {
+  RenderStickyAvatarTrack(
+      this._position, this._bubbleKey, this._hintTop, this._overhang);
+
+  static const double _avatar = 32;
+
   ScrollPosition? _position;
+  GlobalKey? _bubbleKey;
+  double? _hintTop;
+  double _overhang;
+  double _top = 0;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _tick.value++;
-    });
+  double get avatarTop => _top;
+
+  set position(ScrollPosition? value) {
+    if (identical(value, _position)) return;
+    if (attached) _position?.removeListener(markNeedsPaint);
+    _position = value;
+    if (attached) _position?.addListener(markNeedsPaint);
+    markNeedsPaint();
+  }
+
+  set bubbleKey(GlobalKey? value) {
+    if (identical(value, _bubbleKey)) return;
+    _bubbleKey = value;
+    markNeedsPaint();
+  }
+
+  set hintTop(double? value) {
+    if (value == _hintTop) return;
+    _hintTop = value;
+    markNeedsPaint();
+  }
+
+  set overhang(double value) {
+    if (value == _overhang) return;
+    _overhang = value;
+    markNeedsPaint();
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final p = Scrollable.maybeOf(context)?.position;
-    if (!identical(p, _position)) {
-      _position?.removeListener(_onScroll);
-      _position = p;
-      _position?.addListener(_onScroll);
-    }
-  }
+  bool get isRepaintBoundary => true;
 
-  void _onScroll() {
-    if (mounted) _tick.value++;
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _position?.addListener(markNeedsPaint);
   }
 
   @override
-  void dispose() {
-    _position?.removeListener(_onScroll);
-    _tick.dispose();
-    super.dispose();
+  void detach() {
+    _position?.removeListener(markNeedsPaint);
+    super.detach();
   }
 
-  /// Falls back to the track bottom until the bubble can be measured.
-  double _restingTop(double trackHeight) {
-    final fallback = (trackHeight - _avatar).clamp(0.0, double.infinity);
-    final track = context.findRenderObject();
-    final bubble = widget.bubbleKey?.currentContext?.findRenderObject();
-    if (track is RenderBox &&
-        track.hasSize &&
-        bubble is RenderBox &&
-        bubble.hasSize) {
+  @override
+  Size computeDryLayout(BoxConstraints constraints) => constraints.biggest;
+
+  @override
+  void performLayout() {
+    size = constraints.biggest;
+    child?.layout(BoxConstraints.tight(const Size(_avatar, _avatar)));
+  }
+
+  double _restingTop() {
+    final fallback = math.max(0.0, size.height - _avatar);
+    final bubble = _bubbleKey?.currentContext?.findRenderObject();
+    if (bubble is RenderBox && bubble.attached && bubble.hasSize) {
       final bubbleBottom = bubble
-          .localToGlobal(Offset(0, bubble.size.height), ancestor: track)
+          .localToGlobal(Offset(0, bubble.size.height), ancestor: this)
           .dy;
       return (bubbleBottom - _avatar).clamp(0.0, fallback);
     }
     return fallback;
   }
 
-  /// Clamping to `[0, maxTop]` is CSS sticky bounded by the containing block.
-  double _computeTop(double maxTop, double? hintTop) {
-    final scrollable = Scrollable.maybeOf(context);
-    final track = context.findRenderObject();
-    if (scrollable != null && track is RenderBox && track.hasSize) {
-      final viewport = scrollable.context.findRenderObject();
-      if (viewport is RenderBox && viewport.hasSize) {
-        final trackTop =
-            track.localToGlobal(Offset.zero, ancestor: viewport).dy;
-        final lift = floatLiftOver(hintTop,
-            viewport.localToGlobal(Offset(0, viewport.size.height)).dy);
-        final desired = viewport.size.height -
-            ChatFabs.floatBottom -
-            lift -
-            _avatar -
-            trackTop;
-        return desired.clamp(0.0, maxTop);
-      }
+  double _computeTop(double maxTop) {
+    if (_position == null) return maxTop;
+    final RenderObject? viewport = RenderAbstractViewport.maybeOf(this);
+    if (viewport is RenderBox && viewport.hasSize) {
+      final box = viewport;
+      final trackTop = localToGlobal(Offset.zero, ancestor: box).dy;
+      final lift = floatLiftOver(
+          _hintTop, box.localToGlobal(Offset(0, box.size.height)).dy);
+      final desired = box.size.height -
+          ChatFabs.floatBottom -
+          lift -
+          _avatar -
+          trackTop;
+      return desired.clamp(0.0, maxTop);
     }
     return maxTop;
   }
 
   @override
-  Widget build(BuildContext context) {
-    final avatar = GestureDetector(
-      excludeFromSemantics: true,
-      onTap: widget.onTap,
-      child: NymAvatar(
-        seed: widget.pubkey,
-        size: _avatar,
-        imageUrl: widget.imageUrl,
-        localOnly: widget.localOnly,
-      ),
+  void paint(PaintingContext context, Offset offset) {
+    final child = this.child;
+    if (child == null) return;
+    _top = _computeTop(_restingTop());
+    context.paintChild(child, offset + Offset(0, _top));
+  }
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    final child = this.child;
+    if (child == null) return false;
+    return result.addWithPaintOffset(
+      offset: Offset(0, _top),
+      position: position,
+      hitTest: (result, transformed) =>
+          child.hitTest(result, position: transformed),
     );
-    final hintTop = ref.watch(composerHintTopProvider);
-    final overhang = ref.watch(composerOverhangProvider);
-    if (hintTop != _seenHintTop || overhang != _seenOverhang) {
-      _seenHintTop = hintTop;
-      _seenOverhang = overhang;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _tick.value++;
-      });
-    }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final trackHeight = constraints.maxHeight;
-        return ValueListenableBuilder<int>(
-          valueListenable: _tick,
-          // Recompute both bounds every tick; the bubble box exists only from the second frame.
-          builder: (context, _, child) {
-            final maxTop = _restingTop(trackHeight);
-            return Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Positioned(
-                  left: 0,
-                  top: _computeTop(maxTop, hintTop),
-                  width: _avatar,
-                  height: _avatar,
-                  child: child!,
-                ),
-              ],
-            );
-          },
-          child: avatar,
-        );
-      },
-    );
+  }
+
+  @override
+  void applyPaintTransform(RenderBox child, Matrix4 transform) {
+    transform.multiply(Matrix4.translationValues(0, _top, 0));
   }
 }
 
@@ -4774,9 +4848,7 @@ class _SwipeToActState extends State<_SwipeToAct>
       );
     }
 
-    final p = Theme.of(context).platform;
-    final touchPlatform =
-        p == TargetPlatform.android || p == TargetPlatform.iOS;
+    final touchPlatform = !PointerInput.mouseOf(context);
     Widget result = GestureDetector(
       // The whole row, including blank space beside a bubble, must hit-test.
       behavior: HitTestBehavior.translucent,
@@ -5099,4 +5171,107 @@ class _FullscreenImage extends StatelessWidget {
       ),
     );
   }
+}
+
+class _TimeFoot extends MultiChildRenderObjectWidget {
+  _TimeFoot({required Widget body, required Widget time})
+      : super(children: [body, time]);
+
+  @override
+  RenderTimeFoot createRenderObject(BuildContext context) =>
+      RenderTimeFoot(Directionality.of(context));
+
+  @override
+  void updateRenderObject(BuildContext context, RenderTimeFoot renderObject) {
+    renderObject.textDirection = Directionality.of(context);
+  }
+}
+
+class TimeFootParentData extends ContainerBoxParentData<RenderBox> {}
+
+class RenderTimeFoot extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, TimeFootParentData>,
+        RenderBoxContainerDefaultsMixin<RenderBox, TimeFootParentData> {
+  RenderTimeFoot(this._textDirection);
+
+  static const double gap = 4;
+
+  TextDirection _textDirection;
+
+  set textDirection(TextDirection value) {
+    if (value == _textDirection) return;
+    _textDirection = value;
+    markNeedsLayout();
+  }
+
+  RenderBox get _body => firstChild!;
+  RenderBox get _time => lastChild!;
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! TimeFootParentData) {
+      child.parentData = TimeFootParentData();
+    }
+  }
+
+  @override
+  double computeMinIntrinsicWidth(double height) => math.max(
+      _body.getMinIntrinsicWidth(double.infinity),
+      _time.getMinIntrinsicWidth(double.infinity));
+
+  @override
+  double computeMaxIntrinsicWidth(double height) => math.max(
+      _body.getMaxIntrinsicWidth(double.infinity),
+      _time.getMaxIntrinsicWidth(double.infinity));
+
+  @override
+  double computeMinIntrinsicHeight(double width) =>
+      _body.getMinIntrinsicHeight(width) +
+      gap +
+      _time.getMinIntrinsicHeight(width);
+
+  @override
+  double computeMaxIntrinsicHeight(double width) =>
+      _body.getMaxIntrinsicHeight(width) +
+      gap +
+      _time.getMaxIntrinsicHeight(width);
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) {
+    final body =
+        _body.getDryLayout(BoxConstraints(maxWidth: constraints.maxWidth));
+    final time = _time.getDryLayout(const BoxConstraints());
+    return constraints.constrain(Size(
+        math.max(body.width, math.min(time.width, constraints.maxWidth)),
+        body.height + gap + time.height));
+  }
+
+  @override
+  void performLayout() {
+    _body.layout(BoxConstraints(maxWidth: constraints.maxWidth),
+        parentUsesSize: true);
+    _time.layout(const BoxConstraints(), parentUsesSize: true);
+    final body = _body.size;
+    final time = _time.size;
+    size = constraints.constrain(Size(
+        math.max(body.width, math.min(time.width, constraints.maxWidth)),
+        body.height + gap + time.height));
+    (_body.parentData! as TimeFootParentData).offset = Offset(
+        _textDirection == TextDirection.rtl ? size.width - body.width : 0, 0);
+    (_time.parentData! as TimeFootParentData).offset =
+        Offset(size.width - time.width, size.height - time.height);
+  }
+
+  @override
+  double? computeDistanceToActualBaseline(TextBaseline baseline) =>
+      defaultComputeDistanceToHighestActualBaseline(baseline);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      defaultHitTestChildren(result, position: position);
+
+  @override
+  void paint(PaintingContext context, Offset offset) =>
+      defaultPaint(context, offset);
 }

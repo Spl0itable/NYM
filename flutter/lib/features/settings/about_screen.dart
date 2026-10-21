@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:bech32/bech32.dart' as b32;
@@ -18,11 +19,14 @@ import '../../services/api/api_client.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
+import '../share/share_actions.dart';
+import '../share/share_sheet.dart';
 import '../identity/modal_chrome.dart';
 import 'build_integrity.dart';
 import 'settings_widgets.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/dialog_button.dart';
+import '../../widgets/nym_icons.dart';
 
 /// Bundled fallback version, shown until the live version resolves; keep in sync with `NYMCHAT_VERSION` at release.
 const String kAboutVersion = 'v3.75.545';
@@ -421,6 +425,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                     _canaryPanel(c),
                     _description(c),
                     _links(c),
+                    _shareAppRow(c),
                     _license(c),
                     const SizedBox(height: 20),
                     Container(height: 1, color: c.glassBorder),
@@ -884,6 +889,20 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
         _link(c, tr('Privacy Policy'), kPrivacyUrl),
         _link(c, 'DMCA', kDmcaUrl),
       ],
+    );
+  }
+
+  Widget _shareAppRow(NymColors c) {
+    final launch = ref.watch(appShareLauncherProvider);
+    if (launch == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: ShareActionRow(
+        key: const ValueKey('about-share-app'),
+        svg: NymIcons.phone,
+        label: tr('Share Nymchat app'),
+        onTap: () => unawaited(launch(context)),
+      ),
     );
   }
 

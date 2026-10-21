@@ -2,7 +2,7 @@
 
 import { validateZapReceipt, nwcInvoicePaid, ipv6Blocked, ipv6NetKey, cacheRateTakeAll } from './_shared.js';
 import { clientOriginAllowed } from './_client.js';
-import { translateText, MAX_CHARS } from './_translate.js';
+import { translateText, translateUiText, MAX_CHARS } from './_translate.js';
 
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 
@@ -563,13 +563,13 @@ async function handleTranslate(request, context) {
     return jsonResponse({ error: 'Invalid JSON body' }, 400);
   }
 
-  const { text, texts, source, target } = body;
+  const { text, texts, source, target, contexts, glossary } = body;
   if (!target) {
     return jsonResponse({ error: 'Missing target language' }, 400);
   }
   // Batching saves round trips for the build-time sync; each string is still its own inference call.
   if (Array.isArray(texts)) {
-    return await handleTranslateBatch(texts, source || 'auto', target, context, request);
+    return await handleTranslateBatch(texts, source || 'auto', target, context, request, { contexts, glossary });
   }
   if (!text) {
     return jsonResponse({ error: 'Missing text or target language' }, 400);
@@ -614,7 +614,7 @@ const TRANSLATE_BATCH_MAX = 25;
 const TRANSLATE_BATCH_BYTES = 20000;
 const TRANSLATE_BATCH_CONCURRENCY = 4;
 
-async function handleTranslateBatch(texts, source, target, context, request) {
+async function handleTranslateBatch(texts, source, target, context, request, ui = {}) {
   if (texts.length === 0) return jsonResponse({ translations: [] });
   if (texts.length > TRANSLATE_BATCH_MAX) {
     return jsonResponse({ error: `Too many strings (max ${TRANSLATE_BATCH_MAX})` }, 400);
@@ -638,7 +638,9 @@ async function handleTranslateBatch(texts, source, target, context, request) {
       const q = items[i];
       if (!q.trim()) continue;
       try {
-        const r = await translateText(ai, { text: q, source, target });
+        const r = Array.isArray(ui.contexts)
+          ? await translateUiText(ai, { text: q, target, context: ui.contexts[i], glossary: ui.glossary })
+          : await translateText(ai, { text: q, source, target });
         out[i] = r.translatedText;
       } catch (err) {
         failures.push(`[${i}] ${err.message}`);

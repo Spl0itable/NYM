@@ -175,7 +175,7 @@ Object.assign(NYM.prototype, {
         const content = `Sharing file through Nymchat: ${file.name} (${this.formatFileSize(file.size)})`;
         const published = await this.publishFileOffer(fileOffer, content);
         if (published) {
-            this.displaySystemMessage(`File "${file.name}" is now available for P2P download`);
+            this.displaySystemMessage(this.uiText(`File "{name}" is now available for P2P download`, { name: file.name }));
         }
     },
 
@@ -679,7 +679,7 @@ Object.assign(NYM.prototype, {
 
         this.p2pReceivedChunks.delete(transferId);
 
-        this.displaySystemMessage(`File "${transfer.offer?.name || 'file'}" downloaded successfully`);
+        this.displaySystemMessage(this.uiText(`File "{v1}" downloaded successfully`, { v1: transfer.offer?.name || 'file' }));
     },
 
     updateTransferProgress(transferId, percent) {
@@ -908,7 +908,7 @@ Object.assign(NYM.prototype, {
 
         this.updateFileOfferUI(offerId, 'unseeded');
 
-        this.displaySystemMessage('Stopped seeding file' + (offer ? `: ${offer.name}` : ''));
+        this.displaySystemMessage(offer ? this.uiText('Stopped seeding file: {name}', { name: offer.name }) : this.uiText('Stopped seeding file'));
         this.openP2PTransfersModal();
     },
 
@@ -977,14 +977,14 @@ Object.assign(NYM.prototype, {
         const isTorrentFile = file.name.endsWith('.torrent') || file.type === 'application/x-bittorrent';
 
         if (isTorrentFile) {
-            this.displaySystemMessage(`Loading torrent file "${file.name}"...`);
+            this.displaySystemMessage(this.uiText(`Loading torrent file "{name}"...`, { name: file.name }));
             const torrentBuffer = await file.arrayBuffer();
 
             client.add(new Uint8Array(torrentBuffer), (torrent) => {
                 this.onTorrentReady(torrent, file.name);
             });
         } else {
-            this.displaySystemMessage(`Creating torrent for "${file.name}"...`);
+            this.displaySystemMessage(this.uiText(`Creating torrent for "{name}"...`, { name: file.name }));
             client.seed(file, { announceList: [] }, (torrent) => {
                 this.onTorrentReady(torrent, null);
             });
@@ -1018,7 +1018,7 @@ Object.assign(NYM.prototype, {
 
         const content = `Sharing file via torrent: ${displayName} (${this.formatFileSize(displaySize)})`;
         this.publishFileOffer(fileOffer, content).then(published => {
-            if (published) this.displaySystemMessage(`Seeding torrent: "${displayName}"`);
+            if (published) this.displaySystemMessage(this.uiText(`Seeding torrent: "{displayName}"`, { displayName }));
         });
     },
 
@@ -1117,7 +1117,7 @@ Object.assign(NYM.prototype, {
                 torrent.files.forEach((file) => {
                     file.getBlob((err, blob) => {
                         if (err) {
-                            this.displaySystemMessage('Error saving file: ' + err.message);
+                            this.displaySystemMessage(this.uiText('Error saving file: {error}', { error: err.message }));
                             return;
                         }
 
@@ -1134,7 +1134,7 @@ Object.assign(NYM.prototype, {
                 });
 
                 this.updateTransferStatus(transferId, 'complete', 'Download complete!');
-                this.displaySystemMessage(`Torrent download complete: "${offer.name}"`);
+                this.displaySystemMessage(this.uiText(`Torrent download complete: "{name}"`, { name: offer.name }));
 
                 setTimeout(() => {
                     try { torrent.destroy(); } catch (e) {}

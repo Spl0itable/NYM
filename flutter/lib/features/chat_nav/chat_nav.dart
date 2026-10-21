@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:math';
 
 class ChatNavLimits {
   const ChatNavLimits._();
 
   static const int pinMax = 10;
   static const int pinHardMax = 50;
+  static const int pinChannelMax = 500;
   static const int pinRemovedMax = 300;
   static const int pinRemovedTtlMs = 180 * 24 * 60 * 60 * 1000;
   static const int mentionChatsMax = 200;
@@ -28,6 +30,7 @@ class ChatNavLimits {
   static Map<String, num> toJson() => {
         'pinMax': pinMax,
         'pinHardMax': pinHardMax,
+        'pinChannelMax': pinChannelMax,
         'pinRemovedMax': pinRemovedMax,
         'pinRemovedTtlMs': pinRemovedTtlMs,
         'mentionChatsMax': mentionChatsMax,
@@ -807,12 +810,19 @@ Map<String, dynamic> _finishPins(Map<String, dynamic> s, num nowMs) {
       return d != 0 ? d : _cmp(a, b);
     });
   order = [...order, ...rest];
-  if (order.length > ChatNavLimits.pinHardMax) {
-    for (final k in order.sublist(ChatNavLimits.pinHardMax)) {
-      items.remove(k);
+  final room = <String, int>{
+    'channel': ChatNavLimits.pinChannelMax,
+    'chat': ChatNavLimits.pinHardMax,
+  };
+  order = order.where((k) {
+    final sec = pinSection(k);
+    if (room[sec]! > 0) {
+      room[sec] = room[sec]! - 1;
+      return true;
     }
-    order = order.sublist(0, ChatNavLimits.pinHardMax);
-  }
+    items.remove(k);
+    return false;
+  }).toList();
   final removed = <String, int>{};
   final cutoff = nowMs > 0 ? nowMs - ChatNavLimits.pinRemovedTtlMs : 0;
   _removed(s).forEach((k, at) {
@@ -857,8 +867,12 @@ String pinSection(String k) =>
   if (pinParse(k) == null) return (state: s, error: 'invalid');
   final order = _order(s);
   if (order.contains(k)) return (state: s, error: null);
-  final limit = cap > 0 ? cap : ChatNavLimits.pinMax;
   final section = pinSection(k);
+  final limit = cap > 0
+      ? cap
+      : (section == 'channel'
+          ? ChatNavLimits.pinChannelMax
+          : ChatNavLimits.pinMax);
   if (order.where((x) => pinSection(x) == section).length >= limit) {
     return (state: s, error: 'cap');
   }
@@ -1007,13 +1021,17 @@ bool trimPinnedPayload(Map<String, dynamic> p) {
   }
   final order = s['order'];
   if (order is List) {
-    final seen = <String, int>{'channel': 0, 'chat': 0};
+    final channels = order.where((k) => pinSection('$k') == 'channel').length;
+    final room = <String, int>{
+      'channel': max(ChatNavLimits.pinMax, channels - (channels / 4).ceil()),
+      'chat': ChatNavLimits.pinMax,
+    };
     final keep = [];
     final drop = [];
     for (final k in order) {
       final sec = pinSection('$k');
-      if (seen[sec]! < ChatNavLimits.pinMax) {
-        seen[sec] = seen[sec]! + 1;
+      if (room[sec]! > 0) {
+        room[sec] = room[sec]! - 1;
         keep.add(k);
       } else {
         drop.add(k);

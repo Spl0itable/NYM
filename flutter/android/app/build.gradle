@@ -50,7 +50,7 @@ android {
         // unchanged.
         minSdk = 24
         targetSdk = 36
-        versionCode = 693
+        versionCode = 747
         versionName = flutter.versionName
         
         // Support all ABIs - AGP 8.9.1 automatically handles 16 KB alignment
@@ -108,6 +108,7 @@ dependencies {
     implementation 'com.google.android.play:integrity:1.4.0'
 
     implementation 'androidx.biometric:biometric:1.1.0'
+    implementation 'com.google.zxing:core:3.5.3'
     implementation 'androidx.credentials:credentials:1.6.0'
     implementation 'androidx.credentials:credentials-play-services-auth:1.6.0'
 

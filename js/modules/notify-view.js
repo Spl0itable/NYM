@@ -69,6 +69,14 @@
         return live === true && r > t ? r : t;
     }
 
+    function shownSeen(view, ev, tsMs, key, atSec) {
+        const v = normView(view);
+        const e = normEvent(ev);
+        const k = str(key);
+        const at = num(atSec);
+        if (!v.focused || !k || e.key !== k || e.root || !(at > 0)) return false;
+        return Math.floor(num(tsMs) / 1000) <= at;
+    }
     const PUBKEY_RE = /^[0-9a-f]{64}$/i;
     const NEAR_MS = 1000;
 
@@ -213,5 +221,5 @@
         return !str(x.replyTo) || str(x.replyTo) === str(y.replyTo);
     }
 
-    G.NymNotifyView = Object.freeze({ threadOpen, onScreen, sees, outcome, addressed, readTs, sameAlert, samePm, pmChunks, pmOpenPiece, pmPiece, PIECE_HOLD_MS, alertId, reactionId, knockId, joinRequestId, joinDeclinedId, bodyKey, alertScope });
+    G.NymNotifyView = Object.freeze({ threadOpen, onScreen, sees, outcome, addressed, readTs, shownSeen, sameAlert, samePm, pmChunks, pmOpenPiece, pmPiece, PIECE_HOLD_MS, alertId, reactionId, knockId, joinRequestId, joinDeclinedId, bodyKey, alertScope });
 })();

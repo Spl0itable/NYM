@@ -96,6 +96,7 @@
             this.nostrLink = opts.nostrLink || (() => null);
             this.onPublicMessage = opts.onPublicMessage || (() => { });
             this.onPrivateMessage = opts.onPrivateMessage || (() => { });
+            this.onNymShare = opts.onNymShare || (() => { });
             this.acksPrivateMessage = opts.acksPrivateMessage || null;
             this.onReceipt = opts.onReceipt || (() => { });
             this.onFile = opts.onFile || (() => { });
@@ -1114,6 +1115,8 @@
                     isDirect: true,
                     timestampMs: Date.now(),
                 });
+            } else if (envelope.type === NP.nymShare) {
+                this.onNymShare({ senderPeerID, payload: plaintext });
             } else if (envelope.type === NP.delivered || envelope.type === NP.readReceipt) {
                 this.onReceipt({
                     fromPeerID: senderPeerID,
@@ -1128,6 +1131,18 @@
             if (!q) return;
             this.pendingEncrypted.delete(peerID);
             for (const payload of q) await this._handleEncrypted(peerID, payload);
+        }
+
+        async sendNymShare(peerID, link) {
+            const body = P().utf8.encode(String(link || ''));
+            if (!peerID || body.length < 1 || body.length > 1024) return false;
+            const data = new Uint8Array(3 + body.length);
+            data[0] = 0x01;
+            data[1] = (body.length >>> 8) & 255;
+            data[2] = body.length & 255;
+            data.set(body, 3);
+            await this._sendOrQueueEncrypted(peerID, P().encodeNoisePayload(P().NoisePayloadType.nymShare, data));
+            return true;
         }
 
         async sendReadReceipt(peerID, messageId) {

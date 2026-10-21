@@ -95,6 +95,7 @@ Object.assign(NYM.prototype, {
                 }
             });
             applyMessageLayout(this.settings.chatLayout);
+            if (typeof this.installPresenceActivity === 'function') this.installPresenceActivity();
 
             // Paint placeholder columns now so the strip isn't blank until columns activate.
             if (localStorage.getItem('nym_chat_view_mode') === 'columns' && typeof this._renderColumnSkeletons === 'function') {

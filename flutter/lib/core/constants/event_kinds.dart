@@ -26,6 +26,7 @@ class EventKind {
 
   /// Ephemeral geohash channel message (bitchat-compatible), channel in ['g'].
   static const int geoChannel = 20000;
+  static const int geoPresence = 20001;
 
   /// Ephemeral named channel message, channel in ['d'].
   static const int namedChannel = 23333;

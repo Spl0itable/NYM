@@ -28,6 +28,7 @@ import '../translate/translate_service.dart';
 import '../../widgets/anchored_popup.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/common/nym_label.dart';
+import '../layout/pointer_input.dart';
 
 /// Inline poll rendered as a full message row; tapping an option votes, the footer opens the voters list.
 class PollCard extends ConsumerStatefulWidget {
@@ -353,10 +354,7 @@ class _PollCardState extends ConsumerState<PollCard> {
     );
 
     // Non-touch devices track hover and show react/translate buttons; polls skip the event-id gate.
-    final p = Theme.of(context).platform;
-    final touchPlatform =
-        p == TargetPlatform.android || p == TargetPlatform.iOS;
-    if (!touchPlatform) {
+    if (PointerInput.mouseOf(context)) {
       final withButtons =
           MediaQuery.of(context).size.width > NymDimens.mobileBreakpoint;
       Widget hoverChild = row;

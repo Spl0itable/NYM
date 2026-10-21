@@ -44,8 +44,9 @@ class _SidebarRowMenuButtonState extends State<SidebarRowMenuButton> {
     final c = context.nym;
     final lit = _hover || _down;
     final tip = tr('More');
+    final label = tr(widget.semanticLabel);
     final hit = sidebarRowMenuHit();
-    final key = (c, lit, widget.semanticLabel, tip, hit);
+    final key = (c, lit, label, tip, hit);
     final face = _face;
     if (face != null && _faceKey == key) return face;
     _faceKey = key;
@@ -67,7 +68,7 @@ class _SidebarRowMenuButtonState extends State<SidebarRowMenuButton> {
               child: HitSlop(
                 child: NymFocusable(
                 onActivate: _show,
-                label: widget.semanticLabel,
+                label: label,
                 tooltip: tip,
                 radius: NymRadius.rxs,
                 excludeChildSemantics: true,

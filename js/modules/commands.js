@@ -1,5 +1,6 @@
 const BOT_CHANNEL_RUN_MAX_MS = 150000;
 const BOT_CHANNEL_RUN_GRACE_MS = 15000;
+const BOT_CHANNEL_DETACHED_MS = 35000;
 const BOT_CHANNEL_RUNS_KEY = 'nym_bot_channel_runs';
 
 Object.assign(NYM.prototype, {
@@ -271,6 +272,10 @@ Object.assign(NYM.prototype, {
         if (!set) { set = new Set(); this._botChannelRuns.set(geohash, set); }
         set.add(run);
         this._botChannelRunArm(run);
+        if (!this._botChannelLeaveHooked && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+            this._botChannelLeaveHooked = true;
+            window.addEventListener('pagehide', () => this._botChannelRunsSave());
+        }
         this._botChannelRunsSave();
         this._botThinkingPaint(geohash);
         return run;
@@ -286,7 +291,12 @@ Object.assign(NYM.prototype, {
                 this._botChannelRunEnd(run);
                 if (run.recovered) this._botChannelFailureNotice({ status: 0, reason: 'timeout' });
             }
-        }, Math.max(0, run.deadline + BOT_CHANNEL_RUN_GRACE_MS - Date.now()));
+        }, Math.max(0, this._botChannelRunEndAt(run) - Date.now()));
+    },
+
+    _botChannelRunEndAt(run) {
+        const end = run.deadline + BOT_CHANNEL_RUN_GRACE_MS;
+        return Number.isFinite(run.goneAt) ? Math.min(end, run.goneAt + BOT_CHANNEL_DETACHED_MS) : end;
     },
 
     _botChannelRunEnd(run) {
@@ -304,10 +314,11 @@ Object.assign(NYM.prototype, {
     },
 
     _botChannelRunsSave() {
+        const now = Date.now();
         const out = [];
         if (this._botChannelRuns) {
             for (const set of this._botChannelRuns.values()) {
-                for (const r of set) if (!r.anon) out.push(r.remoteId ? { channel: r.channel, startedAt: r.startedAt, deadline: r.deadline, runId: r.remoteId } : { channel: r.channel, startedAt: r.startedAt, deadline: r.deadline });
+                for (const r of set) if (!r.anon) out.push(Object.assign({ channel: r.channel, startedAt: r.startedAt, deadline: r.deadline, seenAt: Number.isFinite(r.goneAt) ? r.goneAt : now }, r.remoteId ? { runId: r.remoteId } : {}));
             }
         }
         try {
@@ -331,8 +342,10 @@ Object.assign(NYM.prototype, {
             if (!r || typeof r.channel !== 'string' || !r.channel) continue;
             const deadline = Number(r.deadline);
             const runId = this._botChannelRunIdOf({ tags: [['run', r.runId]] });
-            if (runId && Number.isFinite(deadline) && deadline + BOT_CHANNEL_RUN_GRACE_MS > now && deadline <= now + BOT_CHANNEL_RUN_MAX_MS) {
-                this._botChannelRunRestore(r.channel, Number(r.startedAt) || now, deadline, runId);
+            const seen = Number(r.seenAt);
+            const goneAt = Number.isFinite(seen) && seen > 0 && seen <= now ? seen : now;
+            if (runId && Number.isFinite(deadline) && this._botChannelRunEndAt({ deadline, goneAt }) > now && deadline <= now + BOT_CHANNEL_RUN_MAX_MS) {
+                this._botChannelRunRestore(r.channel, Number(r.startedAt) || now, deadline, runId, goneAt);
             } else if (Number(r.startedAt) > now - 30 * 60 * 1000) {
                 lost = true;
             }
@@ -341,11 +354,11 @@ Object.assign(NYM.prototype, {
         if (lost) this._botChannelFailureNotice({ status: 0, reason: 'lost' });
     },
 
-    _botChannelRunRestore(channel, startedAt, deadline, runId) {
+    _botChannelRunRestore(channel, startedAt, deadline, runId, goneAt) {
         if (!this._botChannelRuns) this._botChannelRuns = new Map();
         const run = {
             channel, anon: false, startedAt, deadline, ctrl: null, timer: null,
-            ended: false, timedOut: false, remoteId: runId, recovered: true
+            ended: false, timedOut: false, remoteId: runId, recovered: true, goneAt
         };
         let set = this._botChannelRuns.get(channel);
         if (!set) { set = new Set(); this._botChannelRuns.set(channel, set); }
@@ -386,6 +399,7 @@ Object.assign(NYM.prototype, {
                     run.deadline = Math.min(run.deadline, Date.now() + limit);
                     this._botChannelRunArm(run);
                 }
+                if (run && !run.ended && !run.anon) this._botChannelRunsSave();
                 this._botThinkingPaint(geohash);
                 return null;
             }
@@ -536,7 +550,7 @@ Object.assign(NYM.prototype, {
         let until = 0;
         let next = Infinity;
         const set = this._botChannelRuns && this._botChannelRuns.get(geohash);
-        if (set) for (const r of set) until = Math.max(until, r.deadline + BOT_CHANNEL_RUN_GRACE_MS);
+        if (set) for (const r of set) until = Math.max(until, this._botChannelRunEndAt(r));
         const runs = this._botChannelTypingRuns && this._botChannelTypingRuns.get(geohash);
         if (runs) {
             for (const [id, run] of runs) {
@@ -824,7 +838,7 @@ Object.assign(NYM.prototype, {
         if (commandInfo) {
             commandInfo.fn(args);
         } else {
-            this.displaySystemMessage(`Unknown command: ${cmd}`);
+            this.displaySystemMessage(this.uiText(`Unknown command: {cmd}`, { cmd }));
         }
     },
 
@@ -874,7 +888,7 @@ Object.assign(NYM.prototype, {
         }
 
         if (this.isChannelBlocked(channel, channel)) {
-            this.displaySystemMessage(`Channel #${channel} is blocked. Use /unblock #${channel} to unblock it first.`);
+            this.displaySystemMessage(this.uiText(`Channel #{channel} is blocked. Use /unblock #{channel2} to unblock it first.`, { channel, channel2: channel }));
             return;
         }
 
@@ -924,7 +938,7 @@ Object.assign(NYM.prototype, {
                 return null;
             }
             this.applyDeveloperIdentity(result.secretKey, result.pubkey);
-            this.displaySystemMessage(`Identity verified. You are now logged in as ${this.nym}.`);
+            this.displaySystemMessage(this.uiText(`Identity verified. You are now logged in as {nym}.`, { nym: this.nym }));
             return result;
         }
 
@@ -958,7 +972,7 @@ Object.assign(NYM.prototype, {
 
         await this.saveToNostrProfile();
 
-        const changeMessage = `Your nym's new nick is now ${this.nym}`;
+        const changeMessage = this.uiText("Your nym's new nick is now {nym}", { nym: this.nym });
         this.displaySystemMessage(changeMessage);
     },
 
@@ -972,7 +986,7 @@ Object.assign(NYM.prototype, {
 
         const users = Array.from(channelUserSet)
             .map(pubkey => this.users.get(pubkey))
-            .filter(u => u && Date.now() - u.lastSeen < 300000)
+            .filter(u => u && this._seenActive(u.lastSeen, Date.now()))
             .filter(u => (typeof this.isPersonHidden === 'function'
                 ? !this.isPersonHidden(u.pubkey, u.nym)
                 : !this.blockedUsers.has(u.pubkey)))
@@ -983,7 +997,7 @@ Object.assign(NYM.prototype, {
             })
             .join(', ');
 
-        this.displaySystemMessage(`Online nyms in this channel: ${users || 'none'}`, 'system', { html: true, feed: true });
+        this.displaySystemMessage(`Online nyms in this channel: <span data-no-i18n>${users || 'none'}</span>`, 'system', { html: true, feed: true });
     },
 
     async cmdClear() {
@@ -1007,7 +1021,7 @@ Object.assign(NYM.prototype, {
             const targetInput = args.trim().replace(/^@/, '');
             const targetPubkey = this.resolvePubkeyFromNym(targetInput);
             if (!targetPubkey) {
-                this.displaySystemMessage(`User @${targetInput} not found. They need to be visible in a channel first.`);
+                this.displaySystemMessage(this.uiText(`User @{targetInput} not found. They need to be visible in a channel first.`, { targetInput }));
                 return;
             }
             if (targetPubkey === this.pubkey) {
@@ -1025,7 +1039,7 @@ Object.assign(NYM.prototype, {
         if (this.inPMMode && this.currentPM) {
             const extra = args && args.trim() ? this.resolvePubkeyFromNym(args.trim().replace(/^@/, '')) : null;
             if (args && args.trim() && !extra) {
-                this.displaySystemMessage(`User @${args.trim().replace(/^@/, '')} not found. They need to be visible in a channel first.`);
+                this.displaySystemMessage(this.uiText(`User @{v1} not found. They need to be visible in a channel first.`, { v1: args.trim().replace(/^@/, '') }));
                 return;
             }
             this.startGroupFromPM(extra);
@@ -1074,7 +1088,7 @@ Object.assign(NYM.prototype, {
             });
 
             if (matches.length === 0) {
-                this.displaySystemMessage(`User ${targetInput} not found`);
+                this.displaySystemMessage(this.uiText(`User {targetInput} not found`, { targetInput }));
                 return;
             }
 
@@ -1082,7 +1096,7 @@ Object.assign(NYM.prototype, {
                 const matchList = matches.map(m =>
                     `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
                 ).join(', ');
-                this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true, feed: true });
+                this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(searchNym)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
                 this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
                 return;
             }
@@ -1105,12 +1119,12 @@ Object.assign(NYM.prototype, {
 
         if (sent) {
             const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
-            this.displaySystemMessage(`Invitation sent to ${displayNym} for ${this.escapeHtml(channelInfo)}`, 'system', { html: true });
+            this.displaySystemMessage(`Invitation sent to <span data-no-i18n>${displayNym}</span> for <span data-no-i18n>${this.escapeHtml(channelInfo)}</span>`, 'system', { html: true });
 
             const publicNotice = `@${matchedNym} you've been invited to this channel! Check your PMs for details.`;
             await this.publishMessage(publicNotice, this.currentChannel, this.currentGeohash);
         } else {
-            this.displaySystemMessage(`Failed to send invitation to ${this.formatNymWithPubkey(matchedNym, targetPubkey)}`, 'system', { html: true });
+            this.displaySystemMessage(`Failed to send invitation to <span data-no-i18n>${this.formatNymWithPubkey(matchedNym, targetPubkey)}</span>`, 'system', { html: true });
         }
     },
 
@@ -1118,7 +1132,7 @@ Object.assign(NYM.prototype, {
         if (this.inPMMode && this.currentPM && !this.currentGroup) {
             const extra = args && args.trim() ? this.resolvePubkeyFromNym(args.trim().replace(/^@/, '')) : null;
             if (args && args.trim() && !extra) {
-                this.displaySystemMessage(`User @${args.trim().replace(/^@/, '')} not found`);
+                this.displaySystemMessage(this.uiText(`User @{v1} not found`, { v1: args.trim().replace(/^@/, '') }));
                 return;
             }
             this.startGroupFromPM(extra);
@@ -1135,7 +1149,7 @@ Object.assign(NYM.prototype, {
         const targetInput = args.trim().replace(/^@/, '');
         const targetPubkey = this.resolvePubkeyFromNym(targetInput);
         if (!targetPubkey) {
-            this.displaySystemMessage(`User @${targetInput} not found`);
+            this.displaySystemMessage(this.uiText(`User @{targetInput} not found`, { targetInput }));
             return;
         }
         if (targetPubkey === this.pubkey) {
@@ -1161,7 +1175,7 @@ Object.assign(NYM.prototype, {
         const targetInput = args.trim().replace(/^@/, '');
         const targetPubkey = this.resolvePubkeyFromNym(targetInput);
         if (!targetPubkey) {
-            this.displaySystemMessage(`User @${targetInput} not found. Try @nym#xxxx or a hex pubkey.`);
+            this.displaySystemMessage(this.uiText(`User @{targetInput} not found. Try @nym#xxxx or a hex pubkey.`, { targetInput }));
             return null;
         }
         return targetPubkey;
@@ -1276,9 +1290,9 @@ Object.assign(NYM.prototype, {
 
             this.blockChannel(channelName, channelName);
             if (this.isValidGeohash(channelName)) {
-                this.displaySystemMessage(`Blocked geohash channel #${channelName}`);
+                this.displaySystemMessage(this.uiText(`Blocked geohash channel #{channelName}`, { channelName }));
             } else {
-                this.displaySystemMessage(`Blocked channel #${channelName}`);
+                this.displaySystemMessage(this.uiText(`Blocked channel #{channelName}`, { channelName }));
             }
 
             this.updateBlockedChannelsList();
@@ -1300,7 +1314,7 @@ Object.assign(NYM.prototype, {
             this.saveBlockedUsers();
             this.showMessagesFromUnblockedUser(targetPubkey);
 
-            this.displaySystemMessage(`Unblocked ${nymHtml}`, 'system', { html: true });
+            this.displaySystemMessage(`Unblocked <span data-no-i18n>${nymHtml}</span>`, 'system', { html: true });
             this.updateUserList();
             this.updateBlockedList();
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -1311,7 +1325,7 @@ Object.assign(NYM.prototype, {
         this.saveBlockedUsers();
         this.hideMessagesFromBlockedUser(targetPubkey);
 
-        this.displaySystemMessage(`Blocked ${nymHtml}`, 'system', { html: true });
+        this.displaySystemMessage(`Blocked <span data-no-i18n>${nymHtml}</span>`, 'system', { html: true });
         this.updateUserList();
         this.updateBlockedList();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -1331,23 +1345,23 @@ Object.assign(NYM.prototype, {
             if (this.blockedChannels.has(channelName)) {
                 if (this.isValidGeohash(channelName)) {
                     this.unblockChannel(channelName, channelName);
-                    this.displaySystemMessage(`Unblocked geohash channel #${channelName}`);
+                    this.displaySystemMessage(this.uiText(`Unblocked geohash channel #{channelName}`, { channelName }));
                 } else {
                     this.unblockChannel(channelName, '');
-                    this.displaySystemMessage(`Unblocked channel #${channelName}`);
+                    this.displaySystemMessage(this.uiText(`Unblocked channel #{channelName}`, { channelName }));
                 }
 
                 this.updateBlockedChannelsList();
 
             } else {
-                this.displaySystemMessage(`Channel #${channelName} is not blocked`);
+                this.displaySystemMessage(this.uiText(`Channel #{channelName} is not blocked`, { channelName }));
             }
             return;
         }
 
         const targetPubkey = await this.findUserPubkey(target);
         if (!targetPubkey) {
-            this.displaySystemMessage(`User ${target} not found or is not blocked`);
+            this.displaySystemMessage(this.uiText(`User {target} not found or is not blocked`, { target }));
             return;
         }
 
@@ -1362,7 +1376,7 @@ Object.assign(NYM.prototype, {
         this.saveBlockedUsers();
         this.showMessagesFromUnblockedUser(targetPubkey);
 
-        this.displaySystemMessage(`Unblocked ${this.formatNymWithPubkey(targetNym, targetPubkey)}`, 'system', { html: true });
+        this.displaySystemMessage(`Unblocked <span data-no-i18n>${this.formatNymWithPubkey(targetNym, targetPubkey)}</span>`, 'system', { html: true });
         this.updateUserList();
         this.updateBlockedList();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -1376,7 +1390,7 @@ Object.assign(NYM.prototype, {
 
         if (now < tracker.cooldownUntil) {
             const remaining = Math.ceil((tracker.cooldownUntil - now) / 1000);
-            this.displaySystemMessage(`Slow down! You can use /me, /slap, or /hug again in ${remaining}s`);
+            this.displaySystemMessage(this.uiText(`Slow down! You can use /me, /slap, or /hug again in {remaining}s`, { remaining }));
             return false;
         }
 
@@ -1438,7 +1452,7 @@ Object.assign(NYM.prototype, {
                 const matchList = matches.map(m =>
                     `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
                 ).join(', ');
-                this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true, feed: true });
+                this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(searchNym)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
                 this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
                 return;
             }
@@ -1460,7 +1474,7 @@ Object.assign(NYM.prototype, {
         try {
             await this._sendToCurrentTarget(slapContent);
         } catch (error) {
-            this.displaySystemMessage('Failed to send slap: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to send slap: {error}', { error: error.message }));
         }
     },
 
@@ -1511,7 +1525,7 @@ Object.assign(NYM.prototype, {
                 const matchList = matches.map(m =>
                     `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
                 ).join(', ');
-                this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true, feed: true });
+                this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(searchNym)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
                 this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
                 return;
             }
@@ -1532,7 +1546,7 @@ Object.assign(NYM.prototype, {
         try {
             await this._sendToCurrentTarget(hugContent);
         } catch (error) {
-            this.displaySystemMessage('Failed to send hug: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to send hug: {error}', { error: error.message }));
         }
     },
 
@@ -1548,7 +1562,7 @@ Object.assign(NYM.prototype, {
         try {
             await this._sendToCurrentTarget(content);
         } catch (error) {
-            this.displaySystemMessage('Failed to send message: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message }));
         }
     },
 
@@ -1571,37 +1585,37 @@ Object.assign(NYM.prototype, {
     async cmdBold(args) {
         if (!args) { this.displaySystemMessage('Usage: /bold text'); return; }
         try { await this._sendToCurrentTarget(`**${args}**`); }
-        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+        catch (error) { this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message })); }
     },
 
     async cmdItalic(args) {
         if (!args) { this.displaySystemMessage('Usage: /italic text'); return; }
         try { await this._sendToCurrentTarget(`*${args}*`); }
-        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+        catch (error) { this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message })); }
     },
 
     async cmdStrike(args) {
         if (!args) { this.displaySystemMessage('Usage: /strike text'); return; }
         try { await this._sendToCurrentTarget(`~~${args}~~`); }
-        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+        catch (error) { this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message })); }
     },
 
     async cmdUnderline(args) {
         if (!args) { this.displaySystemMessage('Usage: /underline text'); return; }
         try { await this._sendToCurrentTarget(`__${args}__`); }
-        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+        catch (error) { this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message })); }
     },
 
     async cmdSpoiler(args) {
         if (!args) { this.displaySystemMessage('Usage: /spoiler text'); return; }
         try { await this._sendToCurrentTarget(`||${args}||`); }
-        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+        catch (error) { this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message })); }
     },
 
     async cmdSubtext(args) {
         if (!args) { this.displaySystemMessage('Usage: /subtext text'); return; }
         try { await this._sendToCurrentTarget(`-# ${args}`); }
-        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+        catch (error) { this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message })); }
     },
 
     async cmdTimestamp(args) {
@@ -1616,19 +1630,19 @@ Object.assign(NYM.prototype, {
             return;
         }
         try { await this._sendToCurrentTarget(parsed.tag); }
-        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+        catch (error) { this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message })); }
     },
 
     async cmdCode(args) {
         if (!args) { this.displaySystemMessage('Usage: /code text'); return; }
         try { await this._sendToCurrentTarget(`\`\`\`\n${args}\n\`\`\``); }
-        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+        catch (error) { this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message })); }
     },
 
     async cmdQuote(args) {
         if (!args) { this.displaySystemMessage('Usage: /quote text'); return; }
         try { await this._sendToCurrentTarget(`> ${args}`); }
-        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+        catch (error) { this.displaySystemMessage(this.uiText('Failed to send message: {error}', { error: error.message })); }
     },
 
     async cmdBRB(args) {
@@ -1639,7 +1653,7 @@ Object.assign(NYM.prototype, {
 
         const state = await this.setAwayState(args.trim());
 
-        this.displaySystemMessage(`Away message set: "${state.message}"`);
+        this.displaySystemMessage(this.uiText(`Away message set: "{message}"`, { message: state.message }));
         this.displaySystemMessage('You will auto-reply to mentions in ALL channels while away');
     },
 

@@ -1,5 +1,6 @@
 // Durable Object NymLedger: serializes the money-critical mutations.
 
+import { atRestSplit, atRestJoin, LiveStore } from "./_atrest.js";
 import {
   hasD1,
   creditsGet,
@@ -41,6 +42,11 @@ const BOT_PROGRESS_TTL_S = 900;
 const BOT_PROGRESS_MAX_STEPS = 120;
 const BOT_PROGRESS_MAX_BYTES = 128 * 1024;
 const BOT_DRAFT_MAX_CHARS = 32000;
+const BOT_LIVE_MAX_ENTRIES = 2000;
+const BOT_LIVE_MAX_CHARS = 8 * 1024 * 1024;
+const BOT_SIDE_MAX_ENTRIES = 4000;
+const BOT_SIDE_MAX_CHARS = 16 * 1024 * 1024;
+const BOT_SIDE_MAX_TTL_S = 2 * 86400;
 const BOT_NOTIFY_MAX_TTL_S = 900;
 const BOT_NOTIFY_PER_OWNER = 8;
 const BOT_NOTIFY_TOKEN_RE = /^[0-9a-f]{64,200}$/;
@@ -97,12 +103,11 @@ export class NymLedger {
       "CREATE TABLE IF NOT EXISTS bot_resume (id TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL, exp INTEGER NOT NULL);"
     );
     // Advisory progress for the watching client; losing it costs a progress line, never an answer.
-    this.sql.exec(
-      "CREATE TABLE IF NOT EXISTS bot_progress (id TEXT PRIMARY KEY, steps TEXT NOT NULL, exp INTEGER NOT NULL);"
-    );
-    this.sql.exec(
-      "CREATE TABLE IF NOT EXISTS bot_draft (id TEXT PRIMARY KEY, text TEXT NOT NULL, seq INTEGER NOT NULL, at INTEGER NOT NULL, exp INTEGER NOT NULL);"
-    );
+    this.sql.exec("DROP TABLE IF EXISTS bot_progress;");
+    this.sql.exec("DROP TABLE IF EXISTS bot_draft;");
+    this._drafts = new LiveStore(BOT_LIVE_MAX_ENTRIES, BOT_LIVE_MAX_CHARS);
+    this._steps = new LiveStore(BOT_LIVE_MAX_ENTRIES, BOT_LIVE_MAX_CHARS);
+    this._sides = new LiveStore(BOT_SIDE_MAX_ENTRIES, BOT_SIDE_MAX_CHARS);
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS turn_notify (id TEXT PRIMARY KEY, owner TEXT NOT NULL, token TEXT NOT NULL, env TEXT NOT NULL, chat TEXT NOT NULL, text TEXT, exp INTEGER NOT NULL, opts TEXT);"
     );
@@ -343,6 +348,8 @@ export class NymLedger {
       case "progress-push": return this._progressPush(a.key, a.step);
       case "progress-read": return this._progressRead(a.key, a.after, a.draftAfter);
       case "progress-draft": return this._progressDraft(a.key, a.text, a.seq);
+      case "side-put": return this._sideOp(a);
+      case "side-get": return this._sideOp(a);
       case "gate-take": return this._gateTake(a);
       case "gate-limited": return this._gateLimited(a);
       case "gate-settle": return this._gateSettle(a);
@@ -403,7 +410,7 @@ export class NymLedger {
     const raw = rows[0].result;
     if (!raw) return { now, running: true };
     try {
-      return { now, result: JSON.parse(raw) };
+      return { now, result: this._sideJoin(key, JSON.parse(raw), now) };
     } catch {
       // Unreadable row: treat the turn as never having happened rather than stranding the message.
       this.sql.exec("DELETE FROM bot_turns WHERE id = ?;", key);
@@ -459,8 +466,12 @@ export class NymLedger {
   _turnFinish(key, result) {
     if (typeof key !== "string" || !key || key.length > 256) return { ok: false };
     let encoded;
+    const now0 = Math.floor(Date.now() / 1000);
     try {
-      encoded = JSON.stringify(result);
+      const parts = atRestSplit(result && result.body);
+      if (parts.side) this._sidePut([key], parts.side, now0 + BOT_TURN_RESULT_TTL_S);
+      else this._sides.delete(key);
+      encoded = JSON.stringify(parts.side ? Object.assign({}, result, { body: parts.rest }) : result);
     } catch {
       return { ok: false };
     }
@@ -605,27 +616,47 @@ export class NymLedger {
     }
   }
 
+  _sidePut(keys, side, exp) {
+    let size;
+    try {
+      size = JSON.stringify(side).length;
+    } catch {
+      return false;
+    }
+    let ok = true;
+    for (const k of keys) {
+      if (typeof k !== "string" || !k || k.length > 256) continue;
+      ok = this._sides.set(k, side, exp, size) && ok;
+    }
+    return ok;
+  }
+
+  _sideJoin(key, result, now) {
+    const side = this._sides.get(key, now);
+    if (!side || !result || typeof result !== "object") return result;
+    return Object.assign({}, result, { body: atRestJoin(result.body, side) });
+  }
+
+  _sideOp(a) {
+    const now = Math.floor(Date.now() / 1000);
+    if (a.op === "side-get") {
+      if (typeof a.key !== "string" || !a.key || a.key.length > 256) return { side: null };
+      return { side: this._sides.get(a.key, now) };
+    }
+    const keys = Array.isArray(a.keys) ? a.keys.slice(0, 8) : [];
+    if (!keys.length || !a.side || typeof a.side !== "object" || Array.isArray(a.side)) return { ok: false };
+    const ttl = Math.max(1, Math.min(BOT_SIDE_MAX_TTL_S, Math.floor(Number(a.ttl) || BOT_TURN_RESULT_TTL_S)));
+    this._sides.sweep(now);
+    return { ok: this._sidePut(keys, a.side, now + ttl) };
+  }
+
   _progressPush(key, step) {
     if (typeof key !== "string" || !key || key.length > 256) return { ok: false };
     if (!step || typeof step !== "object") return { ok: false };
     const now = Math.floor(Date.now() / 1000);
-    this.sql.exec("DELETE FROM bot_progress WHERE exp < ?;", now);
-    let steps = [];
-    const rows = this.sql
-      .exec("SELECT steps FROM bot_progress WHERE id = ? LIMIT 1;", key)
-      .toArray();
-    if (rows.length) {
-      try {
-        const parsed = JSON.parse(rows[0].steps);
-        if (Array.isArray(parsed)) steps = parsed;
-      } catch {
-        steps = [];
-      }
-    }
-    // Numbered from the highest handed out, since trimming stops the length from growing.
+    let steps = (this._steps.get(key, now) || []).slice();
     const lastN = steps.length ? Number(steps[steps.length - 1].n) || 0 : 0;
     steps.push({ n: lastN + 1, at: Date.now(), ...step });
-    // Oldest out first; numbering keeps the watcher's "after" cursor meaningful.
     if (steps.length > BOT_PROGRESS_MAX_STEPS) {
       steps = steps.slice(steps.length - BOT_PROGRESS_MAX_STEPS);
     }
@@ -634,34 +665,18 @@ export class NymLedger {
       steps = steps.slice(1);
       encoded = JSON.stringify(steps);
     }
-    this.sql.exec(
-      "INSERT INTO bot_progress (id, steps, exp) VALUES (?, ?, ?) " +
-      "ON CONFLICT(id) DO UPDATE SET steps = excluded.steps, exp = excluded.exp;",
-      key,
-      encoded,
-      now + BOT_PROGRESS_TTL_S
-    );
+    this._steps.set(key, steps, now + BOT_PROGRESS_TTL_S, encoded.length);
     return { ok: true, n: steps.length ? steps[steps.length - 1].n : 0 };
   }
 
   _progressRead(key, after, draftAfter) {
     if (typeof key !== "string" || !key || key.length > 256) return { steps: [] };
     const now = Math.floor(Date.now() / 1000);
-    this.sql.exec("DELETE FROM bot_progress WHERE exp < ?;", now);
     const out = { steps: [] };
     const draft = this._draftRead(key, now, draftAfter);
     if (draft) out.draft = draft;
-    const rows = this.sql
-      .exec("SELECT steps FROM bot_progress WHERE id = ? LIMIT 1;", key)
-      .toArray();
-    if (!rows.length) return out;
-    let steps = [];
-    try {
-      const parsed = JSON.parse(rows[0].steps);
-      if (Array.isArray(parsed)) steps = parsed;
-    } catch {
-      return out;
-    }
+    const steps = this._steps.get(key, now);
+    if (!Array.isArray(steps)) return out;
     const from = Number(after) || 0;
     out.steps = steps.filter((s) => (s && s.n ? s.n : 0) > from);
     return out;
@@ -683,34 +698,22 @@ export class NymLedger {
       cut = true;
     }
     const now = Math.floor(Date.now() / 1000);
-    this.sql.exec("DELETE FROM bot_draft WHERE exp < ?;", now);
-    const held = this.sql.exec("SELECT seq FROM bot_draft WHERE id = ? LIMIT 1;", key).toArray();
-    if (held.length && Number(held[0].seq) >= n) return { ok: false, stale: true };
-    this.sql.exec(
-      "INSERT INTO bot_draft (id, text, seq, at, exp) VALUES (?, ?, ?, ?, ?) " +
-      "ON CONFLICT(id) DO UPDATE SET text = excluded.text, seq = excluded.seq, at = excluded.at, exp = excluded.exp;",
-      key,
-      body,
-      n,
-      Date.now(),
-      now + BOT_PROGRESS_TTL_S
-    );
+    const held = this._drafts.get(key, now);
+    if (held && Number(held.seq) >= n) return { ok: false, stale: true };
+    this._drafts.set(key, { text: body, seq: n, at: Date.now() }, now + BOT_PROGRESS_TTL_S, body.length);
     return { ok: true, seq: n, cut };
   }
 
   _draftRead(key, now, after) {
-    this.sql.exec("DELETE FROM bot_draft WHERE exp < ?;", now);
-    const rows = this.sql
-      .exec("SELECT text, seq, at FROM bot_draft WHERE id = ? LIMIT 1;", key)
-      .toArray();
-    if (!rows.length) return null;
-    const seq = Number(rows[0].seq) || 0;
+    const d = this._drafts.get(key, now);
+    if (!d) return null;
+    const seq = Number(d.seq) || 0;
     if (seq <= (Number(after) || 0)) return null;
-    return { text: String(rows[0].text || ""), seq, at: Number(rows[0].at) || 0 };
+    return { text: String(d.text || ""), seq, at: Number(d.at) || 0 };
   }
 
   _draftDrop(key) {
-    this.sql.exec("DELETE FROM bot_draft WHERE id = ?;", key);
+    this._drafts.delete(key);
   }
 
   _gateNum(v, fallback, cap) {

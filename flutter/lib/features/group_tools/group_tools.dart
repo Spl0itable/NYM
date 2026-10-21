@@ -825,7 +825,9 @@ class GroupTools {
     final name = p.n.isEmpty ? 'Group' : p.n;
     final payload = InvitePayload(
       g: p.g,
-      n: name.length > 80 ? name.substring(0, 80) : name,
+      n: name.runes.length > 80
+          ? String.fromCharCodes(name.runes.take(80))
+          : name,
       a: p.a,
       e: p.e,
       s: p.s,

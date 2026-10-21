@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../../models/channel.dart';
 import '../../features/group_tools/group_tools.dart';
 import '../../models/group.dart';
+import '../../features/share/share_links.dart' show strictNpubPubkey;
 
 /// Deep-link routing mirroring the PWA's URL-fragment routing (`#gjoin=`, `#<e|g|c>:<id>`, `#<channel>`).
 // TODO(verify): the PWA has no PM deep-link form (`#pm:`), so none is implemented.
@@ -27,9 +28,13 @@ enum NymLinkKind {
   groupInvite,
 
   callLink,
+
+  profile,
 }
 
 void Function(String token)? callLinkHandler;
+
+void Function(String pubkey)? profileLinkHandler;
 
 @immutable
 class NymLink {
@@ -39,7 +44,11 @@ class NymLink {
     this.refPrefix = '',
     this.inviteToken = '',
     this.invite,
+    this.pubkey = '',
   });
+
+  factory NymLink.profile(String pubkey) =>
+      NymLink._(kind: NymLinkKind.profile, pubkey: pubkey);
 
   factory NymLink.channel(String channel) =>
       NymLink._(kind: NymLinkKind.channel, channel: channel);
@@ -74,6 +83,8 @@ class NymLink {
 
   /// Parsed invite payload, or null if the token failed validation.
   final GroupInviteToken? invite;
+
+  final String pubkey;
 
   @override
   String toString() =>
@@ -169,6 +180,12 @@ NymLink? parseNymLink(String url) {
         : NymLink.callLink(token);
   }
 
+  if (fragment.startsWith('p=')) {
+    final npub = RegExp(r'^p=(npub1[02-9ac-hj-np-z]{58})$').firstMatch(fragment);
+    final pubkey = npub == null ? null : strictNpubPubkey(npub.group(1)!);
+    return pubkey == null ? null : NymLink.profile(pubkey);
+  }
+
   // 1) Group invite: case-sensitive token, matched first.
   final invite = RegExp(r'^gjoin=([A-Za-z0-9_-]+)').firstMatch(fragment);
   if (invite != null) {
@@ -234,6 +251,11 @@ bool dispatchNymLink(NymLink link, DeepLinkTarget target) {
       final handler = callLinkHandler;
       if (handler == null) return false;
       handler(link.inviteToken);
+      return true;
+    case NymLinkKind.profile:
+      final handler = profileLinkHandler;
+      if (handler == null) return false;
+      handler(link.pubkey);
       return true;
   }
 }

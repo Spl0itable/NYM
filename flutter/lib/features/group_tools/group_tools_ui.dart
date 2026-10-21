@@ -21,7 +21,7 @@ import '../calls/call_providers.dart';
 import '../calls/call_signaling.dart' show CallPhase;
 import '../channels/channel_share.dart' show kNymchatShareHost;
 import '../globe/topojson.dart';
-import '../groups/group_logic.dart' show kMaxGroupMembers;
+import '../groups/group_logic.dart' show GroupLogic, kMaxGroupMembers;
 import '../i18n/i18n.dart';
 import '../messages/format/discord_timestamp.dart';
 import '../messages/format/message_content.dart';
@@ -821,6 +821,21 @@ class GtSlowmodeBar extends ConsumerStatefulWidget {
   ConsumerState<GtSlowmodeBar> createState() => _GtSlowmodeBarState();
 }
 
+Object? _slowmodeInputs(AppState s, String groupId) {
+  for (final g in s.groups) {
+    if (g.id != groupId) continue;
+    final interval = GroupTools.normalizeSlowmode(g.slowmode);
+    if (interval == 0) return 0;
+    return (
+      interval,
+      g.slowmodeSince,
+      s.selfPubkey,
+      s.viewRevOf(GroupLogic.groupStorageKey(groupId)),
+    );
+  }
+  return null;
+}
+
 class _GtSlowmodeBarState extends ConsumerState<GtSlowmodeBar> {
   Timer? _t;
 
@@ -840,10 +855,11 @@ class _GtSlowmodeBarState extends ConsumerState<GtSlowmodeBar> {
 
   @override
   Widget build(BuildContext context) {
-    final app = ref.watch(appStateProvider);
     ref.watch(groupToolsRevisionProvider);
-    final view = app.view;
+    final view = ref.watch(currentViewProvider);
     if (view.kind != ViewKind.group) return const SizedBox.shrink();
+    ref.watch(appStateProvider.select((s) => _slowmodeInputs(s, view.id)));
+    final app = ref.read(appStateProvider);
     final svc = ref.read(groupToolsProvider);
     final g = ref.read(appStateProvider.notifier).groupById(view.id);
     final interval = g == null ? 0 : GroupTools.normalizeSlowmode(g.slowmode);

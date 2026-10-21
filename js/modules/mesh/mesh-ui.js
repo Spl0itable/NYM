@@ -85,6 +85,7 @@
                 },
                 onPublicMessage: (m) => this._onMeshPublicMessage(m),
                 onPrivateMessage: (m) => this._onMeshPrivateMessage(m),
+                onNymShare: (m) => { if (typeof this._nearbyReceive === 'function') this._nearbyReceive(m); },
                 acksPrivateMessage: (m) => this._meshAcksPrivate(m),
                 onReceipt: (r) => { if (typeof this.onMeshReceipt === 'function') this.onMeshReceipt(r); },
                 onFile: (f) => { if (typeof this.onMeshFile === 'function') this.onMeshFile(f); },
@@ -205,10 +206,10 @@
             if (!this._mesh || !this._mesh.running) return;
             try {
                 const name = await this._meshService().addPeer();
-                this.displaySystemMessage(this.uiText('Mesh peer added: ') + name);
+                this.displaySystemMessage(this.uiText('Mesh peer added: {name}', { name }));
             } catch (err) {
                 if (err && err.name === 'NotFoundError') return;
-                this.displaySystemMessage(this.uiText('Could not add mesh peer: ') + (err && err.message));
+                this.displaySystemMessage(this.uiText('Could not add mesh peer: {error}', { error: err && err.message }));
             }
             this._renderMeshPanel();
         },
@@ -394,7 +395,7 @@
             try {
                 meshId = await mesh.sendPublicMessage(content, channel === MESH_CHANNEL ? null : channel);
             } catch (err) {
-                this.displaySystemMessage(this.uiText('Mesh send failed: ') + (err && err.message));
+                this.displaySystemMessage(this.uiText('Mesh send failed: {error}', { error: err && err.message }));
                 return;
             }
             if (mesh.linkCount === 0) {

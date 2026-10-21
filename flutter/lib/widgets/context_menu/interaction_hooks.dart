@@ -60,6 +60,11 @@ class InsertTextAction extends ComposerAction {
   final String text;
 }
 
+class ReplaceTextAction extends ComposerAction {
+  const ReplaceTextAction(this.text);
+  final String text;
+}
+
 /// Attaches shared files through the composer's normal upload pipeline.
 class ShareFilesAction extends ComposerAction {
   const ShareFilesAction(this.paths);
@@ -89,6 +94,8 @@ class InteractionHooks extends StateNotifier<ComposerAction?> {
           fullNym: fullNym, content: content, messageId: messageId);
 
   void requestInsertText(String text) => state = InsertTextAction(text);
+
+  void requestReplaceText(String text) => state = ReplaceTextAction(text);
 
   void requestShareFiles(List<String> paths) => state = ShareFilesAction(paths);
 

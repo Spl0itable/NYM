@@ -75,7 +75,7 @@ Object.assign(NYM.prototype, {
 
                 this.closeContextMenu();
 
-                this.displaySystemMessage(`Checking if @${nym} can receive zaps...`);
+                this.displaySystemMessage(this.uiText(`Checking if @{nym} can receive zaps...`, { nym }));
 
                 try {
                     const lnAddress = await this.fetchLightningAddressForUser(pubkey);
@@ -83,10 +83,10 @@ Object.assign(NYM.prototype, {
                     if (lnAddress) {
                         this.showZapModal(messageId, pubkey, nym);
                     } else {
-                        this.displaySystemMessage(`@${nym} cannot receive zaps (no lightning address set)`);
+                        this.displaySystemMessage(this.uiText(`@{nym} cannot receive zaps (no lightning address set)`, { nym }));
                     }
                 } catch (error) {
-                    this.displaySystemMessage(`Failed to check if @${nym} can receive zaps`);
+                    this.displaySystemMessage(this.uiText(`Failed to check if @{nym} can receive zaps`, { nym }));
                 }
             }
         });
@@ -200,7 +200,7 @@ Object.assign(NYM.prototype, {
                 const value = this.formatPubkeyForDisplay(this.contextMenuData.pubkey, format);
                 try {
                     await navigator.clipboard.writeText(value);
-                    this.displaySystemMessage(`Copied ${format === 'npub' ? 'npub' : 'hex pubkey'} to clipboard`);
+                    this.displaySystemMessage(this.uiText(`Copied {v1} to clipboard`, { v1: format === 'npub' ? 'npub' : 'hex pubkey' }));
                 } catch (err) {
                     this.displaySystemMessage('Failed to copy pubkey');
                 }
@@ -587,6 +587,16 @@ Object.assign(NYM.prototype, {
 
         document.getElementById('ctxGiftCredits').style.display =
             (pubkey === this.pubkey || this.isVerifiedBot(pubkey)) ? 'none' : 'block';
+
+        const shareProfileOption = document.getElementById('ctxShareProfile');
+        if (shareProfileOption) {
+            const canShare = typeof this._shareProfileAllowed === 'function' && this._shareProfileAllowed(pubkey);
+            shareProfileOption.style.display = canShare ? 'block' : 'none';
+            shareProfileOption.onclick = () => {
+                this.closeContextMenu();
+                this.shareProfile(pubkey);
+            };
+        }
 
         const editProfileOption = document.getElementById('ctxEditProfile');
         if (editProfileOption) {
@@ -1753,6 +1763,10 @@ Object.assign(NYM.prototype, {
     },
 
     _watchComposerDock(input) {
+        if (input && input.id === 'messageInput' && !input._popoutSizeObserver && typeof ResizeObserver !== 'undefined') {
+            input._popoutSizeObserver = new ResizeObserver(() => this._refreshComposerOffsets());
+            input._popoutSizeObserver.observe(input);
+        }
         const wrapper = input && input.closest('.input-wrapper');
         if (!wrapper || wrapper._dockObserver || typeof MutationObserver === 'undefined') return;
         wrapper._dockObserver = new MutationObserver(() => this._syncComposerDock(wrapper));

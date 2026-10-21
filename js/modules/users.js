@@ -151,7 +151,7 @@ Object.assign(NYM.prototype, {
             this._userListSig = '';
             this.updateUserList();
 
-            this.displaySystemMessage(`Blocked keyword: "${keyword}"`);
+            this.displaySystemMessage(this.uiText(`Blocked keyword: "{keyword}"`, { keyword }));
             if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
         }
     },
@@ -202,7 +202,7 @@ Object.assign(NYM.prototype, {
         this._userListSig = '';
         this.updateUserList();
 
-        this.displaySystemMessage(`Unblocked keyword: "${keyword}"`);
+        this.displaySystemMessage(this.uiText(`Unblocked keyword: "{keyword}"`, { keyword }));
         if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
     },
 
@@ -1053,8 +1053,19 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    async _profileImageFile(file) {
+        const MN = window.NymMediaNotes;
+        if (!MN || !MN.profileImageType || !file || typeof file.slice !== 'function') return file;
+        let head = new Uint8Array(0);
+        try { head = new Uint8Array(await file.slice(0, 16).arrayBuffer()); } catch (_) { }
+        const type = MN.profileImageType(head, file.name, file.type);
+        if (type === file.type) return file;
+        return new File([file], file.name || 'image', { type });
+    },
+
     async uploadAvatar(file) {
         try {
+            file = await this._profileImageFile(file);
             const arrayBuffer = await file.arrayBuffer();
             const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
             const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -1076,7 +1087,7 @@ Object.assign(NYM.prototype, {
             this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
             return url;
         } catch (error) {
-            this.displaySystemMessage('Failed to upload avatar: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to upload avatar: {error}', { error: error.message }));
             return null;
         }
     },
@@ -1095,6 +1106,7 @@ Object.assign(NYM.prototype, {
 
     async uploadBanner(file) {
         try {
+            file = await this._profileImageFile(file);
             const arrayBuffer = await file.arrayBuffer();
             const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
             const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -1112,7 +1124,7 @@ Object.assign(NYM.prototype, {
             this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
             return url;
         } catch (error) {
-            this.displaySystemMessage('Failed to upload banner: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to upload banner: {error}', { error: error.message }));
             return null;
         }
     },
@@ -1143,7 +1155,7 @@ Object.assign(NYM.prototype, {
         });
 
         if (!validSize) {
-            this.displaySystemMessage(`Wallpaper image must be at least ${minWidth}x${minHeight} pixels.`);
+            this.displaySystemMessage(this.uiText(`Wallpaper image must be at least {minWidth}x{minHeight} pixels.`, { minWidth, minHeight }));
             return null;
         }
 
@@ -1159,7 +1171,7 @@ Object.assign(NYM.prototype, {
             this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
             return url;
         } catch (error) {
-            this.displaySystemMessage('Failed to upload wallpaper: ' + error.message);
+            this.displaySystemMessage(this.uiText('Failed to upload wallpaper: {error}', { error: error.message }));
             return null;
         }
     },
@@ -1273,7 +1285,7 @@ Object.assign(NYM.prototype, {
         for (const f of files) {
             if (f.size > MAX_UPLOAD_SIZE) {
                 const isVid = f.type.startsWith('video/');
-                this.displaySystemMessage((isVid ? 'Video' : 'Image') + ' files must be under 50MB. "' + (f.name || 'file') + '" is ' + (f.size / (1024 * 1024)).toFixed(1) + 'MB.');
+                this.displaySystemMessage(this.uiText(isVid ? 'Video files must be under 50MB. "{name}" is {size}MB.' : 'Image files must be under 50MB. "{name}" is {size}MB.', { name: f.name || 'file', size: (f.size / (1024 * 1024)).toFixed(1) }));
                 return;
             }
         }
@@ -1437,12 +1449,16 @@ Object.assign(NYM.prototype, {
         if (this.verifiedBotPubkeys && this.verifiedBotPubkeys.has(pubkey)) return 'online';
         const user = this.users.get(pubkey);
         const now = Date.now();
-        const ACTIVE_THRESHOLD = 300000;
-        const lastSeen = user ? (user.lastSeen || 0) : 0;
-        const isRecent = (now - lastSeen) < ACTIVE_THRESHOLD;
+        const isRecent = this._seenActive(user ? user.lastSeen : 0, now);
         if (this.awayMessages && this.awayMessages.has(pubkey)) return 'away';
         if (user && user.status === 'away') return 'away';
         return isRecent ? 'online' : 'offline';
+    },
+
+    _seenActive(atMs, nowMs) {
+        const L = (typeof self !== 'undefined' && self.NymLastSeen) || null;
+        const at = (typeof atMs === 'number' && atMs > 0) ? atMs : 0;
+        return L ? L.isActive(at, nowMs) : (at > 0 && nowMs - at < 300000);
     },
 
     handleFriendPresenceRumor(rumor, pubkey) {
@@ -1466,16 +1482,18 @@ Object.assign(NYM.prototype, {
         }
 
         const now = Date.now();
+        const L = (typeof self !== 'undefined' && self.NymLastSeen) || null;
+        const seenFrom = (prev) => L ? L.mergePresence(prev, status, (rumor.created_at || 0) * 1000, now) : Math.min(prev, now);
         if (this.users.has(pubkey)) {
             const user = this.users.get(pubkey);
             user.status = status;
-            user.lastSeen = now;
+            user.lastSeen = seenFrom(user.lastSeen || 0);
         } else {
             const nymTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'n');
             this.users.set(pubkey, {
                 nym: nymTag ? this.stripPubkeySuffix(nymTag[1]) : this.getNymFromPubkey(pubkey),
                 pubkey,
-                lastSeen: now,
+                lastSeen: seenFrom(0),
                 status,
                 channels: new Set()
             });
@@ -1506,6 +1524,8 @@ Object.assign(NYM.prototype, {
         const lastTimestamp = this.presenceTimestamps.get(pubkey) || 0;
         if (eventTime < lastTimestamp) return;
         this.presenceTimestamps.set(pubkey, eventTime);
+        if (!this.presenceStatuses) this.presenceStatuses = new Map();
+        this.presenceStatuses.set(pubkey, status);
 
         // Kind 30078 is redelivered on every resubscribe; only a real URL change may bust the cache (avoids flicker).
         if (avatarUpdateTag) {
@@ -1556,7 +1576,15 @@ Object.assign(NYM.prototype, {
             this.awayMessages.delete(pubkey);
         }
 
-        if (this.users.has(pubkey)) {
+        const known = this.users.has(pubkey);
+        const L = (typeof self !== 'undefined' && self.NymLastSeen) || null;
+        const activeMs = L ? L.presenceActivityMs(status, eventTime * 1000) : 0;
+        if (activeMs > 0) {
+            this.recordUserActivity(pubkey, activeMs);
+            if (!known && nym && this.users.has(pubkey)) this.users.get(pubkey).nym = nym;
+        }
+
+        if (known) {
             const user = this.users.get(pubkey);
             // Visibility is tracked in statusHiddenUsers so the user stays listed, just without a status dot.
             if (status !== 'hidden') user.status = status;
@@ -1578,8 +1606,7 @@ Object.assign(NYM.prototype, {
         // Use created_at so historical messages don't falsely mark users as online.
         const eventTime = createdAt ? createdAt * 1000 : Date.now();
 
-        const activeThreshold = 300000; // 5 minutes
-        const isRecent = (Date.now() - eventTime) < activeThreshold;
+        const isRecent = this._seenActive(eventTime, Date.now());
         let baseStatus;
         if (this.awayMessages.has(pubkey)) {
             baseStatus = 'away';
@@ -1620,25 +1647,74 @@ Object.assign(NYM.prototype, {
         this.updateUserList();
     },
 
-    // E.g. after a read receipt, so lurkers who only view messages still appear online.
-    recordUserActivity(pubkey) {
-        if (!pubkey || pubkey === this.pubkey) return;
-        if (this.awayMessages && this.awayMessages.has(pubkey)) return;
+    handleGeoPresenceEvent(event) {
+        const G = (typeof self !== 'undefined' && self.NymGeoPresence) || null;
+        if (!G || !event || this.inPMMode) return;
+        const ch = typeof this._presenceChannel === 'function' ? this._presenceChannel() : null;
+        if (!ch) return;
+        const type = ch.type;
+        const channel = ch.id;
+        const pk = event.pubkey;
         const now = Date.now();
+        const known = this.users.get(pk);
+        const excluded = (this.blockedUsers && this.blockedUsers.has(pk)) || this._userListHidden(pk, known && known.nym ? known.nym : '');
+        const own = [this.pubkey];
+        if (this._anonOwnKeys) this._anonOwnKeys.forEach((k) => own.push(k));
+        const verdict = G.accept(event, { type, channel, nowMs: now, verified: true, own, excluded: excluded ? [pk] : [] });
+        if (!verdict.ok) return;
+        const status = this.presenceStatuses ? this.presenceStatuses.get(pk) : null;
+        const statusAtMs = this.presenceTimestamps ? (this.presenceTimestamps.get(pk) || 0) * 1000 : 0;
+        const act = G.activity({ geoAtMs: verdict.atMs, nowMs: now, prevSeenMs: known ? known.lastSeen || 0 : 0, status: status || null, statusAtMs });
+        if (!act.counts) return;
+        if (!this._geoPresenceMembers) this._geoPresenceMembers = new Map();
+        let members = this._geoPresenceMembers.get(channel);
+        if (!members) {
+            members = new Set();
+            this._geoPresenceMembers.set(channel, members);
+        }
+        if (!G.admits(members.size, members.has(pk))) return;
+        members.add(pk);
+        this.recordUserActivity(pk, act.seenMs);
+        const user = this.users.get(pk);
+        if (!user) return;
+        if (!user.channels) user.channels = new Set();
+        if (!user.channels.has(channel)) {
+            user.channels.add(channel);
+            this.updateUserList();
+        }
+        if (!this.channelUsers.has(channel)) this.channelUsers.set(channel, new Set());
+        this.channelUsers.get(channel).add(pk);
+    },
+
+    // E.g. after a read receipt, so lurkers who only view messages still appear online.
+    recordUserActivity(pubkey, atMs) {
+        if (!pubkey || pubkey === this.pubkey) return;
+        if (this.blockedUsers && this.blockedUsers.has(pubkey)) return;
+        const now = Date.now();
+        const at = (typeof atMs === 'number' && atMs > 0) ? atMs : now;
+        const L = (typeof self !== 'undefined' && self.NymLastSeen) || null;
+        const recent = (seen) => this._seenActive(seen, now);
         const user = this.users.get(pubkey);
         if (user) {
-            user.lastSeen = now;
-            if (user.status !== 'away') user.status = 'online';
+            const next = L ? L.merge(user.lastSeen || 0, at, now) : Math.min(Math.max(user.lastSeen || 0, at), now);
+            if (next === user.lastSeen) return;
+            user.lastSeen = next;
+            const away = this.awayMessages && this.awayMessages.has(pubkey);
+            if (!away && user.status !== 'away' && recent(next)) user.status = 'online';
         } else {
+            const seen = L ? L.merge(0, at, now) : Math.min(at, now);
             this.users.set(pubkey, {
                 nym: this.getNymFromPubkey(pubkey),
                 pubkey: pubkey,
-                lastSeen: now,
-                status: 'online',
+                lastSeen: seen,
+                status: recent(seen) ? 'online' : 'offline',
                 channels: new Set()
             });
         }
         this.updateUserList();
+        if (this.inPMMode && this.currentPM === pubkey && typeof this.refreshPMHeaderStatus === 'function') {
+            this.refreshPMHeaderStatus();
+        }
     },
 
     updateUserList() {
@@ -1663,7 +1739,6 @@ Object.assign(NYM.prototype, {
 
         const currentChannelKey = this.currentGeohash || this.currentChannel;
         const now = Date.now();
-        const ACTIVE_THRESHOLD = 300000;
 
         let pmOnlyPubkeys = null;
         if (this.settings.groupChatPMOnlyMode) {
@@ -1690,7 +1765,7 @@ Object.assign(NYM.prototype, {
                 this._clientGatesActive() &&
                 this.isGibberishNym(user.nym)) return;
 
-            const isRecent = (now - user.lastSeen) < ACTIVE_THRESHOLD;
+            const isRecent = this._seenActive(user.lastSeen, now);
             const effectiveStatus = this.getEffectiveUserStatus(pubkey);
             const statusHidden = effectiveStatus === 'hidden';
             if (!statusHidden && effectiveStatus !== 'offline' && (isRecent || verifiedBotSet.has(pubkey))) {
@@ -1762,6 +1837,7 @@ Object.assign(NYM.prototype, {
         if (!this.inPMMode) {
             const meta = document.getElementById('channelMeta');
             if (meta) meta.textContent = `${this.abbreviateNumber(channelUserCount)} online nyms`;
+            this._channelOnlineCount = channelUserCount;
         }
 
         this.refreshAutocompleteIfOpen();
@@ -2046,7 +2122,7 @@ Object.assign(NYM.prototype, {
         this.saveBlockedUsers();
         this.showMessagesFromUnblockedUser(pubkey);
 
-        this.displaySystemMessage(`Unblocked ${this.getNymHtmlFromPubkey(pubkey)}`, 'system', { html: true });
+        this.displaySystemMessage(`Unblocked <span data-no-i18n>${this.getNymHtmlFromPubkey(pubkey)}</span>`, 'system', { html: true });
         this.updateUserList();
         this.updateBlockedList();
         if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
@@ -2062,7 +2138,7 @@ Object.assign(NYM.prototype, {
         this.saveBlockedUsers();
         this.hideMessagesFromBlockedUser(pubkey);
 
-        this.displaySystemMessage(`Blocked ${this.getNymHtmlFromPubkey(pubkey)}`, 'system', { html: true });
+        this.displaySystemMessage(`Blocked <span data-no-i18n>${this.getNymHtmlFromPubkey(pubkey)}</span>`, 'system', { html: true });
         this.updateUserList();
         this.updateBlockedList();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -2243,11 +2319,11 @@ Object.assign(NYM.prototype, {
         if (this.friends.has(targetPubkey)) {
             this.friends.delete(targetPubkey);
             this.saveFriends();
-            this.displaySystemMessage(`Removed ${nymHtml} from friends`, 'system', { html: true });
+            this.displaySystemMessage(`Removed <span data-no-i18n>${nymHtml}</span> from friends`, 'system', { html: true });
         } else {
             this.friends.add(targetPubkey);
             this.saveFriends();
-            this.displaySystemMessage(`Added ${nymHtml} as a friend`, 'system', { html: true });
+            this.displaySystemMessage(`Added <span data-no-i18n>${nymHtml}</span> as a friend`, 'system', { html: true });
         }
 
         this.updateFriendsList();
@@ -2260,7 +2336,7 @@ Object.assign(NYM.prototype, {
         this.friends.delete(pubkey);
         this.saveFriends();
 
-        this.displaySystemMessage(`Removed ${this.getNymHtmlFromPubkey(pubkey)} from friends`, 'system', { html: true });
+        this.displaySystemMessage(`Removed <span data-no-i18n>${this.getNymHtmlFromPubkey(pubkey)}</span> from friends`, 'system', { html: true });
         this.updateFriendsList();
         this._refreshFriendBadgesFor(pubkey);
         if (typeof this.reapplyImageBlur === 'function') this.reapplyImageBlur();
@@ -2464,7 +2540,7 @@ Object.assign(NYM.prototype, {
         }
 
         if (matches.length === 0) {
-            this.displaySystemMessage(`User ${cleanInput} not found. Try using the full nym#xxxx format if you know their pubkey suffix.`);
+            this.displaySystemMessage(this.uiText(`User {cleanInput} not found. Try using the full nym#xxxx format if you know their pubkey suffix.`, { cleanInput }));
             return null;
         }
 
@@ -2472,7 +2548,7 @@ Object.assign(NYM.prototype, {
             const matchList = matches.map(m =>
                 `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
             ).join(', ');
-            this.displaySystemMessage(`Multiple users found: ${matchList}`, 'system', { html: true, feed: true });
+            this.displaySystemMessage(`Multiple users found: <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
             this.displaySystemMessage('Please specify using the #xxxx suffix', 'system', { feed: true });
             return null;
         }

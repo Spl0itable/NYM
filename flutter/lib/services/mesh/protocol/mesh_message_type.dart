@@ -122,4 +122,8 @@ class NoisePayloadType {
 
   /// Nymchat 1:1 reaction, kept above bitchat's range (all ≤ 0x21) to avoid misparsing its frames.
   static const int reaction = 0x70;
+
+  static const int nymShare = 0x71;
+
+  static const int nymNiToken = 0x72;
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -184,6 +185,42 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     return true;
   }
 
+  bool _sameUnits(_UnitsBuild a, _UnitsBuild b) {
+    if (a.useBubbles != b.useBubbles ||
+        a.breakBefore != b.breakBefore ||
+        a.units.length != b.units.length) {
+      return false;
+    }
+    for (var i = 0; i < a.units.length; i++) {
+      final x = a.units[i];
+      final y = b.units[i];
+      if (x is _GroupUnit && y is _GroupUnit) {
+        if (!_sameEntries(x.entries, y.entries)) return false;
+      } else if (x is _PollUnit && y is _PollUnit) {
+        if (!identical(x.poll, y.poll)) return false;
+      } else {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _navScrolling = false;
+  Duration? _navAt;
+
+  void _navTick() {
+    final now = SchedulerBinding.instance.currentSystemFrameTimeStamp;
+    final last = _navAt;
+    if (_navScrolling &&
+        last != null &&
+        now >= last &&
+        now - last < const Duration(milliseconds: 100)) {
+      return;
+    }
+    _navAt = now;
+    _nav.update();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -244,6 +281,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
 
   static const double _bottomInset = 16;
 
+  bool _keepQueued = false;
+
   void _keepAnchor() {
     if (!mounted ||
         !_listBuilt ||
@@ -260,6 +299,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     }
     if (scroller.animating) return;
     final settings = ref.read(settingsProvider);
+    final before = _units;
     final built = _unitsFor(
       ref.read(messagesForCurrentViewProvider),
       ref.read(pollsForCurrentViewProvider),
@@ -268,6 +308,24 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       '@${_baseNym(app.selfNym)}',
       _navBreak,
     );
+    if (before != null &&
+        !identical(before, built) &&
+        _sameUnits(before, built)) {
+      return;
+    }
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (_keeper.flinging &&
+        (phase == SchedulerPhase.idle ||
+            phase == SchedulerPhase.postFrameCallbacks)) {
+      if (!_keepQueued) {
+        _keepQueued = true;
+        SchedulerBinding.instance.scheduleFrameCallback((_) {
+          _keepQueued = false;
+          _keepAnchor();
+        });
+      }
+      return;
+    }
     final positions = _positionsListener.itemPositions.value;
     ItemPosition? newest;
     for (final p in positions) {
@@ -399,7 +457,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   void _onPositionsChanged() {
     final positions = _positionsListener.itemPositions.value;
     if (positions.isEmpty) return;
-    _nav.update();
+    _navTick();
     ItemPosition? newest;
     for (final p in positions) {
       if (p.index == 0) {
@@ -695,6 +753,19 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   bool _onScroll(ScrollNotification n) {
     _keeper.observe(n);
     if (n.depth == 0) _dayFloat.observe(n);
+    if (n.depth == 0 && n is ScrollStartNotification) _navScrolling = true;
+    if (n.depth == 0 && n is ScrollEndNotification) {
+      _navScrolling = false;
+      _navAt = null;
+      if (SchedulerBinding.instance.schedulerPhase ==
+          SchedulerPhase.persistentCallbacks) {
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _navTick();
+        });
+      } else {
+        _navTick();
+      }
+    }
     if ((n is ScrollUpdateNotification && n.dragDetails != null) ||
         n is UserScrollNotification) {
       _nav.userScrolled();

@@ -1,8 +1,9 @@
 import 'dart:math' as math;
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/painting.dart';
+import 'package:flutter/widgets.dart';
+
+import '../../features/reactions/hover_actions.dart';
 
 class HoverBarController extends ChangeNotifier {
   HoverBarController._();
@@ -16,6 +17,10 @@ class HoverBarController extends ChangeNotifier {
   Timer? _timer;
 
   Object? get active => _active;
+
+  String? get activeId => _active is MessageHoverOwner
+      ? (_active as MessageHoverOwner).hoverMessageId
+      : null;
 
   void request(Object? owner) {
     if (identical(owner, _active)) {
@@ -81,17 +86,46 @@ Offset hoverBarSpot(Rect bubble, Rect clip, double bw, double bh,
 double hoverBarWidth(int count) =>
     count <= 0 ? 0 : count * kHoverBarButtonWidth + (count - 1) * kHoverBarGap;
 
+List<String> fitHoverBar(List<String> full, double availablePx) {
+  final ids = full.isEmpty ? const ['more'] : full;
+  if (hoverBarWidth(ids.length) <= availablePx) return [...ids];
+  return ids.length > 1 ? [ids.first, 'more'] : const ['more'];
+}
+
 List<String> hoverBarButtons(
   List<String> sheetActions, {
   required bool hasId,
   required double availablePx,
-}) {
-  final full = [
-    if (hasId) 'react',
-    if (sheetActions.contains('reply')) 'reply',
-    if (sheetActions.contains('thread')) 'thread',
-    'more',
-  ];
-  if (hoverBarWidth(full.length) <= availablePx) return full;
-  return [if (hasId) 'react', 'more'];
+  Object? slots,
+}) =>
+    fitHoverBar([
+      ...resolveHoverActions(
+          slots, [if (hasId) 'react', ...sheetActions]),
+      'more',
+    ], availablePx);
+
+abstract interface class MessageHoverOwner {
+  String get hoverMessageId;
+}
+
+class MessageHover extends InheritedWidget {
+  const MessageHover({
+    super.key,
+    required this.messageId,
+    required this.hovered,
+    required super.child,
+  });
+
+  final String messageId;
+  final bool hovered;
+
+  static MessageHover? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<MessageHover>();
+
+  static bool hoveredOf(BuildContext context) =>
+      maybeOf(context)?.hovered ?? false;
+
+  @override
+  bool updateShouldNotify(MessageHover oldWidget) =>
+      oldWidget.hovered != hovered || oldWidget.messageId != messageId;
 }

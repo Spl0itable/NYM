@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'features/layout/pointer_input.dart';
 import 'features/calls/call_platform.dart';
 import 'features/calls/call_providers.dart';
 import 'features/calls/call_wake.dart';
@@ -26,6 +27,7 @@ import 'features/notifications/app_badge.dart';
 import 'features/notifications/notification_route_target.dart';
 import 'features/notifications/notification_routing.dart';
 import 'features/onboarding/boot_gate.dart';
+import 'features/share/nearby/nearby_inbox.dart';
 import 'features/share/share_intake.dart';
 import 'features/toasts/event_toast_center.dart';
 import 'features/toasts/event_toast_wiring.dart';
@@ -42,6 +44,7 @@ import 'state/settings_provider.dart';
 import 'widgets/common/hit_slop.dart';
 import 'widgets/common/nym_tooltip.dart';
 import 'widgets/common/toast_host.dart';
+import 'features/share/share_inbound.dart';
 
 /// Root widget; rebuilds when the theme setting or platform brightness changes.
 class NymchatApp extends ConsumerStatefulWidget {
@@ -77,6 +80,12 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     _backgroundConnectivity = ref.read(backgroundConnectivityServiceProvider);
     ref.read(connNoticeGateProvider);
     WidgetsBinding.instance.addObserver(this);
+    HardwareKeyboard.instance.addHandler(_onPresenceKey);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        _notePresence('visible');
+      }
+    });
     _initLocalization();
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncBrightness());
     // Deferred past the first frame so the controller and providers are ready before any link dispatches.
@@ -193,6 +202,12 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       final ctx = _navKey.currentContext;
       if (ctx != null && ctx.mounted) unawaited(joinCallLinkFlow(ctx, token));
     };
+    profileLinkHandler = (pubkey) {
+      final ctx = _navKey.currentContext;
+      if (ctx != null && ctx.mounted) {
+        unawaited(ref.read(inboundShareProvider).openProfilePreview(ctx, pubkey));
+      }
+    };
   }
 
   Future<bool> _confirmGroupInvite(GroupInviteToken token) async {
@@ -240,6 +255,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    HardwareKeyboard.instance.removeHandler(_onPresenceKey);
     _heartbeat?.dispose();
     _payloadSub?.cancel();
     _appBadgeSub?.close();
@@ -251,6 +267,17 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
 
   @override
   void didChangePlatformBrightness() => _syncBrightness();
+
+  void _notePresence(String kind) {
+    try {
+      ref.read(nostrControllerProvider).notePresenceActivity(kind);
+    } catch (_) {}
+  }
+
+  bool _onPresenceKey(KeyEvent event) {
+    if (event is KeyDownEvent) _notePresence('key');
+    return false;
+  }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -390,10 +417,21 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
             systemNavigationBarIconBrightness:
                 isLight ? Brightness.dark : Brightness.light,
           ),
-          child: NymTooltipWarmth(
-            child: PrivacyShield(
-                child: HitSlopScope(
-                    child: ToastHost(child: child ?? const SizedBox.shrink()))),
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (_) => _notePresence('pointer'),
+            onPointerSignal: (_) => _notePresence('wheel'),
+            onPointerPanZoomStart: (_) => _notePresence('wheel'),
+            child: PointerInputScope(
+              child: NymTooltipWarmth(
+                child: PrivacyShield(
+                    child: HitSlopScope(
+                        child: ToastHost(
+                            child: NearbyInboxHost(
+                                navigatorContext: () => _navKey.currentContext,
+                                child: child ?? const SizedBox.shrink())))),
+              ),
+            ),
           ),
         );
       },

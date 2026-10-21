@@ -183,6 +183,9 @@ Object.assign(NYM.prototype, {
 
     async _botRunHandle(run, status, data) {
         if (this._botRunGone(run)) return;
+        if (data && data.free && typeof data.free === 'object' && typeof this._botFreeSet === 'function') {
+            this._botFreeSet(this._botChipKey(!!run.anon), data.free);
+        }
         if (typeof this._markBotPMReceipts === 'function') this._markBotPMReceipts('read');
         if (data && data.runCap) {
             if (data.free) {
@@ -266,10 +269,10 @@ Object.assign(NYM.prototype, {
             if (data.pro && replyCost) {
                 const sel = this._getBotProModel();
                 if (sel && replyCost > (sel.credits || 1)) {
-                    this.displaySystemMessage(`Long reply used ${this._creditFigure(replyCost)} Pro credits. Pro balance: ${this._creditFigure(replyBalance)}.`);
+                    this.displaySystemMessage(this.uiText(`Long reply used {replyCost} Pro credits. Pro balance: {replyBalance}.`, { replyCost: this._creditFigure(replyCost), replyBalance: this._creditFigure(replyBalance) }));
                 }
             } else if (!data.pro && replyCost > 1) {
-                this.displaySystemMessage(`${data.taskType || 'Heavy'} reply used ${this._creditFigure(replyCost)} credits. Balance: ${this._creditFigure(replyBalance)}.`);
+                this.displaySystemMessage(this.uiText(`{v1} reply used {replyCost} credits. Balance: {replyBalance}.`, { v1: data.taskType || 'Heavy', replyCost: this._creditFigure(replyCost), replyBalance: this._creditFigure(replyBalance) }));
             }
             if (data.lowBalance) {
                 this.displaySystemMessage(data.pro

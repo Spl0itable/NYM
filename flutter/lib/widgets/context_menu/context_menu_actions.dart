@@ -334,3 +334,21 @@ CtxTarget ctxTargetForMessage(
     inGroup: message.isGroup || message.groupId != null,
   );
 }
+
+final RegExp _shareHex64 = RegExp(r'^[0-9a-f]{64}$');
+
+String? shareProfilePubkey(CtxTarget t,
+    {required String activePubkey,
+    bool isMeshPeer = false,
+    bool Function(String key)? isOwnOtherKey}) {
+  if (t.isBot) return null;
+  final active = activePubkey.toLowerCase();
+  if (t.isSelf) {
+    if (t.pubkey.toLowerCase() != active) return null;
+    return _shareHex64.hasMatch(active) ? active : null;
+  }
+  final key = t.pubkey.toLowerCase();
+  if (isMeshPeer || key == active || !_shareHex64.hasMatch(key)) return null;
+  if (isOwnOtherKey != null && isOwnOtherKey(key)) return null;
+  return key;
+}

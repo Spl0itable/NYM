@@ -17,6 +17,7 @@ import '../../services/mesh/noise/nostr_link.dart';
 import '../../services/mesh/protocol/mesh_diagnostics_packets.dart';
 import '../../services/mesh/protocol/mesh_profile.dart';
 import '../../services/mesh/transport/ble_mesh_transport.dart';
+import '../../services/mesh/transport/bluetooth_name_repair.dart';
 import '../../services/mesh/transport/mesh_transport.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -24,6 +25,7 @@ import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart' show proxiedAvatarUrl;
 import 'mesh_bridge.dart';
 import 'mesh_diagnostics.dart';
+import '../share/nearby/nearby_share_entry.dart';
 
 /// One peer's echo probe state, showing whether a listed peer is actually reachable.
 @immutable
@@ -152,6 +154,10 @@ class MeshController extends StateNotifier<MeshUiState> {
   /// Active bridge for routing mesh sends and badging; null while the mesh is off.
   MeshBridge? get bridge => _bridge;
 
+  MeshService? get service => _service;
+
+  void Function(MeshService? service)? onServiceChanged;
+
   /// Mesh runs only where BLE central and peripheral are available.
   static bool get isSupportedPlatform =>
       !kIsWeb &&
@@ -211,6 +217,7 @@ class MeshController extends StateNotifier<MeshUiState> {
         profileProvider: _buildMyProfile,
       );
       _service = service;
+      onServiceChanged?.call(service);
 
       final bridge = MeshBridge(
         ref: _ref,
@@ -471,6 +478,7 @@ class MeshController extends StateNotifier<MeshUiState> {
     _bridge = null;
     final service = _service;
     _service = null;
+    if (service != null) onServiceChanged?.call(null);
     _profileAsked.clear();
     if (service != null) {
       await service.stop();
@@ -521,5 +529,7 @@ final meshControllerProvider =
     fireImmediately: true,
   );
   ref.onDispose(controller.shutdown);
+  unawaited(BluetoothNameRepair().run());
+  startNearbyInbox(ref, controller);
   return controller;
 });
