@@ -2102,7 +2102,7 @@ Object.assign(NYM.prototype, {
 
     toggleNotificationsEnabled(enabled) {
         this.notificationsEnabled = enabled;
-        localStorage.setItem('nym_notifications_enabled', String(enabled));
+        try { localStorage.setItem('nym_notifications_enabled', String(enabled)); } catch (_) { }
         this._updateNotificationBadge();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
@@ -2110,7 +2110,7 @@ Object.assign(NYM.prototype, {
     setNotificationSound(sound) {
         if (!sound) return;
         this.settings.sound = sound;
-        localStorage.setItem('nym_sound', sound);
+        try { localStorage.setItem('nym_sound', sound); } catch (_) { }
         const settingsSelect = document.getElementById('soundSelect');
         if (settingsSelect) settingsSelect.value = sound;
         const panelSelect = document.getElementById('notifSoundSelect');
@@ -2122,7 +2122,7 @@ Object.assign(NYM.prototype, {
 
     toggleNotifyFriendsOnly(enabled) {
         this.notifyFriendsOnly = enabled;
-        localStorage.setItem('nym_notify_friends_only', String(enabled));
+        try { localStorage.setItem('nym_notify_friends_only', String(enabled)); } catch (_) { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
@@ -2460,9 +2460,9 @@ Object.assign(NYM.prototype, {
     saveImageBlurSettings() {
         // Always save a global key so ephemeral users keep their preference.
         const val = String(this.blurOthersImages);
-        localStorage.setItem('nym_image_blur', val);
+        try { localStorage.setItem('nym_image_blur', val); } catch (_) { }
         if (this.pubkey) {
-            localStorage.setItem(`nym_image_blur_${this.pubkey}`, val);
+            try { localStorage.setItem(`nym_image_blur_${this.pubkey}`, val); } catch (_) { }
         }
     },
 

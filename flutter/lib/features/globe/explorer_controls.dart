@@ -5,6 +5,7 @@ import '../../core/theme/nym_colors.dart';
 import '../i18n/i18n.dart';
 import 'explorer_lists.dart';
 import 'geo_explore.dart';
+import 'geo_places.dart';
 import '../../widgets/common/nym_tooltip.dart';
 
 const double kGeoTouch = 44;
@@ -143,6 +144,8 @@ class GeoLayersMenu extends StatelessWidget {
     required this.onDaynight,
     required this.onGrid,
     required this.onWindow,
+    this.street = false,
+    this.onStreet,
     this.onClose,
     this.showClusterLegend = false,
     this.showPulseLegend = false,
@@ -158,6 +161,8 @@ class GeoLayersMenu extends StatelessWidget {
   final VoidCallback onDaynight;
   final VoidCallback onGrid;
   final void Function(int hours) onWindow;
+  final bool street;
+  final VoidCallback? onStreet;
   final VoidCallback? onClose;
   final bool showClusterLegend;
   final bool showPulseLegend;
@@ -269,64 +274,124 @@ class GeoLayersMenu extends StatelessWidget {
         border: Border.all(color: nym.glassBorder),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          toggle('heat', tr('Heat'), heat, onHeat, autofocus: true),
-          toggle('daynight', tr('Day / Night'), daynight, onDaynight),
-          toggle('grid', tr('Geohash grid'), grid, onGrid),
-          Divider(height: 12, color: nym.glassBorder),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: ExcludeSemantics(
-                    child: Text(tr('Activity'),
-                        style: TextStyle(fontSize: 12, color: nym.textDim)),
-                  ),
-                ),
-                GeoWindowControl(
-                    hours: windowHours, onChanged: onWindow, radio: true),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
-          Semantics(
-            container: true,
-            explicitChildNodes: true,
-            label: tr('Legend'),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                legend(nym.primary, tr('Active')),
-                legend(const Color(0xFF28E07A), tr('Joined')),
-                legend(const Color(0xFFF5C518), tr('Saved'), ring: true),
-                if (showLocationLegend)
-                  legend(nym.warning, tr('Your Location')),
-                if (showClusterLegend)
-                  _swatchRow(
-                    nym,
-                    const GeoClusterSwatch(
-                        key: ValueKey('geo-legend-cluster-swatch')),
-                    tr('Number = channels grouped together'),
-                  ),
-                if (showPulseLegend)
-                  _swatchRow(
-                    nym,
-                    GeoPulseSwatch(
-                      key: const ValueKey('geo-legend-pulse-swatch'),
-                      animate: !reduceMotion,
+      child: SingleChildScrollView(
+        key: const ValueKey('geo-layers-scroll'),
+          child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            toggle('heat', tr('Heat'), heat, onHeat, autofocus: true),
+            toggle('daynight', tr('Day / Night'), daynight, onDaynight),
+            toggle('grid', tr('Geohash grid'), grid, onGrid),
+            if (onStreet != null) _streetSwitch(nym, onStreet!),
+            Divider(height: 12, color: nym.glassBorder),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ExcludeSemantics(
+                      child: Text(tr('Activity'),
+                          style: TextStyle(fontSize: 12, color: nym.textDim)),
                     ),
-                    tr('Pulsing = active in the last {n} minutes',
-                        {'n': kGeoPulseWindowMs ~/ 60000}),
                   ),
-              ],
+                  GeoWindowControl(
+                      hours: windowHours, onChanged: onWindow, radio: true),
+                ],
+              ),
             ),
+            const SizedBox(height: 6),
+            Semantics(
+              container: true,
+              explicitChildNodes: true,
+              label: tr('Legend'),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  legend(nym.primary, tr('Active')),
+                  legend(const Color(0xFF28E07A), tr('Joined')),
+                  legend(const Color(0xFFF5C518), tr('Saved'), ring: true),
+                  if (showLocationLegend)
+                    legend(nym.warning, tr('Your Location')),
+                  if (showClusterLegend)
+                    _swatchRow(
+                      nym,
+                      const GeoClusterSwatch(
+                          key: ValueKey('geo-legend-cluster-swatch')),
+                      tr('Number = channels grouped together'),
+                    ),
+                  if (showPulseLegend)
+                    _swatchRow(
+                      nym,
+                      GeoPulseSwatch(
+                        key: const ValueKey('geo-legend-pulse-swatch'),
+                        animate: !reduceMotion,
+                      ),
+                      tr('Pulsing = active in the last {n} minutes',
+                          {'n': kGeoPulseWindowMs ~/ 60000}),
+                    ),
+                ],
+              ),
+            ),
+            Divider(height: 12, color: nym.glassBorder),
+            Semantics(
+              key: const ValueKey('geo-map-data'),
+              container: true,
+              explicitChildNodes: true,
+              label: tr('Map data'),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ExcludeSemantics(
+                      child: Text(tr('Map data'),
+                          style: TextStyle(
+                              fontSize: 10,
+                              height: 1.4,
+                              fontWeight: FontWeight.w600,
+                              color: nym.text)),
+                    ),
+                    for (final line in kGeoMapCredits)
+                      Text(line,
+                          style: TextStyle(
+                              fontSize: 10, height: 1.4, color: nym.textDim)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _streetSwitch(NymColors nym, VoidCallback tap) {
+    final label = tr('Street detail');
+    return Semantics(
+      toggled: street,
+      label: label,
+      onTap: tap,
+      excludeSemantics: true,
+      child: InkWell(
+        key: const ValueKey('geo-layer-street'),
+        onTap: tap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: kGeoTouch),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            children: [
+              Icon(street ? Icons.toggle_on : Icons.toggle_off,
+                  size: 24, color: street ? nym.primary : nym.textDim),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(label, style: TextStyle(fontSize: 13, color: nym.text)),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

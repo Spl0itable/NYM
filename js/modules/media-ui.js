@@ -125,7 +125,7 @@
                 btn.classList.toggle('media-off', st.state === 'off');
                 btn.classList.toggle('media-warn', st.state === 'warn');
                 if (feature === 'voice') {
-                    const title = st.reason ? this._mt(label) + ' — ' + this._mt(st.reason) : this._mt(label);
+                    const title = st.reason ? this.uiText('{label} — {reason}', { label: this._mt(label), reason: this._mt(st.reason) }) : this._mt(label);
                     if (btn.getAttribute('title') !== title) btn.setAttribute('title', title);
                 } else if (btn.hasAttribute('title')) {
                     btn.removeAttribute('title');

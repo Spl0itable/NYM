@@ -13,6 +13,7 @@ import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/duo/duo_rail.dart';
 import '../../features/layout/layout_model.dart';
 import '../../features/toasts/event_toast_center.dart';
 import '../../features/groups/group_logic.dart';
@@ -39,11 +40,13 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../chat/message_row.dart';
+import '../chat/message_selection.dart';
 import '../../features/threads/thread_view.dart' show ThreadView;
 import '../chat/list_anchor.dart';
 import '../chat/messages_list.dart' show messageListScrollerProvider;
 import '../chat/message_skeleton.dart';
 import '../chat/typing_indicator.dart';
+import '../common/key_resizer.dart';
 import '../common/nym_avatar.dart';
 import '../context_menu/profile_badges.dart';
 import '../nym_icons.dart';
@@ -1343,7 +1346,32 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     bool transparentColumns,
   ) {
     final pageCount = _columns.length + 1;
-    return PageView.builder(
+    final focusedDesc =
+        _focused >= 0 && _focused < _columns.length ? _columns[_focused] : null;
+    return DuoRailItems(
+      order: 1,
+      active: DuoScope.railOf(context) && focusedDesc != null,
+      items: [
+        DuoRailItem(
+            id: 'column-prev',
+            label: tr('Previous column'),
+            svg: NymIcons.chevronLeft,
+            onTap: _focused > 0 ? () => _stepFocused(-1) : null),
+        DuoRailItem(
+            id: 'column-next',
+            label: tr('Next column'),
+            svg: NymIcons.chevronRight,
+            onTap: _focused < _columns.length - 1
+                ? () => _stepFocused(1)
+                : null),
+        if (focusedDesc != null)
+          DuoRailItem(
+              id: 'column-close',
+              label: tr('Remove column'),
+              svg: NymIcons.close,
+              onTap: () => _removeColumn(focusedDesc)),
+      ],
+      child: PageView.builder(
       controller: _pageController,
       // No touch paging between columns (as in the PWA), freeing horizontal drags for row swipes.
       physics: const NeverScrollableScrollPhysics(),
@@ -1384,7 +1412,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
           onAtBottomChanged: _atBottomHandlerFor(desc),
         );
       },
-    );
+    ));
   }
 }
 
@@ -1985,7 +2013,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                               _nav.viewport = constraints.maxHeight;
                               return NotificationListener<ScrollNotification>(
                                 onNotification: _onScroll,
-                                child: ScrollablePositionedList.builder(
+                                child: MessageSelection(
+                                builder: (keepAlives) => ScrollablePositionedList.builder(
+                                addAutomaticKeepAlives: keepAlives,
                                 itemScrollController: _itemScroll,
                                 itemPositionsListener: _positions,
                                 reverse: true,
@@ -2012,7 +2042,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                     );
                                   return RepaintBoundary(
                                     key: ValueKey(unitId),
-                                    child: AnchoredUnit(
+                                    child: MessageSelection.item(
+                                      context,
+                                      AnchoredUnit(
                                       id: unitId,
                                       units: _anchors,
                                       child: (_navBreak != null &&
@@ -2042,10 +2074,10 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                               ],
                                             )
                                           : group,
-                                    ),
+                                    )),
                                   );
                                 },
-                              ),
+                              )),
                               );
                             });
                           }),
@@ -2102,19 +2134,27 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
               label: tr('Resize columns'),
               value: '${_CvDimens.column.round()}',
               slider: true,
-              child: MouseRegion(
-                cursor: SystemMouseCursors.resizeColumn,
-                child: GestureDetector(
-                  key: ValueKey('cvColumnResizer-${widget.desc.storageKey}'),
-                  behavior: HitTestBehavior.opaque,
-                  dragStartBehavior: DragStartBehavior.down,
-                  onHorizontalDragUpdate: (d) => cvColumnWidth.value =
-                      clampColumnWidth(cvColumnWidth.value + d.delta.dx)
-                          .toDouble(),
-                  onHorizontalDragEnd: (_) => kv.setString(
-                      StorageKeys.columnWidth,
-                      '${cvColumnWidth.value.round()}'),
-                  child: const SizedBox.expand(),
+              child: KeyResizer(
+                onStep: (dx) {
+                  cvColumnWidth.value =
+                      clampColumnWidth(cvColumnWidth.value + dx).toDouble();
+                  kv.setString(StorageKeys.columnWidth,
+                      '${cvColumnWidth.value.round()}');
+                },
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.resizeColumn,
+                  child: GestureDetector(
+                    key: ValueKey('cvColumnResizer-${widget.desc.storageKey}'),
+                    behavior: HitTestBehavior.opaque,
+                    dragStartBehavior: DragStartBehavior.down,
+                    onHorizontalDragUpdate: (d) => cvColumnWidth.value =
+                        clampColumnWidth(cvColumnWidth.value + d.delta.dx)
+                            .toDouble(),
+                    onHorizontalDragEnd: (_) => kv.setString(
+                        StorageKeys.columnWidth,
+                        '${cvColumnWidth.value.round()}'),
+                    child: const SizedBox.expand(),
+                  ),
                 ),
               ),
             ),
@@ -2144,6 +2184,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
           ),
         ),
       ));
+      if (DuoScope.railOf(context)) {
+        return _headerContainer(c, Row(children: children));
+      }
       children.add(const SizedBox(width: 8));
       children.add(_HeaderIconButton(
         svg: NymIcons.chevronLeft,
@@ -2221,7 +2264,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
         color: c.glassBg,
         border: Border(bottom: BorderSide(color: c.glassBorder)),
       ),
-      child: child,
+      child: DuoClear(child: child),
     );
   }
 }

@@ -10,13 +10,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/safe_url.dart';
 import '../../models/channel.dart';
 import '../../services/api/api_client.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../../widgets/nym_icons.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../channels/channel_share.dart';
+import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import '../toasts/toast_center.dart';
 import 'explorer_controls.dart';
@@ -26,10 +29,14 @@ import 'explorer_search.dart';
 import 'geo_detail.dart';
 import 'geo_explore.dart';
 import 'geo_map_painter.dart';
+import 'geo_places.dart';
 import 'geo_projection.dart';
 import 'geohash_channel.dart';
 import 'precision_path.dart';
+import 'street_layer.dart';
+import 'street_plan.dart';
 import 'topojson.dart';
+import '../shortcuts/escape_layers.dart';
 import '../../widgets/common/nym_tooltip.dart';
 
 /// Below this width the explorer uses its phone layout.
@@ -135,6 +142,9 @@ final globePrefsProvider =
   (ref) => (heat: false, daynight: false, grid: false, windowHours: 24),
 );
 
+final streetLayerFactoryProvider =
+    Provider<StreetLayer Function()>((ref) => StreetLayer.new);
+
 /// Equirectangular geohash channel map; Join pops the route with the lowercase geohash.
 class GeohashExplorer extends ConsumerStatefulWidget {
   const GeohashExplorer({super.key, this.focusGeohash});
@@ -220,6 +230,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   List<CityPoint> _cities = const [];
   bool _admin1Loaded = false;
   bool _citiesLoaded = false;
+  List<GeoPlacePack?> _placePacks = const [null, null];
+  final Set<int> _placePackRequested = {};
 
   List<GeoTierPaths?> _tierPaths = const [null, null, null];
   List<List<GeoLabelFeature>?> _tierLabels = const [null, null, null];
@@ -234,6 +246,9 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   bool _heatmap = false;
   bool _daynight = false;
   bool _grid = false;
+  bool _street = false;
+  StreetLayer? _streetLayer;
+  late final AppLifecycleListener _lifecycle;
   int _activeWindowHours = 24;
 
   String? _hoveredGeohash;
@@ -293,6 +308,10 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     _heatmap = prefs.heat;
     _daynight = prefs.daynight;
     _grid = prefs.grid;
+    _street = !kIsWeb && _readStreetPref();
+    _lifecycle = AppLifecycleListener(
+        onStateChange: (s) =>
+            _streetLayer?.setPaused(s != AppLifecycleState.resumed));
     _activeWindowHours = normalizeGeoWindowHours(prefs.windowHours);
     _fly.addListener(_onFlyTick);
     _selectPulse.addStatusListener((s) {
@@ -332,6 +351,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     _selectPulse.dispose();
     _ambient.dispose();
     _layersButtonFocus.dispose();
+    _lifecycle.dispose();
+    _streetLayer?.dispose();
     super.dispose();
   }
 
@@ -385,8 +406,31 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     }
   }
 
+  void _ensurePlacePacks() {
+    if (_lastSize.isEmpty) return;
+    final want = geoPlacesWanted(geoZvOf(_view.scale(_lastSize)));
+    for (var k = 0; k < want; k++) {
+      if (_placePacks[k] != null || !_placePackRequested.add(k)) continue;
+      unawaited(_loadPlacePack(k));
+    }
+  }
+
+  Future<void> _loadPlacePack(int k) async {
+    GeoPlacePack? pack;
+    try {
+      pack = await ref.read(geoPlacePackLoaderProvider)(k);
+    } catch (_) {
+      pack = null;
+    }
+    if (!mounted) return;
+    if (pack == null) return;
+    final got = pack;
+    setState(() => _placePacks = [..._placePacks]..[k] = got);
+  }
+
   void _ensureSubregions({bool force = false}) {
     _ensureTier();
+    _ensurePlacePacks();
     final want = force || _view.zoom >= kSubregionZoomThreshold;
     if (want && !_admin1Loaded) {
       _admin1Loaded = true;
@@ -878,7 +922,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => EscapeToClose(
+        onEscape: () =>
+            _layersOpen ? _closeLayers() : Navigator.of(context).maybePop(),
+        child: _buildExplorer(context),
+      );
+
+  Widget _buildExplorer(BuildContext context) {
     final nym = context.nym;
     final style = GeoMapStyle.resolve(
       isLight: nym.isLight,
@@ -887,7 +937,11 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     );
 
     if (NymSheetScope.of(context)) {
-      return Material(
+      return DuoRailItems(
+        priority: kDuoSheetPriority,
+        active: DuoScope.railOf(context),
+        items: _railItems(),
+        child: Material(
         type: MaterialType.transparency,
         child: Stack(
           children: [
@@ -900,14 +954,16 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
             Positioned(
               top: 5,
               right: 8,
-              child: _ModalCloseButton(
-                nym: nym,
-                onTap: () => Navigator.of(context).maybePop(),
-              ),
+              child: DuoScope.railOf(context)
+                  ? const SizedBox.shrink()
+                  : _ModalCloseButton(
+                      nym: nym,
+                      onTap: () => Navigator.of(context).maybePop(),
+                    ),
             ),
           ],
         ),
-      );
+      ));
     }
 
     // Centered overlay card over a mode-aware translucent scrim, the only dimming layer under a non-opaque route.
@@ -1035,9 +1091,12 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
         // Keep the heatmap image in sync with the current inputs.
         final dpr = capGeoDpr(MediaQuery.devicePixelRatioOf(context));
         _maybeRebuildHeat(size, channels, dpr);
+        _streetSync(size);
 
         WidgetsBinding.instance.addPostFrameCallback((_) => _measureOccupied());
         final narrow = size.width < kGlobeNarrowBreakpoint;
+        final rail = DuoScope.railOf(context);
+        _railSize = size;
         final nowMs = DateTime.now().millisecondsSinceEpoch;
         final recent = <String>{
           for (final c in channels)
@@ -1049,8 +1108,9 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
         final bottomPad = MediaQuery.paddingOf(context).bottom;
         const columnGap = 8.0;
         const columnCount = 6;
-        final columnBottom =
-            inset + columnCount * kGeoTouch + (columnCount - 1) * columnGap;
+        final columnBottom = rail
+            ? inset + kGeoTouch
+            : inset + columnCount * kGeoTouch + (columnCount - 1) * columnGap;
         final showLists = _listsOpen && !(narrow && _selected != null);
 
         return CallbackShortcuts(
@@ -1070,6 +1130,9 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
                     onPointerDown: (_) => _closeStack(),
                   ),
                 ),
+              if (_streetLayer != null)
+                _osmAttribution(inset, bottomPad,
+                    narrow && (showLists || _selected != null)),
               if (_layersOpen)
                 Positioned.fill(
                   child: GestureDetector(
@@ -1087,7 +1150,9 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
               Positioned(
                 top: inset,
                 left: inset,
-                right: narrow ? inset + kGeoTouch + columnGap : null,
+                right: narrow
+                    ? (rail ? inset : inset + kGeoTouch + columnGap)
+                    : null,
                 width: narrow ? null : math.min(340.0, size.width - 120),
                 child: KeyedSubtree(
                   key: _searchBoxKey,
@@ -1101,9 +1166,11 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
               Positioned(
                 top: inset - 4,
                 right: inset - 4,
-                child: KeyedSubtree(
+                child: DuoClear(child: KeyedSubtree(
                   key: _controlsKey,
-                  child: Container(
+                  child: rail
+                      ? const SizedBox.shrink()
+                      : Container(
                     key: const ValueKey('geo-ctl-backdrop'),
                     padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
@@ -1114,37 +1181,51 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
                     ),
                     child: _controlColumn(size, columnGap),
                   ),
-                ),
+                )),
               ),
               if (_layersOpen)
                 Positioned(
-                  top: inset + 3 * (kGeoTouch + columnGap),
-                  right: inset + kGeoTouch + columnGap,
+                  top: rail
+                      ? inset + kGeoTouch + columnGap
+                      : inset + 3 * (kGeoTouch + columnGap),
+                  right: rail ? inset : inset + kGeoTouch + columnGap,
                   width: math.min(
                       240.0, size.width - 2 * inset - kGeoTouch - columnGap),
-                  child: GeoLayersMenu(
-                    heat: _heatmap,
-                    daynight: _daynight,
-                    grid: _grid,
-                    windowHours: _activeWindowHours,
-                    showLocationLegend: _userLocation() != null,
-                    showClusterLegend: !_heatmap,
-                    showPulseLegend: !_heatmap && !_reduceMotion,
-                    reduceMotion: _reduceMotion,
-                    onHeat: () {
-                      setState(() => _heatmap = !_heatmap);
-                      _savePrefs();
-                    },
-                    onDaynight: () {
-                      setState(() => _daynight = !_daynight);
-                      _savePrefs();
-                    },
-                    onGrid: () {
-                      setState(() => _grid = !_grid);
-                      _savePrefs();
-                    },
-                    onWindow: _setActiveWindow,
-                    onClose: _closeLayers,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                        maxHeight: math.max(
+                            2 * kGeoTouch,
+                            size.height -
+                                inset -
+                                (rail
+                                    ? inset + kGeoTouch + columnGap
+                                    : inset + 3 * (kGeoTouch + columnGap)))),
+                    child: GeoLayersMenu(
+                      heat: _heatmap,
+                      daynight: _daynight,
+                      grid: _grid,
+                      windowHours: _activeWindowHours,
+                      showLocationLegend: _userLocation() != null,
+                      showClusterLegend: !_heatmap,
+                      showPulseLegend: !_heatmap && !_reduceMotion,
+                      reduceMotion: _reduceMotion,
+                      onHeat: () {
+                        setState(() => _heatmap = !_heatmap);
+                        _savePrefs();
+                      },
+                      onDaynight: () {
+                        setState(() => _daynight = !_daynight);
+                        _savePrefs();
+                      },
+                      onGrid: () {
+                        setState(() => _grid = !_grid);
+                        _savePrefs();
+                      },
+                      onWindow: _setActiveWindow,
+                      street: _street,
+                      onStreet: kIsWeb ? null : _toggleStreet,
+                      onClose: _closeLayers,
+                    ),
                   ),
                 ),
             ],
@@ -1168,6 +1249,89 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     });
   }
 
+  bool _readStreetPref() {
+    try {
+      return ref.read(keyValueStoreProvider).getString(kStreetPrefKey) != '0';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _toggleStreet() {
+    setState(() => _street = !_street);
+    _streetLayer?.setEnabled(_street);
+    try {
+      unawaited(ref
+          .read(keyValueStoreProvider)
+          .setString(kStreetPrefKey, _street ? '1' : '0'));
+    } catch (_) {}
+  }
+
+  void _streetSync(Size size) {
+    if (kIsWeb || size.isEmpty) return;
+    final s = _view.scale(size);
+    if (_streetLayer == null) {
+      if (!_street || streetZvOf(s) < kStreet.drawZv) return;
+      _streetLayer = ref.read(streetLayerFactoryProvider)();
+    }
+    _streetLayer!.update(
+        cx: _view.cx,
+        cy: _view.cy,
+        pxPerDeg: s,
+        width: size.width,
+        height: size.height);
+  }
+
+  Widget _osmAttribution(double inset, double bottomPad, bool raised) {
+    final layer = _streetLayer!;
+    final light = context.nym.isLight;
+    final left = inset + MediaQuery.paddingOf(context).left;
+    return Positioned(
+      left: left,
+      top: raised ? inset + kGeoTouch + 8 : null,
+      bottom: raised ? null : inset + bottomPad,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: layer.attribution,
+        builder: (context, on, _) => !on
+            ? const SizedBox.shrink()
+            : Semantics(
+                link: true,
+                linkUrl: Uri.parse(kStreetCopyrightUrl),
+                label: kStreetAttribution,
+                excludeSemantics: true,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    key: const ValueKey('geo-osm-attr'),
+                    borderRadius: BorderRadius.circular(4),
+                    onTap: () => launchSafeUrl(kStreetCopyrightUrl),
+                    child: Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: light
+                            ? const Color(0xCCFFFFFF)
+                            : const Color(0x8C000000),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        kStreetAttribution,
+                        style: TextStyle(
+                          fontSize: 11,
+                          height: 16 / 11,
+                          color: light
+                              ? const Color(0xE61E2837)
+                              : const Color(0xE6DCE8F5),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+      ),
+    );
+  }
+
   int get _layerCount => [_heatmap, _daynight, _grid].where((on) => on).length;
 
   void _syncAmbient(bool want) {
@@ -1186,6 +1350,78 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
       });
     }
   }
+
+  Size _railSize = Size.zero;
+
+  void _toggleLayers() {
+    if (_layersOpen) {
+      _closeLayers();
+    } else {
+      setState(() {
+        _layersOpen = true;
+        _stackRooms = null;
+      });
+    }
+  }
+
+  void _toggleLists(Size size) => setState(() {
+        _listsOpen = !_listsOpen;
+        _layersOpen = false;
+        _stackRooms = null;
+        if (_listsOpen) {
+          _loadPlaces();
+          if (size.width < kGlobeNarrowBreakpoint) _selected = null;
+        }
+      });
+
+  List<DuoRailItem> _railItems() => [
+        DuoRailItem(
+            id: 'explorer-close',
+            label: tr('Close'),
+            icon: Icons.close,
+            onTap: () => Navigator.of(context).maybePop()),
+        DuoRailItem(
+            id: 'zoom-in',
+            label: tr('Zoom in'),
+            icon: Icons.add,
+            onTap: () => _setView(
+                _view.zoomedAt(
+                    1.6, _railSize.center(Offset.zero), _railSize),
+                _railSize)),
+        DuoRailItem(
+            id: 'zoom-out',
+            label: tr('Zoom out'),
+            icon: Icons.remove,
+            onTap: () => _setView(
+                _view.zoomedAt(
+                    1 / 1.6, _railSize.center(Offset.zero), _railSize),
+                _railSize)),
+        DuoRailItem(
+            id: 'location',
+            label: tr('Your Location'),
+            icon: Icons.my_location,
+            onTap: () => _goToLocation(_railSize)),
+        DuoRailItem(
+            id: 'layers',
+            label: _layerCount > 0
+                ? tr('Layers, {n} on', {'n': _layerCount})
+                : tr('Layers'),
+            icon: Icons.layers_outlined,
+            toggled: _layersOpen,
+            badge: _layerCount,
+            onTap: _toggleLayers),
+        DuoRailItem(
+            id: 'reset',
+            label: tr('Reset View'),
+            icon: Icons.public,
+            onTap: () => _resetView(_railSize)),
+        DuoRailItem(
+            id: 'lists',
+            label: tr('Channels list'),
+            icon: Icons.list,
+            toggled: _listsOpen,
+            onTap: () => _toggleLists(_railSize)),
+      ];
 
   Widget _controlColumn(Size size, double gap) {
     final children = <Widget>[
@@ -1228,16 +1464,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
           focusNode: _layersButtonFocus,
           badge: _layerCount > 0 ? '$_layerCount' : null,
           badgeKey: const ValueKey('geo-layers-count'),
-          onTap: () {
-            if (_layersOpen) {
-              _closeLayers();
-            } else {
-              setState(() {
-                _layersOpen = true;
-                _stackRooms = null;
-              });
-            }
-          },
+          onTap: _toggleLayers,
         ),
       ),
       GeoControlButton(
@@ -1251,15 +1478,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
         icon: Icons.list,
         tooltip: tr('Channels list'),
         active: _listsOpen,
-        onTap: () => setState(() {
-          _listsOpen = !_listsOpen;
-          _layersOpen = false;
-          _stackRooms = null;
-          if (_listsOpen) {
-            _loadPlaces();
-            if (size.width < kGlobeNarrowBreakpoint) _selected = null;
-          }
-        }),
+        onTap: () => _toggleLists(size),
       ),
     ];
     return Column(
@@ -1428,6 +1647,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
                     features: _features,
                     admin1Features: _admin1Features,
                     cities: _cities,
+                    places: _placePacks,
                     channels: channels,
                     heatmap: _heatmap,
                     daynight: _daynight,
@@ -1436,7 +1656,10 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
                     hoveredGeohash: _hoveredGeohash,
                     userLocation: _userLocation(),
                     heatmapImage: _heatImage,
-                    repaint: _ticker,
+                    repaint: _streetLayer == null
+                        ? _ticker
+                        : Listenable.merge([_ticker, _streetLayer]),
+                    street: _streetLayer,
                     selectedGeohash: _selected?.geohash,
                     selectPulse: _selectPulse.isAnimating && !_reduceMotion
                         ? _selectPulse.value
@@ -1478,8 +1701,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
                 .toStringAsFixed(1)
           });
 
-    Widget action(String key, IconData icon, String tip, VoidCallback onTap,
-            {Color? color}) =>
+    Widget action(String key, IconData? icon, String tip, VoidCallback onTap,
+            {Color? color, String? svg}) =>
         Semantics(
           button: true,
           label: tip,
@@ -1493,7 +1716,9 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
               child: SizedBox(
                 width: kGeoTouch,
                 height: kGeoTouch,
-                child: Icon(icon, size: 20, color: color ?? nym.textDim),
+                child: svg != null
+                    ? NymSvgIcon(svg, size: 20, color: color ?? nym.textDim)
+                    : Icon(icon, size: 20, color: color ?? nym.textDim),
               ),
             ),
           ),
@@ -1522,8 +1747,9 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
               () => _toggleSaved(gh),
               color: isSaved ? kSavedMarkerColor : null,
             ),
-            action('geo-info-share', Icons.share_outlined, tr('Share place'),
-                () => ShareChannelModal.open(context, gh)),
+            action('geo-info-share', null, tr('Share place'),
+                () => ShareChannelModal.open(context, gh),
+                svg: NymIcons.shareNodes),
             action('geo-info-close', Icons.close, tr('Close'),
                 () => setState(() => _selected = null)),
           ],

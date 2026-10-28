@@ -2948,7 +2948,7 @@ Object.assign(NYM.prototype, {
 
         let wireContent = content;
         if (quoteData) {
-            tags.push(['nymquote', quoteData.author, quoteData.fullText || quoteData.text]);
+            tags.push(['nymquote', quoteData.author, typeof quoteData.text === 'string' ? quoteData.text : (quoteData.fullText || '')]);
             const lines = content.split('\n');
             const nonQuoteLines = [];
             let pastQuote = false;
@@ -3121,7 +3121,7 @@ Object.assign(NYM.prototype, {
             // Quotes go out as an @mention so other Nostr clients see a normal mention.
             let wireContent = content;
             if (quoteData) {
-                tags.push(['nymquote', quoteData.author, quoteData.fullText || quoteData.text]);
+                tags.push(['nymquote', quoteData.author, typeof quoteData.text === 'string' ? quoteData.text : (quoteData.fullText || '')]);
                 const lines = content.split('\n');
                 const nonQuoteLines = [];
                 let pastQuote = false;
@@ -3733,8 +3733,14 @@ Object.assign(NYM.prototype, {
         document.addEventListener('keydown', on('key'), opts);
         document.addEventListener('wheel', on('wheel'), opts);
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') this.notePresenceActivity('visible');
-            else this._syncGeoPresenceSend();
+            if (document.visibilityState === 'visible') {
+                this.notePresenceActivity('visible');
+                if (typeof this._flushGeoPresenceUi === 'function') this._flushGeoPresenceUi();
+                if (typeof this._syncPresenceSub === 'function') this._syncPresenceSub();
+            } else {
+                this._syncGeoPresenceSend();
+                if (typeof this._syncPresenceSub === 'function') this._syncPresenceSub();
+            }
         });
         window.addEventListener('focus', on('focus'));
         try {

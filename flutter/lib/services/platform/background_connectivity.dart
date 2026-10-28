@@ -38,6 +38,16 @@ class BackgroundConnectivityService {
 
   bool get isRunning => _running;
 
+  void onNetworkChanged(void Function() handler, {void Function()? onLost}) {
+    try {
+      _channel.setMethodCallHandler((call) async {
+        if (call.method == 'networkChanged') handler();
+        if (call.method == 'networkLost') onLost?.call();
+        return null;
+      });
+    } catch (_) {}
+  }
+
   /// Starts the keep-alive; [mesh] adds Android's `connectedDevice` service type. Returns whether it runs.
   Future<bool> start({bool mesh = false}) async {
     if (!isSupported) return false;

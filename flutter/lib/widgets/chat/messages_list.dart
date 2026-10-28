@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
@@ -14,9 +16,11 @@ import '../../features/chat_nav/chat_nav_ui.dart';
 import '../../features/day_separators/day_labels.dart';
 import '../../features/day_separators/day_separator.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/layout/pointer_input.dart';
 import '../../features/messages/message_announcer.dart';
 import '../../features/polls/poll_card.dart';
 import '../../features/reactions/reaction_picker.dart';
+import '../../features/shortcuts/shortcuts.dart';
 import '../../models/channel.dart';
 import '../../models/message.dart';
 import '../../models/settings.dart';
@@ -24,10 +28,12 @@ import '../../models/poll.dart';
 import '../../features/mesh/mesh_diagnostics.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
+import '../common/focus_rebuild_boundary.dart';
 import '../common/nym_tooltip.dart';
 import '../nym_icons.dart';
 import 'list_anchor.dart';
 import 'message_row.dart';
+import 'message_selection.dart';
 import 'message_skeleton.dart';
 import 'typing_indicator.dart';
 
@@ -126,6 +132,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   static const int _groupWindowSec = 300;
 
   final ItemScrollController _itemScrollController = ItemScrollController();
+  final ScrollOffsetController _offsetController = ScrollOffsetController();
+  final List<ScrollableState> _scrollables = [];
 
   /// Reports visible positions for the scroll-to-bottom FAB's 150px gate; index 0 is the newest message.
   final ItemPositionsListener _positionsListener =
@@ -225,6 +233,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   void initState() {
     super.initState();
     _positionsListener.itemPositions.addListener(_onPositionsChanged);
+    FocusManager.instance.addEarlyKeyEventHandler(_onEarlyKey);
   }
 
   /// Ensures the id-to-index map used to save an anchor belongs to the anchor's view.
@@ -241,6 +250,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   @override
   void dispose() {
     _positionsListener.itemPositions.removeListener(_onPositionsChanged);
+    FocusManager.instance.removeEarlyKeyEventHandler(_onEarlyKey);
     _announcer.dispose();
     _nav.dispose();
     _dayFloat.dispose();
@@ -506,6 +516,106 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         .animateTo(index: 0, alignment: 0);
   }
 
+  KeyEventResult _onEarlyKey(KeyEvent e) {
+    if (e is! KeyDownEvent && e is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final k = e.logicalKey;
+    final page =
+        k == LogicalKeyboardKey.pageUp || k == LogicalKeyboardKey.pageDown;
+    final edge = k == LogicalKeyboardKey.home || k == LogicalKeyboardKey.end;
+    if (!page && !edge) return KeyEventResult.ignored;
+    final hk = HardwareKeyboard.instance;
+    if (hk.isShiftPressed ||
+        hk.isControlPressed ||
+        hk.isMetaPressed ||
+        hk.isAltPressed) {
+      return KeyEventResult.ignored;
+    }
+    if (!mounted ||
+        !_itemScrollController.isAttached ||
+        !(ModalRoute.isCurrentOf(context) ?? true) ||
+        !_listKeysApply(page)) {
+      return KeyEventResult.ignored;
+    }
+    _scrollByKey(k);
+    return KeyEventResult.handled;
+  }
+
+  bool _listKeysApply(bool page) {
+    final focus = FocusManager.instance.primaryFocus;
+    if (focus != null && identical(focus, ComposerShortcutHooks.focus)) {
+      final text = ComposerShortcutHooks.text?.text ?? '';
+      return text.isEmpty || (page && !text.contains('\n'));
+    }
+    final ctx = focus?.context;
+    if (focus == null || ctx == null || focus is FocusScopeNode) return true;
+    if (ctx.widget is EditableText ||
+        ctx.findAncestorWidgetOfExactType<EditableText>() != null) {
+      return false;
+    }
+    if (identical(ctx.findAncestorStateOfType<_MessagesListState>(), this)) {
+      return true;
+    }
+    return Scrollable.maybeOf(ctx, axis: Axis.vertical) == null;
+  }
+
+  void _scrollByKey(LogicalKeyboardKey k) {
+    if (k == LogicalKeyboardKey.home || k == LogicalKeyboardKey.end) {
+      unawaited(_scrollToEdge(k == LogicalKeyboardKey.home));
+      return;
+    }
+    final m = _livePosition;
+    if (m == null) return;
+    final step = m.viewportDimension * 0.875;
+    final target = (m.pixels + (k == LogicalKeyboardKey.pageUp ? step : -step))
+        .clamp(m.minScrollExtent, m.maxScrollExtent)
+        .toDouble();
+    if ((target - m.pixels).abs() < 0.5) return;
+    unawaited(_offsetController.animateScroll(
+        offset: target - m.pixels,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut));
+  }
+
+  Future<void> _scrollToEdge(bool top) async {
+    for (var i = 0; i < 8; i++) {
+      final m = _livePosition;
+      if (!mounted || m == null) return;
+      final gap = (top ? m.maxScrollExtent : m.minScrollExtent) - m.pixels;
+      if (gap.abs() < 0.5) return;
+      await _offsetController.animateScroll(
+          offset: gap,
+          duration: Duration(milliseconds: i == 0 ? 200 : 60),
+          curve: Curves.easeOut);
+    }
+  }
+
+  bool _noteMetrics(ScrollMetricsNotification n) {
+    if (n.depth == 0) _noteScrollable(n.context);
+    return false;
+  }
+
+  void _noteScrollable(BuildContext? ctx) {
+    final s = ctx == null ? null : Scrollable.maybeOf(ctx);
+    if (s == null) return;
+    _scrollables
+      ..removeWhere((x) => identical(x, s) || !x.mounted)
+      ..add(s);
+  }
+
+  @visibleForTesting
+  List<ScrollableState> get debugScrollViews => List.unmodifiable(_scrollables);
+
+  ScrollPosition? get _livePosition {
+    _scrollables.removeWhere((s) => !s.mounted);
+    for (final s in _scrollables.reversed) {
+      final p = s.position;
+      if (p.hasPixels && p.hasContentDimensions) return p;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
@@ -609,8 +719,13 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     _nav.afterBuild(scroller);
 
     // ScrollablePositionedList can reach off-screen lazy items; it lacks keyboardDismissBehavior, so unfocus on drag.
-    return NotificationListener<ScrollNotification>(
-      onNotification: _onScroll,
+    return NotificationListener<ScrollMetricsNotification>(
+      onNotification: _noteMetrics,
+      child: NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (n.depth == 0) _noteScrollable(n.context);
+        return _onScroll(n);
+      },
       child: ColoredBox(
         color: containerColor,
         child: Column(
@@ -624,8 +739,19 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                   key: _floatHost,
                   children: [
                     Positioned.fill(
-                      child: ScrollablePositionedList.builder(
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: PointerInput.instance,
+                        builder: (context, mouse, list) => ScrollConfiguration(
+                          behavior: _ListScrollBehavior(
+                              ScrollConfiguration.of(context), mouse, c.isLight),
+                          child: list!,
+                        ),
+                        child: FocusRebuildBoundary(
+                        child: MessageSelection(
+                        builder: (keepAlives) => ScrollablePositionedList.builder(
+                        addAutomaticKeepAlives: keepAlives,
                         itemScrollController: _itemScrollController,
+                        scrollOffsetController: _offsetController,
                         itemPositionsListener: _positionsListener,
                         reverse: true,
                         physics: const KeepReadingPhysics(),
@@ -635,10 +761,13 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                         // Channels get one extra top unit, the history-edge notice, shown once the user scrolls back to it.
                         itemCount: units.length + (isChannel ? 1 : 0),
                         itemBuilder: (context, revIndex) {
+                          final mouse = PointerInput.mouseOf(context);
                           if (revIndex == units.length) {
-                            return _ChannelHistoryEdgeNotice(
-                                textSize: settings.textSize.toDouble(),
-                                partial: historyMissing);
+                            return MessageSelection.plain(
+                                mouse,
+                                _ChannelHistoryEdgeNotice(
+                                    textSize: settings.textSize.toDouble(),
+                                    partial: historyMissing));
                           }
                           final forward = units.length - 1 - revIndex;
                           final unit = units[forward];
@@ -647,25 +776,29 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                           final unitId = built.unitByIndex[revIndex]!;
                           final Key unitKey = ValueKey(unitId);
                           if (unit is _PollUnit) {
-                            child =
-                                PollCard(poll: unit.poll, settings: settings);
+                            child = MessageSelection.plain(mouse,
+                                PollCard(poll: unit.poll, settings: settings));
                           } else {
                             final group = unit as _GroupUnit;
                             // Reuse the cached widget when inputs are unchanged; the picker captures the State's stable context.
                             final cached = _unitWidgetCache[unitKey];
                             if (cached != null &&
+                                cached.mouse == mouse &&
                                 identical(cached.settings, settings) &&
                                 _sameEntries(cached.entries, group.entries)) {
                               child = cached.widget;
                             } else {
-                              child = MessageGroup(
+                              final Widget groupWidget = MessageGroup(
                                 entries: group.entries,
                                 settings: settings,
                                 onReactionPicker: (msg) => showReactionPicker(
                                     this.context, ref, msg),
                               );
+                              child = mouse
+                                  ? MessageSelectionItem(child: groupWidget)
+                                  : groupWidget;
                               _unitWidgetCache[unitKey] = _CachedUnitWidget(
-                                  group.entries, settings, child);
+                                  group.entries, settings, child, mouse);
                             }
                           }
                           final navBreak = unit is _GroupUnit &&
@@ -678,12 +811,16 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                                       CrossAxisAlignment.stretch,
                                   children: [
                                     if (dayStart)
-                                      DaySeparator(
-                                        createdAt: built.atByIndex[revIndex]!,
-                                        useBubbles: settings.useBubbles,
-                                      ),
+                                      MessageSelection.plain(
+                                          mouse,
+                                          DaySeparator(
+                                            createdAt:
+                                                built.atByIndex[revIndex]!,
+                                            useBubbles: settings.useBubbles,
+                                          )),
                                     if (navBreak)
-                                      ChatNavDivider(cover: _navDivider),
+                                      MessageSelection.plain(mouse,
+                                          ChatNavDivider(cover: _navDivider)),
                                     child,
                                   ],
                                 )
@@ -702,6 +839,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                             ),
                           );
                         },
+                      )),
+                      ),
                       ),
                     ),
                     Positioned(
@@ -739,7 +878,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
           ],
         ),
       ),
-    );
+    ));
   }
 
   /// Returns false so the scroll notification keeps bubbling.
@@ -940,10 +1079,11 @@ class _GroupUnit extends _RenderUnit {
 }
 
 class _CachedUnitWidget {
-  _CachedUnitWidget(this.entries, this.settings, this.widget);
+  _CachedUnitWidget(this.entries, this.settings, this.widget, this.mouse);
   final List<MessageGroupEntry> entries;
   final Settings settings;
   final Widget widget;
+  final bool mouse;
 }
 
 class _UnitsBuild {
@@ -990,7 +1130,10 @@ class _ScrollToBottomButton extends StatefulWidget {
 }
 
 class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
-  bool _hover = false;
+  bool _pointerHover = false;
+  bool _focused = false;
+
+  bool get _hover => _pointerHover || _focused;
 
   @override
   Widget build(BuildContext context) {
@@ -1019,9 +1162,18 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
               );
 
     final label = tr('Scroll to bottom');
-    final body = MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
+    final body = FocusableActionDetector(
+      actions: {
+        ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) {
+          widget.onTap();
+          return null;
+        }),
+      },
+      onShowFocusHighlight: (f) => setState(() => _focused = f),
+      child: MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _pointerHover = true),
+      onExit: (_) => setState(() => _pointerHover = false),
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedScale(
@@ -1043,11 +1195,74 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
           ),
         ),
       ),
-    );
+    ));
     return NymTooltip(
       message: label,
       excludeFromSemantics: true,
       child: Semantics(button: true, label: label, child: body),
     );
   }
+}
+
+class _ListScrollBehavior extends ScrollBehavior {
+  const _ListScrollBehavior(this.parent, this.mouse, this.light);
+
+  final ScrollBehavior parent;
+  final bool mouse;
+  final bool light;
+
+  @override
+  TargetPlatform getPlatform(BuildContext context) => parent.getPlatform(context);
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => parent.dragDevices;
+
+  @override
+  Set<LogicalKeyboardKey> get pointerAxisModifiers => parent.pointerAxisModifiers;
+
+  @override
+  MultitouchDragStrategy getMultitouchDragStrategy(BuildContext context) =>
+      parent.getMultitouchDragStrategy(context);
+
+  @override
+  Widget buildOverscrollIndicator(
+          BuildContext context, Widget child, ScrollableDetails details) =>
+      parent.buildOverscrollIndicator(context, child, details);
+
+  @override
+  GestureVelocityTrackerBuilder velocityTrackerBuilder(BuildContext context) =>
+      parent.velocityTrackerBuilder(context);
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      parent.getScrollPhysics(context);
+
+  @override
+  ScrollViewKeyboardDismissBehavior getKeyboardDismissBehavior(
+          BuildContext context) =>
+      parent.getKeyboardDismissBehavior(context);
+
+  @override
+  Widget buildScrollbar(
+      BuildContext context, Widget child, ScrollableDetails details) {
+    if (!mouse || axisDirectionToAxis(details.direction) != Axis.vertical) {
+      return parent.buildScrollbar(context, child, details);
+    }
+    return RawScrollbar(
+      controller: details.controller,
+      thickness: 6,
+      radius: const Radius.circular(3),
+      thumbColor: light ? const Color(0x1F000000) : const Color(0x1FFFFFFF),
+      crossAxisMargin: 0,
+      mainAxisMargin: 0,
+      minThumbLength: 24,
+      child: child,
+    );
+  }
+
+  @override
+  bool shouldNotify(covariant _ListScrollBehavior oldDelegate) =>
+      oldDelegate.mouse != mouse ||
+      oldDelegate.light != light ||
+      parent.shouldNotify(oldDelegate.parent);
 }

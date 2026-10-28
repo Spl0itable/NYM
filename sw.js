@@ -124,6 +124,8 @@ self.addEventListener('fetch', (e) => {
 
     if (url.origin !== self.location.origin) return;
 
+    if (url.pathname.startsWith('/api/map/')) return;
+
     // Proxied media is effectively immutable, so cache-first; range requests and non-images pass through.
     if (url.pathname === '/api/proxy' && url.searchParams.has('url') && !req.headers.has('range')) {
         if (!mediaStartupPruned) {

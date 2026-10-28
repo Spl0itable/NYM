@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/composer/composer_model.dart';
+import '../../features/duo/duo_rail.dart';
 import '../../features/notifications/notifications_panel.dart';
 import '../../features/shortcuts/shortcuts.dart';
 import '../../features/group_tools/group_tools_ui.dart';
@@ -833,15 +834,20 @@ class _SidebarState extends ConsumerState<Sidebar> {
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               slivers: [
                 SliverToBoxAdapter(
-                  child: UnifiedSearchButton(onTap: () {
-                    widget.onItemSelected?.call();
-                    UnifiedSearchPanel.open(context);
-                  }),
+                  child: DuoClear(
+                    child: UnifiedSearchButton(onTap: () {
+                      widget.onItemSelected?.call();
+                      UnifiedSearchPanel.open(context);
+                    }),
+                  ),
                 ),
                 if (widget.compact)
                   SliverToBoxAdapter(
-                    child:
-                        _SidebarActions(onItemSelected: widget.onItemSelected),
+                    child: DuoScope.railOf(context)
+                        ? const SizedBox.shrink()
+                        : DuoClear(
+                            child: _SidebarActions(
+                                onItemSelected: widget.onItemSelected)),
                   ),
                 for (final s in _order)
                   if (!(settings.groupChatPMOnlyMode &&
@@ -986,6 +992,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
   /// Identity header: a tap opens the nick editor, a 2s hold triggers the panic wipe.
   Widget _header(BuildContext context, String nym) {
     final c = context.nym;
+    final rail = DuoScope.railOf(context);
     final self = ref.read(appStateProvider).selfPubkey;
     final top = MediaQuery.paddingOf(context).top;
     final extent = ref.watch(chatHeaderExtentProvider) ??
@@ -993,7 +1000,13 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 ? 92
                 : 101) +
             top;
-    return Container(
+    final railItems = _railItems(context);
+    return Builder(
+      builder: (context) => DuoRailItems(
+      priority: 1,
+      active: DuoScope.railOf(context) && !_SidebarHidden.of(context),
+      items: railItems,
+      child: Container(
       key: const ValueKey('sidebarHeader'),
       constraints: BoxConstraints(minHeight: extent),
       padding: EdgeInsets.only(top: top),
@@ -1007,7 +1020,8 @@ class _SidebarState extends ConsumerState<Sidebar> {
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          DuoClear(
+            child: Row(
             key: const ValueKey('sidebarIdentityRow'),
             children: [
               const SizedBox(width: NymSpace.s3),
@@ -1060,11 +1074,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
                   ),
                 ),
               ),
-              if (ref.watch(accountsProvider) != null) ...[
+              if (!rail && ref.watch(accountsProvider) != null) ...[
                 const SizedBox(width: NymSpace.s2),
                 const AccountSwitchButton(),
               ],
-              if (widget.compact &&
+              if (!rail &&
+                  widget.compact &&
                   MediaQuery.sizeOf(context).width <= kPhoneMax) ...[
                 const SizedBox(width: NymSpace.s2),
                 const _IdentityBell(),
@@ -1081,10 +1096,70 @@ class _SidebarState extends ConsumerState<Sidebar> {
               ],
               const SizedBox(width: NymSpace.s3),
             ],
-          ),
+          )),
         ],
       ),
-    );
+    )));
+  }
+
+  List<DuoRailItem> _railItems(BuildContext context) {
+    final unread =
+        ref.watch(notificationHistoryProvider.select((s) => s.unread));
+    final notifEnabled =
+        ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
+    final missedCalls = ref.watch(callHistoryMissedProvider);
+    final onClose = widget.onClose;
+    void go(void Function() open) {
+      widget.onItemSelected?.call();
+      open();
+    }
+
+    return [
+      if (onClose != null)
+        DuoRailItem(
+            id: 'sidebar-close',
+            label: tr('Close'),
+            svg: NymIcons.close,
+            onTap: onClose),
+      DuoRailItem(
+          id: 'notifications',
+          label: tr('Notifications'),
+          svg: NymIcons.bell,
+          badge: notifEnabled ? unread : 0,
+          onTap: () => showNotificationsPanel(context)),
+      if (ref.watch(accountsProvider) != null)
+        DuoRailItem(
+            id: 'accounts',
+            label: tr('Manage Identities'),
+            svg: NymIcons.accountSwitch,
+            onTap: () => showAccountSwitcher(context)),
+      DuoRailItem(
+          id: 'saved',
+          label: tr('Saved'),
+          svg: ChatToolIcons.saved,
+          onTap: () => go(() => SavedMessagesPanel.open(context))),
+      DuoRailItem(
+          id: 'calls',
+          label: tr('Calls'),
+          svg: GroupToolIcons.callLink,
+          badge: missedCalls,
+          onTap: () => go(() => showCallsScreen(context))),
+      DuoRailItem(
+          id: 'shop',
+          label: tr('Shop'),
+          svg: NymIcons.store,
+          onTap: () => go(() => ShopModal.open(context))),
+      DuoRailItem(
+          id: 'settings',
+          label: tr('Settings'),
+          svg: NymIcons.settings,
+          onTap: () => go(() => SettingsScreen.open(context))),
+      DuoRailItem(
+          id: 'about',
+          label: tr('About'),
+          svg: NymIcons.info,
+          onTap: () => go(() => AboutScreen.open(context))),
+    ];
   }
 
   // PanicWipe clears disk stores; resetAfterPanic's boot-epoch bump remounts the first-run gate.

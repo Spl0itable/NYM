@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'features/duo/duo_rail.dart';
 import 'features/layout/pointer_input.dart';
 import 'features/calls/call_platform.dart';
 import 'features/calls/call_providers.dart';
@@ -12,6 +13,7 @@ import 'features/calls/ring_setting.dart';
 import 'core/theme/nym_theme.dart';
 import 'features/accounts/account_host.dart';
 import 'features/ai_consent/ai_consent.dart';
+import 'features/nymbot/long_text_gate.dart';
 import 'features/i18n/app_strings_catalog.dart';
 import 'features/commands/command_i18n.dart';
 import 'features/composer/composer_conn.dart';
@@ -77,7 +79,17 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   void initState() {
     super.initState();
     registerAiConsentPrompter(_navKey);
+    registerBotLongGatePrompter(_navKey);
     _backgroundConnectivity = ref.read(backgroundConnectivityServiceProvider);
+    _backgroundConnectivity.onNetworkChanged(() {
+      try {
+        ref.read(nostrControllerProvider).onNetworkChanged();
+      } catch (_) {}
+    }, onLost: () {
+      try {
+        ref.read(nostrControllerProvider).onNetworkLost();
+      } catch (_) {}
+    });
     ref.read(connNoticeGateProvider);
     WidgetsBinding.instance.addObserver(this);
     HardwareKeyboard.instance.addHandler(_onPresenceKey);
@@ -255,6 +267,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _inactiveTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onPresenceKey);
     _heartbeat?.dispose();
     _payloadSub?.cancel();
@@ -279,19 +292,45 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     return false;
   }
 
+  bool _leftForeground = false;
+  Timer? _inactiveTimer;
+
+  static const Duration longInactive = Duration(seconds: 30);
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive) {
+      _inactiveTimer ??= Timer(longInactive, () {
+        _inactiveTimer = null;
+        _leftForeground = true;
+      });
+    } else {
+      _inactiveTimer?.cancel();
+      _inactiveTimer = null;
+    }
     // Re-hydrate the open conversation from D1 on resume.
     try {
       ref.read(appStateProvider.notifier).setAppVisible(
           state == AppLifecycleState.resumed ||
               state == AppLifecycleState.inactive);
     } catch (_) {}
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _leftForeground = true;
+      try {
+        ref.read(nostrControllerProvider).onAppLeftForeground();
+      } catch (_) {}
+    }
     if (state == AppLifecycleState.resumed) {
+      final fromBackground = _leftForeground;
+      _leftForeground = false;
       // Release the keep-alive so the Android notification isn't up while in the foreground.
       unawaited(_backgroundConnectivity.stop());
       try {
-        ref.read(nostrControllerProvider).onAppResumed();
+        ref
+            .read(nostrControllerProvider)
+            .onAppResumed(fromBackground: fromBackground);
       } catch (_) {}
       final heartbeat = _heartbeat;
       if (heartbeat != null) {
@@ -334,7 +373,9 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     try {
       ref
           .read(nostrControllerProvider)
-          .onAppPaused(keepConnectionsAlive: keepAlive);
+          .onAppPaused(
+              keepConnectionsAlive: keepAlive,
+              backgrounded: state != AppLifecycleState.inactive);
     } catch (_) {}
   }
 
@@ -429,7 +470,8 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
                         child: ToastHost(
                             child: NearbyInboxHost(
                                 navigatorContext: () => _navKey.currentContext,
-                                child: child ?? const SizedBox.shrink())))),
+                                child: DuoRailFrame(
+                                    child: child ?? const SizedBox.shrink()))))),
               ),
             ),
           ),

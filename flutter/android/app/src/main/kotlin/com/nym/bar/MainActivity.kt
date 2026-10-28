@@ -37,6 +37,7 @@ import javax.crypto.spec.GCMParameterSpec
 class MainActivity : FlutterFragmentActivity() {
     private var shareChannel: MethodChannel? = null
     private var callChannel: MethodChannel? = null
+    private var networkWatch: NetworkWatch? = null
     private var pendingAnswer: String? = null
     private var secretSecure = false
     private var privacySecure = false
@@ -90,10 +91,13 @@ class MainActivity : FlutterFragmentActivity() {
         shareChannel = share
 
         // Foreground service for "Stay Connected in Background", started off-screen and released on resume.
-        MethodChannel(
+        val backgroundChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             BACKGROUND_CHANNEL,
-        ).setMethodCallHandler { call, result ->
+        )
+        networkWatch?.stop()
+        networkWatch = NetworkWatch(applicationContext, backgroundChannel).also { it.start() }
+        backgroundChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "start" -> {
                     val mesh = call.argument<Boolean>("mesh") ?: false
@@ -714,6 +718,8 @@ class MainActivity : FlutterFragmentActivity() {
         NymRing.onToken = null
         NymRing.onAction = null
         callChannel = null
+        networkWatch?.stop()
+        networkWatch = null
         super.onDestroy()
     }
 

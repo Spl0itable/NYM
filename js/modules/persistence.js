@@ -219,6 +219,7 @@
                 ...(m.slowHeld ? { slowHeld: true } : {}),
                 ...(m.pqPending ? { pqPending: true } : {}),
                 ...(Array.isArray(m.people) && m.people.length ? { people: m.people.slice() } : {}),
+                ...(m.isNotice && m.notice ? { isNotice: true, notice: { type: m.notice.type, target: m.notice.target, actor: m.notice.actor } } : {}),
                 ...(Array.isArray(m.quoted) && m.quoted.length ? { quoted: m.quoted.slice() } : {}),
                 ...(Array.isArray(m.heldTags) && m.heldTags.length ? { heldTags: m.heldTags.map((t) => t.slice()) } : {})
             };

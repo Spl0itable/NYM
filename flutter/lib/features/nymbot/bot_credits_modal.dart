@@ -12,6 +12,7 @@ import '../../features/identity/modal_chrome.dart';
 import '../shop/shop_purchase_policy.dart';
 import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
+import 'bot_chip.dart';
 import 'nymbot_models.dart';
 import 'nymbot_providers.dart';
 import '../../widgets/common/dialog_button.dart';
@@ -19,14 +20,16 @@ import '../../widgets/common/nym_field.dart';
 
 /// Shown instead of the purchase UI where credits can't be sold; named so a test can hold the i18n catalog to it.
 const String kBotCreditsBuyNotice =
-    'Nymbot credits cannot be purchased in this app. Credits are '
-    'bought from the Nymchat web app in your browser. Credits you '
+    'Nymbot credits cannot be purchased in this app. Credits you '
     'already have work here as usual.';
 const String kBotCreditsGiftNotice =
-    'Nymbot credits cannot be gifted from this app. Credits are '
-    'bought from the Nymchat web app in your browser, and can be '
-    'gifted from there. Credits you already have work here as '
-    'usual.';
+    'Nymbot credits cannot be gifted from this app. Credits you '
+    'already have work here as usual.';
+const String kBotFreeLeftAt =
+    '{left} of {limit} free replies left today, resets at {time}';
+const String kBotFreeLeft = '{left} of {limit} free replies left today';
+const String kBotStandardBalance = 'Standard balance: {balance}';
+const String kBotProBalance = 'Pro balance: {balance}';
 const String kBotCreditsHeader = 'NYMBOT CREDITS';
 const String kBotCreditsTitle = 'Nymbot private message credits';
 
@@ -36,6 +39,10 @@ const List<String> kBotCreditsDisabledStrings = [
   kBotCreditsGiftNotice,
   kBotCreditsHeader,
   kBotCreditsTitle,
+  kBotFreeLeftAt,
+  kBotFreeLeft,
+  kBotStandardBalance,
+  kBotProBalance,
 ];
 
 /// Nymbot buy/gift credits sheet; in gift mode the invoice carries `recipientPubkey` so the worker credits them.
@@ -196,7 +203,9 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                       fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 14),
-                if (botCreditPurchasesDisabled)
+                if (botCreditPurchasesDisabled && !widget.isGift)
+                  _allowance(context, c)
+                else if (botCreditPurchasesDisabled)
                   _purchasesDisabledNote(c)
                 else if (_invoice == null) ...[
                   _tierFraming(c),
@@ -254,6 +263,49 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
         ),
         ModalChrome.closeChip(c, () => Navigator.of(context).maybePop()),
       ],
+    );
+  }
+
+  Widget _allowance(BuildContext context, NymColors c) {
+    final state = ref.watch(botChatControllerProvider);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final free = ref.read(botChatControllerProvider.notifier).chipFree?.at(now);
+    final style = TextStyle(color: c.text, fontSize: 13, height: 1.45);
+    final at = free?.resetsAt;
+    final b = state.balanceKnown ? state.balance : null;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 4, bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: c.insetFill,
+        border: Border.all(color: c.insetBorder),
+        borderRadius: NymRadius.rsm,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (free != null)
+            Text(
+              at != null
+                  ? tr(kBotFreeLeftAt, {
+                      'left': '${free.left}',
+                      'limit': '${free.limit ?? free.left}',
+                      'time': botResetTime(context, at),
+                    })
+                  : tr(kBotFreeLeft, {
+                      'left': '${free.left}',
+                      'limit': '${free.limit ?? free.left}',
+                    }),
+              style: style.copyWith(color: c.textBright),
+            ),
+          if (free != null) const SizedBox(height: 6),
+          Text(tr(kBotStandardBalance, {'balance': creditFigure(b?.balance)}),
+              style: style),
+          Text(tr(kBotProBalance, {'balance': creditFigure(b?.proBalance)}),
+              style: style),
+        ],
+      ),
     );
   }
 

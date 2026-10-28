@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 class PanicHoldDetector extends StatefulWidget {
@@ -28,6 +29,10 @@ class _PanicHoldDetectorState extends State<PanicHoldDetector> {
   Offset _downAt = Offset.zero;
 
   void _start(PointerDownEvent e) {
+    if (e.kind == PointerDeviceKind.mouse &&
+        (e.buttons & kPrimaryMouseButton) == 0) {
+      return;
+    }
     _fired = false;
     _downAt = e.position;
     _timer?.cancel();

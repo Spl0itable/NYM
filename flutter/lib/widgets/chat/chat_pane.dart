@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../features/duo/duo_rail.dart';
 import '../../features/shortcuts/shortcuts.dart';
 import '../../features/layout/info_dock.dart';
 import '../../features/toasts/event_toast_area.dart';
@@ -349,6 +350,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     final width = MediaQuery.of(context).size.width;
     final phone = width <= NymDimens.mobileBreakpoint;
     final drawer = !phone && compact;
+    final rail = DuoScope.railOf(context);
     var back = phone && _canBack;
     final titleSize = settings.textSize + 3.0;
     final double headerHeight = (widget.columnsMode && !phone)
@@ -390,11 +392,13 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         ViewKind.pm => 'pm',
         ViewKind.group => 'group',
       },
-      actions: [
-        for (final a in actions)
-          if (!capped.contains(a.id)) a.id,
-        'bell',
-      ],
+      actions: rail
+          ? const []
+          : [
+              for (final a in actions)
+                if (!capped.contains(a.id)) a.id,
+              'bell',
+            ],
       step: metrics.pitch,
       phone: phone,
     );
@@ -412,7 +416,28 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         if (capped.contains(a.id) || plan.moved.contains(a.id)) a,
     ];
 
-    return Container(
+    return DuoRailItems(
+      active: rail,
+      items: [
+        for (final a in actions)
+          DuoRailItem(id: a.id, label: a.label, svg: a.svg, onTap: a.onTap),
+        DuoRailItem(
+            id: 'notifications',
+            label: tr('Notifications'),
+            svg: NymIcons.bell,
+            badge: ref.watch(
+                    settingsProvider.select((s) => s.notificationsEnabled))
+                ? ref.watch(
+                    notificationHistoryProvider.select((s) => s.unread))
+                : 0,
+            onTap: _openNotifications),
+        DuoRailItem(
+            id: 'more',
+            label: tr('More'),
+            svg: NymIcons.rowMenuOutline,
+            onTap: _moreOpener(view, const [])),
+      ],
+      child: Container(
       key: const ValueKey('chatHeader'),
       decoration: BoxDecoration(
         color: c.glassBg,
@@ -474,9 +499,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                 SizedBox(width: side),
                 if (phone)
                   _HeaderActionRow(lead: side, children: [
-                    for (final a in shown) a.button,
-                    _notificationsPill(),
-                    if (plan.more) _moreMenu(view, overflow),
+                    if (!rail) ...[
+                      for (final a in shown) a.button,
+                      _notificationsPill(),
+                      if (plan.more) _moreMenu(view, overflow),
+                    ],
                   ])
                 else ...[
                   _HeaderActionRow(
@@ -500,7 +527,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             ),
         ),
       ),
-    );
+    ));
   }
 
   ({String text, String dist, String? geohash}) _locationFor(
@@ -931,6 +958,25 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
   Widget _moreMenu(ChatView view,
       List<({String id, Widget button, String label, String svg, VoidCallback? onTap})>
           overflow) {
+    final a = _moreArgs(view, overflow);
+    return _moreButton(a.items, a.head, groupId: a.groupId);
+  }
+
+  VoidCallback _moreOpener(ChatView view,
+      List<({String id, Widget button, String label, String svg, VoidCallback? onTap})>
+          overflow) {
+    final a = _moreArgs(view, overflow);
+    return () => _openMoreSheet(a.items, a.head,
+        mainMenuRows('desktop').overflow, _morePick(a.items), a.groupId);
+  }
+
+  ({
+    List<({String id, String label, String svg, VoidCallback? onTap})> items,
+    String head,
+    String? groupId
+  }) _moreArgs(ChatView view,
+      List<({String id, Widget button, String label, String svg, VoidCallback? onTap})>
+          overflow) {
     final chatItems = <({String id, String label, String svg, VoidCallback? onTap})>[
       for (final a in overflow)
         (id: 'chat-${a.id}', label: a.label, svg: a.svg, onTap: a.onTap),
@@ -951,8 +997,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       ViewKind.pm => tr('Private message'),
       ViewKind.channel => tr('Channel'),
     };
-    return _moreButton(chatItems, head,
-        groupId: view.kind == ViewKind.group ? view.id : null);
+    return (
+      items: chatItems,
+      head: head,
+      groupId: view.kind == ViewKind.group ? view.id : null
+    );
   }
 
   void _startCall(ChatView view, {required bool video}) {
@@ -1582,6 +1631,24 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
     );
   }
 
+  void Function(String?) _morePick(
+          List<({String id, String label, String svg, VoidCallback? onTap})>
+              chatItems) =>
+      (id) {
+        if (id == null) return;
+        if (id == 'saved') {
+          SavedMessagesPanel.open(context);
+        } else if (id == 'calls') {
+          showCallsScreen(context);
+        } else if (id == 'about') {
+          AboutScreen.open(context);
+        } else {
+          for (final it in chatItems) {
+            if (it.id == id) it.onTap?.call();
+          }
+        }
+      };
+
   Widget _moreButton(
       List<({String id, String label, String svg, VoidCallback? onTap})> chatItems,
       String head,
@@ -1628,20 +1695,7 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
               style: TextStyle(
                   color: c.textDim, fontSize: 10, letterSpacing: 0.8)),
         );
-    void pick(String? id) {
-      if (id == null) return;
-      if (id == 'saved') {
-        SavedMessagesPanel.open(context);
-      } else if (id == 'calls') {
-        showCallsScreen(context);
-      } else if (id == 'about') {
-        AboutScreen.open(context);
-      } else {
-        for (final it in chatItems) {
-          if (it.id == id) it.onTap?.call();
-        }
-      }
-    }
+    final pick = _morePick(chatItems);
 
     if (useNymActionSheet(context)) {
       return HitSlop(

@@ -14,6 +14,7 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/chat/message_row.dart'
     show MessageGroup, MessageGroupEntry;
+import '../../widgets/chat/message_selection.dart';
 import '../../widgets/chat/typing_indicator.dart';
 import '../../widgets/context_menu/interaction_hooks.dart';
 import '../../widgets/nym_icons.dart';
@@ -24,12 +25,15 @@ import '../threads/thread_view.dart' show ThreadView;
 import 'bot_credits_modal.dart';
 import 'bot_runs.dart' show kBotRunPollEvery;
 import 'bot_runs_view.dart';
+import '../shop/shop_purchase_policy.dart';
+import 'bot_chip.dart';
 import 'nymbot_models.dart';
 import 'brand_tile.dart';
 import 'nymbot_providers.dart';
 import '../../widgets/chat/list_anchor.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../duo/duo_rail.dart';
 
 /// Private Nymbot chat over the canonical bot PM thread, with tier/model switching and credit buying.
 class BotChatScreen extends ConsumerStatefulWidget {
@@ -154,6 +158,10 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
           // Both the Pro pill and the model chip open the picker.
           onTapModel: () => _showModelPicker(context),
           onTapBuy: () => _showBuy(context),
+          balance: state.balanceKnown
+              ? (state.isPro ? state.balance.proBalance : state.balance.balance)
+              : null,
+          free: ref.read(botChatControllerProvider.notifier).chipFree,
           anonOn: state.anonEnabled,
           onTapAnon: () => _showAnon(context),
           runsCount: ref
@@ -268,7 +276,9 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       child: Stack(
         children: [
           Positioned.fill(
-            child: ListView.builder(
+            child: MessageSelection(
+            builder: (keepAlives) => ListView.builder(
+              addAutomaticKeepAlives: keepAlives,
               controller: _scroll,
               reverse: true,
               physics: const KeepReadingPhysics(),
@@ -277,6 +287,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
               itemCount: units.length,
               itemBuilder: (context, revIndex) {
+                Widget unitAt() {
                 final forward = units.length - 1 - revIndex;
                 final unit = units[forward];
                 final separator = dayStarts.contains(forward)
@@ -321,8 +332,14 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                     BotRunStatusView(id: runId, colors: c),
                   ],
                 );
+              }
+
+                final item = unitAt();
+                final key = item.key;
+                return MessageSelection.item(context, item,
+                    key: key == null ? null : ValueKey<Key>(key));
               },
-            ),
+            )),
           ),
           // Shown >150px from the bottom.
           if (_showScrollButton)
@@ -491,6 +508,8 @@ class _BotControlBar extends StatelessWidget {
     required this.onTapBuy,
     required this.anonOn,
     required this.onTapAnon,
+    this.balance,
+    this.free,
     this.runsCount = 0,
     this.onTapRuns,
     this.onStopAll,
@@ -507,6 +526,8 @@ class _BotControlBar extends StatelessWidget {
   final VoidCallback onTapBuy;
   final bool anonOn;
   final VoidCallback onTapAnon;
+  final double? balance;
+  final BotFreeAllowance? free;
 
   @override
   Widget build(BuildContext context) {
@@ -596,12 +617,10 @@ class _BotControlBar extends StatelessWidget {
         children: [
           Expanded(child: left),
           SizedBox(width: gap),
-          _CtrlButton(
-            svg: _kSvgBolt,
-            label: tr('Buy'),
-            tooltip: tr('Buy Nymbot credits'),
-            active: false,
-            buy: true,
+          _BotChip(
+            pro: isPro,
+            balance: balance,
+            free: free,
             labelMaxWidth: labelMax,
             colors: c,
             compact: compact,
@@ -657,6 +676,72 @@ class _BotControlBar extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _BotChip extends StatefulWidget {
+  const _BotChip({
+    required this.pro,
+    required this.balance,
+    required this.free,
+    required this.labelMaxWidth,
+    required this.colors,
+    required this.compact,
+    required this.onTap,
+  });
+
+  final bool pro;
+  final double? balance;
+  final BotFreeAllowance? free;
+  final double labelMaxWidth;
+  final NymColors colors;
+  final bool compact;
+  final VoidCallback onTap;
+
+  @override
+  State<_BotChip> createState() => _BotChipState();
+}
+
+class _BotChipState extends State<_BotChip> {
+  Timer? _wake;
+
+  @override
+  void dispose() {
+    _wake?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final free = widget.free;
+    final view = botChipView(
+      pro: widget.pro,
+      balance: widget.balance,
+      free: free,
+      now: now,
+      purchasesDisabled: botCreditPurchasesDisabled,
+    );
+    final text = botChipText(view, (at) => botResetTime(context, at));
+    _wake?.cancel();
+    _wake = null;
+    final next = free?.limit == null ? null : free!.at(now).resetsAt;
+    if (next != null) {
+      _wake = Timer(Duration(milliseconds: next - now + 50), () {
+        if (mounted) setState(() {});
+      });
+    }
+    return _CtrlButton(
+      svg: _kSvgBolt,
+      label: text.label,
+      tooltip: text.tip,
+      active: false,
+      buy: true,
+      labelMaxWidth: widget.labelMaxWidth,
+      colors: widget.colors,
+      compact: widget.compact,
+      onTap: widget.onTap,
     );
   }
 }
@@ -1229,12 +1314,15 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
                         textAlign: TextAlign.end,
                         style: TextStyle(color: c.textDim, fontSize: 11)),
                   ),
-                  IconButton(
-                    key: const ValueKey('proModelPickerClose'),
-                    tooltip: tr('Close'),
-                    visualDensity: VisualDensity.compact,
-                    icon: Icon(Icons.close, size: 20, color: c.textDim),
-                    onPressed: () => Navigator.of(context).maybePop(),
+                  DuoRailSwap.close(
+                    onTap: () => Navigator.of(context).maybePop(),
+                    child: IconButton(
+                      key: const ValueKey('proModelPickerClose'),
+                      tooltip: tr('Close'),
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(Icons.close, size: 20, color: c.textDim),
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
                   ),
                 ],
               ),

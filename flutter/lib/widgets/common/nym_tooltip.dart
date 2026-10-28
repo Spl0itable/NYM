@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 abstract final class NymTooltipTiming {
   static const Duration wait = Duration(milliseconds: 150);
@@ -109,6 +110,43 @@ class NymTooltip extends Tooltip {
   State<Tooltip> createState() => NymTooltipState();
 }
 
+abstract final class _FocusTip {
+  static FocusManager? _manager;
+  static NymTooltipState? _shown;
+
+  static void attach() {
+    final m = FocusManager.instance;
+    if (identical(m, _manager)) return;
+    _manager = m;
+    _shown = null;
+    m.addListener(_changed);
+  }
+
+  static void forget(NymTooltipState s) {
+    if (identical(_shown, s)) _shown = null;
+  }
+
+  static NymTooltipState? _focused() => FocusManager.instance.primaryFocus?.context
+      ?.findAncestorStateOfType<NymTooltipState>();
+
+  static void _changed() {
+    final tip = _focused();
+    if (identical(tip, _shown)) return;
+    if (_shown != null) {
+      _shown = null;
+      scheduleMicrotask(RawTooltip.dismissAllToolTips);
+    }
+    if (tip == null ||
+        FocusManager.instance.highlightMode != FocusHighlightMode.traditional) {
+      return;
+    }
+    scheduleMicrotask(() {
+      if (!tip.mounted || !identical(_focused(), tip)) return;
+      if (tip.ensureTooltipVisible()) _shown = tip;
+    });
+  }
+}
+
 class NymTooltipState extends State<Tooltip> {
   static const AnimationStyle _animation = AnimationStyle(
     curve: Curves.easeOut,
@@ -129,6 +167,7 @@ class NymTooltipState extends State<Tooltip> {
     super.initState();
     _Warmth.attach();
     _Warmth.warm.addListener(_onWarm);
+    _FocusTip.attach();
   }
 
   @override
@@ -136,11 +175,20 @@ class NymTooltipState extends State<Tooltip> {
     _Warmth.warm.removeListener(_onWarm);
     _anim?.removeStatusListener(_onStatus);
     _Warmth.detach(this);
+    _FocusTip.forget(this);
     super.dispose();
   }
 
   void _onWarm() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    if (SchedulerBinding.instance.schedulerPhase !=
+        SchedulerPhase.persistentCallbacks) {
+      setState(() {});
+      return;
+    }
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _onStatus(AnimationStatus s) {

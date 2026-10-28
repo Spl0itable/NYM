@@ -5,11 +5,14 @@ import 'package:share_plus/share_plus.dart';
 import '../../widgets/nym_icons.dart';
 import 'branded_qr.dart';
 import 'qr_decoder_channel.dart';
+import 'share_origin.dart';
 import 'share_scanner.dart';
 import 'app_share/app_share_entry.dart';
 import 'nearby/nearby_share_entry.dart';
 import 'nfc/nfc_share_entry.dart';
 import 'share_target.dart';
+
+export 'share_origin.dart';
 
 const int kShareOrderSystem = 10;
 const int kShareOrderNearby = 20;
@@ -39,12 +42,6 @@ class ShareAction {
   final String icon;
   final ShareAvailability isAvailable;
   final ShareRun run;
-}
-
-Rect? shareOriginOf(BuildContext context) {
-  final box = context.findRenderObject();
-  if (box is! RenderBox || !box.hasSize) return null;
-  return box.localToGlobal(Offset.zero) & box.size;
 }
 
 Future<void> shareLinkWithSystem(BuildContext context, String link) async {

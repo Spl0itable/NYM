@@ -19,6 +19,7 @@ import '../i18n/localization_service.dart';
 import '../identity/setup_modal.dart';
 import '../identity/vault_settings_modal.dart';
 import '../notifications/background_catch_up.dart';
+import 'composer_quiet.dart';
 import 'tutorial_overlay.dart';
 
 /// Launch gate: language chooser, then setup if there is no saved login, else the shell and tutorial.
@@ -213,6 +214,16 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
   Future<void> _maybeShowPqNotice() async {
     if (_pqNoticeShown) return;
     final ctrl = ref.read(nostrControllerProvider);
+    if (!ctrl.pqUpgradeNoticePending &&
+        !ctrl.pqRootLinkPromptPending &&
+        !(ctrl.pqRootBackupPending && ctrl.pqRootHeld)) {
+      return;
+    }
+    _pqNoticeShown = true;
+    await composerQuiet();
+    if (!mounted) return;
+    var draft = composerDraft();
+    _pqNoticeShown = false;
     // Opens for an upgrade that should save its code or a device that must paste one.
     final linkPending = ctrl.pqRootLinkPromptPending;
     final backupPending = ctrl.pqRootBackupPending && ctrl.pqRootHeld;
@@ -224,6 +235,11 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
       await ctrl.dismissPqRootBackupNotice();
     }
     if (!mounted) return;
+    while (composerHoldsDraft() && composerDraft() != draft) {
+      await composerQuiet();
+      if (!mounted) return;
+      draft = composerDraft();
+    }
     final linkNeeded = ctrl.pqRootLinkNeeded;
     if (linkNeeded) {
       // A device that needs the code can paste it right here.

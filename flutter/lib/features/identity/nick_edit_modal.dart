@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -25,6 +26,7 @@ import '../../widgets/common/nym_label.dart';
 import '../../widgets/common/dialog_button.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
+import '../share/share_sheet.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../i18n/i18n.dart';
 import '../accounts/account_host.dart';
@@ -246,7 +248,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   // Full width and left-aligned, never centered.
   Widget _modalHeader(NymColors c) => Container(
         width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(24, 22, 24, 14),
+        padding: const EdgeInsets.fromLTRB(24, 22, 56, 14),
         decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: c.glassBorder)),
         ),
@@ -377,6 +379,15 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 isNpub ? tr('Show hex') : tr('Show npub'),
                 _togglePubkeyFormat,
                 icon: NymIcons.ctxSwapFormat,
+              ),
+              KeyedSubtree(
+                key: const ValueKey('profile-share'),
+                child: _smallButton(
+                  c,
+                  tr('Share profile'),
+                  () => unawaited(ShareSheet.openOwnProfile(context)),
+                  icon: NymIcons.shareNodes,
+                ),
               ),
             ],
           ),

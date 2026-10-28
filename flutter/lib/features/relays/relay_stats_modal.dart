@@ -28,6 +28,7 @@ import 'blocked_relays.dart';
 import 'relay_add.dart';
 import 'relay_add_check.dart';
 import 'relay_block.dart';
+import '../duo/duo_rail.dart';
 
 /// At or below this width: 3-column cards, no latency column, tighter padding.
 const double _kMobileMaxWidth = 480;
@@ -2306,7 +2307,9 @@ class _CloseChipState extends State<_CloseChip> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final hovered = _hover;
-    return NymFocusable(
+    return DuoRailSwap.close(
+      onTap: widget.onTap,
+      child: NymFocusable(
       onActivate: widget.onTap,
       tooltip: tr('Close'),
       excludeChildSemantics: true,
@@ -2338,6 +2341,7 @@ class _CloseChipState extends State<_CloseChip> {
           ),
         ),
       ),
+    ),
     );
   }
 }

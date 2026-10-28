@@ -8,6 +8,7 @@ import '../../widgets/common/dialog_button.dart';
 import '../../widgets/common/hit_slop.dart';
 import '../../widgets/common/keyboard_inset_dialog.dart';
 import '../../widgets/common/nym_sheet.dart';
+import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import '../../widgets/common/nym_focusable.dart';
 import '../../widgets/common/nym_field.dart';
@@ -115,7 +116,10 @@ class ModalChrome {
     return Positioned(
       top: 14,
       right: 14,
-      child: HitSlop(child: _CloseChip(c: c, onTap: onTap)),
+      child: DuoRailSwap.close(
+        onTap: onTap,
+        child: HitSlop(child: _CloseChip(c: c, onTap: onTap)),
+      ),
     );
   }
 

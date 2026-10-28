@@ -667,10 +667,10 @@
         return true;
     }
 
-    function ui(s) {
+    function ui(s, a) {
         var n = window.nym;
         if (n && typeof n.uiText === 'function') {
-            try { return n.uiText(s) || s; } catch (_) { }
+            try { return n.uiText(s, a) || s; } catch (_) { }
         }
         return s;
     }
@@ -694,13 +694,14 @@
         if (!g) return '';
         var max = n.MAX_GROUP_MEMBERS || 100;
         var count = (g.members || []).length;
-        var countText = ui('{n}/{max} members').split('{n}').join(String(count)).split('{max}').join(String(max)) + (count >= max ? ' · ' + ui('Full') : '');
+        var countText = ui('{n}/{max} members', { n: count, max: max }).split('{n}').join(String(count)).split('{max}').join(String(max));
+        var fullText = count >= max ? ui('Full') : '';
         var avatar = typeof n.getGroupAvatarUrl === 'function' ? n.getGroupAvatarUrl(groupId) : '';
         var icon = avatar ? '<img src="' + esc(avatar) + '" class="group-ctx-custom-avatar" alt="" decoding="async">' : GROUP_SVG;
         return '<div class="context-menu-avatar-header group-sheet-head" data-sheet-handle>'
             + '<div class="group-ctx-icon' + (avatar ? ' has-image' : '') + '">' + icon + '</div>'
             + '<div class="context-menu-avatar-nym">' + esc((typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || 'Group'))) + '</div>'
-            + '<div class="ctx-status-row">' + esc(countText) + '</div>'
+            + '<div class="ctx-status-row">' + esc(countText) + (fullText ? ' · <span>' + esc(fullText) + '</span>' : '') + '</div>'
             + '</div>'
             + ((typeof n._groupDescription === 'function' ? n._groupDescription(g) : (g.description || '')) ? '<div class="context-menu-bio">' + esc((typeof n._groupDescription === 'function' ? n._groupDescription(g) : (g.description || ''))) + '</div>' : '');
     }

@@ -4438,7 +4438,7 @@ async function refreshAppCacheSize() {
     if (totalItems === 0 && sizeBytes === 0) {
         const probe = await probeAppCacheWritable();
         if (!probe.ok) {
-            el.textContent = `IndexedDB unavailable (${probe.reason}) — cache disabled in this app`;
+            el.textContent = nymUiArgs('IndexedDB unavailable ({reason}) — cache disabled in this app', { reason: probe.reason });
         } else {
             el.textContent = 'No cached data on device yet';
         }
@@ -4734,6 +4734,12 @@ function initWallpaperUI() {
 }
 
 const NYMCHAT_VERSION = 'v3.75.545';
+const NYMCHAT_BUILD = 815;
+
+function nymUiArgs(template, args) {
+    if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);
+    return String(template).replace(/\{(\w+)\}/g, (m, k) => (args && Object.prototype.hasOwnProperty.call(args, k) ? String(args[k]) : m));
+}
 
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
@@ -5433,7 +5439,7 @@ async function initializeNym() {
     } catch (error) {
         enterBtn.disabled = false;
         enterBtn.innerHTML = originalBtnText;
-        window.showAppAlert('Failed to initialize: ' + error.message);
+        window.showAppAlert(nymUiArgs('Failed to initialize: {error}', { error: error.message }));
     }
 }
 
@@ -5569,7 +5575,7 @@ async function nostrLoginWithExtension() {
 
         await finishNostrLogin('Logged in with Nostr extension.');
     } catch (err) {
-        errorEl.textContent = err.message;
+        errorEl.textContent = nymUiArgs('Login failed: {error}', { error: (err && err.message) || 'unknown error' });
         errorEl.style.display = 'block';
     } finally {
         btn.disabled = false;
@@ -5759,7 +5765,7 @@ function nostrLoginStartRemoteSigner() {
 
         _nip46OpenRelay();
     } catch (err) {
-        errorEl.textContent = 'Failed to start remote signer connection: ' + err.message;
+        errorEl.textContent = nymUiArgs('Failed to start remote signer connection: {error}', { error: err.message });
         errorEl.style.display = 'block';
         btn.disabled = false;
         btn.textContent = 'Login with Remote Signer';
@@ -5873,7 +5879,7 @@ async function _nip46HandleEvent(event) {
         if (!state.remotePubkey) {
             const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
             if (response.id && response.error) {
-                if (statusEl) statusEl.textContent = 'Remote signer rejected the connection: ' + response.error;
+                if (statusEl) statusEl.textContent = nymUiArgs('Remote signer rejected the connection: {error}', { error: response.error });
                 return;
             }
             const echoed = !!state.secret && (response.method === 'connect'
@@ -5955,9 +5961,9 @@ async function _nip46CompleteLogin(remotePubkey) {
 
         await finishNostrLogin('Logged in with remote signer (NIP-46).');
     } catch (err) {
-        if (statusEl) statusEl.textContent = 'Login failed: ' + err.message;
+        if (statusEl) statusEl.textContent = nymUiArgs('Login failed: {error}', { error: err.message });
         const errorEl = document.getElementById('nostrLoginError');
-        if (errorEl) { errorEl.textContent = 'Remote signer login failed: ' + err.message; errorEl.style.display = 'block'; }
+        if (errorEl) { errorEl.textContent = nymUiArgs('Remote signer login failed: {error}', { error: err.message }); errorEl.style.display = 'block'; }
         console.error('[NIP-46] Login failed:', err);
     }
 }
@@ -6148,7 +6154,7 @@ async function nostrLoginConnectBunker() {
         await _nip46CompleteLogin(parsed.remotePubkey);
     } catch (err) {
         if (errorEl) {
-            errorEl.textContent = 'Remote signer connection failed: ' + err.message;
+            errorEl.textContent = nymUiArgs('Remote signer connection failed: {error}', { error: err.message });
             errorEl.style.display = 'block';
         }
         if (_nip46State && !_nip46State.connected) {
@@ -6861,6 +6867,7 @@ function isValidSwipeReactEmoji(v) {
 
 async function applyNostrSettings(s, opts) {
     if (!s || typeof s !== 'object') return;
+    const lsSave = (k, v) => { try { localStorage.setItem(k, v); } catch (_) { } };
     const accepted = !!(opts && opts.accepted);
     const M = window.NymSyncMerge;
     const gate = !accepted && M && typeof M.prefGate === 'function' && typeof nym._prefStamps === 'function'
@@ -6899,89 +6906,89 @@ async function applyNostrSettings(s, opts) {
     if (s.theme && typeof s.theme === 'string') {
         nym.settings.theme = s.theme;
         nym.applyTheme(s.theme);
-        localStorage.setItem('nym_theme', s.theme);
+        lsSave('nym_theme', s.theme);
     }
 
     if (s.colorMode) {
-        localStorage.setItem('nym_color_mode', s.colorMode);
+        lsSave('nym_color_mode', s.colorMode);
         nym.applyColorMode();
     }
 
     if (s.sound) {
         nym.settings.sound = s.sound;
-        localStorage.setItem('nym_sound', s.sound);
+        lsSave('nym_sound', s.sound);
     }
 
     if (typeof s.autoscroll === 'boolean') {
         nym.settings.autoscroll = s.autoscroll;
-        localStorage.setItem('nym_autoscroll', String(s.autoscroll));
+        lsSave('nym_autoscroll', String(s.autoscroll));
     }
 
     if (typeof s.showTimestamps === 'boolean') {
         nym.settings.showTimestamps = s.showTimestamps;
-        localStorage.setItem('nym_timestamps', String(s.showTimestamps));
+        lsSave('nym_timestamps', String(s.showTimestamps));
     }
 
     if (s.timeFormat) {
         nym.settings.timeFormat = s.timeFormat;
-        localStorage.setItem('nym_time_format', s.timeFormat);
+        lsSave('nym_time_format', s.timeFormat);
     }
 
     if (s.dateFormat) {
         nym.settings.dateFormat = s.dateFormat;
-        localStorage.setItem('nym_date_format', s.dateFormat);
+        lsSave('nym_date_format', s.dateFormat);
     }
 
     if (typeof s.sortByProximity === 'boolean') {
         nym.settings.sortByProximity = s.sortByProximity;
-        localStorage.setItem('nym_sort_proximity', String(s.sortByProximity));
+        lsSave('nym_sort_proximity', String(s.sortByProximity));
     }
 
     if (typeof s.dmForwardSecrecyEnabled === 'boolean') {
         nym.settings.dmForwardSecrecyEnabled = s.dmForwardSecrecyEnabled;
-        localStorage.setItem('nym_dm_fwdsec_enabled', String(s.dmForwardSecrecyEnabled));
+        lsSave('nym_dm_fwdsec_enabled', String(s.dmForwardSecrecyEnabled));
     }
     if (s.dmTTLSeconds) {
         nym.settings.dmTTLSeconds = s.dmTTLSeconds;
-        localStorage.setItem('nym_dm_ttl_seconds', String(s.dmTTLSeconds));
+        lsSave('nym_dm_ttl_seconds', String(s.dmTTLSeconds));
     }
 
     const VALID_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'];
     if (typeof s.readReceiptsScope === 'string' && VALID_SCOPES.includes(s.readReceiptsScope)) {
         nym.settings.readReceiptsScope = s.readReceiptsScope;
         nym.settings.readReceiptsEnabled = s.readReceiptsScope !== 'disabled';
-        localStorage.setItem('nym_read_receipts_scope', s.readReceiptsScope);
-        localStorage.setItem('nym_read_receipts_enabled', String(s.readReceiptsScope !== 'disabled'));
+        lsSave('nym_read_receipts_scope', s.readReceiptsScope);
+        lsSave('nym_read_receipts_enabled', String(s.readReceiptsScope !== 'disabled'));
     } else if (typeof s.readReceiptsEnabled === 'boolean') {
         const scope = s.readReceiptsEnabled ? 'everywhere' : 'disabled';
         nym.settings.readReceiptsScope = scope;
         nym.settings.readReceiptsEnabled = s.readReceiptsEnabled;
-        localStorage.setItem('nym_read_receipts_scope', scope);
-        localStorage.setItem('nym_read_receipts_enabled', String(s.readReceiptsEnabled));
+        lsSave('nym_read_receipts_scope', scope);
+        lsSave('nym_read_receipts_enabled', String(s.readReceiptsEnabled));
     }
 
     if (typeof s.typingIndicatorsScope === 'string' && VALID_SCOPES.includes(s.typingIndicatorsScope)) {
         nym.settings.typingIndicatorsScope = s.typingIndicatorsScope;
         nym.settings.typingIndicatorsEnabled = s.typingIndicatorsScope !== 'disabled';
-        localStorage.setItem('nym_typing_indicators_scope', s.typingIndicatorsScope);
-        localStorage.setItem('nym_typing_indicators_enabled', String(s.typingIndicatorsScope !== 'disabled'));
+        lsSave('nym_typing_indicators_scope', s.typingIndicatorsScope);
+        lsSave('nym_typing_indicators_enabled', String(s.typingIndicatorsScope !== 'disabled'));
     } else if (typeof s.typingIndicatorsEnabled === 'boolean') {
         const scope = s.typingIndicatorsEnabled ? 'everywhere' : 'disabled';
         nym.settings.typingIndicatorsScope = scope;
         nym.settings.typingIndicatorsEnabled = s.typingIndicatorsEnabled;
-        localStorage.setItem('nym_typing_indicators_scope', scope);
-        localStorage.setItem('nym_typing_indicators_enabled', String(s.typingIndicatorsEnabled));
+        lsSave('nym_typing_indicators_scope', scope);
+        lsSave('nym_typing_indicators_enabled', String(s.typingIndicatorsEnabled));
     }
 
     if (typeof s.showStatus === 'boolean' || s.showStatus === 'friends') {
         nym.settings.showStatus = s.showStatus;
-        localStorage.setItem('nym_show_status', String(s.showStatus));
+        lsSave('nym_show_status', String(s.showStatus));
         if (typeof nym._syncGeoPresenceSend === 'function') nym._syncGeoPresenceSend();
     }
 
     if (typeof s.channelCounts === 'boolean') {
         nym.settings.channelCounts = s.channelCounts;
-        localStorage.setItem('nym_channel_counts', String(s.channelCounts));
+        lsSave('nym_channel_counts', String(s.channelCounts));
         const channelCountsToggle = document.getElementById('channelCountsToggle');
         if (channelCountsToggle) channelCountsToggle.checked = s.channelCounts;
         if (typeof nym._syncGeoPresenceSend === 'function') nym._syncGeoPresenceSend();
@@ -6989,25 +6996,25 @@ async function applyNostrSettings(s, opts) {
 
     if (s.nickStyle) {
         nym.settings.nickStyle = s.nickStyle;
-        localStorage.setItem('nym_nick_style', s.nickStyle);
+        lsSave('nym_nick_style', s.nickStyle);
     }
 
     const VALID_SWIPE_ACTIONS = ['quote', 'translate', 'copy', 'react', 'zap', 'slap', 'hug', 'none'];
     if (typeof s.gesturesEnabled === 'boolean') {
         nym.settings.gesturesEnabled = s.gesturesEnabled;
-        localStorage.setItem('nym_gestures_enabled', String(s.gesturesEnabled));
+        lsSave('nym_gestures_enabled', String(s.gesturesEnabled));
     }
     if (typeof s.swipeLeftAction === 'string' && VALID_SWIPE_ACTIONS.includes(s.swipeLeftAction)) {
         nym.settings.swipeLeftAction = s.swipeLeftAction;
-        localStorage.setItem('nym_swipe_left_action', s.swipeLeftAction);
+        lsSave('nym_swipe_left_action', s.swipeLeftAction);
     }
     if (typeof s.swipeRightAction === 'string' && VALID_SWIPE_ACTIONS.includes(s.swipeRightAction)) {
         nym.settings.swipeRightAction = s.swipeRightAction;
-        localStorage.setItem('nym_swipe_right_action', s.swipeRightAction);
+        lsSave('nym_swipe_right_action', s.swipeRightAction);
     }
     if (typeof s.swipeThreshold === 'number' && s.swipeThreshold >= 30 && s.swipeThreshold <= 120) {
         nym.settings.swipeThreshold = s.swipeThreshold;
-        localStorage.setItem('nym_swipe_threshold', String(s.swipeThreshold));
+        lsSave('nym_swipe_threshold', String(s.swipeThreshold));
     }
     if (Array.isArray(s.hoverActions) && window.NymMessageActions) setHoverActions(s.hoverActions);
     if (isValidSwipeReactEmoji(s.swipeReactEmoji)) {
@@ -7015,22 +7022,22 @@ async function applyNostrSettings(s, opts) {
         const localTs = parseInt(localStorage.getItem('nym_swipe_react_emoji_ts') || '0', 10) || 0;
         if (remoteTs >= localTs) {
             nym.settings.swipeReactEmoji = s.swipeReactEmoji;
-            localStorage.setItem('nym_swipe_react_emoji', s.swipeReactEmoji);
-            localStorage.setItem('nym_swipe_react_emoji_ts', String(remoteTs));
+            lsSave('nym_swipe_react_emoji', s.swipeReactEmoji);
+            lsSave('nym_swipe_react_emoji_ts', String(remoteTs));
         } else if (s.swipeReactEmoji !== nym.settings.swipeReactEmoji) {
             setTimeout(() => { if (typeof nym.saveSyncedSettings === 'function') nym.saveSyncedSettings(); }, 1000);
         }
     }
 
     if (s.wallpaperCustomUrl) {
-        localStorage.setItem('nym_wallpaper_custom_url', s.wallpaperCustomUrl);
+        lsSave('nym_wallpaper_custom_url', s.wallpaperCustomUrl);
     }
     if (s.wallpaperType) {
         const prevType = localStorage.getItem('nym_wallpaper_type') || '';
         const prevUrl = localStorage.getItem('nym_wallpaper_custom_url') || '';
         const sameAsCurrent = prevType === s.wallpaperType
             && (s.wallpaperType !== 'custom' || prevUrl === (s.wallpaperCustomUrl || ''));
-        localStorage.setItem('nym_wallpaper_type', s.wallpaperType);
+        lsSave('nym_wallpaper_type', s.wallpaperType);
         if (s.wallpaperType === 'custom' && s.wallpaperCustomUrl) {
             if (!sameAsCurrent || !nym.wallpaperBlobUrl) {
                 nym.applyWallpaper('custom', s.wallpaperCustomUrl);
@@ -7044,7 +7051,7 @@ async function applyNostrSettings(s, opts) {
 
     if (s.chatLayout) {
         nym.settings.chatLayout = s.chatLayout;
-        localStorage.setItem('nym_chat_layout', s.chatLayout);
+        lsSave('nym_chat_layout', s.chatLayout);
         if (typeof applyMessageLayout === 'function') {
             applyMessageLayout(s.chatLayout);
         }
@@ -7058,7 +7065,7 @@ async function applyNostrSettings(s, opts) {
     if (typeof s.threadsEnabled === 'boolean') {
         const prevThreads = nym.settings.threadsEnabled !== false;
         nym.settings.threadsEnabled = s.threadsEnabled;
-        localStorage.setItem('nym_threads_enabled', String(s.threadsEnabled));
+        lsSave('nym_threads_enabled', String(s.threadsEnabled));
         const threadsToggle = document.getElementById('threadsToggle');
         if (threadsToggle) threadsToggle.checked = s.threadsEnabled;
         if (prevThreads !== s.threadsEnabled && typeof nym.applyThreadsEnabled === 'function') {
@@ -7068,7 +7075,7 @@ async function applyNostrSettings(s, opts) {
 
     if (s.chatViewMode === 'single' || s.chatViewMode === 'columns') {
         nym.settings.chatViewMode = s.chatViewMode;
-        localStorage.setItem('nym_chat_view_mode', s.chatViewMode);
+        lsSave('nym_chat_view_mode', s.chatViewMode);
         document.querySelectorAll('.view-option').forEach(opt => {
             opt.classList.toggle('selected', opt.dataset.view === s.chatViewMode);
         });
@@ -7076,19 +7083,19 @@ async function applyNostrSettings(s, opts) {
     }
 
     if (s.lightningAddress) {
-        localStorage.setItem('nym_lightning_address_global', s.lightningAddress);
+        lsSave('nym_lightning_address_global', s.lightningAddress);
         nym.lightningAddress = s.lightningAddress;
     }
 
     if (typeof s.powDifficulty === 'number') {
         nym.powDifficulty = s.powDifficulty;
         nym.enablePow = normalizePowDifficulty(s.powDifficulty) > 0;
-        localStorage.setItem('nym_pow_difficulty', String(s.powDifficulty));
+        lsSave('nym_pow_difficulty', String(s.powDifficulty));
     }
 
     if (typeof s.appVerifiedFilter === 'string') {
         nym.appVerifiedFilter = normalizeAppVerifiedFilter(s.appVerifiedFilter);
-        localStorage.setItem('nym_app_verified_filter', nym.appVerifiedFilter);
+        lsSave('nym_app_verified_filter', nym.appVerifiedFilter);
     }
 
     if (Array.isArray(s.filterPacks)) {
@@ -7098,15 +7105,15 @@ async function applyNostrSettings(s, opts) {
 
     if (typeof s.hideNonPinned === 'boolean') {
         nym.hideNonPinned = s.hideNonPinned;
-        localStorage.setItem('nym_hide_non_pinned', String(s.hideNonPinned));
+        lsSave('nym_hide_non_pinned', String(s.hideNonPinned));
     }
 
     // Supports boolean or 'friends'.
     if (typeof s.blurOthersImages === 'boolean' || s.blurOthersImages === 'friends') {
         nym.blurOthersImages = s.blurOthersImages;
-        localStorage.setItem('nym_image_blur', String(s.blurOthersImages));
+        lsSave('nym_image_blur', String(s.blurOthersImages));
         if (nym.pubkey) {
-            localStorage.setItem(`nym_image_blur_${nym.pubkey}`, String(s.blurOthersImages));
+            lsSave(`nym_image_blur_${nym.pubkey}`, String(s.blurOthersImages));
         }
     }
 
@@ -7116,24 +7123,24 @@ async function applyNostrSettings(s, opts) {
             : s.pinnedLandingChannel;
         nym.pinnedLandingChannel = landing;
         nym.settings.pinnedLandingChannel = landing;
-        localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(landing));
+        lsSave('nym_pinned_landing_channel', JSON.stringify(landing));
     }
 
     if (typeof s.textSize === 'number' && s.textSize >= 12 && s.textSize <= 28) {
         nym.settings.textSize = s.textSize;
-        localStorage.setItem('nym_text_size', String(s.textSize));
+        lsSave('nym_text_size', String(s.textSize));
         document.documentElement.style.setProperty('--user-text-size', s.textSize + 'px');
     }
 
     if (typeof s.transparencyEnabled === 'boolean') {
         nym.settings.transparencyEnabled = s.transparencyEnabled;
-        localStorage.setItem('nym_transparency_enabled', String(s.transparencyEnabled));
+        lsSave('nym_transparency_enabled', String(s.transparencyEnabled));
         applyTransparency(s.transparencyEnabled);
     }
 
     if (typeof s.columnsWallpaper === 'boolean') {
         nym.settings.columnsWallpaper = s.columnsWallpaper;
-        localStorage.setItem('nym_columns_wallpaper', String(s.columnsWallpaper));
+        lsSave('nym_columns_wallpaper', String(s.columnsWallpaper));
         const cwToggle = document.getElementById('columnsWallpaperToggle');
         if (cwToggle) cwToggle.checked = s.columnsWallpaper;
         applyColumnsWallpaper(s.columnsWallpaper);
@@ -7141,14 +7148,14 @@ async function applyNostrSettings(s, opts) {
 
     if (typeof s.lowDataMode === 'boolean') {
         nym.settings.lowDataMode = s.lowDataMode;
-        localStorage.setItem('nym_low_data_mode', String(s.lowDataMode));
+        lsSave('nym_low_data_mode', String(s.lowDataMode));
     }
 
     // Only apply navigation side effects when the mode actually changes; settings sync is async.
     if (typeof s.groupChatPMOnlyMode === 'boolean') {
         const changed = nym.settings.groupChatPMOnlyMode !== s.groupChatPMOnlyMode;
         nym.settings.groupChatPMOnlyMode = s.groupChatPMOnlyMode;
-        localStorage.setItem('nym_groupchat_pm_only_mode', String(s.groupChatPMOnlyMode));
+        lsSave('nym_groupchat_pm_only_mode', String(s.groupChatPMOnlyMode));
         if (changed) {
             nym.applyGroupChatPMOnlyMode(s.groupChatPMOnlyMode);
         }
@@ -7156,7 +7163,7 @@ async function applyNostrSettings(s, opts) {
 
     if (Array.isArray(s.pinnedChannels)) {
         nym.pinnedChannels = new Set(s.pinnedChannels);
-        localStorage.setItem('nym_pinned_channels', JSON.stringify(s.pinnedChannels));
+        lsSave('nym_pinned_channels', JSON.stringify(s.pinnedChannels));
         if (typeof nym._pinAfterLegacyChange === 'function') {
             try { nym._pinAfterLegacyChange(); } catch (_) { }
         }
@@ -7166,7 +7173,7 @@ async function applyNostrSettings(s, opts) {
     if (Array.isArray(s.blockedChannels)) {
         const blockedBefore = new Set(nym.blockedChannels || []);
         nym.blockedChannels = new Set(s.blockedChannels);
-        localStorage.setItem('nym_blocked_channels', JSON.stringify(s.blockedChannels));
+        lsSave('nym_blocked_channels', JSON.stringify(s.blockedChannels));
         if (typeof nym._applySyncedChannelBlocks === 'function') nym._applySyncedChannelBlocks(blockedBefore);
         filtersSynced = true;
     }
@@ -7184,8 +7191,8 @@ async function applyNostrSettings(s, opts) {
         if (typeof nym._withBulkChannelAdd === 'function') nym._withBulkChannelAdd(addJoined);
         else addJoined();
 
-        localStorage.setItem('nym_user_joined_channels', JSON.stringify(joined));
-        localStorage.setItem('nym_user_channels', JSON.stringify(
+        lsSave('nym_user_joined_channels', JSON.stringify(joined));
+        lsSave('nym_user_channels', JSON.stringify(
             joined.map(key => ({
                 key: key,
                 channel: key,
@@ -7196,7 +7203,7 @@ async function applyNostrSettings(s, opts) {
 
     if (Array.isArray(s.hiddenChannels)) {
         nym.hiddenChannels = new Set(s.hiddenChannels);
-        localStorage.setItem('nym_hidden_channels', JSON.stringify(s.hiddenChannels));
+        lsSave('nym_hidden_channels', JSON.stringify(s.hiddenChannels));
         if (typeof nym.applyHiddenChannels === 'function') {
             nym.applyHiddenChannels();
         }
@@ -7206,7 +7213,7 @@ async function applyNostrSettings(s, opts) {
     if (Array.isArray(s.blockedUsers)) {
         const usersBefore = new Set(nym.blockedUsers || []);
         nym.blockedUsers = new Set(s.blockedUsers);
-        localStorage.setItem('nym_blocked', JSON.stringify(s.blockedUsers));
+        lsSave('nym_blocked', JSON.stringify(s.blockedUsers));
         for (const pk of nym.blockedUsers) {
             if (!usersBefore.has(pk) && typeof nym.hideMessagesFromBlockedUser === 'function') nym.hideMessagesFromBlockedUser(pk);
         }
@@ -7218,7 +7225,7 @@ async function applyNostrSettings(s, opts) {
 
     if (Array.isArray(s.friends)) {
         nym.friends = new Set(s.friends);
-        localStorage.setItem('nym_friends', JSON.stringify(s.friends));
+        lsSave('nym_friends', JSON.stringify(s.friends));
         if (typeof nym.reapplyImageBlur === 'function') nym.reapplyImageBlur();
         if (typeof nym.updateFriendsList === 'function') nym.updateFriendsList();
         nym._userListSig = '';
@@ -7227,12 +7234,12 @@ async function applyNostrSettings(s, opts) {
 
     if (s.acceptPMs) {
         nym.settings.acceptPMs = s.acceptPMs;
-        localStorage.setItem('nym_accept_pms', s.acceptPMs);
+        lsSave('nym_accept_pms', s.acceptPMs);
     }
 
     if (s.acceptCalls) {
         nym.settings.acceptCalls = s.acceptCalls;
-        localStorage.setItem('nym_accept_calls', s.acceptCalls);
+        lsSave('nym_accept_calls', s.acceptCalls);
         const acceptCallsSel = document.getElementById('acceptCallsSelect');
         if (acceptCallsSel) acceptCallsSel.value = s.acceptCalls;
     }
@@ -7243,7 +7250,7 @@ async function applyNostrSettings(s, opts) {
 
     if (Array.isArray(s.blockedKeywords)) {
         nym.blockedKeywords = new Set(s.blockedKeywords);
-        localStorage.setItem('nym_blocked_keywords', JSON.stringify(s.blockedKeywords));
+        lsSave('nym_blocked_keywords', JSON.stringify(s.blockedKeywords));
         if (typeof nym._hideRenderedKeywordMatches === 'function') nym._hideRenderedKeywordMatches();
         filtersSynced = true;
     }
@@ -7255,13 +7262,13 @@ async function applyNostrSettings(s, opts) {
 
     if (typeof s.translateLanguage === 'string') {
         nym.settings.translateLanguage = s.translateLanguage;
-        localStorage.setItem('nym_translate_language', s.translateLanguage);
+        lsSave('nym_translate_language', s.translateLanguage);
         if (typeof nym.populateTranslateLanguageSelect === 'function') nym.populateTranslateLanguageSelect();
     }
 
     if (Array.isArray(s.translateFavoriteLanguages)) {
         nym._translateFavorites = s.translateFavoriteLanguages.slice();
-        localStorage.setItem('nym_translate_favorites', JSON.stringify(nym._translateFavorites));
+        lsSave('nym_translate_favorites', JSON.stringify(nym._translateFavorites));
         if (typeof nym._renderTranslateDropdownList === 'function') nym._renderTranslateDropdownList();
     }
 
@@ -7278,7 +7285,7 @@ async function applyNostrSettings(s, opts) {
 
     if (Array.isArray(s.emojiPackFavorites)) {
         nym._emojiPackFavorites = s.emojiPackFavorites.filter(k => typeof k === 'string');
-        localStorage.setItem('nym_emoji_pack_favorites', JSON.stringify(nym._emojiPackFavorites));
+        lsSave('nym_emoji_pack_favorites', JSON.stringify(nym._emojiPackFavorites));
     }
 
     // Merge so an empty or stale remote list can't wipe local picks.
@@ -7295,7 +7302,7 @@ async function applyNostrSettings(s, opts) {
             merged.push(g);
         }
         nym._favoriteGifs = merged.slice(0, 100);
-        localStorage.setItem('nym_favorite_gifs', JSON.stringify(nym._favoriteGifs));
+        lsSave('nym_favorite_gifs', JSON.stringify(nym._favoriteGifs));
     }
 
     // Replace with the remote set so an unfavorite propagates.
@@ -7303,7 +7310,7 @@ async function applyNostrSettings(s, opts) {
         const allCats = nym.allEmojis ? new Set(Object.keys(nym.allEmojis)) : null;
         nym._defaultCategoryFavorites = s.emojiCategoryFavorites
             .filter(c => typeof c === 'string' && (!allCats || allCats.has(c)));
-        localStorage.setItem('nym_emoji_category_favorites', JSON.stringify(nym._defaultCategoryFavorites));
+        lsSave('nym_emoji_category_favorites', JSON.stringify(nym._defaultCategoryFavorites));
     }
 
     if (Array.isArray(s.recentEmojis) && s.recentEmojis.length > 0) {
@@ -7318,7 +7325,7 @@ async function applyNostrSettings(s, opts) {
     if (typeof s.cachePMs === 'boolean') {
         const wasOn = nym.settings.cachePMs !== false;
         nym.settings.cachePMs = s.cachePMs;
-        localStorage.setItem('nym_cache_pms', String(s.cachePMs));
+        lsSave('nym_cache_pms', String(s.cachePMs));
         if (wasOn && !s.cachePMs && typeof nym.clearPMCache === 'function') {
             nym.clearPMCache().catch(() => { });
         }
@@ -7326,25 +7333,25 @@ async function applyNostrSettings(s, opts) {
 
     if (typeof s.syncMLSHistory === 'boolean') {
         nym.settings.syncMLSHistory = s.syncMLSHistory;
-        localStorage.setItem('nym_sync_mls_history', String(s.syncMLSHistory));
+        lsSave('nym_sync_mls_history', String(s.syncMLSHistory));
     }
 
     if (typeof s.notificationsEnabled === 'boolean') {
         nym.notificationsEnabled = s.notificationsEnabled;
-        localStorage.setItem('nym_notifications_enabled', String(s.notificationsEnabled));
+        lsSave('nym_notifications_enabled', String(s.notificationsEnabled));
         if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
     }
     if (typeof s.groupNotifyMentionsOnly === 'boolean') {
         nym.groupNotifyMentionsOnly = s.groupNotifyMentionsOnly;
-        localStorage.setItem('nym_group_notify_mentions_only', String(s.groupNotifyMentionsOnly));
+        lsSave('nym_group_notify_mentions_only', String(s.groupNotifyMentionsOnly));
     }
     if (typeof s.threadNotifyMentionsOnly === 'boolean') {
         nym.threadNotifyMentionsOnly = s.threadNotifyMentionsOnly;
-        localStorage.setItem('nym_thread_notify_mentions_only', String(s.threadNotifyMentionsOnly));
+        lsSave('nym_thread_notify_mentions_only', String(s.threadNotifyMentionsOnly));
     }
     if (typeof s.notifyFriendsOnly === 'boolean') {
         nym.notifyFriendsOnly = s.notifyFriendsOnly;
-        localStorage.setItem('nym_notify_friends_only', String(s.notifyFriendsOnly));
+        lsSave('nym_notify_friends_only', String(s.notifyFriendsOnly));
         if (typeof nym._contentFiltersChanged === 'function') nym._contentFiltersChanged();
     }
     if (s.eventToasts && typeof s.eventToasts === 'object' && typeof nym.applyEventToastSettings === 'function') {
@@ -7354,13 +7361,13 @@ async function applyNostrSettings(s, opts) {
     // Take the later of local vs relay.
     if (typeof s.notificationLastReadTime === 'number' && s.notificationLastReadTime > nym.notificationLastReadTime) {
         nym.notificationLastReadTime = s.notificationLastReadTime;
-        localStorage.setItem('nym_notification_last_read', String(s.notificationLastReadTime));
+        lsSave('nym_notification_last_read', String(s.notificationLastReadTime));
         nym._updateNotificationBadge();
     }
 
     if (Array.isArray(s.closedPMs)) {
         for (const pk of s.closedPMs) nym.closedPMs.add(pk);
-        localStorage.setItem('nym_closed_pms', JSON.stringify([...nym.closedPMs]));
+        lsSave('nym_closed_pms', JSON.stringify([...nym.closedPMs]));
     }
     if (s.closedPMTimes && typeof s.closedPMTimes === 'object') {
         if (!nym.closedPMTimes) nym.closedPMTimes = new Map();
@@ -7484,7 +7491,7 @@ async function applyNostrSettings(s, opts) {
     if (typeof s.botAnonEnabled === 'boolean') {
         try {
             nym._botAnonOn = s.botAnonEnabled;
-            localStorage.setItem('nym_botanon_enabled', s.botAnonEnabled ? 'true' : 'false');
+            lsSave('nym_botanon_enabled', s.botAnonEnabled ? 'true' : 'false');
         } catch (_) { }
     }
 

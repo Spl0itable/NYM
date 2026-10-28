@@ -35,6 +35,7 @@ import '../features/messages/spam_filter.dart';
 import '../features/notifications/notification_routing.dart';
 import '../features/notifications/notify_view.dart';
 import '../features/nymbot/bot_runs.dart' show anchorBotReply;
+import '../features/shop/shop_purchase_policy.dart' show iosBotBuyRewrite;
 import '../features/messages/trust_graph.dart';
 import '../features/pms/last_seen.dart';
 import '../features/presence/geo_presence.dart';
@@ -1224,6 +1225,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   @override
   void dispose() {
+    _geoPresenceFlush?.cancel();
     FilterPacks.removeListener(_onFilterPacksChanged);
     _spamFilterWatchers.remove(_onFilterPacksChanged);
     super.dispose();
@@ -1422,6 +1424,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   void setAppVisible(bool visible) {
     appVisible = visible;
+    if (visible) {
+      flushGeoPresence();
+    } else {
+      _geoPresenceFlush?.cancel();
+      _geoPresenceFlush = null;
+    }
   }
 
   bool isConversationSeen(String storageKey) => _isConversationSeen(storageKey);
@@ -2189,6 +2197,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
     final m = EventMapper.channelMessage(e, selfPubkey: state.selfPubkey);
     if (m != null) {
+      _iosBotReply(m);
       final asker = botAskerOf(e);
       if (asker.isNotEmpty) m.people = asker;
     }
@@ -2295,7 +2304,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final memberKey =
         ((m.geohash?.isNotEmpty ?? false) ? m.geohash! : m.channel)
             ?.toLowerCase();
-    if (memberKey != null && memberKey.isNotEmpty) u.channels.add(memberKey);
+    if (memberKey != null && memberKey.isNotEmpty) {
+      u.channels.add(memberKey);
+      u.postedIn.add(memberKey);
+    }
 
     // Only ever raise last activity, so backfilled history can't sink busy channels.
     final hidden = state.isMessageFiltered(m);
@@ -2706,6 +2718,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   bool isKnownEventId(String id) => id.isNotEmpty && _seenIds.contains(id);
 
   bool ingestPMMessage(Message m, {bool countUnread = true}) {
+    _iosBotReply(m);
     final rawPeer = m.conversationPubkey;
     if (rawPeer == null) return false;
     // Canonical lowercase hex: the peer id is matched exactly against lowercase constants.
@@ -3061,7 +3074,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
       u.lastSeen = mergeLastSeen(
           u.lastSeen, m.timestamp, DateTime.now().millisecondsSinceEpoch);
       final memberKey = (m.channel ?? '').toLowerCase();
-      if (memberKey.isNotEmpty) u.channels.add(memberKey);
+      if (memberKey.isNotEmpty) {
+        u.channels.add(memberKey);
+        u.postedIn.add(memberKey);
+      }
     }
 
     final hidden = state.isMessageFiltered(m);
@@ -3812,6 +3828,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void notePeerActivity(String pubkey, int atMs) {
     if (pubkey.isEmpty || pubkey == state.selfPubkey) return;
     if (state.blockedUsers.contains(pubkey)) return;
+    _presenceOnly.remove(pubkey);
     final now = DateTime.now().millisecondsSinceEpoch;
     final existing = state.users[pubkey];
     final prev = existing?.lastSeen ?? 0;
@@ -3880,30 +3897,100 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
   }
 
-  final Map<String, Set<String>> _geoPresenceMembers = {};
+  bool _geoPresenceDirty = false;
+  Timer? _geoPresenceFlush;
+  final Set<String> _presenceOnly = <String>{};
+  int _presenceOnlySweptAt = 0;
+
+  @visibleForTesting
+  int get presenceOnlyCount => _presenceOnly.length;
+
+  bool get geoPresenceFlushScheduled => _geoPresenceFlush != null;
 
   void noteGeoPresence({
     required String pubkey,
     required String geohash,
     required int seenMs,
+    int channelAtMs = 0,
+    bool open = false,
+    int? nowMs,
   }) {
     final key = geohash.toLowerCase();
-    final members = _geoPresenceMembers.putIfAbsent(key, () => <String>{});
-    if (!GeoPresence.admits(members.length, members.contains(pubkey))) return;
-    members.add(pubkey);
+    final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    if (!state.users.containsKey(pubkey)) _presenceOnly.add(pubkey);
     final u = state.users.putIfAbsent(
       pubkey,
       () => User(pubkey: pubkey, nym: getNymFromPubkey('nym', pubkey)),
     );
     final before = u.lastSeen;
     final had = u.channels.contains(key);
-    u.lastSeen =
-        mergeLastSeen(u.lastSeen, seenMs, DateTime.now().millisecondsSinceEpoch);
+    final wasIn = u.seenIn(key, now);
+    u.lastSeen = mergeLastSeen(u.lastSeen, seenMs, now);
     u.channels.add(key);
-    if (before != u.lastSeen || !had) runAmbient(_scheduleEmit);
+    u.noteChannelSeen(key, channelAtMs > 0 ? channelAtMs : seenMs, now);
+    _sweepPresenceOnly(now);
+    if (before == u.lastSeen && had && wasIn) return;
+    if (open) {
+      runAmbient(_scheduleEmit);
+    } else {
+      _markGeoPresenceDirty();
+    }
   }
 
-  void clearGeoPresence() => _geoPresenceMembers.clear();
+  Set<String> _nonPresenceKeys() => <String>{
+        state.selfPubkey,
+        ...kVerifiedBotPubkeys,
+        ...state.friends,
+        ...state.blockedUsers,
+        for (final c in state.pmConversations) c.pubkey,
+        for (final g in state.groups) ...g.members,
+      };
+
+  void _sweepPresenceOnly(int now) {
+    if (_presenceOnly.isEmpty ||
+        now - _presenceOnlySweptAt < GeoPresence.wideSweepMs) {
+      return;
+    }
+    _presenceOnlySweptAt = now;
+    Set<String>? keep;
+    var removed = false;
+    for (final pk in _presenceOnly.toList()) {
+      final u = state.users[pk];
+      if (u == null) {
+        _presenceOnly.remove(pk);
+        continue;
+      }
+      keep ??= _nonPresenceKeys();
+      if (keep.contains(pk) || u.postedIn.isNotEmpty) {
+        _presenceOnly.remove(pk);
+        continue;
+      }
+      if (lastSeenIsActive(u.lastSeen, now) ||
+          u.channelSeen.values.any((at) => lastSeenIsActive(at, now))) {
+        continue;
+      }
+      _presenceOnly.remove(pk);
+      state.users.remove(pk);
+      removed = true;
+    }
+    if (removed) _markGeoPresenceDirty();
+  }
+
+  void _markGeoPresenceDirty() {
+    _geoPresenceDirty = true;
+    if (_geoPresenceFlush != null || !appVisible) return;
+    _geoPresenceFlush = Timer(
+        const Duration(milliseconds: GeoPresence.wideUiFlushMs),
+        flushGeoPresence);
+  }
+
+  void flushGeoPresence() {
+    _geoPresenceFlush?.cancel();
+    _geoPresenceFlush = null;
+    if (!_geoPresenceDirty) return;
+    _geoPresenceDirty = false;
+    runAmbient(_scheduleEmit);
+  }
 
   /// Closes a PM, stamping the close time so only a strictly newer message re-opens it.
   void closePM(String peerPubkey, {int? nowSec}) {
@@ -3918,6 +4005,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
     state.unreadCounts.remove(peerPubkey);
     state.unreadCounts.remove(PmLogic.pmStorageKey(peerPubkey));
     onClosedPmsChanged?.call();
+    _scheduleEmit();
+  }
+
+  void forgetPMThread(String peerPubkey) {
+    final key = PmLogic.pmStorageKey(peerPubkey);
+    state.pmConversations.removeWhere((c) => c.pubkey == peerPubkey);
+    state.messages.remove(key);
+    state.unreadCounts.remove(peerPubkey);
+    state.unreadCounts.remove(key);
     _scheduleEmit();
   }
 
@@ -4461,6 +4557,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
             }
           }
           m.content = newContent;
+          _iosBotReply(m);
           m.isEdited = true;
           changed = true;
         }
@@ -5049,6 +5146,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
     return key;
   }
 
+  void _iosBotReply(Message m) {
+    if (m.isOwn || !(m.isBot || m.pubkey == kNymbotPubkey)) return;
+    m.content = iosBotBuyRewrite(m.content);
+    final thinking = m.thinking;
+    if (thinking != null) m.thinking = iosBotBuyRewrite(thinking);
+  }
+
   /// Dedup-seeds, appends and re-sorts one key's cached messages; returns true if any landed; doesn't emit.
   bool _hydrateMessagesInto(String key, List<Message> msgs) {
     final list = state.messages.putIfAbsent(key, () => <Message>[]);
@@ -5058,6 +5162,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     for (final m in msgs) {
       if (m.id.isNotEmpty && !_seenIds.add(m.id)) continue;
       if (isChannelKey && !_claimCopy(m.pubkey, m.ms, m.content)) continue;
+      _iosBotReply(m);
       _seedAuthorFromStore(m);
       m.seq = _nextIngestSeq();
       list.add(m);
@@ -5655,14 +5760,25 @@ class AppStateNotifier extends StateNotifier<AppState> {
       {bool action = false,
       String? storageKey,
       List<String> people = const [],
-      List<String> names = const []}) {
+      List<String> names = const [],
+      int? createdAtMs,
+      String? id}) {
     if (content.isEmpty) return;
     final key = storageKey ?? state.view.storageKey;
     final list = state.messages.putIfAbsent(key, () => <Message>[]);
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    list.add(Message.system(content,
-        action: action, createdAtMs: nowMs, people: people, names: names)
-      ..seq = _nextLocalSeq());
+    if (id != null && list.any((m) => m.id == id)) return;
+    final ms = createdAtMs ?? DateTime.now().millisecondsSinceEpoch;
+    final row = Message.system(content,
+        action: action, createdAtMs: ms, people: people, names: names, id: id)
+      ..seq = _nextLocalSeq();
+    final at = createdAtMs == null
+        ? -1
+        : list.indexWhere((m) => m.timestamp > ms);
+    if (at < 0) {
+      list.add(row);
+    } else {
+      list.insert(at, row);
+    }
     _scheduleEmit();
   }
 
@@ -7518,7 +7634,6 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     _hydrate();
   }
 
-  /// Shortcodes learned from message or reaction tags, oldest first.
   final Set<String> _tagged = <String>{};
 
   final Set<String> _asked = <String>{};
@@ -7527,13 +7642,11 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
   int _askAt = 0;
   void Function()? _onLookup;
 
-  /// Runs a forced D1 emoji read; set by the controller once storage is reachable.
   set onLookup(void Function()? f) {
     _onLookup = f;
     if (f != null && _askPending && _askTimer == null) _scheduleAsk();
   }
 
-  /// Asks D1 once for a rendered shortcode whose image is unknown (each code once, at most once a minute).
   void noteMissing(String code) {
     if (!_kEmojiShortcodeRx.hasMatch(code) ||
         !RegExp(r'[a-zA-Z_]').hasMatch(code)) {

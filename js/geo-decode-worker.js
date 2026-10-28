@@ -1,10 +1,15 @@
-importScripts('/js/geo-decode.js');
+importScripts('/js/geo-decode.js', '/js/modules/geo-places.js');
 
 self.onmessage = (e) => {
     const d = e.data || {};
     const seq = d.seq;
     (async () => {
         try {
+            if (d.kind === 'places') {
+                const pack = await self.NymGeoPlaces.fetchPack(d.url);
+                self.postMessage({ seq, features: pack }, self.NymGeoPlaces.transferList(pack));
+                return;
+            }
             const resp = await fetch(d.url, { cache: 'force-cache' });
             if (!resp || !resp.ok) { self.postMessage({ seq, features: [] }); return; }
             const json = await resp.json();

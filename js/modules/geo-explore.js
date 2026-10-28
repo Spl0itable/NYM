@@ -2,7 +2,7 @@
     const G = (typeof self !== 'undefined' ? self : window);
 
     const BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
-    const WINDOW_OPTIONS = Object.freeze([1, 24, 168]);
+    const WINDOW_OPTIONS = Object.freeze([1, 12, 24]);
     const CLUSTER_CELL_PX = 48;
     const CLUSTER_GRID_ZOOM = 4;
     const CLUSTER_SEED_PX = 6;
@@ -601,6 +601,116 @@
         return { x0, y0, x1, y1, flipped };
     }
 
+    const STREET = Object.freeze({ drawZv: 13.5, fetchZv: 14, maxCells: 6, cellsPerMinute: 12, concurrent: 2, settleMs: 400, unavailableRetryMs: 600000, tooLargeRetryMs: 86400000, cacheTtlMs: 2592000000, pwaCacheBytes: 50331648, flutterCacheBytes: 100663296 });
+    const LINE_LABEL = Object.freeze({ endPad: 8, maxTurnDeg: 20, edgePad: 4, repeatPx: 256, maxLabels: 40 });
+    const P5_DEG = 360 / 8192;
+    const MERC_MAX_LAT = 85.0511287798066;
+    const PLAN_MAX_LAT = 85.0511287798;
+
+    function zvOf(pxPerDeg) { return Math.log2(pxPerDeg * 360 / 256); }
+
+    function mercY(lat) { const r = lat * Math.PI / 180; return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2; }
+
+    function cellTiles(geohash, zmin, zmax) {
+        const b = cellBounds(geohash);
+        const out = [];
+        if (!b) return out;
+        const s = Math.max(b.latLo, -MERC_MAX_LAT), n = Math.min(b.latHi, MERC_MAX_LAT);
+        if (s >= n) return out;
+        for (let z = zmin; z <= zmax; z++) {
+            const N = 2 ** z;
+            const x0 = Math.floor((b.lngLo + 180) / 360 * N), x1 = Math.ceil((b.lngHi + 180) / 360 * N) - 1;
+            const y0 = Math.max(0, Math.floor(mercY(n) * N)), y1 = Math.min(N - 1, Math.ceil(mercY(s) * N) - 1);
+            for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) out.push([z, x, y]);
+        }
+        return out;
+    }
+
+    function planCells(v) {
+        const zv = zvOf(v.pxPerDeg);
+        const out = { zv: Math.round(zv * 1e6) / 1e6, draw: zv >= STREET.drawZv, fetch: zv >= STREET.fetchZv, cells: [] };
+        if (!out.draw) return out;
+        const hw = v.width / 2 / v.pxPerDeg, hh = v.height / 2 / v.pxPerDeg;
+        const w = Math.max(-180, v.cx - hw), e = Math.min(180, v.cx + hw);
+        const s = Math.max(-PLAN_MAX_LAT, v.cy - hh), n = Math.min(PLAN_MAX_LAT, v.cy + hh);
+        if (w >= e || s >= n) return out;
+        const c0 = Math.floor((w + 180) / P5_DEG), c1 = Math.ceil((e + 180) / P5_DEG) - 1;
+        const r0 = Math.floor((s + 90) / P5_DEG), r1 = Math.ceil((n + 90) / P5_DEG) - 1;
+        const list = [];
+        for (let r = r0; r <= r1; r++) {
+            for (let c = c0; c <= c1; c++) {
+                const lat = -90 + (r + 0.5) * P5_DEG, lng = -180 + (c + 0.5) * P5_DEG;
+                list.push({ d: (lat - v.cy) ** 2 + (lng - v.cx) ** 2, gh: encodeGeohash(lat, lng, 5) });
+            }
+        }
+        list.sort((a, b) => a.d - b.d || cmp(a.gh, b.gh));
+        out.visible = list.length;
+        out.cells = list.slice(0, STREET.maxCells).map((x) => x.gh);
+        return out;
+    }
+
+    function tileZoomFor(zv, available) {
+        const a = available.slice().sort((x, y) => x - y);
+        let pick = null;
+        for (const z of a) if (z <= zv + 0.25) pick = z;
+        return pick === null ? (a.length ? a[0] : null) : pick;
+    }
+
+    function turnAbs(a, b) {
+        let d = b - a;
+        while (d > Math.PI) d -= 2 * Math.PI;
+        while (d < -Math.PI) d += 2 * Math.PI;
+        return Math.abs(d);
+    }
+
+    function lineLabel(pts, textW, textH, o) {
+        const lim = LINE_LABEL.maxTurnDeg * Math.PI / 180, need = textW + 2 * LINE_LABEL.endPad, pad = LINE_LABEL.edgePad;
+        const n = pts.length / 2;
+        let best = null, i = 0;
+        while (i < n - 1) {
+            const dx0 = pts[2 * i + 2] - pts[2 * i], dy0 = pts[2 * i + 3] - pts[2 * i + 1];
+            if (dx0 === 0 && dy0 === 0) { i++; continue; }
+            const a0 = Math.atan2(dy0, dx0);
+            let j = i + 1;
+            while (j < n - 1) {
+                const dx = pts[2 * j + 2] - pts[2 * j], dy = pts[2 * j + 3] - pts[2 * j + 1];
+                if (dx === 0 && dy === 0) { j++; continue; }
+                if (turnAbs(a0, Math.atan2(dy, dx)) > lim) break;
+                j++;
+            }
+            const x0 = pts[2 * i], y0 = pts[2 * i + 1], x1 = pts[2 * j], y1 = pts[2 * j + 1];
+            const len = Math.hypot(x1 - x0, y1 - y0), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+            if (len >= need && cx >= pad && cx <= o.width - pad && cy >= pad && cy <= o.height - pad && (!best || len > best.len)) best = { len, cx, cy, dx: x1 - x0, dy: y1 - y0 };
+            i = j;
+        }
+        if (!best) return null;
+        let a = Math.atan2(best.dy, best.dx);
+        if (a > Math.PI / 2) a -= Math.PI;
+        else if (a <= -Math.PI / 2) a += Math.PI;
+        const k = Math.max(1, Math.ceil(textW / textH)), boxes = [], c = Math.cos(a), s = Math.sin(a), half = textH / 2;
+        for (let q = 0; q < k; q++) {
+            const t = k === 1 ? 0 : -textW / 2 + half + q * (textW - textH) / (k - 1);
+            const bx = best.cx + c * t, by = best.cy + s * t;
+            boxes.push({ x0: bx - half, y0: by - half, x1: bx + half, y1: by + half });
+        }
+        return { x: best.cx, y: best.cy, angle: a, boxes, len: best.len };
+    }
+
+    function placeLineLabels(cands, blocked, pad) {
+        const pd = typeof pad === 'number' ? pad : 2, placed = (blocked || []).slice(), out = [], seen = [];
+        const hit = (b) => placed.some((o) => b.x0 - pd < o.x1 && o.x0 < b.x1 + pd && b.y0 - pd < o.y1 && o.y0 < b.y1 + pd);
+        for (let i = 0; i < cands.length && out.length < LINE_LABEL.maxLabels; i++) {
+            const c = cands[i];
+            if (!c) continue;
+            if (seen.some((x) => x.name === c.name && Math.hypot(x.x - c.x, x.y - c.y) < LINE_LABEL.repeatPx)) continue;
+            if (c.boxes.some(hit)) continue;
+            for (const b of c.boxes) placed.push(b);
+            seen.push({ name: c.name, x: c.x, y: c.y });
+            out.push(i);
+        }
+        return out;
+    }
+
     G.NymGeoExplore = Object.freeze({
         BASE32, WINDOW_OPTIONS, CLUSTER_CELL_PX, CLUSTER_GRID_ZOOM, CLUSTER_SEED_PX, CLUSTER_GAP_PX, CLUSTER_ZOOM_STEPS, MAX_ZOOM, GRID_AUTO_PX_PER_DEG,
         PULSE_WINDOW_MS, ONLINE_WINDOW_SEC, clusterZoomStep, clusterSplitZoom, deepGrid, GRID_LABEL_DX, GRID_LABEL_DY, gridCornerLabel,
@@ -609,5 +719,6 @@
         rankPlaces, buildPlaceIndex, buildSearchResults, roomPlaceLabel, formatLength, cellSizeMeters, precisionSteps, haversineKm, formatDistanceKm,
         rankActive, rankNearby, clusterChannels, clusterRadius, isRecent, normalizeWindowHours, summarizePeek, peekCapped, peekCountLabel, PEEK_FETCH_CAP,
         MAX_DPR, TIER_PX_PER_DEG, LABEL_PAD, capDpr, tierFor, cityRankCutoff, placeLabels, fitLabelBox,
+        STREET, LINE_LABEL, zvOf, cellTiles, planCells, tileZoomFor, lineLabel, placeLineLabels,
     });
 })();

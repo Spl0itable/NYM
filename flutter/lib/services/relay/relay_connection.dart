@@ -56,15 +56,37 @@ class RelayConnection {
     this.publishTimeout = const Duration(seconds: 10),
     Duration? backoffBase,
     Duration? backoffCap,
+    this.via,
+    this.openFrame,
+    DateTime Function()? now,
   })  : _rng = random ?? Random(),
+        _now = now ?? DateTime.now,
         _backoffBase = backoffBase ?? const Duration(milliseconds: 1000),
         _backoffCap = backoffCap ?? const Duration(milliseconds: 30000),
         isAppRelay = url == RelayConfig.appRelay;
 
+  RelayConnection.viaPool(
+    String url,
+    String via, {
+    WebSocketChannelFactory channelFactory = defaultRelayChannelFactory,
+  }) : this(url,
+            channelFactory: channelFactory,
+            via: via,
+            openFrame: jsonEncode(<dynamic>[
+              'RELAYS',
+              {
+                'relays': [url],
+                'dmRelays': [url]
+              }
+            ]));
+
   final String url;
+  final String? via;
+  final String? openFrame;
   final bool isAppRelay;
   final WebSocketChannelFactory _channelFactory;
   final Random _rng;
+  final DateTime Function() _now;
   final Duration publishTimeout;
   final Duration _backoffBase;
   final Duration _backoffCap;
@@ -119,10 +141,127 @@ class RelayConnection {
     _openSocket();
   }
 
+  bool _held = false;
+
+  void hold() {
+    _held = true;
+    _confirmTimer?.cancel();
+    _confirmTimer = null;
+    _aliveTimer?.cancel();
+    _aliveTimer = null;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+  }
+
+  void reconnectNow() {
+    if (_closedByUser || _held) return;
+    _reconnectAttempt = 0;
+    retryNow();
+  }
+
+  void retryNow() {
+    if (_closedByUser ||
+        _held ||
+        _status == RelayStatus.connecting ||
+        _status == RelayStatus.connected) {
+      return;
+    }
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _openSocket();
+  }
+
+  int _frames = 0;
+  Timer? _aliveTimer;
+
+  void checkAlive(Duration limit) {
+    final ch = _channel;
+    if (_closedByUser ||
+        _held ||
+        ch == null ||
+        _status != RelayStatus.connected ||
+        _aliveTimer != null ||
+        _openedThisWake()) {
+      return;
+    }
+    final before = _frames;
+    final hex = StringBuffer();
+    for (var i = 0; i < 32; i++) {
+      hex.write(_rng.nextInt(256).toRadixString(16).padLeft(2, '0'));
+    }
+    final target = hex.toString();
+    final id = 'nym-live-${target.substring(0, 12)}';
+    _send(jsonEncode(<dynamic>[
+      'REQ',
+      id,
+      {
+        'ids': [target],
+        'limit': 1,
+      }
+    ]));
+    _aliveTimer = Timer(limit, () {
+      _aliveTimer = null;
+      if (_closedByUser || _held || !identical(_channel, ch)) return;
+      if (_frames != before) {
+        _send(jsonEncode(<dynamic>['CLOSE', id]));
+        return;
+      }
+      _dropSocket(ch);
+      _reconnectAttempt = 0;
+      _openSocket();
+    });
+  }
+
+  static const Duration confirmTimeout = Duration(seconds: 12);
+  static const Duration confirmProbeTimeout = Duration(seconds: 3);
+  Timer? _confirmTimer;
+
+  int _framesAtOpen = 0;
+  DateTime? _openedAt;
+
+  bool _openedThisWake() {
+    final at = _openedAt;
+    if (_confirmTimer == null || _frames != _framesAtOpen || at == null) {
+      return false;
+    }
+    final age = _now().difference(at);
+    return !age.isNegative && age < confirmTimeout;
+  }
+
+  void _armConfirm(WebSocketChannel ch) {
+    _confirmTimer?.cancel();
+    final before = _frames;
+    _framesAtOpen = before;
+    _openedAt = _now();
+    _confirmTimer = Timer(confirmTimeout, () {
+      _confirmTimer = null;
+      if (_closedByUser ||
+          _held ||
+          !identical(_channel, ch) ||
+          _frames != before) {
+        return;
+      }
+      if (_activeSubs.isEmpty) {
+        checkAlive(confirmProbeTimeout);
+        return;
+      }
+      _dropSocket(ch);
+      _scheduleReconnect();
+    });
+  }
+
+  void _dropSocket(WebSocketChannel ch) {
+    _cleanupSocket();
+    try {
+      unawaited(ch.sink.close().then((_) {}, onError: (Object _) {}));
+    } catch (_) {}
+    _setStatus(RelayStatus.disconnected);
+  }
+
   void _openSocket() {
     _setStatus(RelayStatus.connecting);
     try {
-      final channel = _channelFactory(Uri.parse(url));
+      final channel = _channelFactory(Uri.parse(via ?? url));
       _channel = channel;
       _socketSub = channel.stream.listen(
         _onData,
@@ -132,7 +271,10 @@ class RelayConnection {
       );
       // Treat listen as connected, but reset backoff only on the first frame: listen succeeds even for dead relays.
       _setStatus(RelayStatus.connected);
+      final open = openFrame;
+      if (open != null) _send(open);
       _resendActiveSubs();
+      _armConfirm(channel);
     } catch (e) {
       _onError(e);
     }
@@ -140,6 +282,7 @@ class RelayConnection {
 
   void _onData(dynamic data) {
     lastMessageAt = DateTime.now();
+    _frames++;
     // Only the first real frame proves the socket connected, so reset backoff here.
     _reconnectAttempt = 0;
     // Count inbound UTF-8 byte length, as the PWA's relayStats does.
@@ -196,13 +339,15 @@ class RelayConnection {
   }
 
   void _cleanupSocket() {
+    _confirmTimer?.cancel();
+    _confirmTimer = null;
     _socketSub?.cancel();
     _socketSub = null;
     _channel = null;
   }
 
   void _scheduleReconnect() {
-    if (_closedByUser) return;
+    if (_closedByUser || _held) return;
     if (!isAppRelay && _reconnectAttempt >= maxReconnectAttempts) {
       _setStatus(RelayStatus.failed);
       return;
@@ -216,7 +361,7 @@ class RelayConnection {
     final delay = applyJitter(base, _rng);
     _reconnectAttempt++;
     _reconnectTimer = Timer(delay, () {
-      if (_closedByUser) return;
+      if (_closedByUser || _held) return;
       _openSocket();
     });
   }
@@ -281,6 +426,10 @@ class RelayConnection {
     _closedByUser = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _aliveTimer?.cancel();
+    _aliveTimer = null;
+    _confirmTimer?.cancel();
+    _confirmTimer = null;
     await _socketSub?.cancel();
     _socketSub = null;
     try {

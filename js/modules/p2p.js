@@ -1143,7 +1143,7 @@ Object.assign(NYM.prototype, {
             });
 
             torrent.on('error', (err) => {
-                this.updateTransferStatus(transferId, 'error', 'Torrent error: ' + err.message);
+                this.updateTransferStatus(transferId, 'error', this.uiText('Torrent error: {error}', { error: err.message }));
             });
         });
     },

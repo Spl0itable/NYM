@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import 'qr_decoder_channel.dart';
 import 'share_actions.dart';
@@ -220,17 +221,25 @@ class _ShareScannerScreenState extends ConsumerState<ShareScannerScreen>
     };
     final showCamera =
         _state == _ScanState.scanning || _state == _ScanState.starting;
-    return Scaffold(
+    final rail = DuoScope.railOf(context);
+    return DuoRailItems(
+      active: rail,
+      priority: kDuoSheetPriority,
+      items: [duoCloseItem(() => Navigator.of(context).maybePop())],
+      child: Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: Text(tr('Scan a code')),
-        leading: IconButton(
-          tooltip: tr('Close'),
-          icon: const Icon(Icons.close),
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
+        automaticallyImplyLeading: !rail,
+        leading: rail
+            ? null
+            : IconButton(
+                tooltip: tr('Close'),
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
       ),
       body: SafeArea(
         child: Column(
@@ -288,6 +297,7 @@ class _ShareScannerScreenState extends ConsumerState<ShareScannerScreen>
             ),
           ],
         ),
+      ),
       ),
     );
   }

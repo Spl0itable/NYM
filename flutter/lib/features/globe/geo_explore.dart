@@ -6,7 +6,7 @@ import 'package:flutter/painting.dart' show Size;
 import 'topojson.dart';
 
 const String kGeoBase32 = '0123456789bcdefghjkmnpqrstuvwxyz';
-const List<int> kGeoWindowOptions = [1, 24, 168];
+const List<int> kGeoWindowOptions = [1, 12, 24];
 const int kGeoClusterCellPx = 48;
 const int kGeoClusterGridZoom = 4;
 const int kGeoClusterSeedPx = 6;

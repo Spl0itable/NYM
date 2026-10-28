@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/utils/peer_connection_release.dart';
+import '../share/share_origin.dart';
 import 'p2p_models.dart';
 
 /// Relay transport for plain (not gift-wrapped) p-tagged kind-25051/25052 events; implemented by NostrController.
@@ -564,8 +565,8 @@ class P2PService extends ChangeNotifier {
       final path = '${dir.path}/$filename';
       final file = File(path);
       await file.writeAsBytes(bytes, flush: true);
-      await SharePlus.instance
-          .share(ShareParams(files: [XFile(path)], subject: filename));
+      await SharePlus.instance.share(ShareParams(
+          files: [XFile(path)], subject: filename, sharePositionOrigin: shareOriginOf(null)));
     } catch (e) {
       debugPrint('P2P save download failed: $e');
       _system('Downloaded "$filename" but could not open the save dialog');

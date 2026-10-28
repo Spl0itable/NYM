@@ -61,7 +61,10 @@
                 b.setAttribute('role', 'option');
                 b.setAttribute('aria-selected', 'false');
                 b.dataset.peerId = p.peerID;
-                b.textContent = p.nickname || p.peerID;
+                const nick = document.createElement('span');
+                nick.textContent = window.NymShareUi.nearbyLabel(p.nickname, p.peerID);
+                b.insertAdjacentHTML('afterbegin', window.NymShareUi.svg('bluetooth', 18));
+                b.appendChild(nick);
                 b.addEventListener('click', () => {
                     chosen = p;
                     list.querySelectorAll('button').forEach((x) => x.setAttribute('aria-selected', x === b ? 'true' : 'false'));
@@ -78,7 +81,7 @@
                 const peer = chosen;
                 try {
                     await m.sendNymShare(peer.peerID, tg.codeLink);
-                    status.textContent = this._shT('Sent to {nick}. They need to accept it.').replace('{nick}', peer.nickname || peer.peerID);
+                    status.textContent = this._shT('Sent to {nick}. They need to accept it.').replace('{nick}', () => window.NymShareUi.nearbyLabel(peer.nickname, peer.peerID));
                 } catch (_) { }
             });
             body.append(list, send, status);
@@ -86,20 +89,22 @@
         },
 
         _nearbyReceive(msg) {
-            const link = msg && msg.payload ? L().decodeNearby(msg.payload) : null;
+            const mesh = this._mesh;
+            const peer = msg && mesh && mesh.peers ? mesh.peers.get(msg.senderPeerID) : null;
+            const pk = peer && typeof peer.nostrPubkey === 'string' ? peer.nostrPubkey.toLowerCase() : '';
+            if (!/^[0-9a-f]{64}$/.test(pk) || peer.nostrLinkVerified !== true) return;
+            if (this.blockedUsers && this.blockedUsers.has(pk)) return;
+            const link = msg.payload ? L().decodeNearby(msg.payload) : null;
             if (!link) return;
             const r = L().parseShareInput(link);
             if (r.kind === 'invalid' || r.kind === 'appLink') return;
-            const mesh = this._mesh;
-            const peer = mesh && mesh.peers ? mesh.peers.get(msg.senderPeerID) : null;
-            if (peer && peer.nostrPubkey && this.blockedUsers && this.blockedUsers.has(peer.nostrPubkey)) return;
             const rl = L();
             if (!this._nearbyLimiter) this._nearbyLimiter = rl.createNearbyLimiter();
             const now = Date.now();
             this._nearbyCards = (this._nearbyCards || []).filter((c) => now - c.at < 300000);
             if (this._nearbyCards.length >= 3) return;
             if (!this._nearbyLimiter.accept(msg.senderPeerID, link, now)) return;
-            const card = { id: Math.random().toString(36).slice(2), at: now, nick: (peer && peer.nickname) || msg.senderPeerID, link, kind: r.kind };
+            const card = { id: Math.random().toString(36).slice(2), at: now, nick: window.NymShareUi.nearbyLabel(peer.nickname, msg.senderPeerID), link, kind: r.kind };
             this._nearbyCards.push(card);
             setTimeout(() => this._nearbyDrop(card.id), 300000);
             this._nearbyRenderCards();
@@ -135,7 +140,7 @@
                 el.dataset.cardId = c.id;
                 const t = document.createElement('div');
                 t.className = 'nearby-card-title';
-                t.textContent = this._shT(KIND_TEXT[c.kind]).replace('{nick}', c.nick);
+                t.textContent = this._shT(KIND_TEXT[c.kind]).replace('{nick}', () => c.nick);
                 const row = document.createElement('div');
                 row.className = 'share-preview-actions';
                 const open = this._shareButton(c.kind === 'groupInvite' ? 'Ask to join' : 'Open', 'icon-btn primary');
@@ -143,7 +148,7 @@
                 open.addEventListener('click', () => {
                     const link = c.link;
                     this._nearbyDrop(c.id);
-                    this.shareInbound(link, 'nearby', this._shT(KIND_TEXT[c.kind]).replace('{nick}', c.nick));
+                    this.shareInbound(link, 'nearby', this._shT(KIND_TEXT[c.kind]).replace('{nick}', () => c.nick));
                 });
                 const dismiss = this._shareButton('Dismiss', 'icon-btn');
                 dismiss.dataset.nearbyCard = 'dismiss';

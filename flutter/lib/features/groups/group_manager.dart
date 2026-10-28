@@ -23,15 +23,8 @@ class GroupManager {
 
   void Function(NostrEvent wrap)? onWrap;
 
-  void Function(NostrEvent wrap)? _depositFor(UnsignedEvent rumor) {
-    if (rumor.kind != 14 && rumor.kind != 7) return null;
-    for (final t in rumor.tags) {
-      if (t.length > 1 && t[0] == 'type' && t[1] == 'group-metadata') {
-        return null;
-      }
-    }
-    return onWrap;
-  }
+  void Function(NostrEvent wrap)? _depositFor(UnsignedEvent rumor) =>
+      rumor.kind == 14 || rumor.kind == 7 ? onWrap : null;
 
   /// Per-message post-quantum coverage; a message counts as protected only if every member got a PQ wrap.
   final Map<String, ({int pq, int total})> _pqCoverage = {};
@@ -437,6 +430,8 @@ class GroupManager {
     required List<List<String>> extraTags,
     List<String>? recipients,
     String content = '',
+    String? nymMessageId,
+    int? nowSec,
   }) async {
     if (!_service.canSign) return false;
     final ek = keysFor(group.id);
@@ -445,9 +440,10 @@ class GroupManager {
       selfPubkey: selfPubkey,
       type: type,
       extraTags: extraTags,
-      nymMessageId: GroupLogic.generateGroupId(),
+      nymMessageId: nymMessageId ?? GroupLogic.generateGroupId(),
       recipients: recipients,
       content: content,
+      nowSec: nowSec,
     );
     final to = recipients ?? group.members;
     return _service.publishGroupMessage(

@@ -132,8 +132,13 @@ final RegExp _token = RegExp(r'^[A-Za-z0-9_-]{1,4000}$');
 final RegExp _npubFragment = RegExp(r'^npub1[02-9ac-hj-np-z]{58}$');
 final RegExp _ref = RegExp(r'^([egcEGC]):(.*)$', dotAll: true);
 final RegExp _channelName = RegExp(r'^[\p{L}\p{N}]+$', unicode: true);
+final RegExp _upperOrTitle = RegExp(r'[\p{Lu}\p{Lt}]', unicode: true);
+final RegExp _asciiUpper = RegExp('[A-Z]');
 final RegExp _hex2 = RegExp(r'^[0-9A-Fa-f]{2}$');
 final RegExp _geohash = RegExp(r'^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$');
+
+String _asciiLower(String s) =>
+    s.replaceAllMapped(_asciiUpper, (m) => m.group(0)!.toLowerCase());
 
 bool _isAsciiSpace(int c) =>
     c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D || c == 0x0C || c == 0x0B;
@@ -254,8 +259,10 @@ ShareParseResult _channel(String name, String refPrefix) {
     if (d == null) return const ShareParseResult.invalid('bad_fragment');
     n = d;
   }
-  n = n.toLowerCase();
-  if (!_channelName.hasMatch(n) || n.runes.length > kShareMaxChannelChars) {
+  n = _asciiLower(n);
+  if (_upperOrTitle.hasMatch(n) ||
+      !_channelName.hasMatch(n) ||
+      n.runes.length > kShareMaxChannelChars) {
     return const ShareParseResult.invalid('bad_fragment');
   }
   return ShareParseResult.channel(n,
@@ -317,9 +324,9 @@ ShareParseResult parseShareInput(Object? raw,
   if (ShareAppLinks.exact.contains(s)) return ShareParseResult.appLink(s);
 
   var rest = s;
-  final hadNostr = rest.toLowerCase().startsWith('nostr:');
+  final hadNostr = _asciiLower(rest).startsWith('nostr:');
   if (hadNostr) rest = rest.substring(6);
-  final lower = rest.toLowerCase();
+  final lower = _asciiLower(rest);
   if (lower.startsWith('nsec1') || lower.startsWith('ncryptsec1')) {
     return const ShareParseResult.invalid('secret');
   }

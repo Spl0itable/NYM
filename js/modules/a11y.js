@@ -279,7 +279,7 @@
                 const one = q[0];
                 const msg = q.length === 1
                     ? (one.nym ? one.nym + ': ' : '') + one.body
-                    : this.uiText(q.length + ' new messages');
+                    : this.uiText('{n} new messages', { n: q.length });
                 this._a11yLastAt = Date.now();
                 el.textContent = '';
                 setTimeout(() => { el.textContent = msg; }, 50);

@@ -4,6 +4,7 @@ import CallKit
 import Flutter
 import PushKit
 import LocalAuthentication
+import Network
 import Security
 import Speech
 import UIKit
@@ -18,6 +19,9 @@ import flutter_webrtc
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   /// Open `beginBackgroundTask` identifier for "Stay Connected in Background".
   private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+  private var backgroundConnectivityChannel: FlutterMethodChannel?
+  private var pathMonitor: NWPathMonitor?
+  private var networkKey: String?
 
   /// Channel the background-refresh window calls into Dart on.
   private var backgroundRefreshChannel: FlutterMethodChannel?
@@ -103,6 +107,12 @@ import flutter_webrtc
       name: UIScene.didActivateNotification,
       object: nil
     )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(duoRegionsMayHaveChanged),
+      name: UIApplication.didBecomeActiveNotification,
+      object: nil
+    )
     drainShareInbox()
     // Must happen before launch finishes, or BGTaskScheduler throws.
     registerBackgroundRefreshTask()
@@ -138,7 +148,12 @@ import flutter_webrtc
       QrScanner.register(with: messenger)
       NearbyShare.register(with: messenger)
       NfcShare.register(with: messenger)
+      DuoRegionProbe.register(with: messenger)
     }
+  }
+
+  @objc private func duoRegionsMayHaveChanged() {
+    DuoRegionProbe.refresh()
   }
 
   override func userNotificationCenter(
@@ -497,6 +512,8 @@ import flutter_webrtc
       name: "app.nymchat/background_connectivity",
       binaryMessenger: messenger
     )
+    backgroundConnectivityChannel = channel
+    watchNetwork()
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self = self else {
         result(false)
@@ -513,6 +530,24 @@ import flutter_webrtc
         result(FlutterMethodNotImplemented)
       }
     }
+  }
+
+  private func watchNetwork() {
+    guard pathMonitor == nil else { return }
+    let monitor = NWPathMonitor()
+    monitor.pathUpdateHandler = { [weak self] path in
+      let key = path.status == .satisfied ? (path.availableInterfaces.first?.name ?? "") : ""
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        let previous = self.networkKey
+        self.networkKey = key
+        guard let before = previous, before != key else { return }
+        let method = key.isEmpty ? "networkLost" : "networkChanged"
+        self.backgroundConnectivityChannel?.invokeMethod(method, arguments: nil)
+      }
+    }
+    monitor.start(queue: DispatchQueue(label: "app.nymchat.network-watch"))
+    pathMonitor = monitor
   }
 
   private func beginBackgroundTask() {
@@ -1037,6 +1072,101 @@ enum Transcriber {
 }
 
 class SceneDelegate: FlutterSceneDelegate {}
+
+final class DuoRegionProbe: UIView {
+  private static var channel: FlutterMethodChannel?
+  private static weak var probe: DuoRegionProbe?
+  private var geometryWatch: NSKeyValueObservation?
+  private var last: [[Double]]?
+
+  static func register(with messenger: FlutterBinaryMessenger) {
+    let made = FlutterMethodChannel(name: "app.nymchat/duo_regions", binaryMessenger: messenger)
+    made.setMethodCallHandler { call, result in
+      guard call.method == "current" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let probe = install()
+      probe?.last = probe?.rects()
+      result(probe?.last)
+    }
+    channel = made
+  }
+
+  static func refresh() {
+    install()?.report()
+  }
+
+  private static func install() -> DuoRegionProbe? {
+    guard #available(iOS 27.1, *) else { return nil }
+    if let probe = probe, probe.superview != nil { return probe }
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let host = scenes.lazy.compactMap { scene in
+      scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
+    }.first
+    guard let root = host?.rootViewController?.view else { return nil }
+    let made = DuoRegionProbe(frame: root.bounds)
+    made.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    made.isUserInteractionEnabled = false
+    made.backgroundColor = .clear
+    made.accessibilityElementsHidden = true
+    root.insertSubview(made, at: 0)
+    probe = made
+    return made
+  }
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    if #available(iOS 27.1, *) {
+      _ = registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitVerticalSizeClass.self]) {
+        (probe: DuoRegionProbe, _: UITraitCollection) in
+        probe.report()
+      }
+    }
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+  }
+
+  override class var requiresConstraintBasedLayout: Bool { true }
+
+  override func updateConstraints() {
+    report()
+    super.updateConstraints()
+  }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    setNeedsUpdateConstraints()
+    geometryWatch = nil
+    if #available(iOS 27.1, *), let scene = window?.windowScene {
+      geometryWatch = scene.observe(\.effectiveGeometry, options: [.new]) { [weak self] _, _ in
+        DispatchQueue.main.async { self?.report() }
+      }
+    }
+    report()
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    report()
+  }
+
+  private func rects() -> [[Double]]? {
+    guard #available(iOS 27.1, *), let root = superview else { return nil }
+    return reservedRegions(kind: .occlusion).map { region in
+      let frame = convert(region.frame, to: root)
+      return [Double(frame.minX), Double(frame.minY), Double(frame.width), Double(frame.height)]
+    }
+  }
+
+  private func report() {
+    guard let rects = rects(), rects != last else { return }
+    last = rects
+    DuoRegionProbe.channel?.invokeMethod("regions", arguments: rects)
+  }
+}
 
 final class ShareLinks: NSObject, FlutterSceneLifeCycleDelegate {
   private let onShare: () -> Void

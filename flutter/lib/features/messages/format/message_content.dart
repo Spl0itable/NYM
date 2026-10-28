@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -33,6 +34,7 @@ import '../../commands/command_handler.dart' show resolveTarget;
 import '../../group_tools/group_tools_ui.dart' show GroupToolIcons, joinCallLinkFlow;
 import '../../emoji/custom_emoji.dart' show noteMissingCustomEmoji;
 import '../../groups/group_invite_confirm.dart';
+import '../../duo/duo_rail.dart';
 import '../../i18n/i18n.dart';
 import '../../media_notes/media_note_view.dart' show audioOrMediaNote;
 import '../../nymbot/nymbot_threads.dart' show threadChainFor;
@@ -587,6 +589,12 @@ class _RichInlineState extends State<_RichInline> {
   final List<Object> _hiddenKeys = [];
   bool _focused = false;
   Object? _hoverKey;
+  final GlobalKey _paraKey = GlobalKey();
+  List<(String, int, int)> _linkSpans = const [];
+  List<(String, List<Rect>)> _linkRects = const [];
+  final List<FocusNode> _linkNodes = [];
+  int? _ringLink;
+  bool _measureQueued = false;
 
   double get size => widget.size;
   bool get emojiOnly => widget.emojiOnly;
@@ -622,7 +630,151 @@ class _RichInlineState extends State<_RichInline> {
     _scope?.removeListener(_onRevealsChanged);
     _local.removeListener(_onRevealsChanged);
     _local.dispose();
+    for (final n in _linkNodes) {
+      n.dispose();
+    }
     super.dispose();
+  }
+
+  static List<(String, int, int)> _linkRanges(InlineSpan root) {
+    final out = <(String, int, int)>[];
+    var at = 0;
+    void walk(InlineSpan s) {
+      if (s is TextSpan) {
+        final start = at;
+        at += s.text?.length ?? 0;
+        for (final ch in s.children ?? const <InlineSpan>[]) {
+          walk(ch);
+        }
+        final r = s.recognizer;
+        if (r is _LinkTap && at > start) {
+          if (out.isNotEmpty && out.last.$1 == r.url && out.last.$3 == start) {
+            out[out.length - 1] = (r.url, out.last.$2, at);
+          } else {
+            out.add((r.url, start, at));
+          }
+        }
+      } else if (s is PlaceholderSpan) {
+        at += 1;
+      }
+    }
+
+    walk(root);
+    return out;
+  }
+
+  void _queueLinkMeasure() {
+    if (_measureQueued) return;
+    _measureQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measureQueued = false;
+      if (!mounted) return;
+      final next = _measureLinks();
+      if (_sameRects(next, _linkRects)) return;
+      setState(() => _linkRects = next);
+    });
+  }
+
+  List<(String, List<Rect>)> _measureLinks() {
+    final host = context.findRenderObject();
+    RenderParagraph? para;
+    void visit(RenderObject o) {
+      if (para != null) return;
+      if (o is RenderParagraph) {
+        para = o;
+        return;
+      }
+      o.visitChildren(visit);
+    }
+
+    final top = _paraKey.currentContext?.findRenderObject();
+    if (top != null) visit(top);
+    final p = para;
+    if (host is! RenderBox || p == null || !p.hasSize || !p.attached) {
+      return const [];
+    }
+    final m = p.getTransformTo(host);
+    return [
+      for (final (url, start, end) in _linkSpans)
+        (
+          url,
+          [
+            for (final b in p.getBoxesForSelection(
+                TextSelection(baseOffset: start, extentOffset: end)))
+              MatrixUtils.transformRect(m, b.toRect()),
+          ]
+        ),
+    ];
+  }
+
+  static bool _sameRects(
+      List<(String, List<Rect>)> a, List<(String, List<Rect>)> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].$1 != b[i].$1 || !listEquals(a[i].$2, b[i].$2)) return false;
+    }
+    return true;
+  }
+
+  FocusNode _linkNode(int i) {
+    while (_linkNodes.length <= i) {
+      _linkNodes.add(FocusNode(debugLabel: 'messageLink'));
+    }
+    return _linkNodes[i];
+  }
+
+  Widget _withLinkFocus(Widget text, NymColors c) {
+    _queueLinkMeasure();
+    return LayoutBuilder(builder: (context, _) {
+      _queueLinkMeasure();
+      return Stack(
+        fit: StackFit.passthrough,
+        clipBehavior: Clip.none,
+        children: [
+          KeyedSubtree(key: _paraKey, child: text),
+          for (var i = 0; i < _linkRects.length; i++)
+            if (_linkRects[i].$2.isNotEmpty)
+              Positioned.fromRect(
+                rect: _linkRects[i].$2.first,
+                child: IgnorePointer(
+                  child: FocusableActionDetector(
+                    focusNode: _linkNode(i),
+                    includeFocusSemantics: false,
+                    shortcuts: _kLinkKeys,
+                    actions: <Type, Action<Intent>>{
+                      ActivateIntent: CallbackAction<ActivateIntent>(
+                          onInvoke: (_) {
+                        launchSafeUrl(_linkRects[i].$1);
+                        return null;
+                      }),
+                    },
+                    onShowFocusHighlight: (v) => setState(() {
+                      if (v) {
+                        _ringLink = i;
+                      } else if (_ringLink == i) {
+                        _ringLink = null;
+                      }
+                    }),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              ),
+          if (_ringLink != null && _ringLink! < _linkRects.length)
+            for (final r in _linkRects[_ringLink!].$2)
+              Positioned.fromRect(
+                rect: r.inflate(2),
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: c.primary, width: 2),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+              ),
+        ],
+      );
+    });
   }
 
   Object _spoilerKey(int index) => (identityHashCode(widget.inlines), index);
@@ -647,15 +799,18 @@ class _RichInlineState extends State<_RichInline> {
     );
     _spoilerSeq = 0;
     _hiddenKeys.clear();
-    final text = Text.rich(
-      TextSpan(
-        children: [
-          for (final n in widget.inlines) _span(context, c, n, base),
-        ],
-      ),
+    final root = TextSpan(
+      children: [
+        for (final n in widget.inlines) _span(context, c, n, base),
+      ],
     );
-    if (_hiddenKeys.isEmpty) return text;
-    return FocusableActionDetector(
+    final text = Text.rich(root);
+    _linkSpans = _linkRanges(root);
+    if (_linkSpans.isEmpty && _linkRects.isNotEmpty) _linkRects = const [];
+    if (_hiddenKeys.isEmpty) {
+      return _linkSpans.isEmpty ? text : _withLinkFocus(text, c);
+    }
+    final spoilers = FocusableActionDetector(
       shortcuts: const <ShortcutActivator, Intent>{
         SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
         SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
@@ -677,6 +832,7 @@ class _RichInlineState extends State<_RichInline> {
         child: text,
       ),
     );
+    return _linkSpans.isEmpty ? spoilers : _withLinkFocus(spoilers, c);
   }
 
   InlineSpan _hiddenSpoiler(NymColors c, List<InlineNode> children,
@@ -816,11 +972,19 @@ class _RichInlineState extends State<_RichInline> {
         return WidgetSpan(
           alignment: code.alignment,
           baseline: code.baseline,
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: () => launchSafeUrl(url),
-              child: code.child,
+          child: MetaData(
+            metaData: _kCodeLinkTag,
+            child: _CodeLinkFocus(
+              url: url,
+              ring: c.primary,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: () => launchSafeUrl(url),
+                  onTertiaryTapUp: (_) => launchSafeUrl(url),
+                  child: code.child,
+                ),
+              ),
             ),
           ),
         );
@@ -1237,8 +1401,72 @@ class _ListView extends StatelessWidget {
 
 /// Opens a URL via url_launcher.
 class _LinkTap extends TapGestureRecognizer {
-  _LinkTap(String url) {
+  _LinkTap(this.url) {
     onTap = () => launchSafeUrl(url);
+    onTertiaryTapUp = (_) => launchSafeUrl(url);
+  }
+
+  final String url;
+}
+
+bool messageLinkHit(HitTestTarget target) =>
+    (target is TextSpan &&
+        (target.recognizer is _LinkTap ||
+            target.recognizer is _ChannelLinkTap)) ||
+    (target is RenderMetaData && identical(target.metaData, _kCodeLinkTag));
+
+const Object _kCodeLinkTag = Object();
+
+const Map<ShortcutActivator, Intent> _kLinkKeys = <ShortcutActivator, Intent>{
+  SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+  SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
+  SingleActivator(LogicalKeyboardKey.space):
+      DoNothingAndStopPropagationIntent(),
+};
+
+class _CodeLinkFocus extends StatefulWidget {
+  const _CodeLinkFocus(
+      {required this.url, required this.ring, required this.child});
+  final String url;
+  final Color ring;
+  final Widget child;
+
+  @override
+  State<_CodeLinkFocus> createState() => _CodeLinkFocusState();
+}
+
+class _CodeLinkFocusState extends State<_CodeLinkFocus> {
+  final FocusNode _node = FocusNode(debugLabel: 'messageLink');
+  bool _ring = false;
+
+  @override
+  void dispose() {
+    _node.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FocusableActionDetector(
+      focusNode: _node,
+      includeFocusSemantics: false,
+      shortcuts: _kLinkKeys,
+      actions: <Type, Action<Intent>>{
+        ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) {
+          launchSafeUrl(widget.url);
+          return null;
+        }),
+      },
+      onShowFocusHighlight: (v) => setState(() => _ring = v),
+      child: DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: BoxDecoration(
+          border: _ring ? Border.all(color: widget.ring, width: 2) : null,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: widget.child,
+      ),
+    );
   }
 }
 
@@ -3872,18 +4100,29 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
                 ),
               ),
             ],
-            Positioned(
-              top: 20,
-              right: gutter + 50,
-              child: SafeArea(
-                  child: _chip('⤓', 40, 22, _download, label: tr('Download'))),
-            ),
+            if (!DuoScope.railOf(context))
+              Positioned(
+                top: 20,
+                right: gutter + 50,
+                child: SafeArea(
+                    child: _chip('⤓', 40, 22, _download, label: tr('Download'))),
+              ),
             Positioned(
               top: 20,
               right: gutter,
               child: SafeArea(
-                child: _chip('×', 40, 24, () => Navigator.of(context).maybePop(),
-                    label: tr('Close')),
+                child: DuoRailSwap(
+                  items: [
+                    duoCloseItem(() => Navigator.of(context).maybePop()),
+                    DuoRailItem(
+                        id: 'viewer-download',
+                        label: tr('Download'),
+                        icon: Icons.download,
+                        onTap: _download),
+                  ],
+                  child: _chip('×', 40, 24, () => Navigator.of(context).maybePop(),
+                      label: tr('Close')),
+                ),
               ),
             ),
           ],

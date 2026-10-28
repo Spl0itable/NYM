@@ -535,13 +535,13 @@ Object.assign(NYM.prototype, {
             const conv = this.pmConversations && this.pmConversations.get(col.pubkey);
             const resolved = this.resolveDisplayNym(col.pubkey, (conv && conv.nym) || col.nym || '');
             if (resolved && resolved.toLowerCase() !== 'nym') return resolved;
-            return (conv && conv.nym) || col.nym || (this.getDisplayNym && this.getDisplayNym(col.pubkey)) || 'Private message';
+            return (conv && conv.nym) || col.nym || (this.getDisplayNym && this.getDisplayNym(col.pubkey)) || this.uiText('Private message');
         }
         if (col.type === 'group') {
             const g = this.groupConversations && this.groupConversations.get(col.groupId);
-            return g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : 'Group chat';
+            return g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || this.uiText('Group'))) : this.uiText('Group chat');
         }
-        return 'Column';
+        return this.uiText('Column');
     },
 
     _cvColTitleHtml(col) {
@@ -863,7 +863,7 @@ Object.assign(NYM.prototype, {
         const panel = document.createElement('div');
         panel.className = 'cv-column cv-picker';
         panel.innerHTML =
-            `<div class="cv-column-header"><span class="cv-col-title">Add a column</span>` +
+            `<div class="cv-column-header"><span class="cv-col-title">${this.escapeHtml(this.uiText('Add a column'))}</span>` +
             `<button class="cv-col-close cv-picker-close" title="Cancel" aria-label="Cancel"><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>` +
             `<div class="cv-picker-search"><input type="text" class="form-input cv-picker-input" placeholder="Search conversations…" autocomplete="off"></div>` +
             `<div class="cv-picker-list"></div>`;
@@ -918,7 +918,7 @@ Object.assign(NYM.prototype, {
                 const src = this.getAvatarUrl(pubkey);
                 const named = !!conv.nym;
                 out.push({
-                    label: named ? `${this.stripPubkeySuffix(conv.nym)}${window.NymSuffix.suffixOf(pubkey)}` : 'Private message',
+                    label: named ? `${this.stripPubkeySuffix(conv.nym)}${window.NymSuffix.suffixOf(pubkey)}` : this.uiText('Private message'),
                     html: named ? this.formatNymWithPubkey(conv.nym, pubkey) : '',
                     icon: `<img class="avatar-pm" src="${this.escapeHtml(src)}" data-avatar-pubkey="${this._safePubkey(pubkey)}" alt="" width="20" height="20">`,
                     desc,
@@ -932,7 +932,7 @@ Object.assign(NYM.prototype, {
                 const gicon = g.avatar && !(typeof this._groupMetaHidden === 'function' && this._groupMetaHidden(g, 'avatar'))
                     ? `<img class="avatar-pm" src="${this.escapeHtml(this._profileMediaUrl(g.avatar))}" alt="" width="20" height="20">`
                     : '◧';
-                out.push({ label: (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')), icon: gicon, desc });
+                out.push({ label: (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || this.uiText('Group'))), icon: gicon, desc });
             }
         }
         return out;

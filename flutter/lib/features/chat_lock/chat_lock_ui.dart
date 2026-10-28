@@ -21,6 +21,7 @@ import 'chat_lock.dart';
 import 'chat_lock_providers.dart';
 import 'chat_lock_service.dart';
 import 'screen_privacy.dart';
+import '../duo/duo_rail.dart';
 
 class ChatLockIcons {
   const ChatLockIcons._();
@@ -296,10 +297,13 @@ class LockedChatsPanel extends ConsumerWidget {
                 ),
               ),
             ),
-            IconButton(
-              tooltip: tr('Close'),
-              onPressed: () => Navigator.of(context).maybePop(),
-              icon: Icon(Icons.close, size: 18, color: c.textDim),
+            DuoRailSwap.close(
+              onTap: () => Navigator.of(context).maybePop(),
+              child: IconButton(
+                tooltip: tr('Close'),
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: Icon(Icons.close, size: 18, color: c.textDim),
+              ),
             ),
           ],
         ),

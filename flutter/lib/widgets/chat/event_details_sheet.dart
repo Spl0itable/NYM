@@ -16,6 +16,7 @@ import '../../state/nostr_controller.dart';
 import '../common/nym_sheet.dart';
 import '../common/dialog_button.dart';
 import '../common/nym_label.dart';
+import '../../features/duo/duo_rail.dart';
 
 /// Shows a message's signed event JSON and relays, from the session, the D1 archive, or the message itself.
 Future<void> showEventDetails(
@@ -128,10 +129,13 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
                 ),
               ),
             ),
-            IconButton(
-              icon: Icon(Icons.close, size: 18, color: c.textDim),
-              onPressed: () => Navigator.of(context).pop(),
-              tooltip: tr('Close'),
+            DuoRailSwap.close(
+              onTap: () => Navigator.of(context).pop(),
+              child: IconButton(
+                icon: Icon(Icons.close, size: 18, color: c.textDim),
+                onPressed: () => Navigator.of(context).pop(),
+                tooltip: tr('Close'),
+              ),
             ),
           ],
         ),

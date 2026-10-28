@@ -181,7 +181,7 @@
         },
 
         async remotePanicCheck() {
-            if (!this.pubkey || this._panicking || this._remotePanicWiping) return null;
+            if (!this.pubkey || this._panicking || this._remotePanicWiping || this._acctGoing) return null;
             if (this._remotePanicChecking) return null;
             this._remotePanicChecking = true;
             try {

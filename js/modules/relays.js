@@ -19,6 +19,7 @@ const CONN_STATUS_OFFLINE = /Failed|Disconnected/;
 const POOL_QUIET_MS = 60000;
 const POOL_PROBE_TIMEOUT_MS = 10000;
 const POOL_RESUME_FRESH_MS = 5000;
+const POOL_RESUME_PROBE_TIMEOUT_MS = 3000;
 const POOL_PROBE_BACKOFF_MAX_MS = 10 * 60 * 1000;
 const POOL_CONNECT_TIMEOUT_MS = 12000;
 const RECONNECT_QUICK_MAX_MS = 250;
@@ -419,7 +420,7 @@ Object.assign(NYM.prototype, {
     async ensureAppRelayConnected() {
         const url = this.appRelay;
         if (!url) return;
-        if (!this.useRelayProxy) return;
+        if (!this.useRelayProxy && !this._userDirectMode) return;
 
         this.blacklistedRelays.delete(url);
         this.blacklistTimestamps.delete(url);
@@ -457,7 +458,7 @@ Object.assign(NYM.prototype, {
 
     startAppRelayWatchdog() {
         if (this._appRelayWatchdog) return;
-        if (!this.useRelayProxy) return;
+        if (!this.useRelayProxy && !this._userDirectMode) return;
         this.ensureAppRelayConnected();
         this._appRelayWatchdog = setInterval(() => {
             if (document.hidden) return;
@@ -1456,6 +1457,7 @@ Object.assign(NYM.prototype, {
             relay.subscriptions.add(subId);
             const filters = this._buildGeoFilters(since24h);
             this._safeWsSend(ws, JSON.stringify(this._normalizeReqPayload(["REQ", subId, ...filters])), { critical: true });
+            this._sendPresenceSubToRelay(relay);
             return;
         }
 
@@ -1468,6 +1470,84 @@ Object.assign(NYM.prototype, {
 
         const filters = this._buildCriticalFilters(since24h);
         this._safeWsSend(ws, JSON.stringify(["REQ", subId, ...filters]), { critical: true });
+        this._sendPresenceSubToRelay(relay);
+    },
+
+    _presenceSubWanted() {
+        if (this.settings && this.settings.groupChatPMOnlyMode) return false;
+        return !(typeof document !== 'undefined' && document.hidden);
+    },
+
+    _presenceReq() {
+        const GP = (typeof self !== 'undefined' && self.NymGeoPresence) || null;
+        if (!GP) return null;
+        if (!this._presenceSubId) this._presenceSubId = 'gp' + Math.random().toString(36).substring(2);
+        return ['REQ', this._presenceSubId, GP.wideFilter(Math.floor(Date.now() / 1000))];
+    },
+
+    _sendPresenceSubToRelay(relay) {
+        if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
+        if (!this._presenceSubWanted()) {
+            this._closePresenceSub();
+            return;
+        }
+        const req = this._presenceReq();
+        if (!req) return;
+        if (!this._presenceSentWs) this._presenceSentWs = new WeakMap();
+        if (this._presenceSentWs.get(relay.ws) === req[1]) return;
+        this._presenceSentWs.set(relay.ws, req[1]);
+        if (!relay.subscriptions) relay.subscriptions = new Set();
+        relay.subscriptions.add(req[1]);
+        this._safeWsSend(relay.ws, JSON.stringify(req), { critical: true });
+    },
+
+    _sendPresenceSubToPool() {
+        if (!this._presenceSubWanted()) {
+            this._closePresenceSub();
+            return;
+        }
+        const req = this._presenceReq();
+        if (!req) return;
+        if (!this._presenceSentWs) this._presenceSentWs = new WeakMap();
+        const fresh = (this.poolSockets || []).filter((p) => p && p.ws && this._presenceSentWs.get(p.ws) !== req[1]);
+        if (!fresh.length) return;
+        const msg = JSON.stringify(this._normalizeReqPayload(req));
+        for (const p of fresh) {
+            this._presenceSentWs.set(p.ws, req[1]);
+            this._safeWsSend(p.ws, msg, { critical: false });
+        }
+    },
+
+    _syncPresenceSub() {
+        if (!this._presenceSubWanted()) {
+            this._closePresenceSub();
+            return;
+        }
+        if (this._presenceSubId) return;
+        this._openPresenceSub();
+    },
+
+    _openPresenceSub() {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
+            this._sendPresenceSubToPool();
+            return;
+        }
+        this.relayPool.forEach((relay, url) => {
+            if (this.writeOnlyRelays && this.writeOnlyRelays.has(url)) return;
+            this._sendPresenceSubToRelay(relay);
+        });
+    },
+
+    _closePresenceSub() {
+        const id = this._presenceSubId;
+        if (!id) return;
+        this._presenceSubId = null;
+        if (this.useRelayProxy && this._isAnyPoolOpen()) this._poolSend(['CLOSE', id]);
+        this.relayPool.forEach((relay) => {
+            if (!relay || !relay.subscriptions || !relay.subscriptions.has(id)) return;
+            relay.subscriptions.delete(id);
+            if (relay.ws && relay.ws.readyState === WebSocket.OPEN) this._safeWsSend(relay.ws, JSON.stringify(['CLOSE', id]), { critical: true });
+        });
     },
 
     _sendChannelReq(subId, filters, channelKey, channelType) {
@@ -1550,7 +1630,6 @@ Object.assign(NYM.prototype, {
         if (!channelKey) return;
         const isCurrent = channelKey === this.currentChannel || channelKey === this.currentGeohash;
         if (!isCurrent && !force) return;
-        this._ensureGeoPresenceSub(channelKey, channelType);
         if (!this._channelTypingSubs) this._channelTypingSubs = new Map();
         if (this._channelTypingSubs.has(channelKey)) return;
 
@@ -1561,20 +1640,6 @@ Object.assign(NYM.prototype, {
         this._channelTypingSubs.set(channelKey, typingSubId);
         this.channelSubscriptions.set(channelKey, typingSubId);
         this._sendChannelReq(typingSubId, typingFilter, channelKey, channelType);
-    },
-
-    _ensureGeoPresenceSub(channelKey, channelType) {
-        const G = (typeof self !== 'undefined' && self.NymGeoPresence) || null;
-        if (!G || !channelKey || channelType === 'group' || channelType === 'pm') return;
-        if (!this._geoPresenceSubs) this._geoPresenceSubs = new Map();
-        if (this._geoPresenceSubs.has(channelKey)) return;
-        const key = String(channelKey).toLowerCase();
-        const nowSec = Math.floor(Date.now() / 1000);
-        const filter = this.isValidGeohash(channelKey) ? G.filter(key, nowSec) : G.namedFilter(key, nowSec);
-        if (!filter) return;
-        const subId = Math.random().toString(36).substring(2);
-        this._geoPresenceSubs.set(channelKey, subId);
-        this._sendChannelReq(subId, [filter], channelKey, channelType);
     },
 
     // Kind 20000 is ephemeral and not stored, so only open a typing sub for the viewed channel.
@@ -1924,6 +1989,8 @@ Object.assign(NYM.prototype, {
             this._stopPoolReconnectInBackground();
             if (this.useRelayProxy) await this._switchPoolToDirect();
             else for (const u of this._addedRelaysInUse()) this._connectAddedRelay(u);
+            this.startAppRelayWatchdog();
+            this.ensureAppRelayConnected();
             this.updateConnectionStatus();
             return;
         }
@@ -2389,17 +2456,24 @@ Object.assign(NYM.prototype, {
                     this._reconnectPoolShard(shard, { quick: this._reconnectQuick(existing._openedAt ? now - existing._openedAt : null) });
                     continue;
                 }
-                if (this._poolShardDeaf(existing, now)) {
-                    try { existing.ws.close(); } catch (_) { }
-                }
+                if (this._poolShardDeaf(existing, now)) this._dropPoolShardNow(existing);
             }
         }
+    },
+
+    _dropPoolShardNow(p) {
+        const ws = p.ws;
+        if (!ws) return;
+        const onclose = ws.onclose;
+        ws.onclose = null;
+        try { ws.close(); } catch (_) { }
+        if (typeof onclose === 'function') onclose.call(ws, { code: 1006, reason: '', wasClean: false });
     },
 
     _poolShardDeaf(p, now) {
         if (!this._poolProbeFails) this._poolProbeFails = new Map();
         if (p._probe) {
-            if (now - p._probe.at < POOL_PROBE_TIMEOUT_MS) return false;
+            if (now - p._probe.at < (p._probe.limit || POOL_PROBE_TIMEOUT_MS)) return false;
             p._probe = null;
             this._poolProbeFails.set(p.id, (this._poolProbeFails.get(p.id) || 0) + 1);
             return true;
@@ -2411,26 +2485,61 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    _sendPoolProbe(p, now) {
+    _sendPoolProbe(p, now, limit) {
         const bytes = new Uint8Array(32);
         crypto.getRandomValues(bytes);
         const probeId = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
-        p._probe = { id: 'nym-live-' + probeId.slice(0, 12), at: now };
+        p._probe = { id: 'nym-live-' + probeId.slice(0, 12), at: now, limit: limit || POOL_PROBE_TIMEOUT_MS };
         this._safeWsSend(p.ws, JSON.stringify(['REQ', p._probe.id, { ids: [probeId], limit: 1 }]), { critical: true });
     },
 
+    _probeDirectRelaysNow() {
+        if (this.useRelayProxy || !(this.relayPool instanceof Map)) return;
+        for (const [url, relay] of this.relayPool) {
+            const ws = relay && relay.ws;
+            if (!ws || ws.readyState !== WebSocket.OPEN || relay._probe) continue;
+            const bytes = new Uint8Array(32);
+            crypto.getRandomValues(bytes);
+            const target = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+            const probe = { id: 'nym-live-' + target.slice(0, 12), timer: null };
+            const prev = ws.onmessage;
+            const hook = (ev) => {
+                if (ws.onmessage === hook) ws.onmessage = prev;
+                if (relay._probe === probe) {
+                    relay._probe = null;
+                    clearTimeout(probe.timer);
+                    this._safeWsSend(ws, JSON.stringify(['CLOSE', probe.id]), { critical: true });
+                }
+                if (typeof prev === 'function') prev.call(ws, ev);
+            };
+            ws.onmessage = hook;
+            relay._probe = probe;
+            this._safeWsSend(ws, JSON.stringify(['REQ', probe.id, { ids: [target], limit: 1 }]), { critical: true });
+            probe.timer = setTimeout(() => {
+                if (relay._probe !== probe) return;
+                relay._probe = null;
+                if (ws.onmessage === hook) ws.onmessage = prev;
+                const current = this.relayPool.get(url);
+                if (!current || current.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+                this._dropPoolShardNow({ ws });
+            }, POOL_RESUME_PROBE_TIMEOUT_MS);
+        }
+    },
+
     _probePoolsNow() {
+        this._probeDirectRelaysNow();
         if (!this.useRelayProxy || !Array.isArray(this.poolSockets)) return;
         const now = Date.now();
         let sent = false;
         for (const p of this.poolSockets) {
             if (!p || !p.ws || p.ws.readyState !== WebSocket.OPEN) continue;
             if (p._probe) {
+                p._probe.limit = Math.min(p._probe.limit || POOL_PROBE_TIMEOUT_MS, POOL_RESUME_PROBE_TIMEOUT_MS);
                 sent = true;
                 continue;
             }
             if (now - Math.max(p._upstreamAt || 0, p._openedAt || 0) < POOL_RESUME_FRESH_MS) continue;
-            this._sendPoolProbe(p, now);
+            this._sendPoolProbe(p, now, POOL_RESUME_PROBE_TIMEOUT_MS);
             sent = true;
         }
         if (!sent) return;
@@ -2438,7 +2547,7 @@ Object.assign(NYM.prototype, {
         this._poolProbeCheckTimer = setTimeout(() => {
             this._poolProbeCheckTimer = null;
             this._ensureAllShardsConnected();
-        }, POOL_PROBE_TIMEOUT_MS + 250);
+        }, POOL_RESUME_PROBE_TIMEOUT_MS + 250);
     },
 
     _settlePoolProbe(p) {
@@ -3146,6 +3255,7 @@ Object.assign(NYM.prototype, {
         if (isReconnect) this._applyReconnectSince(filters);
         this._lastPoolFilters = filters;
         this._poolSend(["REQ", subId, ...filters]);
+        this._sendPresenceSubToPool();
         this._schedulePoolSubRetire(this._poolSubRetireMaxMs);
 
         this._refreshEphemeralSubscriptions();
@@ -3802,7 +3912,6 @@ Object.assign(NYM.prototype, {
         this.channelLoadedFromRelays.clear();
         this.channelSubscriptions.clear();
         if (this._channelTypingSubs) this._channelTypingSubs.clear();
-        if (this._geoPresenceSubs) this._geoPresenceSubs.clear();
 
         // Typing kinds (24420/24421) aren't in the global subscription.
         const current = this.currentChannel || this.currentGeohash;
@@ -3961,7 +4070,8 @@ Object.assign(NYM.prototype, {
     async connectToRelay(relayUrl, type = 'relay') {
         if (this.useRelayProxy) return;
 
-        if (relayUrl === this.appRelay) return;
+        const viaPool = relayUrl === this.appRelay;
+        if (viaPool && !(this._userDirectMode && this._getRelayPoolUrl())) return;
 
         if (this._isUnsafeRelayUrl(relayUrl)) return;
 
@@ -3996,7 +4106,7 @@ Object.assign(NYM.prototype, {
         const connectionPromise = new Promise((resolve) => {
             try {
 
-                const wsTarget = this._getProxiedRelayUrl(relayUrl);
+                const wsTarget = viaPool ? this._getRelayPoolUrl() : this._getProxiedRelayUrl(relayUrl);
                 const ws = new WebSocket(wsTarget);
                 ws._nymUrl = relayUrl;
                 const wsCreatedAt = Date.now();
@@ -4025,6 +4135,10 @@ Object.assign(NYM.prototype, {
 
                     this.relayStats.latencyPerRelay.set(relayUrl, Date.now() - wsCreatedAt);
 
+                    if (viaPool) {
+                        try { ws.send(JSON.stringify(['RELAYS', { relays: [relayUrl], dmRelays: [relayUrl] }])); } catch (_) { }
+                    }
+
                     this.relayPool.set(relayUrl, {
                         ws,
                         type,
@@ -4042,6 +4156,7 @@ Object.assign(NYM.prototype, {
                         const dataLen = typeof event.data === 'string' ? event.data.length : (event.data.byteLength || 0);
                         this.relayStats.bytesReceived += dataLen;
                         const msg = JSON.parse(event.data);
+                        if (viaPool && Array.isArray(msg) && typeof msg[0] === 'string' && msg[0].startsWith('POOL:')) return;
                         this.handleRelayMessage(msg, relayUrl);
                     } catch (e) {
                     }
@@ -5624,6 +5739,7 @@ Object.assign(NYM.prototype, {
     _geoOriginAllows(event, relayUrl) {
         if (!event || (event.kind !== 20000 && event.kind !== 20001)) return true;
         if (typeof relayUrl !== 'string' || !relayUrl) return true;
+        if (relayUrl === this.appRelay) return true;
         const tags = Array.isArray(event.tags) ? event.tags : [];
         const tag = tags.find(t => Array.isArray(t) && t[0] === 'g');
         const geohash = tag && typeof tag[1] === 'string' ? tag[1].toLowerCase() : '';
@@ -6247,11 +6363,6 @@ Object.assign(NYM.prototype, {
         if (this._channelTypingSubs && this._channelTypingSubs.has(channelKey)) {
             subIds.push(this._channelTypingSubs.get(channelKey));
             this._channelTypingSubs.delete(channelKey);
-        }
-        if (this._geoPresenceSubs && this._geoPresenceSubs.has(channelKey)) {
-            subIds.push(this._geoPresenceSubs.get(channelKey));
-            this._geoPresenceSubs.delete(channelKey);
-            if (this._geoPresenceMembers) this._geoPresenceMembers.delete(String(channelKey).toLowerCase());
         }
         if (this.channelSubscriptions.has(channelKey)) {
             const sid = this.channelSubscriptions.get(channelKey);

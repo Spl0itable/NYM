@@ -698,7 +698,7 @@ Object.assign(NYM.prototype, {
             }
         } catch (error) {
             document.getElementById('zapStatus').className = 'zap-status';
-            document.getElementById('zapStatus').textContent = `Failed: ${error.message}`;
+            document.getElementById('zapStatus').textContent = this.uiText('Failed: {error}', { error: error.message });
         }
     },
 
@@ -966,7 +966,7 @@ Object.assign(NYM.prototype, {
             }
         } catch (error) {
             document.getElementById('zapStatus').className = 'zap-status';
-            document.getElementById('zapStatus').textContent = `Failed: ${error.message}`;
+            document.getElementById('zapStatus').textContent = this.uiText('Failed: {error}', { error: error.message });
         }
     },
 

@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/event_kinds.dart';
+import '../shop/shop_purchase_policy.dart';
 import '../../core/crypto/key_format.dart' show normalizePubkeyInput;
 import '../../core/crypto/gift_wrap.dart' as giftwrap;
 import '../../core/crypto/schnorr.dart' as schnorr;
@@ -24,19 +25,20 @@ import '../../widgets/context_menu/interaction_hooks.dart'
     show giftCreditsRequestProvider;
 import '../ai_consent/ai_consent.dart';
 import '../i18n/localization_service.dart';
+import 'long_text_gate.dart';
 import '../i18n/i18n.dart';
 import '../pms/pm_logic.dart';
 import '../relays/relay_add.dart' show RelayAdd;
 import '../shop/shop_controller.dart' show shopControllerProvider;
 import '../commands/command_i18n.dart';
 import '../toasts/toast_center.dart';
-import 'bot_commands.dart';
 import 'bot_runs.dart';
 import 'nymbot_models.dart';
 import '../../services/storage/revocable_prefs.dart';
 import '../../services/storage/secure_store.dart';
 import 'anon_bot.dart';
 import 'nymbot_service.dart';
+import 'long_text.dart';
 
 /// True for `?` followed by a non-space command token.
 bool isBotCommand(String text) {
@@ -114,10 +116,11 @@ String botSendErrorText(NymbotException e) => e.priceUnavailable
     : 'Nymbot: ${BotChatController._errorDetail(e) ?? 'request failed'}';
 
 class BotPriceRetry {
-  const BotPriceRetry({required this.message, this.wrapId});
+  const BotPriceRetry({required this.message, this.wrapId, this.long});
 
   final Message message;
   final String? wrapId;
+  final ({List<String> parts, List<Map<String, dynamic>> wraps})? long;
 }
 
 /// Private chat controls; the conversation lives in the canonical PM store.
@@ -134,9 +137,12 @@ class BotChatState {
     this.anonPubkey,
     this.priceRetry,
     this.runsVersion = 0,
+    this.freeByKey = const <String, BotFreeAllowance>{},
   });
 
   final BotPriceRetry? priceRetry;
+
+  final Map<String, BotFreeAllowance> freeByKey;
 
   final int runsVersion;
 
@@ -177,6 +183,7 @@ class BotChatState {
     Object? anonPubkey = _sentinel,
     Object? priceRetry = _sentinel,
     int? runsVersion,
+    Map<String, BotFreeAllowance>? freeByKey,
   }) =>
       BotChatState(
         proModel: identical(proModel, _sentinel)
@@ -196,6 +203,7 @@ class BotChatState {
             ? this.priceRetry
             : priceRetry as BotPriceRetry?,
         runsVersion: runsVersion ?? this.runsVersion,
+        freeByKey: freeByKey ?? this.freeByKey,
       );
 
   static const _sentinel = Object();
@@ -208,6 +216,12 @@ class BotChatController extends StateNotifier<BotChatState> {
     // Restored history isn't a new send.
     _primeHandled(_thread);
     // Re-resolve a pin only the live catalog knows once it loads, so it isn't dropped to standard routing.
+    LongText.onMissing = (gone) {
+      if (mounted) {
+        _app.addSystemMessage(LongText.missingText(gone),
+            storageKey: conversationKey);
+      }
+    };
     _ref.listen<ProModelCatalog>(proModelCatalogProvider, (_, next) {
       if (!mounted || _pendingModelKey.isEmpty) return;
       final m = next.byKey(_pendingModelKey);
@@ -281,7 +295,8 @@ class BotChatController extends StateNotifier<BotChatState> {
       state = state.copyWith(
           priceRetry: BotPriceRetry(
               message: _ownMessageFor(run.id) ?? _specMessage(run.spec),
-              wrapId: run.eventId));
+              wrapId: run.eventId,
+              long: botRunLongParts(run)));
       _systemFeed(kBotPriceUnavailableText);
     },
     onOpenBuy: (pro) {
@@ -311,11 +326,21 @@ class BotChatController extends StateNotifier<BotChatState> {
       return Future.value(
           (status: 0, data: const <String, dynamic>{}));
     }
-    final anonId = (asAnon ?? anon.ready) && anon.ready ? anon.identity : null;
+    final wantAnon = asAnon ?? anon.enabled;
+    if (wantAnon && !anon.ready) {
+      return Future.value((
+        status: 503,
+        data: const <String, dynamic>{
+          'error': 'Anonymous Nymbot chat is not ready on this device yet.'
+        }
+      ));
+    }
+    final anonId = wantAnon ? anon.identity : null;
+    final key = anonId?.pk ?? pk;
     return _service.botAction(
       action,
       body,
-      pubkey: anonId?.pk ?? pk,
+      pubkey: key,
       anon: anonId != null,
       timeout: timeout,
       signedFor: (payload) async {
@@ -328,7 +353,26 @@ class BotChatController extends StateNotifier<BotChatState> {
             ? await anon.authFor(action, payload)
             : await _authFor(action, payload);
       },
-    );
+    ).then((r) {
+      _setFree(key, BotFreeAllowance.fromJson(r.data['free']));
+      return r;
+    });
+  }
+
+  BotFreeAllowance? get chipFree {
+    final key = anon.enabled ? (anon.ready ? anon.pubkey : null) : _pubkey;
+    return key == null ? null : state.freeByKey[key];
+  }
+
+  void _setFree(String key, BotFreeAllowance? free) {
+    if (free == null || !mounted) return;
+    final next = Map<String, BotFreeAllowance>.of(state.freeByKey)
+      ..remove(key)
+      ..[key] = free;
+    while (next.length > 8) {
+      next.remove(next.keys.first);
+    }
+    state = state.copyWith(freeByKey: next);
   }
 
   void setMaxRuns(int n, {bool fromSync = false}) {
@@ -432,15 +476,12 @@ class BotChatController extends StateNotifier<BotChatState> {
         (data['balance'] as num?)?.toDouble() ??
         0;
     final err = data['error'];
-    final custom =
-        err is String && err.isNotEmpty && err != 'Insufficient credits';
+    final shown = err is String ? botNoCreditsNotice(err, pro: pro) : '';
+    final custom = shown.isNotEmpty && err != 'Insufficient credits';
     if (custom) {
-      _system(err);
+      _systemT('Nymbot: {error}', {'error': shown});
     } else {
-      _systemT(
-          pro
-              ? "You're out of Nymbot Pro credits ({balance} left). Type ?buy and switch to Pro, or ?model off for standard replies."
-              : "You're out of Nymbot credits ({balance} left). Zap Nymbot or type ?buy to purchase more.",
+      _systemT(botOutOfCreditsTemplate(pro: pro),
           {'balance': creditFigure(balance)});
     }
     _applyLedgerBalance(balance, pro: pro);
@@ -493,12 +534,7 @@ class BotChatController extends StateNotifier<BotChatState> {
             {'task': task, 'cost': creditFigure(cost), 'balance': creditFigure(balance)});
       }
       if (data['lowBalance'] == true) {
-        _systemT(
-            isPro
-                ? 'Nymbot Pro credits running low: {balance} left. Type ?buy and switch to Pro to top up.'
-                : balance == 1
-                    ? 'Nymbot credits running low: {balance} credit left. Type ?buy to top up.'
-                    : 'Nymbot credits running low: {balance} credits left. Type ?buy to top up.',
+        _systemT(botLowBalanceTemplate(pro: isPro, balance: balance),
             {'balance': creditFigure(balance)});
       }
     }
@@ -574,16 +610,17 @@ class BotChatController extends StateNotifier<BotChatState> {
     Uint8List? privkey,
     EventSigner? signer,
   }) {
+    final switched = _pubkey != null && _pubkey != pubkey;
     _pubkey = pubkey;
     _auth = auth;
     _privkey = privkey;
     _signer = signer ?? (privkey != null ? LocalSigner(privkey) : null);
     anon.reset(pubkey);
     anon.bindAccount(pubkey, _authFor);
-    unawaited(_hydrateAnon(pubkey));
+    unawaited(_hydrateAnon(pubkey, refresh: switched));
   }
 
-  Future<void> _hydrateAnon(String pubkey) async {
+  Future<void> _hydrateAnon(String pubkey, {bool refresh = false}) async {
     String? blob;
     try {
       blob = await SecureStore().get('nym_botanon_$pubkey');
@@ -603,6 +640,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
     anonKeysChanged?.call();
     unawaited(anon.flush());
+    if (refresh && !anon.enabled) unawaited(checkBotCredits(display: false));
   }
 
   /// Late-attaches the active signer so money actions get fresh signatures; keeps the bound privkey for reply unwrapping.
@@ -663,6 +701,11 @@ class BotChatController extends StateNotifier<BotChatState> {
       stripPubkeySuffix(_appState.users[kNymbotPubkey]?.nym ?? 'Nymbot');
 
   void _system(String text) => showToast(tr(text));
+
+  void _anonNotReady() =>
+      _system('Anonymous Nymbot chat is not ready on this device yet.');
+
+  bool get _anonPending => anon.enabled && !anon.ready;
 
   void _systemT(String template, Map<String, Object?> args) =>
       showToast(tr(template, args));
@@ -828,7 +871,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     _displayTransientSystem('Start of private message', id: 'nymbot-start');
     if (state.clearedAtSec == 0) {
       // Rendered after the start line with a fresh timestamp.
-      _displayBotInfoMessage(botWelcomeText, id: 'nymbot-welcome');
+      _displayBotInfoMessage(botWelcomeCopy(), id: 'nymbot-welcome');
     }
     unawaited(checkBotCredits(display: false));
   }
@@ -853,7 +896,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       id: 'nymbot-welcome-$nowSec',
       author: _botNym,
       pubkey: kNymbotPubkey,
-      content: botFirstContactText,
+      content: botFirstContactCopy(),
       createdAt: nowSec,
       ms: nowMs,
       timestamp: nowSec * 1000,
@@ -945,6 +988,24 @@ class BotChatController extends StateNotifier<BotChatState> {
         thread = at.rootId;
       }
     }
+    final plan = BotLongGate.plan(
+        content, _ref.read(proModelCatalogProvider), state.proModel);
+    if (plan != null) {
+      final choice = await BotLongGate.ask(plan);
+      final switchTo = choice.switchTo;
+      final chunks = choice.chunks;
+      if (switchTo != null) {
+        setModelDirect(switchTo);
+      } else if (chunks != null) {
+        for (var i = 0; i < chunks.length; i++) {
+          await _sendUserBotPMOnce(
+              '[Part ${i + 1} of ${chunks.length}]\n${chunks[i]}', thread);
+        }
+        return;
+      } else if (!choice.go) {
+        return;
+      }
+    }
     final guardKey = '${thread ?? ''}|$content';
     if (!runsEngine.guardTake(guardKey)) return;
     try {
@@ -965,23 +1026,60 @@ class BotChatController extends StateNotifier<BotChatState> {
     NostrEvent? selfWrap;
     final anonSender = anon.enabled ? anon.ensureIdentity() : null;
     if (anon.enabled && anonSender == null) {
-      _system('Anonymous Nymbot chat is not ready on this device yet.');
+      _anonNotReady();
       return;
     }
+    final pieces = LongText.bodyCost(content) > LongText.bodyMax ? LongText.split(content) : null;
+    if (pieces != null && !LongText.check(content).ok) {
+      _systemT('This message is {kb} KB, and the most one message to Nymbot can carry is about {max} KB.',
+          {'kb': (LongText.bodyCost(content) / 1024).round(), 'max': (LongText.longMax / 1024).round()});
+      return;
+    }
+    final leadIds = <String>[];
+    final leadWraps = <Map<String, dynamic>>[];
     if (selfPubkey.isNotEmpty) {
-      final rumor = PmLogic.buildPmRumor(
-        selfPubkey: anonSender?.pk ?? selfPubkey,
-        recipientPubkey: kNymbotPubkey,
-        content: content,
-        nymMessageId: nymMessageId,
-        extraTags: [
-          if (threadRoot != null) ['nymthread', threadRoot],
-          ..._ref
-              .read(liveCustomEmojiProvider.notifier)
-              .emojiTagsForContent(content),
-        ],
-        nowMs: nowMs,
-      );
+      UnsignedEvent partRumor(String text, int index, int total) => PmLogic.buildPmRumor(
+            selfPubkey: anonSender?.pk ?? selfPubkey,
+            recipientPubkey: kNymbotPubkey,
+            content: text,
+            nymMessageId: nymMessageId,
+            extraTags: [
+              if (threadRoot != null) ['nymthread', threadRoot],
+              ['part', '$index', '$total'],
+            ],
+            nowMs: nowMs,
+          );
+      if (pieces != null) {
+        for (var i = 0; i < pieces.length - 1; i++) {
+          final r = partRumor(pieces[i], i + 1, pieces.length);
+          final w = await _wrapRumor(r, kNymbotPubkey, sender: anonSender);
+          if (w == null || !_publishDmEvent(w.toJson(), anon: anonSender != null)) {
+            _system('Nymbot: could not publish every part of your message. Please try again.');
+            return;
+          }
+          leadIds.add(w.id);
+          leadWraps.add(w.toJson());
+          final sw = anonSender != null
+              ? await _wrapRumor(r, anonSender.pk, sender: anonSender, recipientKem: anon.kemFor(anonSender)?.publicKey)
+              : await _wrapRumor(r, selfPubkey);
+          if (sw != null) _publishDmEvent(sw.toJson(), anon: anonSender != null);
+        }
+      }
+      final rumor = pieces != null
+          ? partRumor(pieces.last, pieces.length, pieces.length)
+          : PmLogic.buildPmRumor(
+              selfPubkey: anonSender?.pk ?? selfPubkey,
+              recipientPubkey: kNymbotPubkey,
+              content: content,
+              nymMessageId: nymMessageId,
+              extraTags: [
+                if (threadRoot != null) ['nymthread', threadRoot],
+                ..._ref
+                    .read(liveCustomEmojiProvider.notifier)
+                    .emojiTagsForContent(content),
+              ],
+              nowMs: nowMs,
+            );
       botWrap = await _wrapRumor(rumor, kNymbotPubkey, sender: anonSender);
       if (botWrap != null &&
           !_publishDmEvent(botWrap.toJson(), anon: anonSender != null)) {
@@ -1024,6 +1122,9 @@ class BotChatController extends StateNotifier<BotChatState> {
     );
     _handledIds.add(msg.id);
     _app.ingestPMMessage(msg);
+    if (pieces != null && botWrap != null) {
+      _longParts[botWrap.id] = (parts: [...leadIds, botWrap.id], wraps: [...leadWraps, botWrap.toJson()]);
+    }
     unawaited(_runBotExchange(msg, wrapId: botWrap?.id));
   }
 
@@ -1197,6 +1298,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         msg.thinking = tm.group(1)?.trim();
         msg.content = msg.content.substring(tm.end);
       }
+      msg.content = iosBotBuyRewrite(msg.content);
       msg.author = _botNym;
       msg.isBot = true;
       msg.replyTo ??= replyTo;
@@ -1207,9 +1309,15 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
+  final Map<String, ({List<String> parts, List<Map<String, dynamic>> wraps})> _longParts = {};
+
   Future<void> _runBotExchange(Message m, {String? wrapId}) async {
     if (!await AiConsent.instance.ensure()) {
       _systemFeed(AiConsentStrings.offNotice);
+      return;
+    }
+    if (_anonPending) {
+      _anonNotReady();
       return;
     }
     final anonId = anon.ready ? anon.identity : null;
@@ -1254,6 +1362,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       }
     }
     final cmdAlias = commandAliasHint(m.content);
+    final long = _longParts.remove(wrapId);
     final run = runsEngine.start(BotRunSpec(
       id: m.nymMessageId ?? wrapId,
       eventId: wrapId,
@@ -1265,6 +1374,8 @@ class BotChatController extends StateNotifier<BotChatState> {
         if (pro != null) 'proModel': pro.key,
         'cmdAlias': ?cmdAlias,
         'pqAnnouncement': ?pqAnnouncement,
+        if (long != null) 'parts': long.parts,
+        if (long != null) 'wraps': long.wraps,
       },
     ));
     await run?.done;
@@ -1274,7 +1385,10 @@ class BotChatController extends StateNotifier<BotChatState> {
     final retry = state.priceRetry;
     if (retry == null) return;
     state = state.copyWith(priceRetry: null);
-    await _runBotExchange(retry.message, wrapId: retry.wrapId);
+    final wrapId = retry.wrapId;
+    final long = retry.long;
+    if (wrapId != null && long != null) _longParts[wrapId] = long;
+    await _runBotExchange(retry.message, wrapId: wrapId);
   }
 
   void dismissPriceRetry() {
@@ -1323,8 +1437,13 @@ class BotChatController extends StateNotifier<BotChatState> {
   /// Refreshes the balance; with [display] it also posts a balance bubble.
   Future<void> checkBotCredits({required bool display}) async {
     if (_pubkey == null) return;
+    if (_anonPending) {
+      if (display) _anonNotReady();
+      return;
+    }
     try {
       final anonId = anon.ready ? anon.identity : null;
+      final key = anonId?.pk ?? _pubkey!;
       final b = await _service.balance(
           pubkey: anonId?.pk ?? _pubkey!,
           anon: anonId != null,
@@ -1333,6 +1452,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       if (!mounted) return;
       state = state.copyWith(
           balance: b, balanceKnown: true, balanceUnavailable: false);
+      _setFree(key, b.free);
       if (display) {
         final std = b.balance;
         final pro = b.proBalance;
@@ -1341,7 +1461,7 @@ class BotChatController extends StateNotifier<BotChatState> {
             '**$std** standard credit${std == 1 ? '' : 's'} · '
             '**$pro** Pro credit${pro == 1 ? '' : 's'}.'
             '${anon.ready ? ' Type `?anon` to move more credits across from your nym.' : ''}'
-            '${std <= 0 && pro <= 0 ? ' Type `?buy` to purchase more.' : ''}');
+            '${std <= 0 && pro <= 0 ? botBalanceBuyHint : ''}');
       }
     } on NymbotException catch (e) {
       if (display) {
@@ -1445,7 +1565,7 @@ class BotChatController extends StateNotifier<BotChatState> {
           'Nymbot Pro is off — replies use standard multi-model routing and standard credits.',
         ...lines,
         'Short replies cost the base price; long replies scale with length. The maximum is reserved from your balance per message and only the actual cost is charged.',
-        'Use `?model <name>` to select one, or `?model off` for standard routing. Pro credits: `?buy` → Pro.',
+        botModelListHint,
       ].join('\n'));
       return;
     }
@@ -1469,6 +1589,10 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 
   Future<void> clearBotPMHistory() async {
+    if (_anonPending) {
+      _anonNotReady();
+      return;
+    }
     // Snapshot wrap ids before the wipe; they key the archive purge.
     final ids = [for (final m in _thread) m.id];
     _setClearedAt(DateTime.now().millisecondsSinceEpoch ~/ 1000);
@@ -1554,10 +1678,10 @@ class BotChatController extends StateNotifier<BotChatState> {
           '**2. Nymbot Pro**',
           'Pin every reply to a specific frontier model instead of auto-routing. Pro replies spend separate **Pro credits** (100 sats each, bulk bonuses from 5K sats):',
           ...modelLines,
-          'Pick with `?model <name>` (e.g. `?model claude-opus`), back to standard with `?model off`. Buy Pro credits via `?buy` → Pro switch.',
+          botHelpProPickLine,
           '',
           '**3. Credits**',
-          '`?balance` shows both balances · `?buy` purchases over Lightning (Standard/Pro switch) · `?gift @nym#xxxx` gifts credits · `?transfer @nym#xxxx confirm` moves your ENTIRE balance (both pools) to another pubkey.',
+          botHelpCreditsLine,
           'Credits are tied to your nym — save your nsec (sidebar → your nym → Reveal private key) so they survive a new session.',
           '',
           '**4. Chat tricks**',
@@ -1822,8 +1946,6 @@ List<Message> mergeBotThreadWithInfo(List<Message> store, List<Message> info) {
   return out;
 }
 
-final botCommandsProvider = Provider<List<BotCommand>>((_) => kBotCommands);
-
 /// Disk-cached live Pro catalog refreshed in the background; failures fall back to the built-in list.
 class ProModelCatalogNotifier extends StateNotifier<ProModelCatalog> {
   ProModelCatalogNotifier(this._service) : super(kProModelCatalogFallback) {
@@ -1882,10 +2004,60 @@ final proModelsProvider =
     Provider<List<ProModel>>((ref) => ref.watch(proModelCatalogProvider).models);
 
 /// Welcome copy localized through the UI string cache, primed as soon as a language is chosen.
-List<String> botWelcomeSourceStrings() => const [
-      botWelcomeText,
-      botFirstContactText,
+List<String> botWelcomeSourceStrings() => [
+      botWelcomeCopy(),
+      botFirstContactCopy(),
     ];
+
+String botWelcomeCopy() =>
+    botCreditPurchasesDisabled ? botWelcomeTextNoBuy : botWelcomeText;
+
+String botFirstContactCopy() =>
+    botCreditPurchasesDisabled ? botFirstContactTextNoBuy : botFirstContactText;
+
+String botOutOfCreditsTemplate({required bool pro}) {
+  if (botCreditPurchasesDisabled) {
+    return pro
+        ? "You're out of Nymbot Pro credits ({balance} left). Type ?model off for standard replies."
+        : "You're out of Nymbot credits ({balance} left). Free replies come back at the daily reset.";
+  }
+  return pro
+      ? "You're out of Nymbot Pro credits ({balance} left). Type ?buy and switch to Pro, or ?model off for standard replies."
+      : "You're out of Nymbot credits ({balance} left). Zap Nymbot or type ?buy to purchase more.";
+}
+
+String botLowBalanceTemplate({required bool pro, required double balance}) {
+  if (botCreditPurchasesDisabled) {
+    return pro
+        ? 'Nymbot Pro credits running low: {balance} left.'
+        : balance == 1
+            ? 'Nymbot credits running low: {balance} credit left.'
+            : 'Nymbot credits running low: {balance} credits left.';
+  }
+  return pro
+      ? 'Nymbot Pro credits running low: {balance} left. Type ?buy and switch to Pro to top up.'
+      : balance == 1
+          ? 'Nymbot credits running low: {balance} credit left. Type ?buy to top up.'
+          : 'Nymbot credits running low: {balance} credits left. Type ?buy to top up.';
+}
+
+String botNoCreditsNotice(String err, {required bool pro}) =>
+    withoutBuyHints(err);
+
+String get botHelpProPickLine => botCreditPurchasesDisabled
+    ? 'Pick with `?model <name>` (e.g. `?model claude-opus`), back to standard with `?model off`.'
+    : 'Pick with `?model <name>` (e.g. `?model claude-opus`), back to standard with `?model off`. Buy Pro credits via `?buy` → Pro switch.';
+
+String get botHelpCreditsLine => botCreditPurchasesDisabled
+    ? '`?balance` shows both balances · `?transfer @nym#xxxx confirm` moves your ENTIRE balance (both pools) to another pubkey.'
+    : '`?balance` shows both balances · `?buy` purchases over Lightning (Standard/Pro switch) · `?gift @nym#xxxx` gifts credits · `?transfer @nym#xxxx confirm` moves your ENTIRE balance (both pools) to another pubkey.';
+
+String get botModelListHint => botCreditPurchasesDisabled
+    ? 'Use `?model <name>` to select one, or `?model off` for standard routing.'
+    : 'Use `?model <name>` to select one, or `?model off` for standard routing. Pro credits: `?buy` → Pro.';
+
+String get botBalanceBuyHint =>
+    botCreditPurchasesDisabled ? '' : ' Type `?buy` to purchase more.';
 
 /// Pre-translates the welcome copy when the language is picked at signup.
 void primeBotWelcomeCopy() {
@@ -1927,5 +2099,40 @@ const String botFirstContactText =
     'Want even more power? **Nymbot Pro** lets you pick a specific frontier model — Claude Fable 5, Claude Opus, GPT-5.1, and more — for every reply. Type `?model` to see them; Pro replies use separate Pro credits.\n'
     '\n'
     'Type `?buy` to get credits (Standard or Pro) and `?balance` to check your balance. Credits are tied to your nym, so save your nsec to keep them. Type `?help` here anytime for the full free guide to premium, Pro, and credits.\n'
+    '\n'
+    'So, what can I help you with?';
+
+const String botWelcomeTextNoBuy =
+    "Hey, I'm **Nymbot** 👋 — your private, end-to-end encrypted 1:1 AI assistant.\n"
+    '\n'
+    "I'm smarter than the free public-channel bot. I read each message, figure out the type of task (coding, reasoning/math, creative writing, translation, or general chat) and route it to the best AI model for the job — so my answers are sharper.\n"
+    '\n'
+    "**Here's how to get the most out of me:**\n"
+    '• `?help` — full guide to premium vs Pro, credits, and every command (free).\n'
+    '• Just type normally — I use our whole conversation as context.\n'
+    '• Start a message with `!` to get a one-off answer that ignores all earlier chat history (e.g. `!what is 2+2`).\n'
+    "• Quote-reply any message to ask a follow-up about it — I'll see what you're replying to.\n"
+    '• `?clear` — wipe this chat and start fresh.\n'
+    '• `?balance` — check your credit balance (also shown in the header).\n'
+    '• `?model` — go **Pro**: pick a specific frontier model (Claude Fable 5, Claude Opus/Sonnet/Haiku, GPT-5.6 Sol, Gemini, Grok, Kimi K3, Qwen, MiniMax) for every reply, paid with separate Pro credits.\n'
+    '• `?image <description>` — generate a picture. On Pro, add `--model <name>` to pick a frontier generator (Nano Banana Pro, Imagen 4, FLUX 2, Seedream, GPT Image 2, Grok Imagine, Recraft) — `?image models` lists them free.\n'
+    '• `?speak <text>` — get it read aloud as a voice clip.\n'
+    '• Send or link a picture — models that can see will look at the image itself, not just the link.\n'
+    '• `?transfer @nym#xxxx confirm` — move ALL your credits to another pubkey (great for switching nyms).\n'
+    '\n'
+    "**Pricing:** general chat, creative writing, and translation replies cost **1 credit**. Coding and reasoning/math replies cost **2 credits** (they use larger models). Pro replies start at **1–2 Pro credits** and scale with reply length (each model's range is in `?model`). `?image` costs **5 credits** (2 Pro) and `?speak` **3 credits** (1 Pro), charged per generation — nothing is charged if it fails. Credits are tied to your nym — save your nsec so you don't lose them.\n"
+    '\n'
+    'So, what can I help you with?';
+
+const String botFirstContactTextNoBuy =
+    "Welcome to **Nymchat** 👋 — I'm **Nymbot**, your built-in AI assistant.\n"
+    '\n'
+    'In any public channel you can ask me anything for **free** — just type `?ask <your question>` or mention `@Nymbot`. Type `?help` in a channel to see everything I can do.\n'
+    '\n'
+    "Right here in our private 1:1 chat is the **premium** tier: it's end-to-end encrypted and I route each message to the best AI model for the job (coding, reasoning/math, creative writing, translation, or general chat). These private replies cost **credits** — general chat, creative writing, and translation cost 1 credit each; coding and reasoning/math cost 2 credits each.\n"
+    '\n'
+    'Want even more power? **Nymbot Pro** lets you pick a specific frontier model — Claude Fable 5, Claude Opus, GPT-5.1, and more — for every reply. Type `?model` to see them; Pro replies use separate Pro credits.\n'
+    '\n'
+    'Type `?balance` to check your balance. Credits are tied to your nym, so save your nsec to keep them. Type `?help` here anytime for the full free guide to premium, Pro, and credits.\n'
     '\n'
     'So, what can I help you with?';

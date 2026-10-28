@@ -5,6 +5,7 @@
     const METHODS = ['nsec', 'extension', 'nip46', 'ephemeral', 'anonymous'];
     const CACHE_DB = 'nym-cache';
     const STASH_DB = 'nym-accounts';
+    const MAP_DB = 'nym-map';
     const DROP_KEY = 'nymacct:drop';
     const AVATAR_MAX = 4096;
 
@@ -252,6 +253,7 @@
             const a = before.accounts.find((x) => x.id === e.slice(5));
             if (a) out.push(dbName(CACHE_DB, a));
         }
+        if (out.length) out.push(MAP_DB);
         return out;
     }
 

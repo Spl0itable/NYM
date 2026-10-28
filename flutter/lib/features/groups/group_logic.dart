@@ -450,6 +450,9 @@ class GroupLogic {
     return true;
   }
 
+  static int nextMetaTs(Group g, int now) =>
+      now > g.metaUpdatedAt ? now : g.metaUpdatedAt + 1;
+
   static void stampMeta(Group g, String by, int ts,
       [Map<String, String>? before]) {
     noteMetaSetters(g, before ?? metaSnapshot(g), by);
@@ -556,6 +559,12 @@ class GroupLogic {
       tags: tags,
       content: content,
     );
+  }
+
+  static String joinAnswerVerdict(Group group, int reqEpoch) {
+    if (!group.inviteEnabled) return 'drop';
+    if (reqEpoch != group.inviteEpoch) return 'drop';
+    return group.joinApproval ? 'queue' : 'admit';
   }
 
   /// Owner-issued `group-metadata` control rumor; empty values clear fields and [createdAtSec] keeps the monotonic stamp.

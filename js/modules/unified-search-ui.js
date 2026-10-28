@@ -393,7 +393,7 @@
                 return `<div class="us-row us-${kind}" role="option" id="usOpt${i}" data-us-idx="${i}" data-us-id="${esc(data.rid || '')}" aria-selected="false" aria-label="${esc(label)}">${inner}</div>`;
             };
             const more = (group, shown, total) => row('more', { group, rid: 'more-' + group }, this._us('showMore'), `<span class="us-more">${esc(this._us('showMore'))} (${total - shown})</span>`);
-            const groupHtml = (id, title, total, body) => `<div class="us-group" role="group" aria-labelledby="usG${id}"><div class="us-group-title" id="usG${id}" role="presentation">${esc(title)} · ${total}</div>${body}</div>`;
+            const groupHtml = (id, title, total, body) => `<div class="us-group" role="group" aria-labelledby="usG${id}"><div class="us-group-title" id="usG${id}" role="presentation"><span>${esc(title)}</span> · ${total}</div>${body}</div>`;
             let html = '';
             if (r.channels.total || r.join) {
                 let body = '';

@@ -8,6 +8,7 @@ import '../../services/storage/at_rest_cipher.dart';
 import '../../services/storage/cache_store.dart';
 import '../../services/storage/mesh_file_store.dart';
 import '../../services/storage/secure_store.dart';
+import '../globe/street_cache.dart';
 import 'biometric_secret_store.dart';
 import 'panic_purge.dart';
 
@@ -128,6 +129,7 @@ class PanicWipe {
     required this._secure,
     required this._cache,
     this._files,
+    this._mapFiles,
     this._purge,
     this._purgeBudget = defaultPurgeBudget,
   });
@@ -144,6 +146,7 @@ class PanicWipe {
         cache: _CacheStoreAdapter(cache ?? CacheStore()),
         files: _AtRestFilesAdapter(
             MeshFileStore.instance, AtRestCipher.instance),
+        mapFiles: StreetCacheWipe(),
         purge: purge,
         purgeBudget: purgeBudget,
       );
@@ -154,7 +157,10 @@ class PanicWipe {
   final PanicSecureStore _secure;
   final PanicCacheStore _cache;
   final PanicFileStore? _files;
+  final PanicFileStore? _mapFiles;
   final PanicIdentityPurge? _purge;
+
+  bool get hasMapFiles => _mapFiles != null;
   final Duration _purgeBudget;
 
   /// True while a wipe runs; persistence paths check it and refuse to write so nothing re-writes data mid-wipe.
@@ -192,6 +198,9 @@ class PanicWipe {
     } catch (_) {}
     try {
       await _files?.wipe();
+    } catch (_) {}
+    try {
+      await _mapFiles?.wipe();
     } catch (_) {}
     try {
       onStatus?.call('Purging caches…');

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import '../../models/message.dart';
+import '../shop/shop_purchase_policy.dart';
 
 typedef BotRunResponse = ({int status, Map<String, dynamic> data});
 
@@ -310,14 +311,14 @@ class BotRunsEngine {
         _note(
             run,
             BotRunNote(BotRunNoteKind.capFree,
-                text: (data['error'] ?? '').toString()));
+                text: withoutBuyHints((data['error'] ?? '').toString())));
         _end(run);
         onOpenBuy?.call(false);
         return;
       }
       run.state = BotRunState.capped;
       run.cap = BotRunCap(
-        error: (data['error'] ?? '').toString(),
+        error: withoutBuyHints((data['error'] ?? '').toString()),
         running: _int(data['running'], 0),
         limit: _int(data['limit'], kBotRunDefaultLimit),
         ceiling: _int(data['ceiling'], kBotRunCeiling),
@@ -336,8 +337,9 @@ class BotRunsEngine {
       onPriceUnavailable?.call(run);
       return;
     }
-    final err = data['error'];
-    if (status >= 400 || (err is String && err.isNotEmpty)) {
+    final raw = data['error'];
+    final err = raw is String ? withoutBuyHints(raw) : raw;
+    if (status >= 400 || (raw is String && raw.isNotEmpty)) {
       _note(
           run,
           BotRunNote(BotRunNoteKind.error,
@@ -462,7 +464,7 @@ class BotRunsEngine {
           startedAt: r.startedAt,
           extra: {
             for (final e in r.spec.extra.entries)
-              if (e.key != 'pqAnnouncement') e.key: e.value,
+              if (e.key != 'pqAnnouncement' && e.key != 'wraps') e.key: e.value,
           },
         ).toJson(),
     ]);
@@ -759,4 +761,14 @@ class BotRunsEngine {
   void dispose() {
     disposed = true;
   }
+}
+
+({List<String> parts, List<Map<String, dynamic>> wraps})? botRunLongParts(BotRun run) {
+  final parts = run.spec.extra['parts'];
+  final wraps = run.spec.extra['wraps'];
+  if (parts is! List || wraps is! List || parts.isEmpty) return null;
+  return (
+    parts: [for (final p in parts) if (p is String) p],
+    wraps: [for (final w in wraps) if (w is Map) Map<String, dynamic>.from(w)],
+  );
 }

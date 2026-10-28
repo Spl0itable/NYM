@@ -9,13 +9,13 @@ enum GeoListTab { active, nearby, saved }
 
 String geoWindowLabel(int hours) => switch (hours) {
       1 => tr('Last hour'),
-      168 => tr('Last 7 days'),
+      12 => tr('Last 12 hours'),
       _ => tr('Last 24 hours'),
     };
 
 String geoWindowShort(int hours) => switch (hours) {
       1 => tr('1h'),
-      168 => tr('7d'),
+      12 => tr('12h'),
       _ => tr('24h'),
     };
 

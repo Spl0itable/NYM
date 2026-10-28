@@ -303,7 +303,7 @@ export function relayPublisher(env, opts) {
     const open = events.filter((e) => !isAppRelayOnly(e));
     const plan = [];
     const list = relays.slice();
-    if (appOnly.length && list.indexOf(APP_RELAY) < 0) list.push(APP_RELAY);
+    if (events.length && list.indexOf(APP_RELAY) < 0) list.push(APP_RELAY);
     for (const url of list) {
       const batch = url === APP_RELAY ? appOnly.concat(open) : open;
       if (!batch.length) continue;
@@ -409,7 +409,7 @@ export async function runScheduled(env, opts) {
   const publish = o.publish || relayPublisher(env, { proxyHost: o.proxyHost });
   const judge = o.judge || ((events) => judgeChannelEvents(env, o.context, events, 15000));
   try {
-    const p = await db.prepare("DELETE FROM scheduled WHERE status IN ('sent', 'failed') AND MAX(sent_at, next_try, publish_at) < ?").bind(now - L.keepDoneSec).run();
+    const p = await db.prepare("DELETE FROM scheduled WHERE status IN ('sent', 'failed') AND next_try < ? AND MAX(sent_at, next_try, publish_at) < ?").bind(now - L.keepDoneSec, now - L.keepDoneSec).run();
     summary.purged = (p && p.meta && p.meta.changes) || 0;
   } catch { }
   await db.prepare("UPDATE scheduled SET status = 'pending', lease_until = 0 WHERE status = 'sending' AND lease_until < ?").bind(now).run();

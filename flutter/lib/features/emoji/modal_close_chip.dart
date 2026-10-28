@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../widgets/common/hit_slop.dart';
+import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_focusable.dart';
+import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 
 /// Header close chip shared by the emoji and GIF pickers: 28x28 circle that turns danger-red on hover.
@@ -19,6 +21,11 @@ class _ModalCloseChipState extends State<ModalCloseChip> {
 
   @override
   Widget build(BuildContext context) {
+    if (!NymSheetScope.of(context)) return _chip(context);
+    return DuoRailSwap.close(onTap: widget.onTap, child: _chip(context));
+  }
+
+  Widget _chip(BuildContext context) {
     final c = context.nym;
     return HitSlop(
       child: NymFocusable(

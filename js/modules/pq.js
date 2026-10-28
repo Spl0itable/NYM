@@ -8,6 +8,7 @@
     // How long "this peer has no announcement" is trusted before asking again.
     const PQ_REFETCH_MS = 10 * 60 * 1000;
     const PQ_RETRY_SOON_MS = 15 * 1000;
+    const PQ_NOTICE_COMPOSER_QUIET_MS = 4000;
     const PQ_FRESH_KEYLESS_SEC = 10 * 60;
     // A one-shot lookup gives up after this and the message goes classical.
     const PQ_FETCH_TIMEOUT_MS = 2500;
@@ -1263,6 +1264,13 @@
             const revealPending = this.pqRootRevealPending() && this.pqHasRoot();
             if (!this.pqUpgradeNoticePending() && !linkPending && !revealPending) return;
             if (this._pqNoticeOpen) return;
+            if (!this._pqNoticeAfterHold && this._pqComposerBusy()) {
+                if (this._pqNoticeHeld) return;
+                this._pqNoticeHeld = true;
+                try { await this._pqWhenComposerQuiet(); } finally { this._pqNoticeHeld = false; }
+                this._pqNoticeAfterHold = true;
+                try { return await this.maybeShowPqUpgradeNotice(); } finally { this._pqNoticeAfterHold = false; }
+            }
             // A locked device is not `pqCapable`, so the capability gate must not swallow its prompt.
             if (!linkPending && !this.pqCapable()) { this.dismissPqUpgradeNotice(); return; }
             if (this._pqTutorialPending()) { this.dismissPqUpgradeNotice(); return; }
@@ -1321,6 +1329,34 @@
                 });
             } catch (_) { /* dialog unavailable; the notice is not load-bearing */ }
             finally { this._pqNoticeOpen = false; }
+        },
+
+        _pqComposerBusy() {
+            if (typeof document === 'undefined' || !document) return false;
+            const input = document.getElementById('messageInput');
+            if (!input || document.activeElement !== input) return false;
+            const text = typeof input.value === 'string' ? input.value : (input.textContent || '');
+            return text.trim() !== '';
+        },
+
+        _pqWhenComposerQuiet() {
+            const input = document.getElementById('messageInput');
+            return new Promise((resolve) => {
+                let timer = null;
+                const events = ['input', 'keydown', 'blur'];
+                const done = () => {
+                    clearTimeout(timer);
+                    for (const e of events) input.removeEventListener(e, onEvent);
+                    resolve();
+                };
+                const onEvent = (ev) => {
+                    clearTimeout(timer);
+                    if ((ev && ev.type === 'blur') || !this._pqComposerBusy()) { done(); return; }
+                    timer = setTimeout(done, PQ_NOTICE_COMPOSER_QUIET_MS);
+                };
+                for (const e of events) input.addEventListener(e, onEvent);
+                timer = setTimeout(done, PQ_NOTICE_COMPOSER_QUIET_MS);
+            });
         },
 
         /// Whether the tutorial is still ahead of this user.

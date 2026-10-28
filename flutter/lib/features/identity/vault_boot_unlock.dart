@@ -316,7 +316,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock>
       child: Text(
         text,
         style: TextStyle(
-          color: c.text,
+          color: c.textDim,
           fontSize: NymType.xl,
           fontWeight: FontWeight.w600,
           height: 1.3,

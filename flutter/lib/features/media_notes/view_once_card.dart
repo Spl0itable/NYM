@@ -13,6 +13,7 @@ import '../../core/utils/secret_screen.dart';
 import '../chat_lock/screen_privacy.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../state/nostr_controller.dart';
+import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import '../mesh/mesh_controller.dart';
 import 'media_note_files.dart';
@@ -308,7 +309,11 @@ class _ViewOnceViewerState extends State<ViewOnceViewer> {
               style: const TextStyle(color: Colors.white))
           : const Icon(Icons.graphic_eq, color: Colors.white, size: 64);
     }
-    return Material(
+    return DuoRailItems(
+      active: DuoScope.railOf(context),
+      priority: kDuoSheetPriority,
+      items: [duoCloseItem(() => Navigator.of(context).maybePop())],
+      child: Material(
       color: Colors.transparent,
       child: SafeArea(
         child: Padding(
@@ -336,6 +341,6 @@ class _ViewOnceViewerState extends State<ViewOnceViewer> {
           ),
         ),
       ),
-    );
+    ));
   }
 }

@@ -289,10 +289,11 @@ class Message {
     int? createdAtMs,
     List<String> people = const [],
     List<String> names = const [],
+    String? id,
   }) {
     final ms = createdAtMs ?? DateTime.now().millisecondsSinceEpoch;
     return Message(
-      id: 'sys-${ms.toRadixString(36)}-${content.hashCode.toUnsigned(20)}',
+      id: id ?? 'sys-${ms.toRadixString(36)}-${content.hashCode.toUnsigned(20)}',
       author: '',
       pubkey: '',
       content: content,

@@ -26,6 +26,7 @@ import '../settings/settings_widgets.dart' show SettingsToggleRow;
 import '../media_notes/profile_image.dart';
 import '../share/qr_decoder_channel.dart';
 import '../share/share_scanner.dart';
+import '../duo/duo_rail.dart';
 
 /// A picked recipient: 64-hex pubkey plus display nym.
 class PmRecipient {
@@ -489,7 +490,9 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   }
 
   Widget _closeButton(NymColors c) {
-    return InkWell(
+    return DuoRailSwap.close(
+      onTap: () => Navigator.of(context).pop(),
+      child: InkWell(
       onTap: () => Navigator.of(context).pop(),
       borderRadius: const BorderRadius.all(Radius.circular(16)),
       child: Container(
@@ -504,6 +507,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
         child: Icon(Icons.close,
             semanticLabel: tr('Close'), size: 16, color: c.textDim),
       ),
+    ),
     );
   }
 

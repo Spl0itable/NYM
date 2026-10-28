@@ -9,23 +9,8 @@
     };
     const RESET_HINT = 'Reset the invite link in group settings to stop old codes and stickers.';
     const PROFILE_NOTE = 'Anyone who scans this code can open this profile.';
-    const ACTIONS = [
-        { id: 'share', order: 10, label: 'Share...' },
-        { id: 'nearby', order: 20, label: 'Share nearby' },
-        { id: 'nfc', order: 40, label: 'Write to NFC sticker' },
-        { id: 'save', order: 50, label: 'Save QR image' },
-        { id: 'scan', order: 60, label: 'Scan a code' },
-        { id: 'app', order: 70, label: 'Share Nymchat app' },
-    ];
-    const ICONS = {
-        share: '<path d="M8 2v8M5 5l3-3 3 3"/><path d="M3 9v4h10V9"/>',
-        nearby: '<circle cx="8" cy="8" r="1.5"/><path d="M5 5a4.2 4.2 0 0 0 0 6M11 5a4.2 4.2 0 0 1 0 6M3 3a7 7 0 0 0 0 10M13 3a7 7 0 0 1 0 10"/>',
-        nfc: '<rect x="3" y="2" width="10" height="12" rx="2"/><path d="M6 6c1 1.2 1 2.8 0 4M8.5 5c1.6 1.8 1.6 4.2 0 6"/>',
-        save: '<path d="M8 2v8M5 7l3 3 3-3"/><path d="M3 13h10"/>',
-        scan: '<path d="M2 5V2h3M11 2h3v3M14 11v3h-3M5 14H2v-3"/><path d="M4 8h8"/>',
-        app: '<rect x="4" y="1.5" width="8" height="13" rx="1.5"/><path d="M7 12.5h2"/>',
-    };
-    const svg = (p) => `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
+    const U = () => window.NymShareUi;
+    const webActions = () => U().ACTIONS.filter((a) => !a.platforms || a.platforms.includes('web'));
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
     Object.assign(NYM.prototype, {
@@ -165,7 +150,7 @@
             switch (id) {
                 case 'share': return typeof navigator.share === 'function';
                 case 'nearby': return typeof this.shareNearbyAvailable === 'function' && this.shareNearbyAvailable();
-                case 'nfc': return typeof this.shareNfcAvailable === 'function' && this.shareNfcAvailable();
+                case 'sticker': return typeof this.shareNfcAvailable === 'function' && this.shareNfcAvailable();
                 case 'save': return !!tg.codeLink;
                 case 'scan': return typeof this.openShareScanner === 'function';
                 case 'app': return tg.kind === 'profile' && !!tg.isOwnProfile && typeof this.openShareApp === 'function';
@@ -176,8 +161,8 @@
         _shareRenderActions() {
             const tg = this._shareTarget;
             const box = document.getElementById('shareActions');
-            const list = ACTIONS.filter((a) => this._shareActionAvailable(a.id, tg)).sort((a, b) => a.order - b.order);
-            box.innerHTML = list.map((a) => `<button type="button" class="share-action" data-action="shareRunAction" data-share-action="${a.id}">${svg(ICONS[a.id])}<span>${esc(this._shT(a.label))}</span></button>`).join('');
+            const list = webActions().filter((a) => this._shareActionAvailable(a.id, tg)).sort((a, b) => a.order - b.order);
+            box.innerHTML = list.map((a) => `<button type="button" class="share-action" data-action="shareRunAction" data-share-action="${a.id}">${U().svg(a.icon, 20)}<span>${esc(this._shT(a.label))}</span></button>`).join('');
             box.classList.toggle('nm-hidden', !list.length);
         },
 
@@ -205,7 +190,7 @@
                 navigator.share({ title: 'Nymchat', url: tg.link }).catch(() => { });
             } else if (id === 'nearby') {
                 this.openNearbyShare(tg);
-            } else if (id === 'nfc') {
+            } else if (id === 'sticker') {
                 this.openNfcWrite(tg);
             } else if (id === 'save') {
                 this._shareSaveQr(tg);

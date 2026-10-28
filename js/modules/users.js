@@ -132,7 +132,7 @@ Object.assign(NYM.prototype, {
     },
 
     saveBlockedKeywords() {
-        localStorage.setItem('nym_blocked_keywords', JSON.stringify(Array.from(this.blockedKeywords)));
+        this._lsSave('nym_blocked_keywords', JSON.stringify(Array.from(this.blockedKeywords)));
         if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
 
@@ -1078,7 +1078,7 @@ Object.assign(NYM.prototype, {
 
             this.userAvatars.set(this.pubkey, url);
             this.cacheAvatarImage(this.pubkey, url);
-            localStorage.setItem('nym_avatar_url', url);
+            this._lsSave('nym_avatar_url', url);
             this.updateSidebarAvatar();
             this.updateRenderedAvatars(this.pubkey, url);
             await this.saveToNostrProfile();
@@ -1118,7 +1118,7 @@ Object.assign(NYM.prototype, {
             this.bannerBlobCache.delete(this.pubkey);
             this.userBanners.set(this.pubkey, url);
             this.cacheBannerImage(this.pubkey, url);
-            localStorage.setItem('nym_banner_url', url);
+            this._lsSave('nym_banner_url', url);
             await this.saveToNostrProfile();
 
             this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
@@ -1206,9 +1206,9 @@ Object.assign(NYM.prototype, {
     },
 
     saveWallpaper(type, customUrl) {
-        localStorage.setItem('nym_wallpaper_type', type);
+        this._lsSave('nym_wallpaper_type', type);
         if (type === 'custom' && customUrl) {
-            localStorage.setItem('nym_wallpaper_custom_url', customUrl);
+            this._lsSave('nym_wallpaper_custom_url', customUrl);
         } else {
             localStorage.removeItem('nym_wallpaper_custom_url');
             this._clearWallpaperCache();
@@ -1622,7 +1622,8 @@ Object.assign(NYM.prototype, {
                 pubkey: pubkey,
                 lastSeen: eventTime,
                 status: baseStatus,
-                channels: new Set([channelKey])
+                channels: new Set([channelKey]),
+                postedIn: new Set([String(channelKey).toLowerCase()])
             });
         } else {
             const user = this.users.get(pubkey);
@@ -1635,6 +1636,8 @@ Object.assign(NYM.prototype, {
             this._propagateNymChange(pubkey, nym, prevBase);
             if (!user.channels) user.channels = new Set();
             user.channels.add(channelKey);
+            if (!user.postedIn) user.postedIn = new Set();
+            user.postedIn.add(String(channelKey).toLowerCase());
         }
 
         if (!this.channelUsers.has(channelKey)) {
@@ -1649,47 +1652,203 @@ Object.assign(NYM.prototype, {
 
     handleGeoPresenceEvent(event) {
         const G = (typeof self !== 'undefined' && self.NymGeoPresence) || null;
-        if (!G || !event || this.inPMMode) return;
-        const ch = typeof this._presenceChannel === 'function' ? this._presenceChannel() : null;
-        if (!ch) return;
-        const type = ch.type;
-        const channel = ch.id;
+        if (!G || !event) return;
+        if (!this._geoPresenceTracker) this._geoPresenceTracker = G.createTracker();
         const pk = event.pubkey;
         const now = Date.now();
         const known = this.users.get(pk);
         const excluded = (this.blockedUsers && this.blockedUsers.has(pk)) || this._userListHidden(pk, known && known.nym ? known.nym : '');
         const own = [this.pubkey];
         if (this._anonOwnKeys) this._anonOwnKeys.forEach((k) => own.push(k));
-        const verdict = G.accept(event, { type, channel, nowMs: now, verified: true, own, excluded: excluded ? [pk] : [] });
+        const verdict = this._geoPresenceTracker.ingest(event, { nowMs: now, verified: true, own, excluded: excluded ? [pk] : [] });
         if (!verdict.ok) return;
+        const channel = verdict.channel;
         const status = this.presenceStatuses ? this.presenceStatuses.get(pk) : null;
         const statusAtMs = this.presenceTimestamps ? (this.presenceTimestamps.get(pk) || 0) * 1000 : 0;
         const act = G.activity({ geoAtMs: verdict.atMs, nowMs: now, prevSeenMs: known ? known.lastSeen || 0 : 0, status: status || null, statusAtMs });
         if (!act.counts) return;
-        if (!this._geoPresenceMembers) this._geoPresenceMembers = new Map();
-        let members = this._geoPresenceMembers.get(channel);
-        if (!members) {
-            members = new Set();
-            this._geoPresenceMembers.set(channel, members);
-        }
-        if (!G.admits(members.size, members.has(pk))) return;
-        members.add(pk);
-        this.recordUserActivity(pk, act.seenMs);
+        this.recordUserActivity(pk, act.seenMs, { quiet: true });
         const user = this.users.get(pk);
         if (!user) return;
-        if (!user.channels) user.channels = new Set();
-        if (!user.channels.has(channel)) {
-            user.channels.add(channel);
-            this.updateUserList();
+        if (!known) {
+            if (!this._presenceOnlyUsers) this._presenceOnlyUsers = new Set();
+            this._presenceOnlyUsers.add(pk);
         }
+        if (!user.channels) user.channels = new Set();
+        const joined = !this._seenIn(user, channel, now);
+        user.channels.add(channel);
+        this._noteChannelSeen(user, channel, verdict.atMs, now);
         if (!this.channelUsers.has(channel)) this.channelUsers.set(channel, new Set());
         this.channelUsers.get(channel).add(pk);
+        const open = this.inPMMode ? '' : String(this.currentGeohash || this.currentChannel || '').toLowerCase();
+        if (channel !== open) this._scheduleGeoPresenceUi();
+        else {
+            if (joined) this._scheduleChannelMetaCount();
+            this.updateUserList();
+        }
+        this._sweepPresenceOnlyUsers(now);
+    },
+
+    _scheduleChannelMetaCount() {
+        if (this._channelMetaQueued) return;
+        this._channelMetaQueued = true;
+        const run = () => {
+            this._channelMetaQueued = false;
+            this._writeChannelMetaCount();
+        };
+        if (typeof queueMicrotask === 'function') queueMicrotask(run);
+        else Promise.resolve().then(run);
+    },
+
+    _writeChannelMetaCount() {
+        if (this.inPMMode) return;
+        const key = this.currentGeohash || this.currentChannel;
+        const now = Date.now();
+        const pmOnly = this._pmOnlyPubkeys();
+        let n = 0;
+        this.users.forEach((user, pubkey) => {
+            if (this._userListGate(user, pubkey, pmOnly) && this.getEffectiveUserStatus(pubkey) !== 'hidden' && this._onlineIn(user, key, now)) n++;
+        });
+        this._channelOnlineCount = n;
+        const meta = typeof document !== 'undefined' && typeof document.getElementById === 'function' ? document.getElementById('channelMeta') : null;
+        if (meta) meta.textContent = `${this.abbreviateNumber(n)} online nyms`;
+    },
+
+    _pmOnlyPubkeys() {
+        if (!this.settings || !this.settings.groupChatPMOnlyMode) return null;
+        const out = new Set();
+        if (this.pmConversations) this.pmConversations.forEach((_c, pk) => out.add(pk));
+        if (this.groupConversations) {
+            this.groupConversations.forEach(g => {
+                if (g && g.members) g.members.forEach(pk => out.add(pk));
+            });
+        }
+        return out;
+    },
+
+    _userListGate(user, pubkey, pmOnly) {
+        if (!user || !user.nym) return false;
+        if (this._userListHidden(pubkey, user.nym)) return false;
+        if (pmOnly && !pmOnly.has(pubkey)) return false;
+        if (pubkey !== this.pubkey && !this.isFriend?.(pubkey) &&
+            typeof this.isGibberishNym === 'function' &&
+            this._clientGatesActive() &&
+            this.isGibberishNym(user.nym)) return false;
+        return true;
+    },
+
+    _nonPresenceKeys() {
+        const out = new Set();
+        const add = (pk) => { if (typeof pk === 'string' && pk) out.add(pk); };
+        add(this.pubkey);
+        add(this.currentPM);
+        const each = (c) => { if (c && typeof c.forEach === 'function') c.forEach((_v, k) => add(typeof k === 'string' ? k : _v)); };
+        each(this._anonOwnKeys);
+        each(this.friends);
+        each(this.blockedUsers);
+        each(this.verifiedBotPubkeys);
+        if (this.pmConversations) this.pmConversations.forEach((_c, pk) => add(pk));
+        if (this.groupConversations) {
+            this.groupConversations.forEach(g => {
+                if (g && g.members) g.members.forEach(pk => add(pk));
+            });
+        }
+        return out;
+    },
+
+    _sweepPresenceOnlyUsers(nowMs) {
+        const set = this._presenceOnlyUsers;
+        if (!set || !set.size) return;
+        const G = (typeof self !== 'undefined' && self.NymGeoPresence) || null;
+        const every = G && typeof G.wideConfig === 'function' ? G.wideConfig().sweepMs : 60000;
+        if (nowMs - (this._presenceOnlySweptAt || 0) < every) return;
+        this._presenceOnlySweptAt = nowMs;
+        let keep = null;
+        let removed = 0;
+        for (const pk of set) {
+            const user = this.users.get(pk);
+            if (!user) { set.delete(pk); continue; }
+            if (!keep) keep = this._nonPresenceKeys();
+            if (keep.has(pk) || (user.postedIn && user.postedIn.size > 0)) { set.delete(pk); continue; }
+            if (this._seenActive(user.lastSeen, nowMs)) continue;
+            let live = false;
+            if (user.channelSeen) user.channelSeen.forEach((at) => { if (this._seenActive(at, nowMs)) live = true; });
+            if (live) continue;
+            set.delete(pk);
+            this._dropUser(pk, user);
+            removed++;
+        }
+        if (removed > 0) {
+            this._userListSig = '';
+            this.updateUserList();
+        }
+    },
+
+    _dropUser(pk, user) {
+        this.users.delete(pk);
+        if (this.userColors) this.userColors.delete(pk);
+        const blobUrl = this.avatarBlobCache && this.avatarBlobCache.get(pk);
+        if (blobUrl && blobUrl.startsWith('blob:')) URL.revokeObjectURL(blobUrl);
+        if (this.avatarBlobCache) this.avatarBlobCache.delete(pk);
+        if (!this.channelUsers) return;
+        if (user && user.channels) {
+            user.channels.forEach((ch) => {
+                const members = this.channelUsers.get(ch);
+                if (!members) return;
+                members.delete(pk);
+                if (!members.size) this.channelUsers.delete(ch);
+            });
+        } else {
+            this.channelUsers.forEach(members => members.delete(pk));
+        }
+    },
+
+    _noteChannelSeen(user, key, atMs, nowMs) {
+        if (!user || !key) return;
+        if (!user.channelSeen) user.channelSeen = new Map();
+        const m = user.channelSeen;
+        for (const [k, at] of m) {
+            if (!this._seenActive(at, nowMs)) m.delete(k);
+        }
+        const at = Math.min(typeof atMs === 'number' ? atMs : 0, nowMs);
+        if (!this._seenActive(at, nowMs)) return;
+        const k = String(key).toLowerCase();
+        if (at > (m.get(k) || 0)) m.set(k, at);
+    },
+
+    _seenIn(user, key, nowMs) {
+        if (!user || !user.channelSeen || !key) return false;
+        return this._seenActive(user.channelSeen.get(String(key).toLowerCase()) || 0, nowMs);
+    },
+
+    _onlineIn(user, key, nowMs) {
+        if (!user || !key) return false;
+        if (this._seenIn(user, key, nowMs)) return true;
+        return !!(user.postedIn && user.postedIn.has(String(key).toLowerCase())) && this._seenActive(user.lastSeen, nowMs);
+    },
+
+    _scheduleGeoPresenceUi() {
+        this._geoPresenceUiDirty = true;
+        if (this._geoPresenceUiTimer) return;
+        if (typeof document !== 'undefined' && document.hidden) return;
+        const G = self.NymGeoPresence;
+        this._geoPresenceUiTimer = setTimeout(() => {
+            this._geoPresenceUiTimer = null;
+            this._flushGeoPresenceUi();
+        }, G.wideConfig().uiFlushMs);
+    },
+
+    _flushGeoPresenceUi() {
+        if (!this._geoPresenceUiDirty) return;
+        this._geoPresenceUiDirty = false;
+        this.updateUserList();
     },
 
     // E.g. after a read receipt, so lurkers who only view messages still appear online.
-    recordUserActivity(pubkey, atMs) {
+    recordUserActivity(pubkey, atMs, opts) {
         if (!pubkey || pubkey === this.pubkey) return;
         if (this.blockedUsers && this.blockedUsers.has(pubkey)) return;
+        if (!(opts && opts.quiet) && this._presenceOnlyUsers) this._presenceOnlyUsers.delete(pubkey);
         const now = Date.now();
         const at = (typeof atMs === 'number' && atMs > 0) ? atMs : now;
         const L = (typeof self !== 'undefined' && self.NymLastSeen) || null;
@@ -1711,6 +1870,7 @@ Object.assign(NYM.prototype, {
                 channels: new Set()
             });
         }
+        if (opts && opts.quiet) return;
         this.updateUserList();
         if (this.inPMMode && this.currentPM === pubkey && typeof this.refreshPMHeaderStatus === 'function') {
             this.refreshPMHeaderStatus();
@@ -1740,14 +1900,7 @@ Object.assign(NYM.prototype, {
         const currentChannelKey = this.currentGeohash || this.currentChannel;
         const now = Date.now();
 
-        let pmOnlyPubkeys = null;
-        if (this.settings.groupChatPMOnlyMode) {
-            pmOnlyPubkeys = new Set();
-            this.pmConversations.forEach((_c, pk) => pmOnlyPubkeys.add(pk));
-            this.groupConversations.forEach(g => {
-                if (g.members) g.members.forEach(pk => pmOnlyPubkeys.add(pk));
-            });
-        }
+        const pmOnlyPubkeys = this._pmOnlyPubkeys();
 
         const themeBitchat = this.settings.theme === 'bitchat';
         const verifiedBotSet = this.verifiedBotPubkeys;
@@ -1757,13 +1910,7 @@ Object.assign(NYM.prototype, {
         let channelUserCount = 0;
 
         this.users.forEach((user, pubkey) => {
-            if (!user || !user.nym) return;
-            if (this._userListHidden(pubkey, user.nym)) return;
-            if (pmOnlyPubkeys && !pmOnlyPubkeys.has(pubkey)) return;
-            if (pubkey !== this.pubkey && !this.isFriend?.(pubkey) &&
-                typeof this.isGibberishNym === 'function' &&
-                this._clientGatesActive() &&
-                this.isGibberishNym(user.nym)) return;
+            if (!this._userListGate(user, pubkey, pmOnlyPubkeys)) return;
 
             const isRecent = this._seenActive(user.lastSeen, now);
             const effectiveStatus = this.getEffectiveUserStatus(pubkey);
@@ -1772,7 +1919,7 @@ Object.assign(NYM.prototype, {
                 activeCount++;
             }
 
-            if (!statusHidden && isRecent && user.channels && user.channels.has(currentChannelKey)) {
+            if (!statusHidden && this._onlineIn(user, currentChannelKey, now)) {
                 channelUserCount++;
             }
 
@@ -2048,12 +2195,8 @@ Object.assign(NYM.prototype, {
         const target = this.users.size - TARGET;
         for (let i = 0; i < candidates.length && removed < target; i++) {
             const pk = candidates[i].pk;
-            this.users.delete(pk);
-            this.userColors && this.userColors.delete(pk);
-            const blobUrl = this.avatarBlobCache && this.avatarBlobCache.get(pk);
-            if (blobUrl && blobUrl.startsWith('blob:')) URL.revokeObjectURL(blobUrl);
-            this.avatarBlobCache && this.avatarBlobCache.delete(pk);
-            this.channelUsers && this.channelUsers.forEach(set => set.delete(pk));
+            this._dropUser(pk, null);
+            if (this._presenceOnlyUsers) this._presenceOnlyUsers.delete(pk);
             removed++;
         }
         if (removed > 0) this._userListSig = '';
@@ -2149,8 +2292,9 @@ Object.assign(NYM.prototype, {
     },
 
     saveBlockedUsers() {
-        localStorage.setItem('nym_blocked', JSON.stringify(Array.from(this.blockedUsers)));
+        const saved = this._lsSave('nym_blocked', JSON.stringify(Array.from(this.blockedUsers)));
         if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
+        return saved;
     },
 
     updateBlockedList() {
@@ -2293,8 +2437,31 @@ Object.assign(NYM.prototype, {
     },
 
     saveFriends() {
-        localStorage.setItem('nym_friends', JSON.stringify(Array.from(this.friends)));
+        const saved = this._lsSave('nym_friends', JSON.stringify(Array.from(this.friends)));
         if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
+        return saved;
+    },
+
+    _lsSave(key, value) {
+        try {
+            localStorage.setItem(key, value);
+            return true;
+        } catch (e) {
+            const guard = typeof NymStorage !== 'undefined' && NymStorage && typeof NymStorage.isQuota === 'function' ? NymStorage : null;
+            if (!guard || guard.isQuota(e)) this._storageFullNotice();
+            return false;
+        }
+    },
+
+    _storageFullNotice() {
+        const now = Date.now();
+        if (this._storageFullNoticeAt && now - this._storageFullNoticeAt < 60000) return;
+        this._storageFullNoticeAt = now;
+        const text = typeof this.uiText === 'function'
+            ? this.uiText('Storage on this device is full. Some changes could not be saved here.')
+            : 'Storage on this device is full. Some changes could not be saved here.';
+        if (typeof this.showToast === 'function') this.showToast(text, { kind: 'error' });
+        else if (typeof this.displaySystemMessage === 'function') this.displaySystemMessage(text);
     },
 
     isFriend(pubkey) {
@@ -2329,7 +2496,9 @@ Object.assign(NYM.prototype, {
         this.updateFriendsList();
         this._refreshFriendBadgesFor(targetPubkey);
         if (typeof this.reapplyImageBlur === 'function') this.reapplyImageBlur();
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (typeof nostrSettingsSave === 'function') {
+            try { Promise.resolve(nostrSettingsSave()).catch(() => { }); } catch (_) { }
+        }
     },
 
     removeFriendByPubkey(pubkey) {
@@ -2586,3 +2755,9 @@ Object.defineProperty(NYM.prototype, 'nym', {
 });
 
 NYM.prototype.isUsableNym = nymUsableNick;
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('nym-storage-full', () => {
+        if (typeof nym !== 'undefined' && nym && typeof nym._storageFullNotice === 'function') nym._storageFullNotice();
+    });
+}

@@ -52,7 +52,6 @@ class CustomEmojiState {
   /// Loaded packs, deduped by [CustomEmojiPack.key].
   final List<CustomEmojiPack> packs;
 
-  /// Shortcodes learned from message or reaction tags; saved ahead of pack emoji.
   final Set<String> tagged;
 
   bool get isEmpty => codeToUrl.isEmpty;
@@ -143,10 +142,8 @@ CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read) {
   return CustomEmojiState(codeToUrl: codeToUrl, packs: packs, tagged: tagged);
 }
 
-/// Set by the live emoji store; receives shortcodes rendered without a known image.
 void Function(String code)? customEmojiMissingSink;
 
-/// Reports a rendered `:code:` with no known image so the store can look it up once.
 void noteMissingCustomEmoji(String code) => customEmojiMissingSink?.call(code);
 
 /// Proxied emoji image URL, or [url] verbatim when no proxy base is configured.

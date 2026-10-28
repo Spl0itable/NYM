@@ -1260,15 +1260,11 @@ Object.assign(NYM.prototype, {
                 } else if (info) {
                     const inThread = !!info.inThread;
                     if (info.type === 'geohash') {
-                        const where = `#${this.escapeHtml(info.geohash)}`;
-                        contextHtml = inThread
-                            ? `<span class="notification-item-context">in a thread in ${where}</span>`
-                            : `<span class="notification-item-context">in ${where}</span>`;
+                        const where = '#' + info.geohash;
+                        contextHtml = `<span class="notification-item-context">${this.escapeHtml(this.uiText(inThread ? 'in a thread in {where}' : 'in {where}', { where }))}</span>`;
                     } else if (info.type === 'group') {
-                        const where = this.escapeHtml(groupName(info.groupId || String(info.id || '').replace(/^group-/, '')));
-                        contextHtml = inThread
-                            ? `<span class="notification-item-context">in a thread in ${where}</span>`
-                            : `<span class="notification-item-context">in ${where}</span>`;
+                        const where = groupName(info.groupId || String(info.id || '').replace(/^group-/, ''));
+                        contextHtml = `<span class="notification-item-context">${this.escapeHtml(this.uiText(inThread ? 'in a thread in {where}' : 'in {where}', { where }))}</span>`;
                     } else if (info.type === 'pm') {
                         const dmLabel = this.escapeHtml(this.uiText(inThread ? 'Private message thread' : 'Private message'));
                         contextHtml = `<span class="notification-item-context">${dmLabel}</span>`;
@@ -1311,7 +1307,7 @@ Object.assign(NYM.prototype, {
                         <div class="notification-item-meta">
                             <div class="notification-item-title">${authorHtml}</div>
                             ${bodyHtml}
-                            <div class="notification-item-footer">${contextHtml} <span class="notification-item-time">${time}</span></div>
+                            <div class="notification-item-footer">${contextHtml} <span class="notification-item-time" data-no-i18n>${time}</span></div>
                         </div>
                     </div>
                 `;

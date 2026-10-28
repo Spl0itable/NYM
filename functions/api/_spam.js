@@ -102,7 +102,10 @@ const FLUSH_STEP_MS = 14500;
 const SCHEMA_STEP_MS = 12000;
 const JOB_DEADLINE_MIN_MS = 10000;
 const DELIVER_EVERY_MS = 50;
-const SETTINGS_TIMING_DEFAULT = { versionMs: 5000, refreshMs: 60000, timeoutMs: 3000, backoffMs: 2000, versionCacheS: 3 };
+const SETTINGS_SLOT_WAIT_MS = 500;
+const SETTINGS_TIMING_DEFAULT = { versionMs: 15000, refreshMs: 60000, timeoutMs: 3000, backoffMs: 2000, versionCacheS: 15 };
+const STATUS_HEARTBEAT_MS = 90000;
+const STATUS_GATE_KEY = "status-gate";
 let SETTINGS_TIMING = Object.assign({}, SETTINGS_TIMING_DEFAULT);
 export function _setSettingsTiming(t) { SETTINGS_TIMING = Object.assign({}, SETTINGS_TIMING_DEFAULT, t || {}); }
 const SETTINGS_VERSION_CACHE_KEY = "settings-version";
@@ -1279,6 +1282,11 @@ const state = {
   lastError: null,
   lastErrorAt: 0,
   statusAt: 0,
+  statusSig: null,
+  statusNextAt: 0,
+  statusForce: false,
+  hiddenSinceMemo: new Map(),
+  hiddenIdMemo: new Map(),
   cooldownUntil: 0,
   lastProgressAt: 0,
   stalled: false,
@@ -1337,6 +1345,7 @@ export function _resetSpamState() {
   state.generation++; state.budgetMinute = 0; state.budgetUsed = 0;
   state.dossierMinute = 0; state.dossierUsed = 0;
   state.lastAuditAt = 0; state.lastError = null; state.lastErrorAt = 0; state.statusAt = 0; state.cooldownUntil = 0;
+  state.statusSig = null; state.statusNextAt = 0; state.statusForce = false; state.hiddenSinceMemo.clear(); state.hiddenIdMemo.clear();
   state.lastProgressAt = 0; state.stalled = false;
   if (state.wtimer) clearTimeout(state.wtimer);
   state.wtimer = null; state.wtimerAt = 0; state.wbuf = []; state.wbufSince = 0; state.wrows.clear(); state.wenv = null;
@@ -1363,6 +1372,12 @@ function timed(p, ms, what) {
 function isTimeout(e) { return /timed out after/.test(String(e && e.message || e)); }
 
 function ioKey(ctx) { return ctx && typeof ctx === "object" ? ctx : IO_ROOT; }
+export function _ioDone(ctx) { ioGive(ctx); }
+export function _holdIo(ctx, n) { if (n > 0) state.ioBusy.set(ioKey(ctx), n); else state.ioBusy.delete(ioKey(ctx)); }
+
+function ioFree(ctx) {
+  return (state.ioBusy.get(ioKey(ctx)) || 0) < ENGINE_CONNS_PER_CONTEXT;
+}
 
 function ioTake(ctx) {
   const k = ioKey(ctx);
@@ -1374,7 +1389,39 @@ function ioTake(ctx) {
 
 function ioGive(ctx) {
   const k = ioKey(ctx);
+  const waiting = ioWaiters.get(k);
+  if (waiting && waiting.length) {
+    const next = waiting.shift();
+    if (!waiting.length) ioWaiters.delete(k);
+    next(true);
+    return;
+  }
   state.ioBusy.set(k, Math.max(0, (state.ioBusy.get(k) || 1) - 1));
+}
+
+const ioWaiters = new Map();
+
+function ioTakeSoon(ctx, ms) {
+  if (ioTake(ctx)) return Promise.resolve(true);
+  const k = ioKey(ctx);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (got) => { if (done) return; done = true; clearTimeout(timer); resolve(got); };
+    const timer = setTimeout(() => {
+      const list = ioWaiters.get(k);
+      if (list) { const i = list.indexOf(finish); if (i >= 0) list.splice(i, 1); if (!list.length) ioWaiters.delete(k); }
+      finish(false);
+    }, ms);
+    if (!ioWaiters.has(k)) ioWaiters.set(k, []);
+    ioWaiters.get(k).push(finish);
+  });
+}
+
+async function cacheGetSoon(ctx, key, ms) {
+  if (!(await ioTakeSoon(ctx, ms))) return undefined;
+  const p = Promise.resolve().then(() => edgeCacheGet(key));
+  p.then(() => ioGive(ctx), () => ioGive(ctx));
+  try { return await timed(p, CACHE_TIMEOUT_MS, "cache read"); } catch (_) { return undefined; }
 }
 
 export function ioReserve(ctx) {
@@ -1625,24 +1672,45 @@ function watchdog(now) {
   }
 }
 
-async function noteStatus(env) {
+const STATUS_UPSERT_SQL = "INSERT INTO spam_config (key, value) VALUES ('status', ?), (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+const STATUS_GATED_SQL = STATUS_UPSERT_SQL + " WHERE CASE WHEN json_valid(spam_config.value) THEN COALESCE(json_extract(spam_config.value, '$.sig'), '') != ? OR COALESCE(json_extract(spam_config.value, '$.at'), 0) <= ? ELSE 1 END";
+
+async function noteStatus(env, ctx) {
   const now = Date.now();
-  if (now - state.statusAt < SETTINGS_REFRESH_MS) return;
+  const force = state.statusForce;
+  if (!force && now - state.statusAt < SETTINGS_REFRESH_MS) return;
   state.statusAt = now;
+  state.statusForce = false;
   const db = env && env.DB_NOPE;
   if (!hasD1(db)) return;
   try {
-    await timed(ensureConfigSchema(env), STATUS_TIMEOUT_MS, "status schema");
-    const payload = JSON.stringify({
+    const flush = flushHealth(now);
+    const body = {
       engine: SPAM_ENGINE_VERSION, at: now, model: state.settings ? state.settings.model : null, lastAuditAt: state.lastAuditAt,
       lastError: state.lastError, lastErrorAt: state.lastErrorAt, pending: state.pending.size, queue: state.queue.length + state.modelWaiters.length,
       cooldownUntil: state.cooldownUntil, viaGateway: String(env.SPAM_VIA_GATEWAY || "") === "1" && !!env.AI_GATEWAY_NAME,
       badgeGate: state.settings ? state.settings.requireBadge || "off" : "unloaded", authority: !!authorityPubkey(env),
       stalled: state.stalled, settingsVersion: state.settingsVersion || "", markers: state.markers.size,
-      flush: flushHealth(now), counters: Object.assign({}, state.counters)
-    });
-    await timed(db.prepare("INSERT INTO spam_config (key, value) VALUES ('status', ?), (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .bind(payload, SPAM_STATUS_VERSION_PREFIX + SPAM_ENGINE_VERSION, payload).run(), STATUS_TIMEOUT_MS, "status write");
+      flush, counters: Object.assign({}, state.counters)
+    };
+    const sig = JSON.stringify([body.engine, body.model, body.lastError, body.viaGateway, body.badgeGate, body.authority, body.stalled, body.settingsVersion, state.cooldownUntil > now, flush.lastFlushError]);
+    const changed = state.statusSig !== null && state.statusSig !== sig;
+    state.statusSig = sig;
+    if (!force && !changed && now < state.statusNextAt) return;
+    const quiet = !state.inflight.size && !state.queue.length && !state.ioBusy.get(ioKey(ctx));
+    if (!force && !changed && quiet) {
+      const gate = await cacheGet(ctx, STATUS_GATE_KEY);
+      if (gate && gate.sig === sig && now < Number(gate.until)) { state.statusNextAt = Number(gate.until); return; }
+    }
+    await timed(ensureConfigSchema(env), STATUS_TIMEOUT_MS, "status schema");
+    body.sig = sig;
+    const payload = JSON.stringify(body);
+    const versionKey = SPAM_STATUS_VERSION_PREFIX + SPAM_ENGINE_VERSION;
+    const stmt = force ? db.prepare(STATUS_UPSERT_SQL).bind(payload, versionKey, payload) : db.prepare(STATUS_GATED_SQL).bind(payload, versionKey, payload, sig, now - STATUS_HEARTBEAT_MS);
+    const res = await timed(stmt.run(), STATUS_TIMEOUT_MS, "status write");
+    const wrote = !!(res && res.meta && Number(res.meta.changes) > 0);
+    state.statusNextAt = now + STATUS_HEARTBEAT_MS;
+    if (quiet) await cachePut(ctx, STATUS_GATE_KEY, { sig, until: now + (wrote ? STATUS_HEARTBEAT_MS : STATUS_HEARTBEAT_MS / 2) }, Math.ceil(STATUS_HEARTBEAT_MS / 1000));
   } catch (_) { }
 }
 
@@ -1655,7 +1723,7 @@ function flushHealth(now) {
 }
 
 export const _noteStatus = noteStatus;
-export function _forceStatus() { state.statusAt = 0; }
+export function _forceStatus() { state.statusAt = 0; state.statusForce = true; }
 
 export function spamCounters() { return Object.assign({}, state.counters); }
 
@@ -1666,6 +1734,10 @@ function keepAlive(context, p) {
 const HIDDEN_LOOKUP_CHUNK = 80;
 const HIDDEN_SINCE_MAX = 5000;
 const HIDDEN_SINCE_BUCKET_MS = 30000;
+const HIDDEN_MEMO_MS = HIDDEN_SINCE_CACHE_S * 1000;
+const HIDDEN_MEMO_CHANNELS_MAX = 500;
+const HIDDEN_MEMO_IDS_MAX = 20000;
+const HIDDEN_MEMO_NEG_MS = 3000;
 
 export async function hiddenEventIds(env, ids) {
   return (await hiddenByIds(env, ids)).hidden;
@@ -1679,9 +1751,18 @@ async function hiddenByIds(env, ids) {
   const db = env && env.DB_NOPE;
   if (!hasD1(db) || !list.length) return { hidden: withoutRestored(out), ok };
   await syncedSettings(env);
+  const now = Date.now();
+  const ask = [];
+  for (const id of list) {
+    if (out.has(id)) continue;
+    const memo = state.hiddenIdMemo.get(id);
+    if (memo && now - memo.at < (memo.hidden ? HIDDEN_MEMO_MS : HIDDEN_MEMO_NEG_MS)) { if (memo.hidden) out.add(id); continue; }
+    ask.push(id);
+  }
+  if (!ask.length) return { hidden: withoutRestored(out), ok };
   const r = replica(spamDb(env));
-  for (let i = 0; i < list.length; i += HIDDEN_LOOKUP_CHUNK) {
-    const chunk = list.slice(i, i + HIDDEN_LOOKUP_CHUNK);
+  for (let i = 0; i < ask.length; i += HIDDEN_LOOKUP_CHUNK) {
+    const chunk = ask.slice(i, i + HIDDEN_LOOKUP_CHUNK);
     const ph = chunk.map(() => "?").join(", ");
     let rs = null;
     try {
@@ -1692,8 +1773,11 @@ async function hiddenByIds(env, ids) {
         try { rs = await timed(r.prepare("SELECT id FROM spam_events WHERE id IN (" + ph + ") AND action LIKE '%event-hidden%'").bind(...chunk).all(), D1_READ_TIMEOUT_MS, "hidden read"); } catch (e2) { rs = missingTable(e) && missingTable(e2) ? { results: [] } : null; }
       }
     }
-    if (!rs) ok = false;
-    for (const row of (rs && rs.results) || []) out.add(row.id);
+    if (!rs) { ok = false; continue; }
+    const found = new Set();
+    for (const row of rs.results || []) { out.add(row.id); found.add(row.id); }
+    for (const id of chunk) { state.hiddenIdMemo.delete(id); state.hiddenIdMemo.set(id, { hidden: found.has(id), at: now }); }
+    trimMap(state.hiddenIdMemo, HIDDEN_MEMO_IDS_MAX);
   }
   return { hidden: withoutRestored(out), ok };
 }
@@ -1710,7 +1794,14 @@ async function hiddenSince(env, channels, sinceMs) {
   await syncedSettings(env);
   const bucket = Math.floor((Number(sinceMs) || 0) / HIDDEN_SINCE_BUCKET_MS);
   const from = bucket * HIDDEN_SINCE_BUCKET_MS;
-  const key = "hidden-since/" + bucket + "/" + list.map(encodeURIComponent).join(",");
+  const listKey = list.map(encodeURIComponent).join(",");
+  const now = Date.now();
+  const memo = state.hiddenSinceMemo.get(listKey);
+  if (memo && now - memo.at < HIDDEN_MEMO_MS && memo.from <= from && (!memo.full || from >= memo.floor)) {
+    for (const row of memo.rows) if (row[1] > from) out.add(row[0]);
+    return { hidden: withoutRestored(out), ok: true, full: out.size >= HIDDEN_SINCE_MAX };
+  }
+  const key = "hidden-since/" + bucket + "/" + listKey;
   const hit = await cacheGet(null, key);
   if (Array.isArray(hit)) {
     for (const id of hit) if (typeof id === "string") out.add(id);
@@ -1720,16 +1811,20 @@ async function hiddenSince(env, channels, sinceMs) {
   const ph = list.map(() => "?").join(", ");
   let rs = null;
   try {
-    rs = await timed(r.prepare("SELECT id FROM spam_hidden WHERE channel IN (" + ph + ") AND seen_at > ? ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
+    rs = await timed(r.prepare("SELECT id, seen_at FROM spam_hidden WHERE channel IN (" + ph + ") AND seen_at > ? ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
       .bind(...list, from).all(), D1_READ_TIMEOUT_MS, "hidden read");
   } catch (e) {
     if (isTimeout(e)) return { hidden: out, ok: false, full: false };
     try {
-      rs = await timed(r.prepare("SELECT id FROM spam_events WHERE channel IN (" + ph + ") AND seen_at > ? AND action LIKE '%event-hidden%' ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
+      rs = await timed(r.prepare("SELECT id, seen_at FROM spam_events WHERE channel IN (" + ph + ") AND seen_at > ? AND action LIKE '%event-hidden%' ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
         .bind(...list, from).all(), D1_READ_TIMEOUT_MS, "hidden read");
     } catch (e2) { return { hidden: out, ok: missingTable(e) && missingTable(e2), full: false }; }
   }
-  for (const row of (rs && rs.results) || []) out.add(row.id);
+  const rows = (rs && rs.results) || [];
+  for (const row of rows) out.add(row.id);
+  state.hiddenSinceMemo.delete(listKey);
+  state.hiddenSinceMemo.set(listKey, { from, at: now, rows: rows.map((row) => [row.id, Number(row.seen_at) || 0]), full: rows.length >= HIDDEN_SINCE_MAX, floor: rows.length ? Number(rows[rows.length - 1].seen_at) || 0 : from });
+  trimMap(state.hiddenSinceMemo, HIDDEN_MEMO_CHANNELS_MAX);
   await cachePut(null, key, Array.from(out), HIDDEN_SINCE_CACHE_S);
   return { hidden: withoutRestored(out), ok: true, full: out.size >= HIDDEN_SINCE_MAX };
 }
@@ -1902,7 +1997,7 @@ export async function readSpamSettings(env) {
 
 async function settingsVersion(env, ctx) {
   const ttl = SETTINGS_TIMING.versionCacheS;
-  const hit = ttl > 0 ? await cacheGet(ctx, SETTINGS_VERSION_CACHE_KEY) : undefined;
+  const hit = ttl > 0 ? await cacheGetSoon(ctx, SETTINGS_VERSION_CACHE_KEY, SETTINGS_SLOT_WAIT_MS) : undefined;
   if (hit && typeof hit === "object" && typeof hit.v === "string") return hit.v;
   let v = "";
   try {
@@ -1919,7 +2014,7 @@ async function loadSpamSettings(env, mode, ctx) {
   if (!hasD1(db)) return { settings: base, version: "" };
   if (mode === "check") {
     const version = await settingsVersion(env, ctx);
-    if (version === (state.settingsVersion || "")) return { unchanged: true, version };
+    if (version === null || version === (state.settingsVersion || "")) return { unchanged: true, version };
   } else {
     const hit = await cacheGet(ctx, SETTINGS_CACHE_KEY);
     if (hit && typeof hit === "object" && "value" in hit) return { settings: settingsFrom(hit.value, base), restored: hit.restored, version: typeof hit.version === "string" ? hit.version : "" };
@@ -4188,7 +4283,7 @@ async function runJob(env, context, job, generation) {
 
 function maybeStatus(env, context) {
   if (Date.now() - state.statusAt < SETTINGS_REFRESH_MS) return null;
-  const p = noteStatus(env).catch(() => { });
+  const p = noteStatus(env, context).catch(() => { });
   keepAlive(context, p);
   return p;
 }
@@ -4484,7 +4579,7 @@ export function spamEngine(env, context) {
     },
     noteUnbadged() {
       state.counters.unbadged++;
-      keepAlive(context, noteStatus(env));
+      keepAlive(context, noteStatus(env, context));
     },
     isHidden(id) { return state.hidden.has(id); },
     isPending(id) { return state.pending.has(id); },

@@ -20,6 +20,7 @@ import 'localization_service.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_focusable.dart';
+import '../duo/duo_rail.dart';
 
 /// A UI-language option: stored code (empty for English source) and English display name.
 class UiLanguageOption {
@@ -476,9 +477,12 @@ Future<void> showLanguageListDialog(
                 ),
               ),
             ),
-            IconButton(
-              icon: Icon(Icons.close, color: c.textDim),
-              onPressed: () => Navigator.of(dialogContext).pop(),
+            DuoRailSwap.close(
+              onTap: () => Navigator.of(dialogContext).pop(),
+              child: IconButton(
+                icon: Icon(Icons.close, color: c.textDim),
+                onPressed: () => Navigator.of(dialogContext).pop(),
+              ),
             ),
           ],
         ),

@@ -467,7 +467,7 @@ class _ShardSocket {
 
   DateTime? healthyAt;
 
-  ({String id, DateTime at})? probe;
+  ({String id, DateTime at, Duration limit})? probe;
 
   DateTime? _lostAtOverride;
 
@@ -649,22 +649,43 @@ class _ShardSocket {
     _channel = null;
   }
 
+  bool _held = false;
+
+  void hold() {
+    _held = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+  }
+
   void _scheduleReconnect({bool quick = false}) {
-    if (_closedByUser) return;
+    if (_closedByUser || _held) return;
     _reconnectTimer?.cancel();
     final delayMs =
         shardReconnectDelayMs(quick ? -1 : _reconnectAttempt, rng.nextDouble());
     if (!quick) _reconnectAttempt++;
     _reconnectTimer = Timer(Duration(milliseconds: delayMs), () {
-      if (_closedByUser) return;
+      if (_closedByUser || _held) return;
       connect();
     });
   }
 
   void reconnectNow() {
-    if (_closedByUser || _open) return;
+    if (_closedByUser || _held || _open) return;
     _reconnectAttempt = 0;
     _scheduleReconnect(quick: true);
+  }
+
+  void retryNow() {
+    if (_closedByUser || _held || _open) return;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    connect();
+  }
+
+  void forgetFailures() {
+    _reconnectAttempt = 0;
+    failuresSinceFrame = 0;
+    failureStreakStartedAt = null;
   }
 
   bool send(String frame) {
@@ -805,7 +826,7 @@ class RelayPoolProxy implements PoolTransport {
   static const Duration healthInterval = Duration(seconds: 15);
   static const Duration zombieAfter = Duration(seconds: 45);
   static const Duration resumeFresh = Duration(seconds: 5);
-  static const Duration probeCheckDelay = Duration(milliseconds: 10250);
+  static const Duration resumeProbeTimeout = Duration(seconds: 3);
 
   static Duration probeQuietFor(int fails) {
     final ms = probeQuiet.inMilliseconds * pow(2, min(fails, 16)).toInt();
@@ -822,8 +843,18 @@ class RelayPoolProxy implements PoolTransport {
 
   Timer? _probeCheckTimer;
 
+  bool _livenessHeld = false;
+
+  void holdLiveness() {
+    _livenessHeld = true;
+    _stopLiveness();
+    for (final sock in _sockets) {
+      sock.hold();
+    }
+  }
+
   void _startHealthCheck() {
-    if (_healthTimer != null) return;
+    if (_healthTimer != null || _livenessHeld) return;
     _healthTimer = Timer.periodic(healthInterval, (_) => _checkShardHealth());
   }
 
@@ -835,7 +866,7 @@ class RelayPoolProxy implements PoolTransport {
   }
 
   void _checkShardHealth() {
-    if (_disposed) return;
+    if (_disposed || _livenessHeld) return;
     final now = _now();
     for (final sock in _sockets.toList()) {
       if (!sock.isOpen || sock.shard.relays.isEmpty) continue;
@@ -856,7 +887,7 @@ class RelayPoolProxy implements PoolTransport {
     final probe = sock.probe;
     final id = sock.shard.id;
     if (probe != null) {
-      if (now.difference(probe.at) < probeTimeout) return false;
+      if (now.difference(probe.at) < probe.limit) return false;
       sock.probe = null;
       _probeFails[id] = (_probeFails[id] ?? 0) + 1;
       return true;
@@ -867,14 +898,15 @@ class RelayPoolProxy implements PoolTransport {
     return false;
   }
 
-  void _sendProbe(_ShardSocket sock, DateTime now) {
+  void _sendProbe(_ShardSocket sock, DateTime now,
+      {Duration limit = probeTimeout}) {
     final hex = StringBuffer();
     for (var i = 0; i < 32; i++) {
       hex.write(_rng.nextInt(256).toRadixString(16).padLeft(2, '0'));
     }
     final target = hex.toString();
     final id = 'nym-live-${target.substring(0, 12)}';
-    sock.probe = (id: id, at: now);
+    sock.probe = (id: id, at: now, limit: limit);
     sock.send(jsonEncode(<dynamic>[
       'REQ',
       id,
@@ -885,23 +917,52 @@ class RelayPoolProxy implements PoolTransport {
     ]));
   }
 
-  void probeNow() {
-    if (_disposed) return;
+  void retryDownShards() {
+    if (_disposed || _livenessHeld) return;
+    for (final sock in _sockets.toList()) {
+      sock.retryNow();
+    }
+  }
+
+  void wake() {
+    if (_disposed || _livenessHeld) return;
+    final now = _now();
+    for (final sock in _sockets.toList()) {
+      sock.forgetFailures();
+      final opened = sock.openedAt;
+      if (sock.isOpen &&
+          !sock.hasFrameSinceConnect &&
+          opened != null &&
+          now.difference(opened) >= resumeProbeTimeout) {
+        sock.recycle();
+      }
+    }
+    reconnectDownShards();
+    probeNow(timeout: resumeProbeTimeout);
+  }
+
+  void probeNow({Duration timeout = probeTimeout}) {
+    if (_disposed || _livenessHeld) return;
     final now = _now();
     var sent = false;
     for (final sock in _sockets) {
       if (!sock.isOpen) continue;
-      if (sock.probe != null) {
+      final pending = sock.probe;
+      if (pending != null) {
+        if (timeout < pending.limit) {
+          sock.probe = (id: pending.id, at: pending.at, limit: timeout);
+        }
         sent = true;
         continue;
       }
       if (now.difference(sock.lastActiveAt) < resumeFresh) continue;
-      _sendProbe(sock, now);
+      _sendProbe(sock, now, limit: timeout);
       sent = true;
     }
     if (!sent) return;
     _probeCheckTimer?.cancel();
-    _probeCheckTimer = Timer(probeCheckDelay, () {
+    _probeCheckTimer =
+        Timer(timeout + const Duration(milliseconds: 250), () {
       _probeCheckTimer = null;
       _checkShardHealth();
     });
@@ -1252,11 +1313,9 @@ class RelayPoolProxy implements PoolTransport {
     for (final s in subs) {
       await s.close();
     }
-    final socks = _sockets.toList();
+    final closing = [for (final s in _sockets) s.close()];
     _sockets.clear();
-    for (final s in socks) {
-      await s.close();
-    }
+    await Future.wait(closing);
   }
 
   void handOverHeld(PoolTransport next) => _held.flush(next);
@@ -1270,11 +1329,9 @@ class RelayPoolProxy implements PoolTransport {
     _activeFilters.clear();
     _reqSentAt.clear();
     _eosedShards.clear();
-    final socks = _sockets.toList();
+    final closing = [for (final s in _sockets) s.close()];
     _sockets.clear();
-    for (final s in socks) {
-      await s.close();
-    }
+    await Future.wait(closing);
   }
 
   /// Live subscriptions and filters, for replay onto a replacement pool.

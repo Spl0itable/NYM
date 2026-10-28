@@ -8,6 +8,7 @@ import '../common/nym_sheet.dart';
 import '../common/nym_label.dart';
 import '../common/nym_field.dart';
 import '../common/dialog_button.dart';
+import '../../features/duo/duo_rail.dart';
 
 /// Report modal; [onSubmit] is wired to the NIP-56 kind-1984 report publish.
 class ReportModal extends StatefulWidget {
@@ -255,7 +256,9 @@ class _ReportModalState extends State<ReportModal> {
   }
 
   Widget _closeButton(NymColors c) {
-    return InkWell(
+    return DuoRailSwap.close(
+      onTap: () => Navigator.of(context).pop(),
+      child: InkWell(
       onTap: () => Navigator.of(context).pop(),
       borderRadius: const BorderRadius.all(Radius.circular(16)),
       child: Container(
@@ -269,6 +272,7 @@ class _ReportModalState extends State<ReportModal> {
         ),
         child: Icon(Icons.close, size: 16, color: c.textDim),
       ),
+    ),
     );
   }
 

@@ -76,7 +76,10 @@ class GiftWrapUnwrapped {
     this.isPq = false,
     this.rawWrap,
     this.fromArchive = false,
+    this.sealKind = EventKind.seal,
   });
+
+  final int sealKind;
 
   /// Arrived over the hybrid PQ transport; confidentiality, orthogonal to [senderVerified].
   final bool isPq;
@@ -242,13 +245,10 @@ class NostrService {
   /// Our ML-KEM keypair from the controller, to strip the layered outer layer before a signer; null without a root.
   ({Uint8List kemSk, Uint8List kemPk})? Function()? selfKemForUnwrap;
 
-  /// A peer's ML-KEM key, only when they accept the layered format.
   Uint8List? Function(String realPubkey)? pqPeerKey;
 
-  /// Our own ML-KEM key for self-addressed copies.
   Uint8List? Function()? pqSelfKey;
 
-  /// Whether self-addressed copies may use the layered format.
   bool Function()? pqSelfLayered;
 
   ({Uint8List? kem, bool layered}) _pqTarget(String realPubkey) {
@@ -348,6 +348,9 @@ class NostrService {
                     relays: relays ?? RelayConfig.defaultRelays,
                     writeOnlyRelays: RelayConfig.writeOnlyRelays,
                     verify: _verifyOffThread,
+                    appRelayVia: useProxy && userDirect
+                        ? ApiConfig.relayPoolUrl()
+                        : null,
                   )) {
     // Route process-wide /api traffic into our stats in production only, keeping tests isolated.
     if (pool == null && useProxy) {
@@ -422,6 +425,7 @@ class NostrService {
       ))
     ..setBlockedRelays(_blockedRelays)
     ..setAddedRelays(_directAdded)
+    ..setAppRelayVia(_userDirect ? ApiConfig.relayPoolUrl() : null)
     ..anonKeys = _anonKeys
     ..anonLane = _anonLane;
 
@@ -656,9 +660,11 @@ class NostrService {
 
     _mainSub = pool.subscribe(_buildCriticalFilters());
     _eventSub = _mainSub!.events.listen(_routeMain);
+    _syncPresenceSub();
 
     _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       handlers.onConnectionChanged?.call(pool.connectedCount);
+      _watchdog();
     });
     handlers.onConnectionChanged?.call(pool.connectedCount);
 
@@ -684,6 +690,9 @@ class NostrService {
   bool get _d1Available => ApiConfig.apiHost.isNotEmpty && isProxyMode;
 
   bool get d1Backed => _d1Available;
+
+  @visibleForTesting
+  List<NostrFilter> criticalFiltersForTest() => _buildCriticalFilters();
 
   /// Port of the PWA's `_buildCriticalFilters`: live-only windows under D1, full 24h windows in direct mode.
   List<NostrFilter> _buildCriticalFilters() {
@@ -919,7 +928,42 @@ class NostrService {
       }
     }
     if (changed) scheduleCriticalResubscribe();
+    _syncPresenceSub();
   }
+
+  Subscription? _presenceSub;
+  bool _presencePaused = false;
+
+  void _syncPresenceSub() {
+    final cur = _presenceSub;
+    if (_handlers == null || !_channelMode || _presencePaused) {
+      _presenceSub = null;
+      if (cur != null) unawaited(cur.close());
+      return;
+    }
+    if (cur != null && !cur.isClosed) return;
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final sub = pool.subscribe([
+      NostrFilter(
+          kinds: const [EventKind.geoPresence],
+          since: nowSec - GeoPresence.sinceWindowSec),
+    ]);
+    sub.events.listen(_routeInbound, onError: (_) {});
+    _presenceSub = sub;
+  }
+
+  void pausePresence() {
+    _presencePaused = true;
+    _syncPresenceSub();
+  }
+
+  void resumePresence() {
+    _presencePaused = false;
+    _syncPresenceSub();
+  }
+
+  @visibleForTesting
+  set handlersForTest(NostrHandlers handlers) => _handlers = handlers;
 
   /// Author cap on the direct-mode vouch filter.
   static const int _vouchAuthorCap = 500;
@@ -1017,12 +1061,77 @@ class NostrService {
     if (p is RelayPool) p.onConnectedChanged = note;
   }
 
-  void probePool() {
+  void probePool({bool wake = true}) {
+    _foreground = true;
+    if (wake) networkChanged();
+  }
+
+  bool _networkUp = true;
+
+  void networkLost() {
+    _networkUp = false;
+    _downTicks = 0;
+  }
+
+  void networkChanged() {
+    _networkUp = true;
+    _downTicks = 0;
+    if (_stopped || _switchHold) return;
     final p = _pool;
-    if (p is RelayPoolProxy) {
-      p.reconnectDownShards();
-      p.probeNow();
+    if (p is RelayPoolProxy) p.wake();
+    if (p is RelayPool) p.wake();
+    _restoreProbe?.wake();
+    if (_poolFallbackActive && !_userDirect) {
+      _bgRestoreAttempts = 0;
+      retryProxyNow();
     }
+  }
+
+  bool _switchHold = false;
+
+  void holdForSwitch() {
+    _switchHold = true;
+    _foreground = false;
+    _downTicks = 0;
+    final probe = _restoreProbe;
+    _stopBgRestore();
+    _dropIncoming();
+    if (probe != null) {
+      probe.onProxyConnected = null;
+      probe.onProxyUnreachable = null;
+      unawaited(probe.disconnectAll());
+    }
+    final p = _pool;
+    if (p is RelayPoolProxy) p.holdLiveness();
+    if (p is RelayPool) p.holdLiveness();
+  }
+
+  void appBackgrounded() {
+    _foreground = false;
+    _downTicks = 0;
+  }
+
+  static const int watchdogTicks = 3;
+
+  bool _foreground = true;
+  int _downTicks = 0;
+
+  @visibleForTesting
+  bool get inForeground => _foreground;
+
+  void _watchdog() {
+    if (_stopped || _switchHold || relayLinked) {
+      if (relayLinked) _networkUp = true;
+      _downTicks = 0;
+      return;
+    }
+    if (!_foreground || !_networkUp || ++_downTicks < watchdogTicks) return;
+    _downTicks = 0;
+    final p = _pool;
+    if (p is RelayPoolProxy) p.retryDownShards();
+    if (p is RelayPool) p.retryNow();
+    _restoreProbe?.retryDownShards();
+    if (_poolFallbackActive && !_userDirect) retryProxyNow();
   }
 
   static const int giftWrapBackdateSec = 172800;
@@ -1074,7 +1183,11 @@ class NostrService {
   void Function()? onAutoFallback;
 
   void _onProxyUnreachable() {
-    if (!_autoFallback || _poolFallbackActive || _userDirect || _stopped) {
+    if (!_autoFallback ||
+        _poolFallbackActive ||
+        _userDirect ||
+        _stopped ||
+        _switchHold) {
       return;
     }
     _poolFallbackActive = true;
@@ -1085,7 +1198,12 @@ class NostrService {
   /// Replaces the proxy with [direct], replaying live subscriptions onto it, then arms the restore loop.
   Future<void> _swapToDirect(RelayPool direct) async {
     if (_swapping) return;
+    if (_switchHold || _stopped) {
+      unawaited(direct.disconnectAll());
+      return;
+    }
     _swapping = true;
+    _incoming = direct;
     try {
       final old = _pool;
 
@@ -1093,7 +1211,8 @@ class NostrService {
       final live = _activeSubsOf(old);
 
       // Detach the old pool's sockets without closing the subscriptions.
-      await _detachSockets(old);
+      await _detachSockets(old).timeout(detachLimit, onTimeout: () {});
+      if (!_takeIncoming(direct)) return;
 
       // Replay live subs on the direct pool, but rebuild the main REQ since its filters are mode-shaped.
       direct.setAddedRelays(_directAdded);
@@ -1122,8 +1241,30 @@ class NostrService {
       _scheduleBgRestore();
       _handlers?.onConnectionChanged?.call(_pool.connectedCount);
     } finally {
+      if (identical(_incoming, direct)) _incoming = null;
       _swapping = false;
     }
+  }
+
+  PoolTransport? _incoming;
+
+  void _dropIncoming() {
+    final p = _incoming;
+    _incoming = null;
+    if (p == null) return;
+    if (p is RelayPoolProxy) {
+      p.onProxyConnected = null;
+      p.onProxyUnreachable = null;
+    }
+    unawaited(p.disconnectAll());
+  }
+
+  bool _takeIncoming(PoolTransport p) {
+    if (!identical(_incoming, p)) return false;
+    _incoming = null;
+    if (!_switchHold && !_stopped) return true;
+    unawaited(p.disconnectAll());
+    return false;
   }
 
   Map<String, ({Subscription sub, List<NostrFilter> filters})> _activeSubsOf(
@@ -1137,6 +1278,8 @@ class NostrService {
     if (from is RelayPoolProxy) from.handOverHeld(to);
     if (from is RelayPool) from.handOverHeld(to);
   }
+
+  static const Duration detachLimit = Duration(milliseconds: 500);
 
   Future<void> _detachSockets(PoolTransport p) async {
     if (p is RelayPoolProxy) {
@@ -1153,7 +1296,7 @@ class NostrService {
   /// Background restore: first retry after 15s, then `min(15000 * 2^min(n-1,4), 120000)` with 50–100% jitter.
   void _scheduleBgRestore() {
     if (!_autoFallback || !_poolFallbackActive || _userDirect) return;
-    if (_bgRestoreInFlight || _stopped) return;
+    if (_bgRestoreInFlight || _stopped || _switchHold) return;
     _bgRestoreTimer?.cancel();
     final delay = _bgRestoreAttempts == 0
         ? const Duration(seconds: 15)
@@ -1174,18 +1317,21 @@ class NostrService {
   /// Probes a fresh proxy; swaps back when it confirms, else its unreachable trigger reschedules.
   void _tryRestoreProxy() {
     _bgRestoreTimer = null;
-    if (!_poolFallbackActive || _userDirect || _stopped) return;
+    if (!_poolFallbackActive || _userDirect || _stopped || _switchHold) return;
     _bgRestoreAttempts++;
     _bgRestoreInFlight = true;
 
     // Short-lived probe: adopted if it confirms, discarded with backoff if not.
     final probe = _newProxyPool();
+    _restoreProbe = probe;
     probe.onProxyUnreachable = () {
+      if (identical(_restoreProbe, probe)) _restoreProbe = null;
       _bgRestoreInFlight = false;
       unawaited(probe.disconnectAll());
       _scheduleBgRestore();
     };
     probe.onProxyConnected = () {
+      if (identical(_restoreProbe, probe)) _restoreProbe = null;
       // Probe reached the host: promote it to the live transport.
       if (!_poolFallbackActive) {
         // A concurrent restore already happened; discard this probe.
@@ -1202,15 +1348,17 @@ class NostrService {
 
   /// Promotes a confirmed probe proxy: replay live subs onto it and tear down the direct sockets.
   Future<void> _adoptRestoredProxy(RelayPoolProxy restored) async {
-    if (_swapping || !_poolFallbackActive) {
+    if (_swapping || !_poolFallbackActive || _switchHold || _stopped) {
       unawaited(restored.disconnectAll());
       return;
     }
     _swapping = true;
+    _incoming = restored;
     try {
       final old = _pool;
       final live = _activeSubsOf(old);
-      await _detachSockets(old);
+      await _detachSockets(old).timeout(detachLimit, onTimeout: () {});
+      if (!_takeIncoming(restored)) return;
       _pool = restored;
       _wireCount(restored);
       restored.geoOriginAllows = geoOriginAllowsEvent;
@@ -1236,6 +1384,7 @@ class NostrService {
           '(${live.length} subs replayed)');
       _handlers?.onConnectionChanged?.call(_pool.connectedCount);
     } finally {
+      if (identical(_incoming, restored)) _incoming = null;
       _swapping = false;
     }
   }
@@ -1252,7 +1401,10 @@ class NostrService {
     return _adoptRestoredProxy(restored);
   }
 
+  RelayPoolProxy? _restoreProbe;
+
   void _stopBgRestore() {
+    _restoreProbe = null;
     _bgRestoreTimer?.cancel();
     _bgRestoreTimer = null;
     _bgRestoreInFlight = false;
@@ -1270,7 +1422,10 @@ class NostrService {
       _poolFallbackActive = false;
       _stopBgRestore();
       final current = _pool;
-      if (current is RelayPool) current.setAddedRelays(_directAdded);
+      if (current is RelayPool) {
+        current.setAddedRelays(_directAdded);
+        current.setAppRelayVia(ApiConfig.relayPoolUrl());
+      }
       if (current is! RelayPoolProxy) {
         _handlers?.onConnectionChanged?.call(_pool.connectedCount);
         return;
@@ -1292,12 +1447,15 @@ class NostrService {
     }
     _poolFallbackActive = true;
     final current = _pool;
-    if (current is RelayPool) current.setAddedRelays(_directAdded);
+    if (current is RelayPool) {
+      current.setAddedRelays(_directAdded);
+      current.setAppRelayVia(null);
+    }
     retryProxyNow();
   }
 
   void retryProxyNow() {
-    if (!_autoFallback || _userDirect || _stopped) return;
+    if (!_autoFallback || _userDirect || _stopped || _switchHold) return;
     if (!_poolFallbackActive || _bgRestoreInFlight || _swapping) return;
     _bgRestoreTimer?.cancel();
     _bgRestoreTimer = null;
@@ -1343,50 +1501,6 @@ class NostrService {
     // Typing events route through onEvent; cancellation is handled on close.
     s.onError((_) {});
     return sub;
-  }
-
-  Subscription? _geoPresenceSub;
-  String? _geoPresenceKey;
-
-  String? get channelPresenceSubscribedKey =>
-      (_geoPresenceSub?.isClosed ?? true) ? null : _geoPresenceKey;
-
-  Subscription? subscribeChannelPresence(String type, String id) {
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final named = type == 'named';
-    final f = named
-        ? GeoPresence.namedFilter(id, nowSec)
-        : GeoPresence.filter(id, nowSec);
-    if (f == null) {
-      closeGeoPresence();
-      return null;
-    }
-    final key = '$type:$id';
-    final cached = _geoPresenceSub;
-    if (_geoPresenceKey == key && cached != null && !cached.isClosed) {
-      return cached;
-    }
-    _geoPresenceSub?.close();
-    final sub = pool.subscribe([
-      NostrFilter(
-        kinds: const [EventKind.geoPresence],
-        since: f['since'] as int,
-        tags: {
-          named ? 'd' : 'g': [named ? id.toLowerCase() : id],
-        },
-      ),
-    ]);
-    final s = sub.events.listen((e) => _handlers?.onEvent?.call(e));
-    s.onError((_) {});
-    _geoPresenceSub = sub;
-    _geoPresenceKey = key;
-    return sub;
-  }
-
-  void closeGeoPresence() {
-    _geoPresenceSub?.close();
-    _geoPresenceSub = null;
-    _geoPresenceKey = null;
   }
 
   Future<NostrEvent?> publishChannelPresence(String type, String id,
@@ -1793,6 +1907,7 @@ class NostrService {
       isPq: isPq,
       rawWrap: wrap.toJson(),
       fromArchive: fromArchive,
+      sealKind: seal.kind,
     );
     if (sink != null) {
       sink(out);
@@ -3001,6 +3116,7 @@ class NostrService {
       return true;
     }
     if (relayUrl == null || relayUrl.isEmpty) return true;
+    if (relayUrl == RelayConfig.appRelay) return true;
     final gh = e.tagValue('g')?.toLowerCase();
     if (gh == null || gh.isEmpty) return true;
     // decodeGeohash accepts junk characters, so validate first.
@@ -3082,6 +3198,7 @@ class NostrService {
     _criticalResubTimer = null;
     stopGeoRelayKeepAlive();
     _stopBgRestore();
+    _dropIncoming();
     _poolFallbackActive = false;
     // Detach our api-stats sink if still active, so a disposed service catches no traffic.
     if (identical(ApiClient.apiStatsSink, _apiStats)) {
@@ -3089,12 +3206,14 @@ class NostrService {
     }
     await _eventSub?.cancel();
     await _channelTypingSub?.close();
-    closeGeoPresence();
     for (final sub in _wrapCatchUpSubs.toList()) {
       await sub.close();
     }
     _wrapCatchUpSubs.clear();
     await _mainSub?.close();
+    final presence = _presenceSub;
+    _presenceSub = null;
+    await presence?.close();
     await pool.disconnectAll();
   }
 }

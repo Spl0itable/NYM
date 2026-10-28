@@ -9,6 +9,7 @@ import '../branded_qr.dart';
 import '../share_target.dart';
 import 'ndef.dart';
 import 'nfc_channel.dart';
+import '../../duo/duo_rail.dart';
 
 Future<void> openTapToShare(
         BuildContext context, WidgetRef ref, ShareTarget target) =>
@@ -145,12 +146,20 @@ class _TapToShareScreenState extends ConsumerState<TapToShareScreen>
         appBar: AppBar(
           backgroundColor: c.bg,
           foregroundColor: c.text,
-          title: Text(tr('Tap to share')),
-          leading: IconButton(
-            tooltip: tr('Close'),
-            icon: const Icon(Icons.close),
-            onPressed: _stop,
+          title: DuoRailItems(
+            active: DuoScope.railOf(context),
+            priority: kDuoSheetPriority,
+            items: [duoCloseItem(_stop)],
+            child: Text(tr('Tap to share')),
           ),
+          automaticallyImplyLeading: !DuoScope.railOf(context),
+          leading: DuoScope.railOf(context)
+              ? null
+              : IconButton(
+                  tooltip: tr('Close'),
+                  icon: const Icon(Icons.close),
+                  onPressed: _stop,
+                ),
         ),
         body: SafeArea(
           child: ListView(

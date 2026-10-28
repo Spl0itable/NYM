@@ -150,6 +150,22 @@ class GeoPresenceAnonTick {
       {'action': action, 'reason': reason, 'atMs': atMs};
 }
 
+class GeoPresenceShape {
+  const GeoPresenceShape(this.ok, this.reason, this.type, this.channel, this.atMs);
+  final bool ok;
+  final String reason;
+  final String? type;
+  final String? channel;
+  final int atMs;
+  Map<String, dynamic> toJson() => {
+        'ok': ok,
+        'reason': reason,
+        'type': type,
+        'channel': channel,
+        'atMs': atMs,
+      };
+}
+
 class GeoPresence {
   GeoPresence._();
 
@@ -170,6 +186,12 @@ class GeoPresence {
   static final RegExp _geohashRe = RegExp(r'^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$');
   static final RegExp _hex64Re = RegExp(r'^[0-9a-f]{64}$');
   static final RegExp _nameRe = RegExp(r'^[\p{L}\p{N}]+$', unicode: true);
+  static final RegExp _upperOrTitleRe =
+      RegExp(r'[\p{Lu}\p{Lt}]', unicode: true);
+  static final RegExp _asciiUpperRe = RegExp('[A-Z]');
+
+  static String _asciiLower(String v) =>
+      v.replaceAllMapped(_asciiUpperRe, (m) => m.group(0)!.toLowerCase());
 
   static Map<String, dynamic> config() => {
         'kind': kind,
@@ -403,4 +425,190 @@ class GeoPresence {
   }
 
   static bool admits(int count, bool known) => known || count < channelCap;
+
+  static const int wideFutureSkewSec = 120;
+  static const int wideMaxAgeSec = 300;
+  static const int wideDecayMs = 300000;
+  static const int wideMaxNameLength = 64;
+  static const int wideRatePerMin = 6;
+  static const int wideMaxChannels = 1000;
+  static const int wideMaxEntries = 20000;
+  static const int wideDedupeMax = 4096;
+  static const int wideRateKeysMax = 20000;
+  static const int wideSweepMs = 60000;
+  static const int wideUiFlushMs = 2000;
+
+  static Map<String, dynamic> wideConfig() => {
+        'sinceWindowSec': sinceWindowSec,
+        'futureSkewSec': wideFutureSkewSec,
+        'maxAgeSec': wideMaxAgeSec,
+        'decayMs': wideDecayMs,
+        'maxPrecision': maxSendPrecision,
+        'maxNameLength': wideMaxNameLength,
+        'ratePerMin': wideRatePerMin,
+        'channelCap': channelCap,
+        'maxChannels': wideMaxChannels,
+        'maxEntries': wideMaxEntries,
+        'dedupeMax': wideDedupeMax,
+        'rateKeysMax': wideRateKeysMax,
+        'sweepMs': wideSweepMs,
+        'uiFlushMs': wideUiFlushMs,
+      };
+
+  static Map<String, dynamic> wideFilter(int nowSec) => {
+        'kinds': [kind],
+        'since': nowSec - sinceWindowSec,
+      };
+
+  static GeoPresenceShape _shapeRefuse(String reason) =>
+      GeoPresenceShape(false, reason, null, null, 0);
+
+  static GeoPresenceShape shape(
+      Map<String, dynamic> ev, Map<String, dynamic> ctx) {
+    if (ev['kind'] != kind) return _shapeRefuse('kind');
+    final pubkey = ev['pubkey'];
+    if (pubkey is! String || !_hex64Re.hasMatch(pubkey)) {
+      return _shapeRefuse('pubkey');
+    }
+    final id = ev['id'];
+    if (id is! String || !_hex64Re.hasMatch(id)) return _shapeRefuse('id');
+    if (ctx['verified'] != true) return _shapeRefuse('sig');
+    if (ev['content'] != '') return _shapeRefuse('content');
+    final tags = ev['tags'];
+    if (tags is! List || tags.length != 1) return _shapeRefuse('tags');
+    final t = tags[0];
+    if (t is! List ||
+        t.length != 2 ||
+        (t[0] != 'g' && t[0] != 'd') ||
+        t[1] is! String) {
+      return _shapeRefuse('tags');
+    }
+    final value = _asciiLower(t[1] as String);
+    final cased = _upperOrTitleRe.hasMatch(value);
+    final String type;
+    if (t[0] == 'g') {
+      if (cased || !isGeohash(value)) return _shapeRefuse('geohash');
+      if (value.length > maxSendPrecision) return _shapeRefuse('precision');
+      type = 'geohash';
+    } else {
+      if (cased || !isChannelName(value) || value.length > wideMaxNameLength) {
+        return _shapeRefuse('name');
+      }
+      type = 'named';
+    }
+    final at = ev['created_at'];
+    if (at is! num || at != at.roundToDouble() || at <= 0) {
+      return _shapeRefuse('time');
+    }
+    final nowMsRaw = ctx['nowMs'];
+    final nowMs = nowMsRaw is num
+        ? nowMsRaw.toInt()
+        : DateTime.now().millisecondsSinceEpoch;
+    final nowSec = nowMs ~/ 1000;
+    final atSec = at.toInt();
+    if (atSec > nowSec + wideFutureSkewSec) return _shapeRefuse('future');
+    if (atSec < nowSec - wideMaxAgeSec) return _shapeRefuse('stale');
+    final own = ctx['own'];
+    if (own is List && own.contains(pubkey)) return _shapeRefuse('own');
+    final excluded = ctx['excluded'];
+    if (excluded is List && excluded.contains(pubkey)) {
+      return _shapeRefuse('excluded');
+    }
+    return GeoPresenceShape(
+        true, 'ok', type, value, math.min(atSec * 1000, nowMs));
+  }
+}
+
+class GeoPresenceTracker {
+  final Set<String> _seen = <String>{};
+  final Map<String, List<int>> _rate = <String, List<int>>{};
+  final Map<String, Map<String, int>> _chans = <String, Map<String, int>>{};
+  int _entries = 0;
+  int _lastSweep = 0;
+
+  void _dropOld(Map<String, int> members, int nowMs) {
+    members.removeWhere((pk, at) {
+      final old = nowMs - at >= GeoPresence.wideDecayMs;
+      if (old) _entries--;
+      return old;
+    });
+  }
+
+  void sweep(int nowMs) {
+    _chans.removeWhere((ch, m) {
+      _dropOld(m, nowMs);
+      return m.isEmpty;
+    });
+    _rate.removeWhere((pk, list) => list.isEmpty || nowMs - list.last >= 60000);
+    _lastSweep = nowMs;
+  }
+
+  GeoPresenceShape ingest(Map<String, dynamic> ev, Map<String, dynamic> ctx) {
+    final v = GeoPresence.shape(ev, ctx);
+    if (!v.ok) return v;
+    final nowRaw = ctx['nowMs'];
+    final nowMs =
+        nowRaw is num ? nowRaw.toInt() : DateTime.now().millisecondsSinceEpoch;
+    final id = ev['id'] as String;
+    if (_seen.contains(id)) return GeoPresence._shapeRefuse('dup');
+    _seen.add(id);
+    if (_seen.length > GeoPresence.wideDedupeMax) _seen.remove(_seen.first);
+    if (nowMs - _lastSweep >= GeoPresence.wideSweepMs) sweep(nowMs);
+    final pk = ev['pubkey'] as String;
+    final list = (_rate.remove(pk) ?? <int>[])
+        .where((x) => nowMs - x < 60000)
+        .toList();
+    if (list.length >= GeoPresence.wideRatePerMin) {
+      _rate[pk] = list;
+      return GeoPresence._shapeRefuse('rate');
+    }
+    list.add(nowMs);
+    _rate[pk] = list;
+    if (_rate.length > GeoPresence.wideRateKeysMax) {
+      _rate.remove(_rate.keys.first);
+    }
+    final ch = v.channel!;
+    var members = _chans.remove(ch);
+    if (members != null) {
+      _dropOld(members, nowMs);
+    } else {
+      members = <String, int>{};
+    }
+    _chans[ch] = members;
+    final prev = members[pk];
+    if (prev == null && members.length >= GeoPresence.channelCap) {
+      return GeoPresence._shapeRefuse('cap');
+    }
+    if (prev == null) _entries++;
+    members[pk] = math.max(prev ?? 0, v.atMs);
+    while (_chans.length > GeoPresence.wideMaxChannels ||
+        _entries > GeoPresence.wideMaxEntries) {
+      final first = _chans.keys.first;
+      if (first == ch) break;
+      _entries -= _chans.remove(first)!.length;
+    }
+    return v;
+  }
+
+  List<String> active(String channel, int nowMs,
+      [List<String> excluded = const []]) {
+    final m = _chans[channel.toLowerCase()];
+    if (m == null) return const [];
+    return [
+      for (final e in m.entries)
+        if (nowMs - e.value < GeoPresence.wideDecayMs &&
+            !excluded.contains(e.key))
+          e.key
+    ]..sort();
+  }
+
+  int count(String channel, int nowMs, [List<String> excluded = const []]) =>
+      active(channel, nowMs, excluded).length;
+
+  Map<String, int> stats() => {
+        'channels': _chans.length,
+        'entries': _entries,
+        'seen': _seen.length,
+        'rateKeys': _rate.length,
+      };
 }

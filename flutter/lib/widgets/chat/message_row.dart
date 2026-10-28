@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,11 +23,14 @@ import '../../features/notifications/self_reference.dart';
 import '../../features/chat_tools/chat_tools_service.dart'
     show chatToolsKeptLookup;
 import '../../features/chat_tools/chat_tools_ui.dart';
+import '../../features/share/share_origin.dart';
 import '../../features/autocomplete/pending_edit.dart';
 import '../../features/commands/command_i18n.dart';
 import '../../features/composer/send_as_model.dart';
 import '../../features/composer/composer_conn.dart';
+import '../../features/duo/duo_rail.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/nymbot/long_text.dart';
 import '../../features/messages/flood_tracker.dart';
 import '../../features/messages/format/message_content.dart';
 import '../../features/messages/inline_network_image.dart';
@@ -39,6 +43,7 @@ import '../../features/threads/thread_view.dart' show openMessageThread;
 import '../../features/reactions/quick_react_popup.dart';
 import '../../features/reactions/message_action_sheet.dart';
 import '../../features/reactions/hover_actions.dart';
+import '../../features/shortcuts/escape_layers.dart';
 import '../../features/reactions/message_actions.dart';
 import '../../core/utils/haptics.dart';
 import '../common/nym_sheet.dart';
@@ -62,6 +67,7 @@ import '../common/nym_avatar.dart';
 import '../../features/accounts/account_host.dart' show accountsProvider;
 import '../nym_icons.dart';
 import 'hover_bar_controller.dart';
+import 'message_selection.dart';
 import '../../features/layout/pointer_input.dart';
 import 'bitchat_user_color.dart';
 import 'crypto_pq_badge.dart';
@@ -332,6 +338,162 @@ class _MessageRowState extends ConsumerState<MessageRow>
   final OverlayPortalController _barPortal = OverlayPortalController();
   bool _barActive = false;
   Offset? _barPos;
+  bool _keyFocus = false;
+  final GlobalKey<SelectionAreaState> _selKey = GlobalKey<SelectionAreaState>();
+  final FocusNode _selFocus =
+      FocusNode(skipTraversal: true, debugLabel: 'messageSelection');
+  String _selectedText = '';
+  MessageSelectionState? _list;
+  MessageBodySelection? _listBody;
+  _CopyMenuRoute? _copyMenu;
+  EscapeLayer? _copyLayer;
+
+  bool get _barShown => _barActive || _barFocused || _keyFocus;
+
+  void _onRowFocus(bool has) {
+    final fm = FocusManager.instance;
+    final key = has &&
+        fm.highlightMode == FocusHighlightMode.traditional &&
+        !identical(fm.primaryFocus, _selFocus);
+    if (key == _keyFocus || !mounted) return;
+    setState(() {
+      _keyFocus = key;
+      if (key) _refreshBar();
+    });
+    if (!key) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_keyFocus) return;
+      final pos = _computeBarPos();
+      if (pos != _barPos) setState(() => _barPos = pos);
+    });
+  }
+
+  Widget _selectable(Widget child) {
+    if (!PointerInput.mouseOf(context)) return child;
+    final list = MessageSelection.maybeOf(context);
+    final registrar = MessageSelection.itemRegistrarOf(context);
+    if (list != null && registrar != null) {
+      if (_listBody == null) {
+        _list = list;
+        _listBody = list.body();
+      }
+      return GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTapDown: (_) => list.focus(),
+        onTap: list.clear,
+        child: SelectionContainer(
+            registrar: registrar, delegate: _listBody!, child: child),
+      );
+    }
+    return SelectionArea(
+      key: _selKey,
+      focusNode: _selFocus,
+      onSelectionChanged: (s) {
+        _selectedText = s?.plainText ?? '';
+        if (_selectedText.isEmpty) _closeCopyMenu();
+      },
+      child: child,
+    );
+  }
+
+  bool _hitsLinkOrAuthor(Offset global) {
+    final result = HitTestResult();
+    WidgetsBinding.instance
+        .hitTestInView(result, global, View.of(context).viewId);
+    for (final e in result.path) {
+      final t = e.target;
+      if (messageLinkHit(t)) return true;
+      if (t is RenderMetaData && identical(t.metaData, _kAuthorTag)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _doubleClick(Offset global) {
+    if (_hitsLinkOrAuthor(global)) return;
+    scheduleMicrotask(() {
+      if (!mounted) return;
+      if (_listBody != null) {
+        _list?.clear();
+      } else {
+        _selKey.currentState?.selectableRegion.clearSelection();
+      }
+    });
+    _quoteReply();
+  }
+
+  void _secondaryClick(BuildContext context, Offset global) {
+    final list = _listBody == null ? null : _list;
+    final sel = list != null
+        ? list.region
+        : _selKey.currentState?.selectableRegion;
+    final text = list != null ? list.text.value : _selectedText;
+    if (sel == null || text.isEmpty) {
+      _openContextMenu(context);
+      return;
+    }
+    _closeCopyMenu();
+    list?.text.addListener(_onListText);
+    final route = _CopyMenuRoute(
+      onGone: (r) {
+        if (!identical(_copyMenu, r)) return;
+        _list?.text.removeListener(_onListText);
+        _copyMenu = null;
+        EscapeLayers.remove(_copyLayer);
+        _copyLayer = null;
+      },
+      builder: (_) => TapRegion(
+        onTapOutside: (_) => _closeCopyMenu(),
+        child: AdaptiveTextSelectionToolbar.buttonItems(
+          anchors: TextSelectionToolbarAnchors(primaryAnchor: global),
+          buttonItems: [
+            ContextMenuButtonItem(
+              type: ContextMenuButtonType.copy,
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: text));
+                _closeCopyMenu();
+              },
+            ),
+            ContextMenuButtonItem(
+              type: ContextMenuButtonType.selectAll,
+              onPressed: () {
+                _closeCopyMenu();
+                sel.selectAll();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+    _copyMenu = route;
+    _copyLayer = EscapeLayers.add(
+        EscapeRank.quickReact + 10, () => _copyMenu != null, _closeCopyMenu);
+    Navigator.of(context, rootNavigator: true).push(route);
+  }
+
+  void _onListText() {
+    if (_list?.text.value.isEmpty ?? true) _closeCopyMenu();
+  }
+
+  void _closeCopyMenu() {
+    final r = _copyMenu;
+    if (r == null) return;
+    _list?.text.removeListener(_onListText);
+    _copyMenu = null;
+    EscapeLayers.remove(_copyLayer);
+    _copyLayer = null;
+    void drop() {
+      if (r.isActive) r.navigator?.removeRoute(r);
+    }
+
+    if (WidgetsBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => drop());
+    } else {
+      drop();
+    }
+  }
 
   @override
   void initState() {
@@ -480,6 +642,9 @@ class _MessageRowState extends ConsumerState<MessageRow>
     HoverBarController.instance.removeListener(_onHoverBarChange);
     PointerInput.instance.removeListener(_onPointerMode);
     HoverBarController.instance.release(this);
+    _closeCopyMenu();
+    _listBody?.dispose();
+    _selFocus.dispose();
     _spoilers.dispose();
     if (_relativeTickerSubscribed) {
       RelativeTimeTicker.instance.removeListener(_onRelativeTick);
@@ -703,6 +868,20 @@ class _MessageRowState extends ConsumerState<MessageRow>
     required double size,
     required double flairSize,
     bool brackets = false,
+  }) =>
+      MetaData(
+        metaData: _kAuthorTag,
+        behavior: HitTestBehavior.translucent,
+        child: _authorLineBody(c,
+            self: self, size: size, flairSize: flairSize, brackets: brackets),
+      );
+
+  Widget _authorLineBody(
+    NymColors c, {
+    required bool self,
+    required double size,
+    required double flairSize,
+    bool brackets = false,
   }) {
     final base = _authorStyle(c, self: self, size: size);
     final style = context.highContrast && base.color != null
@@ -839,10 +1018,12 @@ class _MessageRowState extends ConsumerState<MessageRow>
     if (_cosmetics.isRedacted) {
       body = _RedactedReveal(
         fontSize: fontSize,
-        child: _content(context, color, fontSize, deco: deco, bubble: bubble),
+        child: _selectable(
+            _content(context, color, fontSize, deco: deco, bubble: bubble)),
       );
     } else {
-      body = _content(context, color, fontSize, deco: deco, bubble: bubble);
+      body = _selectable(
+          _content(context, color, fontSize, deco: deco, bubble: bubble));
     }
     // A bot reply's reasoning section is prepended inside the content.
     final thinking = message.thinking;
@@ -871,18 +1052,17 @@ class _MessageRowState extends ConsumerState<MessageRow>
     if (message.isMeAction) return _buildActionMessage(context);
     Widget row =
         settings.useBubbles ? _buildBubble(context) : _buildIrc(context);
-    if (PointerInput.mouseOf(context)) {
-      final withButtons = _hoverButtonsEligible(context);
+    final withButtons = _hoverButtonsEligible(context);
+    if (PointerInput.mouseOf(context) || (_keyFocus && withButtons)) {
       Widget hoverChild = row;
       if (withButtons) {
-        if ((_barActive || _barFocused) &&
-            !identical(_barSlots, settings.hoverActions)) {
+        if (_barShown && !identical(_barSlots, settings.hoverActions)) {
           _refreshBar();
         }
-        final pos = (_barActive || _barFocused) ? _barPos : null;
+        final pos = _barShown ? _barPos : null;
         final bar = AnimatedOpacity(
           key: _barKey,
-          opacity: (_barActive || _barFocused) ? 1 : 0,
+          opacity: _barShown ? 1 : 0,
           duration: NymMotion.transition,
           curve: NymMotion.curve,
           child: _MsgHoverButtons(
@@ -902,7 +1082,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
           ),
         );
         final barLayer = IgnorePointer(
-          ignoring: !(_barActive || _barFocused),
+          ignoring: !_barShown,
           child: MouseRegion(
             onEnter: (_) => _hoverEnter(),
             onExit: (_) => _hoverExit(),
@@ -929,11 +1109,20 @@ class _MessageRowState extends ConsumerState<MessageRow>
         onExit: (_) => _hoverExit(),
         child: MessageHover(
           messageId: message.id,
-          hovered: _hovered || _barActive || _barFocused,
+          hovered: _hovered || _barShown,
           child: hoverChild,
         ),
       );
+    } else if (withButtons) {
+      row = KeyedSubtree(key: _barHostKey, child: row);
     }
+    row = Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      includeSemantics: false,
+      onFocusChange: _onRowFocus,
+      child: row,
+    );
     // Dim live flooding senders only; PMs and historical backlog are never dimmed.
     if (!message.isOwn &&
         !message.isPM &&
@@ -1581,10 +1770,11 @@ class _MessageRowState extends ConsumerState<MessageRow>
       settings: settings,
       applies: _swipeApplies,
       onAction: (a) => _dispatchSwipeAction(context, a),
-      onDoubleTap: _quoteReply,
+      onDoubleClick: _doubleClick,
       // Quick-react popup anchored to the press point.
       onLongPressStart: (d) => _onMessageLongPress(context, d.globalPosition),
       onSecondaryTap: () => _openContextMenu(context),
+      onSecondaryClick: (at) => _secondaryClick(context, at),
       swipeReactEmojiUrl: _swipeReactEmojiUrl,
       child: content,
     );
@@ -1815,10 +2005,11 @@ class _MessageRowState extends ConsumerState<MessageRow>
       settings: settings,
       applies: _swipeApplies,
       onAction: (a) => _dispatchSwipeAction(context, a),
-      onDoubleTap: _quoteReply,
+      onDoubleClick: _doubleClick,
       // Quick-react popup anchored to the press point.
       onLongPressStart: (d) => _onMessageLongPress(context, d.globalPosition),
       onSecondaryTap: () => _openContextMenu(context),
+      onSecondaryClick: (at) => _secondaryClick(context, at),
       avatarDx: widget.swipeAvatarDx,
       swipeReactEmojiUrl: _swipeReactEmojiUrl,
       child: rowStack,
@@ -2193,7 +2384,9 @@ class _MessageRowState extends ConsumerState<MessageRow>
     final items = _sheetItems(context);
     final picker = widget.onReactionPicker;
     final onMore = picker == null ? null : () => picker(message);
-    if (useNymSheet(context)) {
+    if (messageSheetFits(
+        width: MediaQuery.sizeOf(context).width,
+        mouse: PointerInput.mouseOf(context))) {
       final nym = _baseNym(_displayNym());
       showMessageActionSheet(
         context,
@@ -2438,10 +2631,36 @@ class _MessageRowState extends ConsumerState<MessageRow>
         child: NymBareSuffixScope(
           enabled: message.isBot ||
               ref.read(nostrControllerProvider).isVerifiedBot(message.pubkey),
-          child: _contentBody(context, color, fontSize,
-              deco: deco, bubble: bubble),
+          child: _longToggle(
+              _contentBody(context, color, fontSize,
+                  deco: deco, bubble: bubble),
+              color,
+              fontSize),
         ),
       );
+
+  bool _longOpen = false;
+
+  Widget _longToggle(Widget body, Color color, double fontSize) {
+    if (!message.isOwn ||
+        !message.isPM ||
+        LongText.collapsedHead(message.content) == null) {
+      return body;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        body,
+        TextButton(
+          key: const ValueKey('pmLongToggle'),
+          onPressed: () => setState(() => _longOpen = !_longOpen),
+          child: Text(_longOpen ? tr('Show less') : tr('Show more'),
+              style: TextStyle(color: color, fontSize: fontSize * 0.9)),
+        ),
+      ],
+    );
+  }
 
   Widget _contentBody(
     BuildContext context,
@@ -2451,7 +2670,10 @@ class _MessageRowState extends ConsumerState<MessageRow>
     bool bubble = false,
   }) {
     final blur = _shouldBlurImages();
-    var displayContent = message.content;
+    final longHead = message.isOwn && message.isPM && !_longOpen
+        ? LongText.collapsedHead(message.content)
+        : null;
+    var displayContent = longHead ?? message.content;
     // Only the synthetic Nymbot welcome row is app copy and gets translated; everything else renders as authored.
     if (message.id.startsWith(kNymbotWelcomeIdPrefix)) {
       displayContent = localizeBotWelcome(message.id, displayContent);
@@ -3028,15 +3250,15 @@ class _BotThinkSectionState extends State<_BotThinkSection> {
     final side = BorderSide(color: c.glassBorder);
     return Container(
       margin: const EdgeInsets.only(top: 2, bottom: 8),
+      padding: const EdgeInsets.only(left: 3),
       decoration: BoxDecoration(
         color: c.secondaryA(0.08),
         borderRadius: NymRadius.rxs,
-        border: Border(
-          top: side,
-          right: side,
-          bottom: side,
-          left: BorderSide(color: c.primaryA(0.45), width: 3),
-        ),
+        border: Border(top: side, right: side, bottom: side),
+      ),
+      foregroundDecoration: BoxDecoration(
+        borderRadius: NymRadius.rxs,
+        border: Border(left: BorderSide(color: c.primaryA(0.45), width: 3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -4595,9 +4817,10 @@ class _SwipeToAct extends StatefulWidget {
     required this.settings,
     required this.applies,
     required this.onAction,
-    required this.onDoubleTap,
+    required this.onDoubleClick,
     required this.onLongPressStart,
     required this.onSecondaryTap,
+    required this.onSecondaryClick,
     this.avatarDx,
     this.swipeReactEmojiUrl,
     required this.child,
@@ -4608,10 +4831,11 @@ class _SwipeToAct extends StatefulWidget {
   final bool Function(String action) applies;
 
   final ValueChanged<String> onAction;
-  final VoidCallback onDoubleTap;
+  final ValueChanged<Offset> onDoubleClick;
 
   final GestureLongPressStartCallback onLongPressStart;
   final VoidCallback onSecondaryTap;
+  final ValueChanged<Offset> onSecondaryClick;
 
   /// Group avatar offset channel for an others' group's last bubble; also selects the past-avatar indicator inset.
   final ValueNotifier<double>? avatarDx;
@@ -4632,6 +4856,40 @@ class _SwipeToActState extends State<_SwipeToAct>
 
   // Created in initState: a lazy field would create a ticker during dispose for never-swiped rows.
   late final AnimationController _settle;
+
+  Offset? _clickFrom;
+  Offset? _lastClickAt;
+  Duration? _lastClickTime;
+  int _clicks = 0;
+
+  void _clickDown(PointerDownEvent e) {
+    if (e.kind != PointerDeviceKind.mouse || e.buttons != kPrimaryButton) {
+      _clicks = 0;
+      _clickFrom = null;
+      return;
+    }
+    final last = _lastClickAt;
+    final lastTime = _lastClickTime;
+    final chained = last != null &&
+        lastTime != null &&
+        (e.position - last).distance <= kDoubleTapSlop &&
+        e.timeStamp - lastTime <= kDoubleTapTimeout;
+    _clicks = chained ? _clicks + 1 : 1;
+    _clickFrom = e.position;
+  }
+
+  void _clickUp(PointerUpEvent e) {
+    final from = _clickFrom;
+    _clickFrom = null;
+    if (from == null || (e.position - from).distance > kTouchSlop) {
+      _clicks = 0;
+      _lastClickAt = null;
+      return;
+    }
+    _lastClickAt = e.position;
+    _lastClickTime = e.timeStamp;
+    if (_clicks == 2) widget.onDoubleClick(e.position);
+  }
 
   double _dx = 0;
   double _travel = 0; // Raw finger dx since touch-down.
@@ -4848,18 +5106,35 @@ class _SwipeToActState extends State<_SwipeToAct>
       );
     }
 
-    final touchPlatform = !PointerInput.mouseOf(context);
+    final mouse = PointerInput.mouseOf(context);
     Widget result = GestureDetector(
       // The whole row, including blank space beside a bubble, must hit-test.
       behavior: HitTestBehavior.translucent,
-      // Desktop-only double-click, which also spares touch taps the double-tap delay.
-      onDoubleTap: touchPlatform ? null : widget.onDoubleTap,
-      onSecondaryTap: widget.onSecondaryTap,
+      onSecondaryTap: mouse ? null : widget.onSecondaryTap,
       child: Transform.translate(
         offset: Offset(_dx, 0),
         child: body,
       ),
     );
+    if (mouse) {
+      result = RawGestureDetector(
+        behavior: HitTestBehavior.translucent,
+        gestures: <Type, GestureRecognizerFactory>{
+          _SecondaryClickRecognizer:
+              GestureRecognizerFactoryWithHandlers<_SecondaryClickRecognizer>(
+            () => _SecondaryClickRecognizer(debugOwner: this),
+            (r) => r.onClick = widget.onSecondaryClick,
+          ),
+        },
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: _clickDown,
+          onPointerUp: _clickUp,
+          onPointerCancel: (_) => _clickFrom = null,
+          child: result,
+        ),
+      );
+    }
 
     // 500ms hold cancelled by any move over 5px, tighter than the framework's ~18px slop.
     result = RawGestureDetector(
@@ -5072,7 +5347,7 @@ class _LocalMediaBody extends StatelessWidget {
   Widget _fileCard(BuildContext context) {
     final label = (name != null && name!.isNotEmpty) ? name! : 'File';
     return GestureDetector(
-      onTap: () => _shareFile(),
+      onTap: () => _shareFile(context),
       child: Container(
         constraints: const BoxConstraints(maxWidth: 260),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -5102,11 +5377,13 @@ class _LocalMediaBody extends StatelessWidget {
     );
   }
 
-  Future<void> _shareFile() async {
+  Future<void> _shareFile(BuildContext context) async {
     try {
+      final origin = shareOriginOf(context);
       final bytes = await _read(path);
       await SharePlus.instance.share(ShareParams(
         files: [XFile.fromData(bytes, mimeType: mime, name: name)],
+        sharePositionOrigin: origin,
       ));
     } catch (_) {
       // Sharing unavailable (desktop/test).
@@ -5117,7 +5394,7 @@ class _LocalMediaBody extends StatelessWidget {
     Navigator.of(context).push(PageRouteBuilder<void>(
       opaque: false,
       barrierColor: Colors.black87,
-      pageBuilder: (_, _, _) => _FullscreenImage(
+      pageBuilder: (_, _, _) => FullscreenImageView(
         bytes: bytes,
         onShare: _shareFile,
         colors: colors,
@@ -5126,15 +5403,16 @@ class _LocalMediaBody extends StatelessWidget {
   }
 }
 
-class _FullscreenImage extends StatelessWidget {
-  const _FullscreenImage({
+class FullscreenImageView extends StatelessWidget {
+  const FullscreenImageView({
+    super.key,
     required this.bytes,
     required this.onShare,
     required this.colors,
   });
 
   final Uint8List bytes;
-  final Future<void> Function() onShare;
+  final Future<void> Function(BuildContext context) onShare;
   final NymColors colors;
 
   @override
@@ -5154,17 +5432,29 @@ class _FullscreenImage extends StatelessWidget {
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
             right: 8,
-            child: Row(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.share, color: Colors.white),
-                  onPressed: () => onShare(),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white),
-                  onPressed: () => Navigator.of(context).maybePop(),
-                ),
+            child: DuoRailSwap(
+              items: [
+                duoCloseItem(() => Navigator.of(context).maybePop()),
+                DuoRailItem(
+                    id: 'viewer-share',
+                    label: tr('Share'),
+                    icon: Icons.share,
+                    onTap: () => onShare(context)),
               ],
+              child: Row(
+                children: [
+                  Builder(
+                    builder: (button) => IconButton(
+                      icon: const Icon(Icons.share, color: Colors.white),
+                      onPressed: () => onShare(button),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.of(context).maybePop(),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -5274,4 +5564,61 @@ class RenderTimeFoot extends RenderBox
   @override
   void paint(PaintingContext context, Offset offset) =>
       defaultPaint(context, offset);
+}
+
+const Object _kAuthorTag = Object();
+
+class _SecondaryClickRecognizer extends OneSequenceGestureRecognizer {
+  _SecondaryClickRecognizer({super.debugOwner})
+      : super(
+          supportedDevices: const {PointerDeviceKind.mouse},
+          allowedButtonsFilter: (b) => b == kSecondaryButton,
+        );
+
+  ValueChanged<Offset>? onClick;
+  Offset? _from;
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    super.addAllowedPointer(event);
+    _from = event.position;
+    resolve(GestureDisposition.accepted);
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    if (event is PointerUpEvent) {
+      final from = _from;
+      _from = null;
+      stopTrackingPointer(event.pointer);
+      if (from != null) onClick?.call(event.position);
+    } else if (event is PointerCancelEvent) {
+      _from = null;
+      stopTrackingPointer(event.pointer);
+    }
+  }
+
+  @override
+  void didStopTrackingLastPointer(int pointer) {}
+
+  @override
+  String get debugDescription => 'secondary click';
+}
+
+class _CopyMenuRoute extends OverlayRoute<void> {
+  _CopyMenuRoute({required this.builder, required this.onGone})
+      : super(requestFocus: false);
+
+  final WidgetBuilder builder;
+  final void Function(_CopyMenuRoute route) onGone;
+
+  @override
+  Iterable<OverlayEntry> createOverlayEntries() =>
+      [OverlayEntry(builder: builder)];
+
+  @override
+  void didComplete(void result) {
+    super.didComplete(result);
+    onGone(this);
+  }
 }

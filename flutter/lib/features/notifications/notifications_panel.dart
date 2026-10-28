@@ -18,6 +18,7 @@ import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/chat/message_row.dart' show formatTime;
 import '../calls/call_nym.dart';
+import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import 'notification_route_target.dart';
 import 'notification_routing.dart';
@@ -274,6 +275,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    final rail = DuoScope.railOf(context);
 
     final body = Stack(
       children: [
@@ -294,7 +296,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
                 ),
               ),
             ),
-            if (_hasUnread)
+            if (_hasUnread && !rail)
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, NymSpace.s2),
                 child: Row(
@@ -331,6 +333,29 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
             ),
           ],
         ),
+        if (rail)
+          DuoRailItems(
+            priority: kDuoSheetPriority,
+            items: [
+              duoCloseItem(() => Navigator.of(context).maybePop()),
+              DuoRailItem(
+                id: 'notif-settings',
+                label: tr('Notification settings'),
+                svg: NymIcons.settings,
+                toggled: _prefsOpen,
+                onTap: () => setState(() => _prefsOpen = !_prefsOpen),
+              ),
+              if (_hasUnread)
+                DuoRailItem(
+                  id: 'notif-mark-read',
+                  label: tr('Mark all as read'),
+                  icon: Icons.done_all,
+                  onTap: _markAllRead,
+                ),
+            ],
+            child: const SizedBox.shrink(),
+          )
+        else
         Positioned(
           top: 12,
           right: 14,

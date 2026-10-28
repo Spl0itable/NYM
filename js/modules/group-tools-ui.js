@@ -159,7 +159,7 @@
             if (!this._gtGate('slowmode', 'group').ok) return;
             const next = T().normalizeSlowmode(sec);
             if (next === T().normalizeSlowmode(group.slowmode)) return;
-            const ts = nowSec();
+            const ts = this._nextGroupMetaTs(group, nowSec());
             group.slowmode = next;
             group.slowmodeSince = ts;
             this._stampGroupMeta(group, this.pubkey, ts);
@@ -183,7 +183,7 @@
             const next = !!on;
             if (next === (group.joinApproval === true)) return;
             group.joinApproval = next;
-            this._stampGroupMeta(group, this.pubkey, nowSec());
+            this._stampGroupMeta(group, this.pubkey, this._nextGroupMetaTs(group, nowSec()));
             this.groupConversations.set(groupId, group);
             this._saveGroupConversations();
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -497,7 +497,7 @@
                     : (p.approval ? `<div class="gt-inv-note">${esc(this._gx('An admin approves join requests for this group.'))}</div>` : '');
                 const waiting = pending && pending.waiting;
                 const joinLabel = full ? this._gx('Group is full') : (waiting ? this._gx('Waiting for approval') : this._gx('Join'));
-                body.innerHTML = `<div class="gt-inv-card">${banner}<div class="gt-inv-head">${avatar}<div class="gt-inv-name">${esc(p.name)}</div></div>${desc}${members}${admins}${note}
+                body.innerHTML = `<div class="gt-inv-card">${banner}<div class="gt-inv-head">${avatar}<div class="gt-inv-name">${esc(p.name === 'Group' ? this._gx('Group') : p.name)}</div></div>${desc}${members}${admins}${note}
                     <div class="gt-inv-actions"><button class="icon-btn" data-gt-inv="cancel">${esc(this._gx('Cancel'))}</button>
                     <button class="send-btn" data-gt-inv="join" ${(waiting || full) ? 'disabled' : ''}>${esc(joinLabel)}</button></div></div>`;
                 let done = false;

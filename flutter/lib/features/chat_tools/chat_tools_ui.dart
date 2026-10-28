@@ -23,6 +23,7 @@ import '../../widgets/chat/message_row.dart' show formatFullTimestamp;
 import '../../widgets/chat/messages_list.dart' show messageListScrollerProvider;
 import '../../widgets/context_menu/interaction_hooks.dart';
 import '../../widgets/nym_icons.dart';
+import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import '../media_notes/media_notes.dart' show parseMeshFileName;
 import '../messages/format/message_content.dart';
@@ -35,6 +36,7 @@ import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_label.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../identity/deleted_notice.dart' show dimNymLabel;
+import '../share/share_origin.dart';
 
 class ChatToolIcons {
   const ChatToolIcons._();
@@ -424,10 +426,13 @@ class _PanelShell extends StatelessWidget {
                 ),
               ),
             ),
-            IconButton(
-              tooltip: tr('Close'),
-              onPressed: () => Navigator.of(context).maybePop(),
-              icon: Icon(Icons.close, size: 18, color: c.textDim),
+            DuoRailSwap.close(
+              onTap: () => Navigator.of(context).maybePop(),
+              child: IconButton(
+                tooltip: tr('Close'),
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: Icon(Icons.close, size: 18, color: c.textDim),
+              ),
             ),
           ],
         ),
@@ -1203,7 +1208,8 @@ class ChatExporter {
       final dir = await getTemporaryDirectory();
       final path = '${dir.path}/$name';
       await File(path).writeAsBytes(bytes, flush: true);
-      await SharePlus.instance.share(ShareParams(files: [XFile(path, mimeType: mime)], subject: name));
+      await SharePlus.instance.share(ShareParams(
+          files: [XFile(path, mimeType: mime)], subject: name, sharePositionOrigin: shareOriginOf(null)));
     } catch (e) {
       showToast(
           tr("Couldn't open the share sheet: {error}", {'error': '$e'}));

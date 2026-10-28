@@ -44,7 +44,7 @@
                 const p = geoPending.get(d.seq);
                 if (!p) return;
                 geoPending.delete(d.seq);
-                if (d.error) p.reject(new Error(d.error));
+                if (d.error) p.reject(Object.assign(new Error(d.error), { fromWorker: true }));
                 else p.resolve(d.features || []);
             };
             w.onerror = () => {
@@ -69,6 +69,32 @@
             try { w.postMessage({ seq, kind, url }); }
             catch (_) { geoPending.delete(seq); reject(new Error('geo post failed')); }
         });
+    }
+
+    const GP = window.NymGeoPlaces;
+    const placePacks = [null, null];
+    const placeRequested = [false, false];
+    const placeFailed = [false, false];
+    let placeLoads = 0;
+    function loadPlacePack(k, done) {
+        if (!GP || placePacks[k] || placeRequested[k]) return;
+        placeRequested[k] = true;
+        placeLoads++;
+        const url = GP.URLS[k];
+        decodeViaWorker('places', url)
+            .catch((e) => (e && e.fromWorker ? Promise.reject(e) : GP.fetchPack(url)))
+            .then((pack) => {
+                if (!pack || !pack.count) { placeFailed[k] = true; return; }
+                placePacks[k] = pack;
+                if (done) done();
+            })
+            .catch(() => { placeFailed[k] = true; });
+    }
+
+    function retryFailedPlacePacks() {
+        for (let k = 0; k < placeFailed.length; k++) {
+            if (placeFailed[k]) placeFailed[k] = placeRequested[k] = false;
+        }
     }
 
     function decodeOnMain(kind, url) {
@@ -271,7 +297,6 @@
         globe: SVG('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
         list: SVG('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
         star: SVG('<path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9L12 3z"/>'),
-        share: SVG('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/>'),
     };
 
     const GX_FLY_MS = 650;
@@ -376,6 +401,7 @@ Object.assign(NYM.prototype, {
             this._geomapCleanup = null;
         }
         container.innerHTML = '';
+        retryFailedPlacePacks();
 
         const GX = window.NymGeoExplore;
         const L = (t) => (typeof this.uiText === 'function' ? this.uiText(t) : t);
@@ -385,6 +411,7 @@ Object.assign(NYM.prototype, {
         this._geohashActiveWindowHours = GX.normalizeWindowHours(this._geohashActiveWindowHours);
         const activeHours = this._geohashActiveWindowHours;
         const windowGroup = this._gxWindowGroupHtml(activeHours, true);
+        const streetOn = this._streetDetailOn();
         const icon = (name) => GX_ICONS[name] || '';
         const ctl = (id, action, label, ic, extra = '') =>
             `<button type="button" class="gx-ctl" id="${id}"${action ? ` data-action="${action}"` : ''} aria-label="${esc(L(label))}" title="${esc(L(label))}"${extra}>${icon(ic)}</button>`;
@@ -413,11 +440,14 @@ Object.assign(NYM.prototype, {
     ${ctl('gxListsBtn', '', 'Channels list', 'list', ' aria-expanded="false" aria-controls="gxLists"')}
 </div>
 
+<a class="gx-osm-attr nm-hidden" id="gxOsmAttr" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" data-no-i18n translate="no">© OpenStreetMap contributors</a>
+
 <div class="gx-layers nm-hidden" id="gxLayers">
     <div id="gxLayersMenu" role="menu" aria-orientation="vertical" aria-label="${esc(L('Layers'))}">
     <button type="button" class="gx-layer-toggle" id="geohashHeatmapBtn" data-action="toggleHeatmap" role="menuitemcheckbox" aria-checked="false" tabindex="-1"><span class="gx-check" aria-hidden="true"></span>${esc(L('Heat'))}</button>
     <button type="button" class="gx-layer-toggle" id="geohashDaynightBtn" data-action="toggleDaynight" role="menuitemcheckbox" aria-checked="false" tabindex="-1"><span class="gx-check" aria-hidden="true"></span>${esc(L('Day / Night'))}</button>
     <button type="button" class="gx-layer-toggle" id="geohashGridBtn" data-action="toggleGeohashGrid" role="menuitemcheckbox" aria-checked="false" tabindex="-1"><span class="gx-check" aria-hidden="true"></span>${esc(L('Geohash grid'))}</button>
+    <button type="button" class="gx-layer-toggle${streetOn ? ' active' : ''}" id="geohashStreetsBtn" data-action="toggleStreetDetail" role="menuitemcheckbox" aria-checked="${streetOn ? 'true' : 'false'}" tabindex="-1"><span class="gx-check" aria-hidden="true"></span>${esc(L('Street detail'))}</button>
     <div class="gx-layers-row" role="none"><span aria-hidden="true">${esc(L('Activity'))}</span>${windowGroup}</div>
     </div>
     <div class="gx-legend" role="list" aria-label="${esc(L('Legend'))}">
@@ -427,6 +457,10 @@ Object.assign(NYM.prototype, {
         ${showYourLocation ? `<div class="geohash-legend-item" role="listitem"><div class="geohash-legend-dot nm-geo-2" aria-hidden="true"></div><span>${esc(L('Your Location'))}</span></div>` : ''}
         <div class="geohash-legend-item gx-legend-cluster" role="listitem"><span class="gx-swatch gx-swatch-cluster" aria-hidden="true">3</span><span>${esc(L('Number = channels grouped together'))}</span></div>
         <div class="geohash-legend-item gx-legend-pulse" role="listitem"><span class="gx-swatch gx-swatch-pulse" aria-hidden="true"></span><span>${esc(L('Pulsing = active in the last {n} minutes').replace('{n}', String(Math.round(GX.PULSE_WINDOW_MS / 60000))))}</span></div>
+    </div>
+    <div class="gx-map-data" id="gxMapData" role="group" aria-labelledby="gxMapDataTitle">
+        <div class="gx-map-data-title" id="gxMapDataTitle">${esc(L('Map data'))}</div>
+        ${(GP ? GP.CREDITS : []).map((c) => `<div class="gx-map-data-line" data-no-i18n translate="no">${esc(c)}</div>`).join('')}
     </div>
 </div>
 
@@ -451,7 +485,7 @@ Object.assign(NYM.prototype, {
     <div class="gx-info-head">
         <div class="geohash-info-title" id="geohashInfoTitle">Channel Info</div>
         <button type="button" class="gx-icon-btn" id="gxSaveBtn" aria-pressed="false" aria-label="${esc(L('Save place'))}" title="${esc(L('Save place'))}">${icon('star')}</button>
-        <button type="button" class="gx-icon-btn" id="gxShareBtn" aria-label="${esc(L('Share place'))}" title="${esc(L('Share place'))}">${icon('share')}</button>
+        <button type="button" class="gx-icon-btn" id="gxShareBtn" aria-label="${esc(L('Share place'))}" title="${esc(L('Share place'))}">${window.NymShareUi.svg('shareNodes', 20)}</button>
         <button type="button" class="gx-icon-btn geohash-info-close" id="geohashInfoClose" data-action="closeGeohashInfo" aria-label="${esc(L('Close'))}" title="${esc(L('Close'))}">${icon('close')}</button>
     </div>
     <div class="gx-info-scroll">
@@ -526,6 +560,20 @@ Object.assign(NYM.prototype, {
         let daynightMode = !!this._daynightPreference;
         let geohashGridMode = !!this._geohashGridPreference;
         let styles = getMapStyles();
+        const street = window.NymGeoStreet ? window.NymGeoStreet.createLayer({
+            enabled: this._streetDetailOn(),
+            view: () => ({ cx: view.cx, cy: view.cy, pxPerDeg: baseScale() * view.zoom, width: cssWidth, height: cssHeight }),
+            light: () => document.body.classList.contains('light-mode'),
+            dpr: () => dpr,
+            requestDraw: () => requestDraw(),
+            blocked: () => gridLabelBlocked(),
+            measure: (font, text) => { ctx.save(); ctx.font = font; const w = ctx.measureText(text).width; ctx.restore(); return w; },
+            labelStyle: () => {
+                const light = document.body.classList.contains('light-mode');
+                return { fill: styles.cityLabel, stroke: styles.labelStroke, water: light ? 'rgba(60,110,150,0.9)' : 'rgba(120,170,210,0.85)' };
+            },
+            setAttribution: (on) => { const el = document.getElementById('gxOsmAttr'); if (el) el.classList.toggle('nm-hidden', !on); },
+        }) : null;
 
         const tierData = [null, null, null];
         const wantTier = () => GX.tierFor(baseScale() * view.zoom);
@@ -546,8 +594,14 @@ Object.assign(NYM.prototype, {
         };
         const tierRequested = new Set();
 
+        const ensurePlaces = () => {
+            const n = GP ? GP.wantedPacks(GP.zvOf(baseScale() * view.zoom)) : 0;
+            for (let k = 0; k < n; k++) loadPlacePack(k, requestDraw);
+        };
+
         const ensureSubregions = () => {
             ensureTier();
+            ensurePlaces();
             if (view.zoom >= ADMIN1_ZOOM_THRESHOLD && !admin1Loaded) {
                 admin1Loaded = true;
                 loadAdmin1Features().then(feats => {
@@ -601,6 +655,13 @@ Object.assign(NYM.prototype, {
             updateLayersBtn();
         };
         updateGeohashGridButton();
+
+        const updateStreetButton = () => {
+            const btn = document.getElementById('geohashStreetsBtn');
+            const on = !!street && street.enabled;
+            if (btn) { btn.classList.toggle('active', on); btn.setAttribute('aria-checked', on ? 'true' : 'false'); }
+        };
+        updateStreetButton();
 
         const computeGridPrecision = () => {
             const s = baseScale() * view.zoom;
@@ -773,13 +834,13 @@ Object.assign(NYM.prototype, {
             return t > 0 ? tierData[t] : (features.length ? { countries: pathsForFeatures(features, true) } : null);
         };
 
-        const drawWorld = () => {
+        const drawWorld = (split) => {
             const td = tierLayers();
             if (!td || !td.countries) return;
             withWorld((sc) => {
                 ctx.fillStyle = styles.land;
                 ctx.strokeStyle = styles.border;
-                drawLayer(td.countries, { fill: true, width: 0.5 / sc });
+                drawLayer(td.countries, split ? { fill: true } : { fill: true, width: 0.5 / sc });
                 if (!td.lakes) return;
                 ctx.fillStyle = styles.lake;
                 ctx.globalAlpha = 1;
@@ -788,6 +849,15 @@ Object.assign(NYM.prototype, {
                 ctx.strokeStyle = styles.river;
                 ctx.lineCap = 'round';
                 drawLayer(td.rivers, { width: (rank) => (rank <= 2 ? 0.9 : 0.6) / sc });
+            });
+        };
+
+        const drawWorldBorders = () => {
+            const td = tierLayers();
+            if (!td || !td.countries) return;
+            withWorld((sc) => {
+                ctx.strokeStyle = styles.border;
+                drawLayer(td.countries, { width: 0.5 / sc });
             });
         };
 
@@ -840,11 +910,16 @@ Object.assign(NYM.prototype, {
             lastOccupied = out;
             return out;
         };
-        const FONT = (w, px) => `${w} ${px}px ${styles.font}`;
+        const FONT = (w, px, italic) => `${italic ? 'italic ' : ''}${w} ${px}px ${styles.font}`;
+        const placesActive = () => {
+            if (!GP || heatmapMode || !placePacks[0]) return null;
+            const zv = GP.zvOf(baseScale() * view.zoom);
+            return zv >= GP.LO_ZV ? zv : null;
+        };
         const layoutLabels = () => {
             const cands = [];
-            const add = (text, kind, p, px, weight, color, halo, center) => {
-                const font = FONT(weight, px);
+            const add = (text, kind, p, px, weight, color, halo, center, italic) => {
+                const font = FONT(weight, px, italic);
                 const w = measureLabel(ctx, font, text);
                 const h = px * 1.2;
                 const box = center
@@ -867,7 +942,18 @@ Object.assign(NYM.prototype, {
                 if (!inView(p, 0)) continue;
                 add(f.name, 'country', p, 11, 600, styles.label, 3, true);
             }
-            if (!heatmapMode && view.zoom >= 3 && cityFeatures.length) {
+            const placeZv = placesActive();
+            const firstPlace = cands.length;
+            if (placeZv !== null) {
+                const want = GP.wantedPacks(placeZv);
+                const packs = placePacks.slice(0, want);
+                for (const c of GP.select(packs, { cx: view.cx, cy: view.cy, pxPerDeg: baseScale() * view.zoom, width: cssWidth, height: cssHeight })) {
+                    const st = GP.styleFor(c.kind);
+                    add(c.name, 'place', project(c.lng, c.lat), st.px, st.weight, styles[st.color], GP.HALO_PX, !GP.hasDot(c.kind, placeZv), st.italic);
+                }
+            }
+            const placeEnd = cands.length;
+            if (placeZv === null && !heatmapMode && view.zoom >= 3 && cityFeatures.length) {
                 const cutoff = GX.cityRankCutoff(view.zoom);
                 for (const c of citiesByPriority(cityFeatures)) {
                     if (c.rank > cutoff) break;
@@ -892,7 +978,16 @@ Object.assign(NYM.prototype, {
                 }
             }
             const bubbles = currentClusters().filter((k) => k.count > 1).map((k) => ({ x0: k.x - k.r, y0: k.y - k.r, x1: k.x + k.r, y1: k.y + k.r }));
-            return GX.placeLabels(cands.map((c) => c.box), GX.LABEL_PAD, occupiedRects().concat(bubbles)).map((i) => cands[i]);
+            const blocked = occupiedRects().concat(bubbles);
+            if (placeZv === null) return GX.placeLabels(cands.map((c) => c.box), GX.LABEL_PAD, blocked).map((i) => cands[i]);
+            const head = [];
+            let placed = 0;
+            for (const i of GX.placeLabels(cands.slice(0, placeEnd).map((c) => c.box), GX.LABEL_PAD, blocked)) {
+                if (i >= firstPlace && ++placed > GP.MAX_LABELS) continue;
+                head.push(cands[i]);
+            }
+            const tail = cands.slice(placeEnd);
+            return head.concat(GX.placeLabels(tail.map((c) => c.box), GX.LABEL_PAD, blocked.concat(head.map((c) => c.box))).map((i) => tail[i]));
         };
 
         const drawPlaceLabels = () => {
@@ -1271,9 +1366,13 @@ Object.assign(NYM.prototype, {
             ctx.fillRect(0, 0, cssWidth, cssHeight);
 
             drawGraticule();
-            drawWorld();
+            const split = !!street && street.active();
+            drawWorld(split);
+            if (street) street.frame(ctx);
+            if (split) drawWorldBorders();
             drawAdmin1();
             drawPlaceLabels();
+            if (street) street.drawLabels(ctx);
             if (!geohashGridMode && deepGrid()) drawGeohashGrid();
             if (heatmapMode) {
                 drawHeatmap();
@@ -1337,6 +1436,7 @@ Object.assign(NYM.prototype, {
         };
         const offThemeChange = this.onThemeChange(() => {
             styles = getMapStyles();
+            if (street) street.themeChanged();
             requestDraw();
         });
 
@@ -1601,6 +1701,7 @@ Object.assign(NYM.prototype, {
             if (rafAnim) cancelAnimationFrame(rafAnim);
             rafAnim = 0;
             fly = null;
+            if (street) street.destroy();
             if (typeof this._gxTeardownUi === 'function') this._gxTeardownUi();
         };
 
@@ -1664,6 +1765,14 @@ Object.assign(NYM.prototype, {
                 updateGeohashGridButton();
                 requestDraw();
             },
+            toggleStreetDetail: () => {
+                if (!street) return;
+                const on = !street.enabled;
+                this._setStreetDetail(on);
+                street.setEnabled(on);
+                updateStreetButton();
+                requestDraw();
+            },
             flyToBounds: (bounds, animate, opts) => {
                 const o = opts || {};
                 const t = targetForBounds(bounds, o.padding || 0.7);
@@ -1696,6 +1805,8 @@ Object.assign(NYM.prototype, {
                     };
                 })(),
                 occupied: lastOccupied,
+                street: street ? street.debug() : null,
+                places: { loaded: placePacks.map((p) => !!p), counts: placePacks.map((p) => (p ? p.count : 0)), loads: placeLoads, zv: GP ? GP.zvOf(baseScale() * view.zoom) : null, active: placesActive() !== null },
                 labels: lastLabels.map((l) => ({ text: l.text, kind: l.kind, x0: l.box.x0, y0: l.box.y0, x1: l.box.x1, y1: l.box.y1 })) }),
             zoomToBounds: (bounds, padding = 0.7) => {
                 this._gxCloseStack(false);
@@ -1742,6 +1853,18 @@ Object.assign(NYM.prototype, {
 
     toggleGeohashGrid() {
         if (this.geohashMap) this.geohashMap.toggleGeohashGrid();
+    },
+
+    toggleStreetDetail() {
+        if (this.geohashMap) this.geohashMap.toggleStreetDetail();
+    },
+
+    _streetDetailOn() {
+        try { return localStorage.getItem('nym_street_detail') !== '0'; } catch (_) { return true; }
+    },
+
+    _setStreetDetail(on) {
+        try { localStorage.setItem('nym_street_detail', on ? '1' : '0'); } catch (_) { }
     },
 
     _selectGeohashCell(geohash, opts = {}) {
@@ -1794,8 +1917,8 @@ Object.assign(NYM.prototype, {
     },
 
     _gxWindowGroupHtml(active, inMenu) {
-        const label = { 1: 'Last hour', 24: 'Last 24 hours', 168: 'Last 7 days' };
-        const short = { 1: '1h', 24: '24h', 168: '7d' };
+        const label = { 1: 'Last hour', 12: 'Last 12 hours', 24: 'Last 24 hours' };
+        const short = { 1: '1h', 12: '12h', 24: '24h' };
         const state = (h) => inMenu
             ? `role="menuitemradio" tabindex="-1" aria-checked="${h === active ? 'true' : 'false'}"`
             : `aria-pressed="${h === active ? 'true' : 'false'}"`;
@@ -2032,10 +2155,10 @@ Object.assign(NYM.prototype, {
     _gxRow(c, km) {
         const GX = window.NymGeoExplore;
         const place = this._gxPlaceLabel(c.geohash);
-        const activity = c.messages === 1 ? this._gxL('1 message') : this._gxL(`${c.messages} messages`);
+        const activity = c.messages === 1 ? this._gxL('1 message') : this.uiText('{n} messages', { n: c.messages });
         const loc = this._gxUserLoc();
         const d = typeof km === 'number' ? km : (loc ? GX.haversineKm(loc.lat, loc.lng, c.lat, c.lng) : null);
-        const dist = d === null ? '' : this._gxL(`${GX.formatDistanceKm(d)} away`);
+        const dist = d === null ? '' : this.uiText('{distance} away', { distance: GX.formatDistanceKm(d) });
         const label = [`#${c.geohash}`, place, dist, activity].filter(Boolean).join(', ');
         const e = (t) => this.escapeHtml(t);
         return `<button type="button" class="gx-row" data-gh="${e(c.geohash)}" aria-label="${e(label)}">
@@ -2073,7 +2196,7 @@ Object.assign(NYM.prototype, {
         let html = '';
         if (tab === 'active') {
             const rows = GX.rankActive(active);
-            const wl = { 1: 'Last hour', 24: 'Last 24 hours', 168: 'Last 7 days' }[this._geohashActiveWindowHours] || 'Last 24 hours';
+            const wl = { 1: 'Last hour', 12: 'Last 12 hours', 24: 'Last 24 hours' }[this._geohashActiveWindowHours] || 'Last 24 hours';
             html = `<div class="gx-lists-head"><span>${this.escapeHtml(this._gxL(wl))}</span>${this._gxWindowGroupHtml(this._geohashActiveWindowHours)}</div>`
                 + (rows.length ? `<div class="gx-rows">${rows.map((c) => this._gxRow(c)).join('')}</div>`
                     : this._gxEmpty('No active channels', 'Nothing was posted in this window.'));
@@ -2225,7 +2348,7 @@ Object.assign(NYM.prototype, {
             + steps.map((s, i) => {
                 const label = this._gxL(s.label);
                 const sel = s.geohash === gh;
-                const aria = `#${s.geohash}, ${label}, ${this._gxL('about')} ${s.size}`;
+                const aria = this.uiText('#{geohash}, {label}, about {size}', { geohash: s.geohash, label, size: s.size });
                 return `${i ? '<span class="gx-step-sep" aria-hidden="true">›</span>' : ''}<button type="button" class="gx-step${sel ? ' active' : ''}" data-gh="${e(s.geohash)}" aria-label="${e(aria)}" aria-current="${sel ? 'true' : 'false'}" title="${e(label)} · ~${e(s.size)}"><span class="gx-step-gh">${e(s.geohash)}</span><span class="gx-step-label">${e(label)}</span></button>`;
             }).join('')
             + `</div><div class="gx-hint">${e(this._gxL('A shorter geohash shares less about where you are.'))}</div>`;
@@ -2284,7 +2407,7 @@ Object.assign(NYM.prototype, {
         const el = document.getElementById('gxPeek');
         if (!el) return;
         const e = (t) => this.escapeHtml(t);
-        const head = (online) => `<div class="gx-peek-head"><span class="gx-section-title">${e(this._gxL('Recent messages'))}</span>${typeof online === 'number' ? `<span class="gx-peek-online" id="gxPeekOnline">${e(this._gxL(online === 1 ? '1 nym online' : `${online} nyms online`))}</span>` : ''}</div>`;
+        const head = (online) => `<div class="gx-peek-head"><span class="gx-section-title">${e(this._gxL('Recent messages'))}</span>${typeof online === 'number' ? `<span class="gx-peek-online" id="gxPeekOnline">${e(online === 1 ? this._gxL('1 nym online') : this.uiText('{n} nyms online', { n: online }))}</span>` : ''}</div>`;
         const note = (cls, text) => `${head()}<div class="gx-peek-note ${cls}">${e(this._gxL(text))}</div>`;
         const reach = this._gxPeekReach(gh);
         if (reach !== 'online') {
@@ -2318,7 +2441,7 @@ Object.assign(NYM.prototype, {
             const set = this.channelUsers && this.channelUsers.get(gh);
             if (set) for (const pk of set) {
                 const u = this.users && this.users.get(pk);
-                if (u && this._seenActive(u.lastSeen, now) && !(typeof this.isPersonHidden === 'function' && this.isPersonHidden(pk, u.nym))) local.push(pk);
+                if (u && this._onlineIn(u, gh, now) && !(typeof this.isPersonHidden === 'function' && this.isPersonHidden(pk, u.nym))) local.push(pk);
             }
             summary = window.NymGeoExplore.summarizePeek(ok, {
                 geohash: gh, nowSec: Math.floor(now / 1000), blocked: [...(this.blockedUsers || [])], localOnline: local,
@@ -2406,7 +2529,7 @@ Object.assign(NYM.prototype, {
             }
             let title, sub;
             if (r.type === 'geohash') {
-                title = this._gxL(`Go to #${r.geohash}`);
+                title = this.uiText('Go to #{geohash}', { geohash: r.geohash });
                 const steps = window.NymGeoExplore.precisionSteps(r.geohash);
                 const step = steps[steps.length - 1];
                 sub = [

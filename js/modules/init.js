@@ -124,7 +124,7 @@ Object.assign(NYM.prototype, {
             if (typeof this._leBindAll === 'function') this._leBindAll();
 
         } catch (error) {
-            this.showNotification('Error', 'Failed to initialize: ' + error.message);
+            this.showNotification('Error', this.uiText('Failed to initialize: {error}', { error: error.message }));
         }
     },
 

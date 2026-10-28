@@ -16,6 +16,8 @@ export var RUN_PROGRESS_CHARS = 200;
 export var RUN_STEER_CHARS = 2000;
 export var RUN_STEER_STATUS_MAX = 20;
 export var RUN_RESULT_MAX_BYTES = 512 * 1024;
+export var RUN_SWEEP_EVERY_MS = 6 * 3600 * 1000;
+export var RUN_SWEEP_ROUNDS = 20;
 
 var RUN_DDL = [
   "CREATE TABLE IF NOT EXISTS botpm_turns (pubkey TEXT NOT NULL, asked TEXT NOT NULL, thread TEXT NOT NULL DEFAULT '', " +
@@ -35,7 +37,8 @@ var RUN_DDL = [
   "CREATE TABLE IF NOT EXISTS botpm_locks (pubkey TEXT NOT NULL, lock TEXT NOT NULL, asked TEXT NOT NULL, " +
   "beat_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (pubkey, lock))",
   "CREATE TABLE IF NOT EXISTS botpm_summary (pubkey TEXT NOT NULL, thread TEXT NOT NULL, text TEXT NOT NULL, " +
-  "upto_at INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (pubkey, thread))"
+  "upto_at INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (pubkey, thread))",
+  "CREATE TABLE IF NOT EXISTS botpm_sweep (name TEXT PRIMARY KEY, at INTEGER NOT NULL DEFAULT 0)"
 ];
 
 async function runsRepair(db) {
@@ -280,16 +283,16 @@ export async function runLockDrop(db, pk, lock, asked) {
 
 export async function runTurnsRecent(db, pk, limit) {
   return withTables(db, async function () {
-    var rs = await db.prepare("SELECT asked, thread, ids, at FROM botpm_turns WHERE pubkey = ? ORDER BY at DESC LIMIT ?")
-      .bind(pk, limit || 120).all();
+    var rs = await db.prepare("SELECT asked, thread, ids, at FROM botpm_turns WHERE pubkey = ? AND at >= ? ORDER BY at DESC LIMIT ?")
+      .bind(pk, Date.now() - RUN_TURN_KEEP_MS, limit || 120).all();
     return (rs && rs.results) || [];
   }, []);
 }
 
 export async function runTurnsThread(db, pk, thread, limit) {
   return withTables(db, async function () {
-    var rs = await db.prepare("SELECT asked, thread, ids, at FROM botpm_turns WHERE pubkey = ? AND (thread = ? OR asked = ?) ORDER BY at DESC LIMIT ?")
-      .bind(pk, thread || "", thread || "\u0000", limit || 200).all();
+    var rs = await db.prepare("SELECT asked, thread, ids, at FROM botpm_turns WHERE pubkey = ? AND (thread = ? OR asked = ?) AND at >= ? ORDER BY at DESC LIMIT ?")
+      .bind(pk, thread || "", thread || "\u0000", Date.now() - RUN_TURN_KEEP_MS, limit || 200).all();
     return (rs && rs.results) || [];
   }, []);
 }
@@ -297,10 +300,10 @@ export async function runTurnsThread(db, pk, thread, limit) {
 export async function runThreadHolders(db, pk, thread) {
   if (!thread) return { mine: false, other: false };
   return withTables(db, async function () {
-    var mine = await db.prepare("SELECT 1 AS x FROM botpm_turns WHERE pubkey = ? AND (thread = ? OR asked = ?) LIMIT 1")
-      .bind(pk, thread, thread).first();
-    var other = await db.prepare("SELECT 1 AS x FROM botpm_turns WHERE thread = ? AND pubkey != ? LIMIT 1")
-      .bind(thread, pk).first();
+    var mine = await db.prepare("SELECT 1 AS x FROM botpm_turns WHERE pubkey = ? AND (thread = ? OR asked = ?) AND at >= ? LIMIT 1")
+      .bind(pk, thread, thread, Date.now() - RUN_TURN_KEEP_MS).first();
+    var other = await db.prepare("SELECT 1 AS x FROM botpm_turns WHERE thread = ? AND pubkey != ? AND at >= ? LIMIT 1")
+      .bind(thread, pk, Date.now() - RUN_TURN_KEEP_MS).first();
     return { mine: !!mine, other: !!other };
   }, { mine: false, other: false });
 }
@@ -356,7 +359,7 @@ export async function runResultPut(db, pk, keys, result, at) {
 
 export async function runResultGet(db, pk, key) {
   return withTables(db, async function () {
-    var row = await db.prepare("SELECT result FROM botpm_results WHERE pubkey = ? AND id = ?").bind(pk, key).first();
+    var row = await db.prepare("SELECT result FROM botpm_results WHERE pubkey = ? AND id = ? AND at >= ?").bind(pk, key, Date.now() - RUN_RESULT_KEEP_MS).first();
     if (!row) return null;
     try { return JSON.parse(row.result); } catch (e) { return null; }
   }, null);
@@ -376,13 +379,13 @@ var RUN_COLS = "asked, thread, kind, label, progress, state, cancel, resume, sta
 
 export async function runGet(db, pk, asked) {
   return withTables(db, async function () {
-    return await db.prepare("SELECT " + RUN_COLS + " FROM botpm_runs WHERE pubkey = ? AND asked = ?").bind(pk, asked).first();
+    return await db.prepare("SELECT " + RUN_COLS + " FROM botpm_runs WHERE pubkey = ? AND asked = ? AND beat_at >= ?").bind(pk, asked, Date.now() - RUN_ROW_KEEP_MS).first();
   }, null);
 }
 
 export async function runByResume(db, pk, token) {
   return withTables(db, async function () {
-    return await db.prepare("SELECT " + RUN_COLS + " FROM botpm_runs WHERE pubkey = ? AND resume = ?").bind(pk, token).first();
+    return await db.prepare("SELECT " + RUN_COLS + " FROM botpm_runs WHERE pubkey = ? AND resume = ? AND beat_at >= ?").bind(pk, token, Date.now() - RUN_ROW_KEEP_MS).first();
   }, null);
 }
 
@@ -509,7 +512,7 @@ export async function runListSince(db, pk, since, limit) {
     var rs = await db.prepare(
       "SELECT " + RUN_COLS + " FROM botpm_runs WHERE pubkey = ? AND beat_at > ? AND (state IN ('done', 'stopped', 'failed', 'parked', 'waiting', 'awaiting', 'expired') OR cancel = 1) " +
       "AND state != 'pending' ORDER BY beat_at DESC LIMIT ?"
-    ).bind(pk, Number(since) || 0, limit || 50).all();
+    ).bind(pk, Math.max(Number(since) || 0, Date.now() - RUN_ROW_KEEP_MS - 1), limit || 50).all();
     return (rs && rs.results) || [];
   }, []);
 }
@@ -524,8 +527,8 @@ export async function runSteerAdd(db, pk, asked, id, text, now) {
 
 export async function runSteerList(db, pk, asked) {
   return withTables(db, async function () {
-    var rs = await db.prepare("SELECT id, text, at, applied_at FROM botpm_steer WHERE pubkey = ? AND asked = ? ORDER BY at LIMIT 20")
-      .bind(pk, asked).all();
+    var rs = await db.prepare("SELECT id, text, at, applied_at FROM botpm_steer WHERE pubkey = ? AND asked = ? AND NOT ((applied_at < 0 AND applied_at > ?) OR (applied_at >= 0 AND at < ?)) ORDER BY at LIMIT 20")
+      .bind(pk, asked, -(Date.now() - RUN_RESULT_KEEP_MS), Date.now() - RUN_ROW_KEEP_MS).all();
     return (rs && rs.results) || [];
   }, []);
 }
@@ -561,9 +564,9 @@ export async function runSteerStatus(db, pk, ids) {
     var st = db.prepare(
       "SELECT s.id AS id, s.applied_at AS applied_at, r.state AS state, r.cancel AS cancel FROM botpm_steer s " +
       "LEFT JOIN botpm_runs r ON r.pubkey = s.pubkey AND r.asked = s.asked WHERE s.pubkey = ? AND s.id IN (" +
-      want.map(function () { return "?"; }).join(", ") + ")"
+      want.map(function () { return "?"; }).join(", ") + ") AND NOT ((s.applied_at < 0 AND s.applied_at > ?) OR (s.applied_at >= 0 AND s.at < ?))"
     );
-    var rs = await st.bind.apply(st, [pk].concat(want)).all();
+    var rs = await st.bind.apply(st, [pk].concat(want, [-(Date.now() - RUN_RESULT_KEEP_MS), Date.now() - RUN_ROW_KEEP_MS])).all();
     ((rs && rs.results) || []).forEach(function (r) {
       var applied = Number(r.applied_at) || 0;
       if (applied > 0) out[r.id] = "applied";
@@ -576,7 +579,7 @@ export async function runSteerStatus(db, pk, ids) {
 
 export async function runSummaryGet(db, pk, thread) {
   return withTables(db, async function () {
-    return await db.prepare("SELECT text, upto_at FROM botpm_summary WHERE pubkey = ? AND thread = ?").bind(pk, thread || "").first();
+    return await db.prepare("SELECT text, upto_at FROM botpm_summary WHERE pubkey = ? AND thread = ? AND at >= ?").bind(pk, thread || "", Date.now() - RUN_TURN_KEEP_MS).first();
   }, null);
 }
 
@@ -604,19 +607,73 @@ export async function runForget(db, pk) {
   }, false);
 }
 
-export async function runSweep(db, now, limit) {
+var RUN_SWEEP_STEPS = {
+  turns: function (db, at, n) {
+    return db.prepare("DELETE FROM botpm_turns WHERE rowid IN (SELECT rowid FROM botpm_turns WHERE at < ? LIMIT ?)").bind(at - RUN_TURN_KEEP_MS, n);
+  },
+  results: function (db, at, n) {
+    return db.prepare("DELETE FROM botpm_results WHERE rowid IN (SELECT rowid FROM botpm_results WHERE at < ? LIMIT ?)").bind(at - RUN_RESULT_KEEP_MS, n);
+  },
+  runs: function (db, at, n) {
+    return db.prepare("DELETE FROM botpm_runs WHERE rowid IN (SELECT rowid FROM botpm_runs WHERE beat_at < ? LIMIT ?)").bind(at - RUN_ROW_KEEP_MS, n);
+  },
+  steer: function (db, at, n) {
+    return db.prepare("DELETE FROM botpm_steer WHERE rowid IN (SELECT rowid FROM botpm_steer WHERE (applied_at < 0 AND applied_at > ?) OR (applied_at >= 0 AND at < ?) LIMIT ?)")
+      .bind(-(at - RUN_RESULT_KEEP_MS), at - RUN_ROW_KEEP_MS, n);
+  },
+  locks: function (db, at) {
+    return db.prepare("DELETE FROM botpm_locks WHERE beat_at < ?").bind(at - RUN_ROW_KEEP_MS);
+  },
+  summary: function (db, at, n) {
+    return db.prepare("DELETE FROM botpm_summary WHERE rowid IN (SELECT rowid FROM botpm_summary WHERE at < ? LIMIT ?)").bind(at - RUN_TURN_KEEP_MS, n);
+  }
+};
+var RUN_SWEEP_ALL = Object.keys(RUN_SWEEP_STEPS);
+var RUN_SWEEP_BOUNDED = ["turns", "results", "runs", "steer", "summary"];
+
+async function runSweepSteps(db, now, limit, steps) {
   var at = now || Date.now();
   var n = limit || 500;
   return withTables(db, async function () {
-    await db.batch([
-      db.prepare("DELETE FROM botpm_turns WHERE rowid IN (SELECT rowid FROM botpm_turns WHERE at < ? LIMIT ?)").bind(at - RUN_TURN_KEEP_MS, n),
-      db.prepare("DELETE FROM botpm_results WHERE rowid IN (SELECT rowid FROM botpm_results WHERE at < ? LIMIT ?)").bind(at - RUN_RESULT_KEEP_MS, n),
-      db.prepare("DELETE FROM botpm_runs WHERE rowid IN (SELECT rowid FROM botpm_runs WHERE beat_at < ? LIMIT ?)").bind(at - RUN_ROW_KEEP_MS, n),
-      db.prepare("DELETE FROM botpm_steer WHERE rowid IN (SELECT rowid FROM botpm_steer WHERE (applied_at < 0 AND applied_at > ?) OR (applied_at >= 0 AND at < ?) LIMIT ?)")
-        .bind(-(at - RUN_RESULT_KEEP_MS), at - RUN_ROW_KEEP_MS, n),
-      db.prepare("DELETE FROM botpm_locks WHERE beat_at < ?").bind(at - RUN_ROW_KEEP_MS),
-      db.prepare("DELETE FROM botpm_summary WHERE rowid IN (SELECT rowid FROM botpm_summary WHERE at < ? LIMIT ?)").bind(at - RUN_TURN_KEEP_MS, n)
-    ]);
-    return true;
+    var res = await db.batch(steps.map(function (k) { return RUN_SWEEP_STEPS[k](db, at, n); }));
+    var got = {};
+    for (var i = 0; i < steps.length; i++) got[steps[i]] = Number(res && res[i] && res[i].meta && res[i].meta.changes) || 0;
+    return got;
+  }, {});
+}
+
+export async function runSweep(db, now, limit) {
+  var got = await runSweepSteps(db, now, limit, RUN_SWEEP_ALL);
+  var most = 0;
+  for (var k in got) most = Math.max(most, got[k]);
+  return most;
+}
+
+export async function runSweepClaim(db, now, everyMs) {
+  var at = now || Date.now();
+  var gap = everyMs || RUN_SWEEP_EVERY_MS;
+  return withTables(db, async function () {
+    var res = await db.prepare(
+      "INSERT INTO botpm_sweep (name, at) VALUES ('bot', ?) ON CONFLICT(name) DO UPDATE SET at = excluded.at WHERE botpm_sweep.at <= ?"
+    ).bind(at, at - gap).run();
+    return Number(res && res.meta && res.meta.changes) > 0;
   }, false);
+}
+
+export async function runSweepRounds(db, now, limit, sweepWraps) {
+  var n = limit || 500;
+  var wraps = typeof sweepWraps === "function";
+  var steps = RUN_SWEEP_ALL;
+  for (var round = 0; round < RUN_SWEEP_ROUNDS && (wraps || steps.length); round++) {
+    if (wraps) {
+      var w = 0;
+      try { w = Number(await sweepWraps(n)) || 0; } catch (e) { w = 0; }
+      wraps = w >= n;
+    }
+    if (steps.length) {
+      var got = await runSweepSteps(db, now, n, steps);
+      steps = RUN_SWEEP_BOUNDED.filter(function (k) { return got[k] >= n; });
+    }
+  }
+  return true;
 }

@@ -208,16 +208,22 @@ Object.assign(NYM.prototype, {
     return { credId, key };
   },
 
+  _vaultErr(text) {
+    const e = new Error(text);
+    e.vaultText = text;
+    return e;
+  },
+
   _webauthnError(e, method) {
     const bio = method === 'biometric';
     const name = e && e.name;
     if (name === 'NotAllowedError' || name === 'AbortError') {
-      return new Error(bio ? 'Biometric unlock was canceled.' : 'The passkey request was canceled or timed out.');
+      return this._vaultErr(bio ? 'Biometric unlock was canceled.' : 'The passkey request was canceled or timed out.');
     }
     if (name === 'SecurityError') {
-      return new Error(bio ? 'Biometric unlock can\'t be used on this address.' : 'Passkeys can\'t be used on this address.');
+      return this._vaultErr(bio ? 'Biometric unlock can\'t be used on this address.' : 'Passkeys can\'t be used on this address.');
     }
-    return new Error(bio ? 'Biometric authentication failed.' : 'Your passkey could not be used.');
+    return this._vaultErr(bio ? 'Biometric authentication failed.' : 'Your passkey could not be used.');
   },
 
   _vaultWrongSecret(method) {
@@ -240,7 +246,7 @@ Object.assign(NYM.prototype, {
     if (!assertion) throw this._webauthnError(null, method);
     const ext = assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
     if (!ext.prf || !ext.prf.results || !ext.prf.results.first) {
-      throw new Error('This passkey/authenticator does not support key derivation (WebAuthn PRF). Try a different passkey, or use a password or PIN instead.');
+      throw this._vaultErr('This passkey/authenticator does not support key derivation (WebAuthn PRF). Try a different passkey, or use a password or PIN instead.');
     }
     const prfOut = new Uint8Array(ext.prf.results.first);
     const base = await crypto.subtle.importKey('raw', prfOut, 'HKDF', false, ['deriveKey']);
@@ -250,7 +256,7 @@ Object.assign(NYM.prototype, {
   },
 
   async enableVault(method, password) {
-    if (this.vaultEnabled()) throw new Error('Encryption is already enabled.');
+    if (this.vaultEnabled()) throw this._vaultErr('Encryption is already enabled.');
     const salt = crypto.getRandomValues(new Uint8Array(16));
     let credId = null;
     if (this._vaultIsWebAuthn(method)) {
@@ -258,7 +264,7 @@ Object.assign(NYM.prototype, {
       this._vaultKey = r.key;
       credId = r.credId;
     } else {
-      if (!password || String(password).length < 4) throw new Error('Choose a password or PIN of at least 4 characters.');
+      if (!password || String(password).length < 4) throw this._vaultErr('Choose a password or PIN of at least 4 characters.');
       this._vaultKey = await this._deriveKeyFromPassword(String(password), salt);
     }
     this._vaultMem = new Map();
@@ -282,7 +288,7 @@ Object.assign(NYM.prototype, {
       localStorage.setItem('nym_encrypt_at_rest_pref', '1');
       localStorage.removeItem('nym_encrypt_at_rest_prompt_dismissed');
     } catch (e) {
-      throw new Error('Could not persist encryption settings.');
+      throw this._vaultErr('Could not persist encryption settings.');
     }
     try { if (typeof nostrSettingsSave === 'function') nostrSettingsSave(); } catch (e) {}
   },
@@ -290,7 +296,7 @@ Object.assign(NYM.prototype, {
   // Requires the vault to be unlocked.
   async disableVault() {
     if (!this.vaultEnabled()) return;
-    if (!this._vaultKey) throw new Error('Unlock first to disable encryption.');
+    if (!this._vaultKey) throw this._vaultErr('Unlock first to disable encryption.');
     for (const name of this._VAULT_KEYS) {
       let plain = this._vaultMem && this._vaultMem.has(name) ? this._vaultMem.get(name) : null;
       if (plain == null) {
@@ -336,14 +342,14 @@ Object.assign(NYM.prototype, {
   async unlockVault(password) {
     if (!this.vaultEnabled()) return true;
     let salt;
-    try { salt = this._vb64d(localStorage.getItem('nym_vault_salt') || ''); } catch (e) { throw new Error('Vault metadata is corrupt.'); }
+    try { salt = this._vb64d(localStorage.getItem('nym_vault_salt') || ''); } catch (e) { throw this._vaultErr('Vault metadata is corrupt.'); }
     const method = this.vaultMethod();
     if (this._vaultIsWebAuthn(method)) {
       const credId = localStorage.getItem('nym_vault_cred');
-      if (!credId) throw new Error('Passkey credential is missing.');
+      if (!credId) throw this._vaultErr('Passkey credential is missing.');
       this._vaultKey = await this._webauthnDeriveKey(credId, salt, method);
     } else {
-      if (!password) throw new Error('Enter your password or PIN.');
+      if (!password) throw this._vaultErr('Enter your password or PIN.');
       this._vaultKey = await this._deriveKeyFromPassword(String(password), salt);
     }
     // Verify against the check token first; _vaultDecrypt throws on the AES-GCM tag if the key is wrong.
@@ -353,11 +359,11 @@ Object.assign(NYM.prototype, {
       const check = localStorage.getItem('nym_vault_check');
       if (check && String(check).startsWith('enc:v1:')) {
         const v = await this._vaultDecrypt(check);
-        if (v !== 'nymchat-vault-ok') throw new Error('Vault verification failed.');
+        if (v !== 'nymchat-vault-ok') throw this._vaultErr('Vault verification failed.');
         verifiedOne = true;
       }
     } catch (e) {
-      throw new Error(this._vaultWrongSecret(method));
+      throw this._vaultErr(this._vaultWrongSecret(method));
     }
     for (const name of this._VAULT_KEYS) {
       let blob = null;
@@ -379,7 +385,7 @@ Object.assign(NYM.prototype, {
 
   async changeVaultPassword(current, next) {
     if (!this.vaultEnabled() || this._vaultIsWebAuthn(this.vaultMethod())) return false;
-    if (String(next || '').length < 4) throw new Error('Use at least 4 characters.');
+    if (String(next || '').length < 4) throw this._vaultErr('Use at least 4 characters.');
     const saltB64 = localStorage.getItem('nym_vault_salt');
     const check = localStorage.getItem('nym_vault_check');
     if (!saltB64 || !check || !current) return false;
@@ -525,7 +531,7 @@ Object.assign(NYM.prototype, {
         } catch (e) {
           this._vaultKey = null;
           setWorking(false);
-          err.textContent = this._vt(e && e.message ? e.message : 'Unlock failed.');
+          err.textContent = this._vt(e && e.vaultText ? e.vaultText : 'Unlock failed.');
           err.hidden = false;
           if (inp) { inp.value = ''; inp.focus(); } else goBtn.focus();
           return;
@@ -774,7 +780,7 @@ Object.assign(NYM.prototype, {
         }
         try { await this.disableVault(); } catch (e) {
           lock(false);
-          status(e && e.message ? e.message : 'Re-authentication failed. Encryption was not turned off.');
+          status(e && e.vaultText ? e.vaultText : 'Re-authentication failed. Encryption was not turned off.');
           return;
         }
         o.close();
@@ -866,7 +872,7 @@ Object.assign(NYM.prototype, {
         }
         o.close();
         this._vaultAlert('Identity encryption enabled and verified. You\'ll be asked to unlock on next launch.');
-      } catch (e) { status(e.message || 'Could not enable encryption.'); }
+      } catch (e) { status(e && e.vaultText ? e.vaultText : 'Could not enable encryption.'); }
     };
   }
 

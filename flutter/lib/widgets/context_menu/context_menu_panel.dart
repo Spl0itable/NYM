@@ -18,6 +18,7 @@ import '../../core/utils/nym_utils.dart';
 import '../../features/autocomplete/pending_edit.dart';
 import '../../features/chat_tools/chat_tools_providers.dart';
 import '../../features/chat_tools/chat_tools_ui.dart';
+import '../../features/duo/duo_rail.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/mesh/mesh_controller.dart';
 import '../../features/messages/inline_network_image.dart';
@@ -44,6 +45,7 @@ import 'report_modal.dart';
 import '../common/hit_slop.dart';
 import '../../core/theme/nym_a11y.dart';
 import '../../features/share/share_sheet.dart';
+import '../../features/shortcuts/escape_layers.dart';
 
 CtxTarget enrichCtxTarget(AppState s, CtxTarget target) {
   final self = s.selfPubkey;
@@ -314,8 +316,14 @@ class ContextMenuPanel extends ConsumerWidget {
               Positioned(
                 top: 6,
                 left: 10,
-                child: _BackButton(
-                  onTap: () => _onBack(context, backToGroupId!),
+                child: DuoRailSwap(
+                  items: [
+                    duoBackItem(() => _onBack(context, backToGroupId!)),
+                    duoCloseItem(onDismiss ?? onClose),
+                  ],
+                  child: _BackButton(
+                    onTap: () => _onBack(context, backToGroupId!),
+                  ),
                 ),
               ),
           ],
@@ -358,8 +366,12 @@ class ContextMenuPanel extends ConsumerWidget {
                 Positioned(
                   top: MediaQuery.of(context).padding.top + 10,
                   left: 10,
-                  child: _BackButton(
-                    onTap: () => _onBack(context, backToGroupId!),
+                  child: DuoRailSwap(
+                    order: -1,
+                    items: [duoBackItem(() => _onBack(context, backToGroupId!))],
+                    child: _BackButton(
+                      onTap: () => _onBack(context, backToGroupId!),
+                    ),
                   ),
                 ),
               Positioned(
@@ -1189,7 +1201,10 @@ class _CtxCloseButtonState extends State<CtxCloseButton> {
   bool _hover = false;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      DuoRailSwap.close(onTap: widget.onTap, child: _button(context));
+
+  Widget _button(BuildContext context) {
     final c = context.nym;
     return HitSlop(child: Semantics(button: true, label: tr('Close'), onTap: widget.onTap, excludeSemantics: true, child: MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -1287,7 +1302,7 @@ class _ExpandableProfileImage extends StatelessWidget {
         final rootContext = Navigator.of(context, rootNavigator: true).context;
         onClose();
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (rootContext.mounted) _ProfileImageViewer.open(rootContext, url);
+          if (rootContext.mounted) ProfileImageViewer.open(rootContext, url);
         });
       },
       child: MouseRegion(cursor: SystemMouseCursors.click, child: child),
@@ -1296,8 +1311,8 @@ class _ExpandableProfileImage extends StatelessWidget {
 }
 
 /// Fullscreen viewer for the profile avatar/banner, since the message viewer is private to its file.
-class _ProfileImageViewer extends StatelessWidget {
-  const _ProfileImageViewer({required this.url});
+class ProfileImageViewer extends StatelessWidget {
+  const ProfileImageViewer({super.key, required this.url});
   final String url;
 
   static Future<void> open(BuildContext context, String url) {
@@ -1305,14 +1320,16 @@ class _ProfileImageViewer extends StatelessWidget {
       PageRouteBuilder<void>(
         opaque: false,
         barrierColor: Colors.black.withValues(alpha: 0.92),
-        pageBuilder: (_, _, _) => _ProfileImageViewer(url: url),
+        pageBuilder: (_, _, _) => ProfileImageViewer(url: url),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return EscapeToClose(
+      onEscape: () => Navigator.of(context).maybePop(),
+      child: Scaffold(
       backgroundColor: Colors.transparent,
       body: Stack(
         children: [
@@ -1344,6 +1361,6 @@ class _ProfileImageViewer extends StatelessWidget {
           ),
         ],
       ),
-    );
+    ));
   }
 }

@@ -20,6 +20,7 @@ import '../../widgets/context_menu/context_menu_actions.dart';
 import '../../widgets/context_menu/context_menu_panel.dart';
 import '../../widgets/nym_icons.dart';
 import '../emoji/emoji_picker.dart';
+import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart';
 import '../shop/cosmetics.dart';
@@ -153,8 +154,39 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
     if (!call.isActiveCall) return const SizedBox.shrink();
 
     final service = ref.read(callServiceProvider);
+    final rail = DuoScope.railOf(context);
+    final switchCam = call.kind == CallKind.video &&
+        !call.sharing &&
+        !_chatOpen &&
+        call.videoInputCount > 1;
+    void toggleChat() {
+      setState(() => _chatOpen = !_chatOpen);
+      if (_chatOpen) service.markChatRead();
+    }
 
-    return Material(
+    return DuoRailItems(
+      active: rail,
+      priority: kDuoSheetPriority,
+      items: [
+        DuoRailItem(
+          id: 'call-chat',
+          label: _chatOpen ? tr('Close chat') : tr('Chat'),
+          svg: NymIcons.callChat,
+          toggled: _chatOpen,
+          badge: _chatOpen ? 0 : call.chatUnread,
+          onTap: toggleChat,
+        ),
+        if (switchCam)
+          DuoRailItem(
+            id: 'call-switch-camera',
+            label: call.facingMode == 'environment'
+                ? tr('Switch to front camera')
+                : tr('Switch to rear camera'),
+            svg: NymIcons.callSwitchCam,
+            onTap: call.switchingCamera ? null : service.switchCamera,
+          ),
+      ],
+      child: Material(
       // The Material sits above SafeArea so the fill reaches under the notch.
       color: context.nym.isLight
           ? const Color(0xF2F5F5F2)
@@ -182,10 +214,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
                     ),
                   ),
                   // Top-right, with more than one video input, hidden while chat is open or sharing.
-                  if (call.kind == CallKind.video &&
-                      !call.sharing &&
-                      !_chatOpen &&
-                      call.videoInputCount > 1)
+                  if (switchCam && !rail)
                     Positioned(
                       top: 14,
                       right: 14,
@@ -249,14 +278,12 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
                 _presenterOpen = !_presenterOpen;
                 _reactionsOpen = false;
               }),
-              onChat: () {
-                setState(() => _chatOpen = !_chatOpen);
-                if (_chatOpen) service.markChatRead();
-              },
+              onChat: toggleChat,
               onEnd: service.end,
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -855,6 +882,7 @@ class _ChatPanel extends ConsumerWidget {
     final width = MediaQuery.of(context).size.width;
     final fullscreen = width <= 640;
     return Container(
+      key: const ValueKey('callChatPanel'),
       width: fullscreen ? width : 320,
       constraints: BoxConstraints(maxWidth: width * 0.84),
       decoration: BoxDecoration(
@@ -874,10 +902,11 @@ class _ChatPanel extends ConsumerWidget {
                     style: TextStyle(
                         color: c.textBright, fontWeight: FontWeight.w600)),
                 const Spacer(),
-                IconButton(
-                  icon: Icon(Icons.close, size: 20, color: c.textDim),
-                  onPressed: onClose,
-                ),
+                if (!DuoScope.railOf(context))
+                  IconButton(
+                    icon: Icon(Icons.close, size: 20, color: c.textDim),
+                    onPressed: onClose,
+                  ),
               ],
             ),
           ),

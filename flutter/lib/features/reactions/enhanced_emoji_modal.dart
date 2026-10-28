@@ -17,6 +17,7 @@ import '../../widgets/common/nym_focusable.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../core/theme/nym_a11y.dart';
+import '../duo/duo_rail.dart';
 
 /// Below this width the grid drops to 5 columns.
 const double _kFiveColMaxWidth = 480;
@@ -445,7 +446,9 @@ class _ModalCloseChipState extends State<_ModalCloseChip> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return NymFocusable(
+    return DuoRailSwap.close(
+      onTap: widget.onTap,
+      child: NymFocusable(
       onActivate: widget.onTap,
       tooltip: tr('Close'),
       excludeChildSemantics: true,
@@ -479,6 +482,7 @@ class _ModalCloseChipState extends State<_ModalCloseChip> {
           ),
         ),
       ),
+    ),
     );
   }
 }

@@ -856,5 +856,6 @@ export {
   rumorInThreadScope,
   buildPqGiftWrappedDM,
   buildPqGiftWrappedDMPair,
-  botDMRumor
+  botDMRumor,
+  wrapDMTo
 };

@@ -12,6 +12,9 @@ import 'geo_explore.dart';
 import 'geo_projection.dart';
 import 'geohash_channel.dart';
 import 'topojson.dart';
+import 'geo_places.dart';
+import 'street_labels.dart';
+import 'street_layer.dart';
 
 /// Map colors: land, border and graticule use the PWA's literal canvas palette; accents come from theme tokens.
 @immutable
@@ -308,7 +311,21 @@ class GeoMapPainter extends CustomPainter {
     this.tierLabels = const [],
     this.mapSize,
     this.occupied = const [],
+    this.places = const [],
+    this.street,
   }) : super(repaint: repaint);
+
+  final StreetLayer? street;
+
+  bool get _light => style.land.computeLuminance() > 0.4;
+
+  final List<GeoPlacePack?> places;
+
+  double? _placesZv(Size size) {
+    if (heatmap || places.isEmpty || places.first == null) return null;
+    final zv = geoZvOf(view.scale(size));
+    return zv >= kGeoPlacesLoZv ? zv : null;
+  }
 
   final List<Rect> occupied;
 
@@ -384,9 +401,16 @@ class GeoMapPainter extends CustomPainter {
     canvas.drawRect(Offset.zero & size, Paint()..color = style.ocean);
 
     _drawGraticule(canvas, size);
-    _drawWorld(canvas, size);
+    final st = street;
+    final streetOn = st != null && st.plan.draw;
+    _drawWorld(canvas, size, borders: !streetOn);
+    if (streetOn) {
+      st.paint(canvas, size, view, light: _light, dpr: dpr);
+      _drawBorders(canvas, size);
+    }
     _drawAdmin1(canvas, size);
     _drawPlaceLabels(canvas, size);
+    if (streetOn) _drawStreetLabels(canvas, size, st);
     if (grid && gridCorner) _drawGrid(canvas, size);
     if (heatmap) {
       _drawHeatmap(canvas, size);
@@ -549,7 +573,32 @@ class GeoMapPainter extends CustomPainter {
     }
   }
 
-  void _drawWorld(Canvas canvas, Size size) {
+  void _drawBorders(Canvas canvas, Size size) {
+    final t = tierFor(size);
+    final tp = t < tiers.length ? tiers[t] : null;
+    final countries = tp?.countries ?? geoPathsFor(features);
+    if (countries == null) return;
+    _withWorld(canvas, size, (s) {
+      _drawLayer(canvas, size, countries, s,
+          stroke: Paint()
+            ..color = style.border
+            ..strokeWidth = 0.5 / s
+            ..strokeJoin = StrokeJoin.round
+            ..style = PaintingStyle.stroke);
+    });
+  }
+
+  void _drawStreetLabels(Canvas canvas, Size size, StreetLayer st) {
+    final blocked = <StreetBox>[
+      for (final r in occupied) StreetBox(r.left, r.top, r.right, r.bottom),
+      for (final l in _placed ?? const <GeoMapLabel>[])
+        StreetBox(l.box.x0, l.box.y0, l.box.x1, l.box.y1),
+    ];
+    st.paintLabels(canvas, size, view, blocked,
+        fill: style.cityLabel, halo: style.labelStroke, light: _light);
+  }
+
+  void _drawWorld(Canvas canvas, Size size, {bool borders = true}) {
     final t = tierFor(size);
     final tp = t < tiers.length ? tiers[t] : null;
     final countries = tp?.countries ?? geoPathsFor(features);
@@ -563,7 +612,8 @@ class GeoMapPainter extends CustomPainter {
         ..strokeWidth = 0.5 / s
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
-      _drawLayer(canvas, size, countries, s, fill: fill, stroke: stroke);
+      _drawLayer(canvas, size, countries, s,
+          fill: fill, stroke: borders ? stroke : null);
       if (tp == null) return;
       final lakeFill = Paint()
         ..color = style.lake
@@ -640,7 +690,26 @@ class GeoMapPainter extends CustomPainter {
           center: true));
     }
 
-    if (!heatmap && view.zoom >= 3 && cities.isNotEmpty) {
+    final pz = _placesZv(size);
+    final firstPlace = cands.length;
+    if (pz != null) {
+      final want = geoPlacesWanted(pz);
+      for (final c in selectGeoPlaces(places.take(want).toList(),
+          cx: view.cx,
+          cy: view.cy,
+          pxPerDeg: view.scale(size),
+          width: size.width,
+          height: size.height)) {
+        final st = geoPlaceStyle(c.kind);
+        add(_label(c.name, 'place', view.project(c.lng, c.lat, size),
+            st.fontSize, st.weight, st.admin ? style.adminLabel : style.cityLabel,
+            kGeoPlacesHalo, size,
+            center: !geoPlaceHasDot(c.kind, pz), italic: st.italic));
+      }
+    }
+    final placeEnd = cands.length;
+
+    if (pz == null && !heatmap && view.zoom >= 3 && cities.isNotEmpty) {
       final cutoff = geoCityRankCutoff(view.zoom);
       for (final c in _citiesByPriority(cities)) {
         if (c.rank > cutoff) break;
@@ -675,17 +744,31 @@ class GeoMapPainter extends CustomPainter {
       for (final k in clusters)
         if (k.count > 1) GeoLabelBox(k.x - k.r, k.y - k.r, k.x + k.r, k.y + k.r),
     ];
-    for (final i in placeGeoLabels(boxes, blocked: blocked)) {
+    if (pz == null) {
+      for (final i in placeGeoLabels(boxes, blocked: blocked)) {
+        out.add(cands[i]);
+      }
+      return out;
+    }
+    var placed = 0;
+    for (final i in placeGeoLabels(boxes.sublist(0, placeEnd), blocked: blocked)) {
+      if (i >= firstPlace && ++placed > kGeoPlacesMaxLabels) continue;
       out.add(cands[i]);
+    }
+    final tail = cands.sublist(placeEnd);
+    for (final i in placeGeoLabels([for (final l in tail) l.box],
+        blocked: [...blocked, for (final l in out) l.box])) {
+      out.add(tail[i]);
     }
     return out;
   }
 
   GeoMapLabel? _label(String text, String kind, Offset p, double fontSize,
       FontWeight weight, Color color, double halo, Size size,
-      {required bool center}) {
-    final tp =
-        _labelPainters(text, fontSize, weight, color, halo, style.labelStroke);
+      {required bool center, bool italic = false}) {
+    final tp = _labelPainters(
+        text, fontSize, weight, color, halo, style.labelStroke,
+        italic: italic);
     final w = tp.$2.width, h = tp.$2.height;
     final box = center
         ? GeoLabelBox(p.dx - w / 2 - 1, p.dy - h / 2, p.dx + w / 2 + 1, p.dy + h / 2)
@@ -1054,6 +1137,8 @@ class GeoMapPainter extends CustomPainter {
       old.features != features ||
       old.admin1Features != admin1Features ||
       old.cities != cities ||
+      old.places != places ||
+      old.street != street ||
       old.channels != channels ||
       old.heatmap != heatmap ||
       old.daynight != daynight ||
@@ -1129,9 +1214,10 @@ List<CityPoint> _citiesByPriority(List<CityPoint> cities) =>
 final Map<String, (TextPainter, TextPainter)> _labelCache = {};
 
 (TextPainter, TextPainter) _labelPainters(String text, double fontSize,
-    FontWeight weight, Color color, double halo, Color haloColor) {
+    FontWeight weight, Color color, double halo, Color haloColor,
+    {bool italic = false}) {
   final key =
-      '$text|$fontSize|${weight.value}|${color.toARGB32()}|$halo|${haloColor.toARGB32()}';
+      '$text|$fontSize|${weight.value}|${color.toARGB32()}|$halo|${haloColor.toARGB32()}${italic ? '|i' : ''}';
   final hit = _labelCache[key];
   if (hit != null) return hit;
   if (_labelCache.length > 1500) _labelCache.clear();
@@ -1142,6 +1228,7 @@ final Map<String, (TextPainter, TextPainter)> _labelCache = {};
               fontFamily: kSansFont,
               fontSize: fontSize,
               fontWeight: weight,
+              fontStyle: italic ? FontStyle.italic : null,
               foreground: fg),
         ),
         textDirection: TextDirection.ltr,

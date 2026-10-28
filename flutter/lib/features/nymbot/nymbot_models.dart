@@ -2,6 +2,7 @@
 library;
 
 import '../i18n/i18n.dart' show creditFigure;
+import '../shop/shop_purchase_policy.dart';
 
 const int kNominalTurnIn = 3000;
 const int kNominalTurnOut = 700;
@@ -49,6 +50,7 @@ class ProModel {
     this.reasoning = false,
     this.tools = false,
     this.context,
+    this.outTokens,
     this.hosting = '',
     this.priced = true,
   });
@@ -73,6 +75,7 @@ class ProModel {
       reasoning: j['reasoning'] == true,
       tools: j['tools'] == true,
       context: asInt(j['context']),
+      outTokens: asInt(j['outTokens']) ?? asInt(j['maxTokens']),
       hosting: (j['hosting'] ?? '').toString(),
       // Absent means priced, so an older worker doesn't gray out the list.
       priced: j['priced'] != false,
@@ -95,6 +98,7 @@ class ProModel {
         'reasoning': reasoning,
         'tools': tools,
         if (context != null) 'context': context,
+        if (outTokens != null) 'outTokens': outTokens,
         if (hosting.isNotEmpty) 'hosting': hosting,
         'priced': priced,
       };
@@ -133,6 +137,7 @@ class ProModel {
 
   /// Context window in tokens, when known.
   final int? context;
+  final int? outTokens;
 
   /// `cloudflare-hosted` or `third-party`; empty on older workers; only used for a badge.
   final String hosting;
@@ -723,7 +728,9 @@ List<BotPMCommand> filterBotPMCommands(String input) {
   if (!needle.contains(' ')) {
     return [
       for (final c in kBotPMCommands)
-        if (c.name.startsWith(needle)) c,
+        if (c.name.startsWith(needle) &&
+            !(c.name == '?buy' && botCreditPurchasesDisabled))
+          c,
     ];
   }
 
@@ -814,6 +821,7 @@ class BotBalance {
     required this.proBalance,
     required this.proTotalPurchased,
     required this.proTotalUsed,
+    this.free,
   });
 
   final double balance; // standard credits available, fractions included
@@ -822,6 +830,7 @@ class BotBalance {
   final double proBalance; // Pro credits available, fractions included
   final int proTotalPurchased;
   final int proTotalUsed;
+  final BotFreeAllowance? free;
 
   factory BotBalance.fromJson(Map<String, dynamic> j) => BotBalance(
         balance: _credits(j['balanceCredits'] ?? j['balance']),
@@ -830,6 +839,7 @@ class BotBalance {
         proBalance: _credits(j['proBalanceCredits'] ?? j['proBalance']),
         proTotalPurchased: _int(j['proTotalPurchased']),
         proTotalUsed: _int(j['proTotalUsed']),
+        free: BotFreeAllowance.fromJson(j['free']),
       );
 
   static const empty = BotBalance(
@@ -840,6 +850,36 @@ class BotBalance {
     proTotalPurchased: 0,
     proTotalUsed: 0,
   );
+}
+
+class BotFreeAllowance {
+  const BotFreeAllowance({required this.left, this.limit, this.resetsAt});
+
+  final int left;
+  final int? limit;
+  final int? resetsAt;
+
+  static BotFreeAllowance? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final left = j['left'];
+    if (left is! num || !left.isFinite) return null;
+    final limit = j['limit'];
+    final at = j['resetsAt'];
+    return BotFreeAllowance(
+      left: left.floor() < 0 ? 0 : left.floor(),
+      limit: limit is num && limit.isFinite ? (limit.floor() < 0 ? 0 : limit.floor()) : null,
+      resetsAt: at is num && at.isFinite ? at.toInt() : null,
+    );
+  }
+
+  BotFreeAllowance at(int now) {
+    final r = resetsAt;
+    final l = limit;
+    if (r == null || l == null || now < r) return this;
+    const day = 86400000;
+    return BotFreeAllowance(
+        left: l, limit: l, resetsAt: r + ((now - r + 1) / day).ceil() * day);
+  }
 }
 
 enum CreditTier { standard, pro }

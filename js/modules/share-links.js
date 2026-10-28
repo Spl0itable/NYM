@@ -138,6 +138,8 @@
     const RX_NPUB_FRAGMENT = /^npub1[02-9ac-hj-np-z]{58}$/;
     const RX_GEOHASH = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
     const RX_CHANNEL = /^[\p{L}\p{N}]+$/u;
+    const RX_UPPER_OR_TITLE = /[\p{Lu}\p{Lt}]/u;
+    const asciiLower = (v) => v.replace(/[A-Z]/g, (c) => c.toLowerCase());
 
     function trimAscii(s) {
         return s.replace(/^[ \t\n\r\f\v]+/, '').replace(/[ \t\n\r\f\v]+$/, '');
@@ -165,8 +167,8 @@
             n = strictPercentDecode(n);
             if (n === null) return invalid('bad_fragment');
         }
-        n = n.toLowerCase();
-        if (!RX_CHANNEL.test(n) || Array.from(n).length > MAX_CHANNEL_CHARS) return invalid('bad_fragment');
+        n = asciiLower(n);
+        if (RX_UPPER_OR_TITLE.test(n) || !RX_CHANNEL.test(n) || Array.from(n).length > MAX_CHANNEL_CHARS) return invalid('bad_fragment');
         return { kind: 'channel', channel: n, geohash: RX_GEOHASH.test(n), refPrefix };
     }
 
@@ -191,7 +193,7 @@
         let rest = s;
         const hadNostr = /^nostr:/i.test(rest);
         if (hadNostr) rest = rest.slice(6);
-        const lowerRest = rest.toLowerCase();
+        const lowerRest = asciiLower(rest);
         if (lowerRest.startsWith('nsec1') || lowerRest.startsWith('ncryptsec1')) return invalid('secret');
         if (lowerRest.startsWith('npub1')) {
             const pk = npubToHex(rest);

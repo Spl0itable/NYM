@@ -31,6 +31,7 @@ import '../../features/mesh/mesh_controller.dart';
 import '../../features/autocomplete/autocomplete_queries.dart';
 import '../../features/autocomplete/autocomplete_triggers.dart';
 import '../../features/autocomplete/pending_edit.dart';
+import '../../features/shortcuts/escape_layers.dart';
 import '../../features/shortcuts/shortcuts.dart';
 import '../../features/group_tools/group_tools_service.dart' show GtChat;
 import '../../features/group_tools/group_tools_ui.dart';
@@ -208,6 +209,7 @@ class _ComposerState extends ConsumerState<Composer>
   }
 
   final _translatePortal = OverlayPortalController();
+  List<EscapeLayer> _escapeLayers = const [];
   final _translateAnchor = LayerLink();
   final _translateSearchController = TextEditingController();
   final _translateSearchFocus = FocusNode(debugLabel: 'translateSearch');
@@ -547,9 +549,14 @@ class _ComposerState extends ConsumerState<Composer>
     _videoActivity = null;
     WidgetsBinding.instance.removeObserver(this);
     _focus.removeListener(_onFocusChanged);
+    if (identical(ComposerShortcutHooks.text, _controller)) {
+      ComposerShortcutHooks.text = null;
+    }
     if (identical(ComposerShortcutHooks.focus, _focus)) {
       ComposerShortcutHooks.focus = null;
     }
+    _escapeLayers.forEach(EscapeLayers.remove);
+    EscapeLayers.unwatchText(_focus);
     _controller.dispose();
     _focus.dispose();
     _sendMenuFocus.dispose();
@@ -680,6 +687,15 @@ class _ComposerState extends ConsumerState<Composer>
     _focus.addListener(_onFocusChanged);
     WidgetsBinding.instance.addObserver(this);
     ComposerShortcutHooks.focus = _focus;
+    ComposerShortcutHooks.text = _controller;
+    _escapeLayers = [
+      EscapeLayers.add(EscapeRank.picker,
+          () => mounted && _emojiPortal.isShowing, _hideEmojiPicker),
+      EscapeLayers.add(EscapeRank.translate,
+          () => mounted && _translatePortal.isShowing, _hideTranslate),
+    ];
+    EscapeLayers.watchText(_focus,
+        () => _overlayActive || _pendingEdit != null || _pendingQuote != null);
     // Register hooks so slash commands that open UI surfaces actually fire.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -864,6 +880,10 @@ class _ComposerState extends ConsumerState<Composer>
   void _onFocusChanged() {
     // Markers follow the caret, and an unfocused field has no caret.
     _controller.composerFocused = _focus.hasFocus;
+    if (_focus.hasFocus) {
+      ComposerShortcutHooks.focus = _focus;
+      ComposerShortcutHooks.text = _controller;
+    }
     _keyboardClosed = false;
     if (mounted) setState(() {});
   }
@@ -2049,8 +2069,7 @@ class _ComposerState extends ConsumerState<Composer>
         : (_pendingQuote != null
             ? _QuotePreviewChip(
                 author: _pendingQuote!.author,
-                // Snippet from the full original content, not the stripped send text.
-                text: _quotePreviewText(_pendingQuote!.fullText),
+                text: _quotePreviewText(_pendingQuote!.text),
                 onClose: _clearQuote,
                 squareTop: _overlayActive,
               )

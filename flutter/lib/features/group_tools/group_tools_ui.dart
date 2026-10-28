@@ -22,6 +22,7 @@ import '../calls/call_signaling.dart' show CallPhase;
 import '../channels/channel_share.dart' show kNymchatShareHost;
 import '../globe/topojson.dart';
 import '../groups/group_logic.dart' show GroupLogic, kMaxGroupMembers;
+import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/discord_timestamp.dart';
 import '../messages/format/message_content.dart';
@@ -922,10 +923,13 @@ class GtPanelShell extends StatelessWidget {
                 ),
               ),
             ),
-            IconButton(
-              tooltip: tr('Close'),
-              onPressed: () => Navigator.of(context).maybePop(),
-              icon: Icon(Icons.close, size: 18, color: c.textDim),
+            DuoRailSwap.close(
+              onTap: () => Navigator.of(context).maybePop(),
+              child: IconButton(
+                tooltip: tr('Close'),
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: Icon(Icons.close, size: 18, color: c.textDim),
+              ),
             ),
           ],
         ),

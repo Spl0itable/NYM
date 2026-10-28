@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../features/duo/duo_rail.dart';
 import '../../features/layout/layout_model.dart';
 import '../../features/i18n/i18n.dart';
 import 'app_dialog.dart';
@@ -38,6 +39,9 @@ String nymSheetSettle({
 }
 
 bool nymSheetFits(double width) => width <= kNymSheetMaxWidth;
+
+bool messageSheetFits({required double width, required bool mouse}) =>
+    mouse ? width <= kPhoneMax : nymSheetFits(width);
 
 bool useNymSheet(BuildContext context) =>
     nymSheetFits(MediaQuery.sizeOf(context).width);
@@ -274,7 +278,14 @@ class _NymSheetFrameState extends State<NymSheetFrame>
     var maxH = avail * (widget.fullHeight ? 0.96 : 0.92);
     var offset = _drag;
     var square = false;
-    Widget body = NymSheetScope(child: widget.child);
+    Widget body = NymSheetScope(
+      child: DuoRailItems(
+        active: DuoScope.railOf(context),
+        priority: kDuoSheetFallbackPriority,
+        items: [duoCloseItem(close)],
+        child: widget.child,
+      ),
+    );
     if (expands) {
       _fullH = box.maxHeight.isFinite ? box.maxHeight : avail;
       final half = _fullH * kNymSheetHalf;

@@ -4,14 +4,7 @@
 
     Object.assign(NYM.prototype, {
         _shareAppChoices() {
-            const A = L().APP_LINKS;
-            return [
-                { id: 'download', label: 'Get Nymchat', url: A.downloadPage },
-                { id: 'web', label: 'Web app', url: A.webApp },
-                { id: 'ios', label: 'App Store (TestFlight)', url: A.iosTestFlight },
-                { id: 'play', label: 'Google Play', url: A.googlePlay },
-                { id: 'zapstore', label: 'Zapstore', url: A.zapstore },
-            ];
+            return window.NymShareUi.appLinkChoices('web', L().APP_LINKS);
         },
 
         openShareApp() {
@@ -24,8 +17,6 @@
             canvas.id = 'shareAppQr';
             canvas.setAttribute('role', 'img');
             card.appendChild(canvas);
-            const title = document.createElement('div');
-            title.className = 'share-subtitle';
             const linkText = document.createElement('div');
             linkText.className = 'share-detail share-app-link';
             linkText.id = 'shareAppLink';
@@ -37,7 +28,6 @@
             let current = choices[0];
             const show = async (c) => {
                 current = c;
-                title.textContent = this._shT(c.label);
                 linkText.textContent = c.url;
                 chips.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.appChoice === c.id ? 'true' : 'false'));
                 canvas.dataset.qrText = '';
@@ -55,11 +45,16 @@
             });
             if (typeof navigator.share === 'function') {
                 const sh = this._shareButton('Share...');
+                const label = document.createElement('span');
+                label.textContent = sh.textContent;
+                sh.textContent = '';
+                sh.insertAdjacentHTML('afterbegin', window.NymShareUi.svg('shareNodes', 20));
+                sh.appendChild(label);
                 sh.dataset.appAction = 'share';
                 sh.addEventListener('click', () => { navigator.share({ title: 'Nymchat', url: current.url }).catch(() => { }); });
                 actions.appendChild(sh);
             }
-            body.append(card, title, linkText, chips, actions);
+            body.append(card, linkText, chips, actions);
             modal.classList.add('active');
             show(current);
         },

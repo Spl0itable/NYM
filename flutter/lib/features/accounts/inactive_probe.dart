@@ -29,6 +29,8 @@ import '../identity/pq_registry.dart';
 import '../identity/pq_root.dart';
 import '../relays/relay_block.dart';
 import 'account_logic.dart';
+import '../nymbot/standalone_nymbot.dart';
+import '../../state/app_state.dart' show kNymbotPubkey;
 
 typedef ProbeTransportFactory = PoolTransport Function(
     bool direct, List<String> relays);
@@ -310,7 +312,7 @@ class InactiveProbe {
         accept != 'enabled' ||
         packs.isNotEmpty ||
         blockedChannels.isNotEmpty;
-    if (!userFilters && !spamOn && mutedOf == null) return null;
+    final filtering = userFilters || spamOn || mutedOf != null;
     Uint8List? sk;
     final read = secretOf;
     final nsec = read == null ? null : await read(a.id);
@@ -346,6 +348,7 @@ class InactiveProbe {
       ctx: ctx,
       accept: accept,
       unopened: userFilters,
+      filtering: filtering,
       kemKeys: key == null ? null : () => _kemKeys(a, key),
       groups: () => _groupsOf(a),
     );
@@ -536,7 +539,10 @@ class _WrapJudge {
     required this.unopened,
     required this.kemKeys,
     required this.groups,
+    this.filtering = true,
   });
+
+  final bool filtering;
 
   final AccountEntry account;
   final Uint8List? sk;
@@ -566,6 +572,16 @@ class _WrapJudge {
       cands.add(giftwrap.classicalCandidate(key, bitchat: true));
       final u = await giftwrap.unwrapGiftWrap(wrap, cands);
       if (u == null) return unopened;
+      if (isStandaloneNymbotRunWrap(
+        sealPubkey: u.seal.pubkey,
+        sealKind: u.seal.kind,
+        rumor: u.rumor,
+        me: account.pubkey,
+        botPubkey: kNymbotPubkey,
+      )) {
+        return true;
+      }
+      if (!filtering) return false;
       final sender = u.seal.pubkey;
       if (sender.isEmpty || sender == account.pubkey) return false;
       final raw = u.rumor['content'];

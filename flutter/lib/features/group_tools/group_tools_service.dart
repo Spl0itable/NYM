@@ -515,7 +515,7 @@ class GroupToolsService {
     if (!gate('slowmode', 'group').ok) return;
     final next = GroupTools.normalizeSlowmode(sec);
     if (next == GroupTools.normalizeSlowmode(g.slowmode)) return;
-    final ts = _nowSec;
+    final ts = GroupLogic.nextMetaTs(g, _nowSec);
     g.slowmode = next;
     g.slowmodeSince = ts;
     GroupLogic.stampMeta(g, _self, ts);
@@ -543,7 +543,7 @@ class GroupToolsService {
     if (!gate('approval', 'group').ok) return;
     if (on == g.joinApproval) return;
     g.joinApproval = on;
-    GroupLogic.stampMeta(g, _self, _nowSec);
+    GroupLogic.stampMeta(g, _self, GroupLogic.nextMetaTs(g, _nowSec));
     hooks.saveGroup?.call(g);
     await hooks.broadcastMetadata?.call(g);
     _notice(

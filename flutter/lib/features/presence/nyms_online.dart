@@ -35,8 +35,7 @@ int channelOnlineNymsCount(
 }) =>
     users.where((u) {
       if (u.pubkey == selfPubkey) return false;
-      if (!u.channels.contains(channelKey)) return false;
       if (isPersonHidden(u)) return false;
       if (nymStatus(u, nowMs) == UserStatus.hidden) return false;
-      return lastSeenIsActive(u.lastSeen, nowMs);
+      return u.onlineIn(channelKey, nowMs);
     }).length;

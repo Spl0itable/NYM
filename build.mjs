@@ -125,6 +125,15 @@ async function run() {
 
   // Hash data/ first so '/data/...' references in JS get rewritten to hashed names.
   for (const file of await walk(path.join(root, 'data'))) {
+    if (file.endsWith('.nyp.gz')) {
+      const rel = toPosix(path.relative(root, file));
+      const content = await fs.readFile(file);
+      const hashed = hashedName(rel, content);
+      await emit(hashed, content);
+      assetMap.set(rel, hashed);
+      manifestFiles['/' + hashed] = sha256b64(content);
+      continue;
+    }
     if (!file.endsWith('.json')) continue;
     const rel = toPosix(path.relative(root, file));
     const code = JSON.stringify(JSON.parse(await fs.readFile(file, 'utf8')));
@@ -146,19 +155,22 @@ async function run() {
   const jsWave = (rel) => {
     if (rel === 'js/nostr-tools.js' || rel.startsWith('js/vendor/')) return 0;
     // Worker dependencies before workers, workers before their referrers.
-    if (rel === 'js/modules/syntax-highlight.js' || rel === 'js/geo-decode.js'
+    if (rel === 'js/modules/syntax-highlight.js' || rel === 'js/geo-decode.js' || rel === 'js/modules/geo-places.js'
         || rel === 'js/modules/message-format.js' || rel === 'js/modules/media-notes.js'
         || rel === 'js/modules/call-link-icon.js') return 1;
     if (rel === 'js/verify-worker.js' || rel === 'js/highlight-worker.js'
-        || rel === 'js/geo-decode-worker.js' || rel === 'js/format-worker.js') return 2;
+        || rel === 'js/geo-decode-worker.js' || rel === 'js/format-worker.js' || rel === 'js/geo-street-worker.js') return 2;
     return 3;
   };
   const jsFiles = (await walk(path.join(root, 'js')))
     .filter((f) => f.endsWith('.js'))
     .sort((a, b) => jsWave(toPosix(path.relative(root, a))) - jsWave(toPosix(path.relative(root, b))));
+  const { catalogHash, stampCatalog } = await import('./i18n/catalog-key.mjs');
+  const i18nCatalog = catalogHash((await (await import('./i18n/strings.mjs')).loadSources()).sources);
   for (const file of jsFiles) {
     const rel = toPosix(path.relative(root, file));
     let src = await fs.readFile(file, 'utf8');
+    if (rel === 'js/modules/i18n.js') src = stampCatalog(src, i18nCatalog);
     for (const [orig, hashed] of assetMap) src = src.split('/' + orig).join('/' + hashed);
     const { code } = await transform(src, { loader: 'js', minify: true, legalComments: 'none' });
     const hashed = hashedName(rel, code);
@@ -233,7 +245,7 @@ async function run() {
     'css/styles-core.css', 'css/styles-shell.css', 'css/styles-chat.css',
     'css/styles-components.css', 'css/styles-themes-responsive.css', 'css/styles-columns.css',
     'css/no-inline.css',
-    'js/defer-css.js', 'js/accounts.js', 'js/theme-init.js', 'js/setup-modal-init.js',
+    'js/defer-css.js', 'js/storage-guard.js', 'js/accounts.js', 'js/theme-init.js', 'js/setup-modal-init.js',
     'js/languages.js', 'js/first-lang.js',
     'js/modules/call-link-icon.js', 'js/modules/menu-dots-icon.js',
     'js/modules/inline-bindings.js', 'js/modules/dialog.js', 'js/modules/sheets.js',

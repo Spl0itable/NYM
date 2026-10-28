@@ -1118,6 +1118,7 @@ Object.assign(NYM.prototype, {
 
         this.setupSwipeToReply();
         this.setupDoubleClickToReply();
+        this.setupMessageCopy();
 
         window.addEventListener('popstate', (e) => {
             if (typeof this._phonePop === 'function' && this._phonePop(e)) return;

@@ -252,6 +252,8 @@ class RelayPool implements PoolTransport {
     Set<String>? writeOnlyRelays,
     Iterable<String>? blockedRelays,
     RelayConnection Function(String url)? connectionFactory,
+    this._appRelayVia,
+    RelayConnection Function(String url, String via)? appConnectionFactory,
     Random? random,
     this.eoseQuorum = 0.6,
     this.eoseTimeout = const Duration(seconds: 4),
@@ -262,11 +264,36 @@ class RelayPool implements PoolTransport {
         _blocked = RelayBlock.toSet(blockedRelays),
         _connectionFactory =
             connectionFactory ?? ((url) => RelayConnection(url)),
+        _appConnectionFactory =
+            appConnectionFactory ?? RelayConnection.viaPool,
         _rng = random ?? Random() {
     for (final url in relays) {
-      if (url == RelayConfig.appRelay) continue;
+      if (url == RelayConfig.appRelay && _appRelayVia == null) continue;
       _wanted.add(url);
       _addRelayInternal(url);
+    }
+  }
+
+  String? _appRelayVia;
+
+  final RelayConnection Function(String url, String via) _appConnectionFactory;
+
+  String? get appRelayVia => _appRelayVia;
+
+  void setAppRelayVia(String? via) {
+    if (via == _appRelayVia) return;
+    _appRelayVia = via;
+    const app = RelayConfig.appRelay;
+    if (_connections.containsKey(app)) unawaited(removeRelay(app));
+    if (via == null) {
+      _wanted.remove(app);
+      return;
+    }
+    if (_started) {
+      addRelay(app);
+    } else {
+      _wanted.add(app);
+      _addRelayInternal(app);
     }
   }
 
@@ -463,7 +490,10 @@ class RelayPool implements PoolTransport {
   void _addRelayInternal(String url) {
     if (_connections.containsKey(url)) return;
     if (isRelayBlocked(url)) return;
-    final conn = _connectionFactory(url);
+    final via = _appRelayVia;
+    final conn = url == RelayConfig.appRelay && via != null
+        ? _appConnectionFactory(url, via)
+        : _connectionFactory(url);
     _connections[url] = conn;
     _msgSubs[url] = conn.messages.listen((msg) => _onRelayMessage(url, msg));
     _statusSubs[url] = conn.statusStream.listen((status) {
@@ -490,7 +520,7 @@ class RelayPool implements PoolTransport {
 
   /// Adds a relay; when already connected it connects and back-fills active subscriptions.
   void addRelay(String url) {
-    if (url == RelayConfig.appRelay) return;
+    if (url == RelayConfig.appRelay && _appRelayVia == null) return;
     _wanted.add(url);
     if (_bannedRelays.contains(url)) return;
     if (isRelayBlocked(url)) return;
@@ -521,6 +551,35 @@ class RelayPool implements PoolTransport {
       conn.connect();
     }
     if (connectedCount > 0) _held.flush(this);
+  }
+
+  static const Duration resumeProbeTimeout = Duration(seconds: 3);
+
+  bool _livenessHeld = false;
+
+  void holdLiveness() {
+    _livenessHeld = true;
+    for (final conn in _connections.values) {
+      conn.hold();
+    }
+  }
+
+  void wake() {
+    if (_disposed || !_started || _livenessHeld) return;
+    for (final conn in _connections.values.toList()) {
+      if (conn.isConnected) {
+        conn.checkAlive(resumeProbeTimeout);
+      } else {
+        conn.reconnectNow();
+      }
+    }
+  }
+
+  void retryNow() {
+    if (_disposed || !_started || _livenessHeld) return;
+    for (final conn in _connections.values.toList()) {
+      conn.retryNow();
+    }
   }
 
   /// Direct mode: opens and back-fills a socket per new geo relay url; skips present or blocked urls.
@@ -630,6 +689,8 @@ class RelayPool implements PoolTransport {
     _stopSampler();
     _subscriptions.clear();
     _activeFilters.clear();
+    final closing = [for (final c in _connections.values) c.close()];
+    _connections.clear();
     for (final s in _msgSubs.values) {
       await s.cancel();
     }
@@ -638,11 +699,7 @@ class RelayPool implements PoolTransport {
     }
     _msgSubs.clear();
     _statusSubs.clear();
-    final conns = _connections.values.toList();
-    _connections.clear();
-    for (final c in conns) {
-      await c.close();
-    }
+    await Future.wait(closing);
   }
 
   /// Broadcasts [event]; returns how many relays accepted it.

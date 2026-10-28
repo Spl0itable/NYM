@@ -6,8 +6,12 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter/widgets.dart';
 
 import '../../services/api/api_client.dart';
+import '../../services/api/api_config.dart';
 import '../../services/storage/key_value_store.dart';
 import '../translate/translate_service.dart';
+import 'app_strings_catalog.dart';
+import 'catalog_key.dart';
+import '../../services/storage/storage_guard.dart';
 
 /// Runtime UI localization via the translate proxy; misses return English and repaint via [onChanged].
 class LocalizationService {
@@ -18,6 +22,9 @@ class LocalizationService {
 
   /// Per-language cache key prefix; the blob maps English source to translation.
   static const String _cachePrefix = 'nym_ui_i18n_';
+
+  static final String cacheVersion =
+      i18nCacheKey(i18nCatalogHash(kAppStringsCatalog), ApiConfig.appBuild);
 
   KeyValueStore? _kv;
   TranslateService? _translator;
@@ -88,6 +95,7 @@ class LocalizationService {
     final next = code.trim();
     if (next == _lang) return;
     _lang = next;
+    if (next.isNotEmpty && next != 'en') _pruneOtherCaches(next);
     _cache.clear();
     _requested.clear();
     _pending.clear();
@@ -296,26 +304,38 @@ class LocalizationService {
 
   static final RegExp _rxPlaceholder = RegExp(r'\{(\w+)\}');
 
+  void _pruneOtherCaches(String keep) {
+    final kv = _kv;
+    if (kv == null) return;
+    for (final k in kv.keys.toList()) {
+      final lang = StorageGuard.i18nLang(k);
+      if (lang != null && lang != keep) kv.remove(k);
+    }
+  }
+
   void _loadCache() {
     final kv = _kv;
     if (kv == null) return;
     final raw = kv.getString('$_cachePrefix$_lang');
     if (raw == null || raw.isEmpty) return;
     try {
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      map.forEach((k, v) {
-        if (v is String) _cache[k] = v;
-      });
-    } catch (_) {
-      // Corrupt blob: discard and rebuild on demand.
-    }
+      final decoded = jsonDecode(raw);
+      if (decoded is Map && decoded['v'] == cacheVersion && decoded['m'] is Map) {
+        (decoded['m'] as Map).forEach((k, v) {
+          if (k is String && v is String) _cache[k] = v;
+        });
+        return;
+      }
+    } catch (_) {}
+    unawaited(kv.remove('$_cachePrefix$_lang'));
   }
 
   void _persist() {
     final kv = _kv;
     if (kv == null || !isActive) return;
     try {
-      kv.setString('$_cachePrefix$_lang', jsonEncode(_cache));
+      kv.setString(
+          '$_cachePrefix$_lang', jsonEncode({'v': cacheVersion, 'm': _cache}));
     } catch (_) {}
   }
 

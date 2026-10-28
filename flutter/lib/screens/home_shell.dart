@@ -28,6 +28,7 @@ import '../features/nymbot/nymbot_providers.dart'
 import '../features/onboarding/tutorial_overlay.dart';
 import '../features/search/unified_search_panel.dart';
 import '../features/settings/settings_screen.dart';
+import '../features/shortcuts/escape_layers.dart';
 import '../features/shortcuts/shortcuts.dart';
 import '../models/channel.dart' show kDefaultChannel;
 import '../services/location/geolocation.dart';
@@ -37,6 +38,8 @@ import '../state/settings_provider.dart';
 import '../state/view_history.dart';
 import '../widgets/context_menu/interaction_hooks.dart';
 import '../widgets/chat/chat_pane.dart';
+import '../widgets/common/focus_rebuild_boundary.dart';
+import '../widgets/common/key_resizer.dart';
 import '../widgets/common/nym_sheet.dart' show kNymSheetCloseVelocity;
 import '../widgets/sidebar/list_swipe_back.dart';
 import '../widgets/sidebar/sidebar.dart';
@@ -82,6 +85,7 @@ class HomeShellState extends ConsumerState<HomeShell>
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_onGlobalKey);
+    FocusManager.instance.addEarlyKeyEventHandler(_onEarlyKey);
     _viewSwitches = ref.read(appStateProvider.notifier).viewSwitches
       ..addListener(_onViewSwitch);
     // Fresh target keys so a disposed shell's GlobalKeys can't reparent here.
@@ -98,6 +102,8 @@ class HomeShellState extends ConsumerState<HomeShell>
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onGlobalKey);
+    FocusManager.instance.removeEarlyKeyEventHandler(_onEarlyKey);
+    _sideWindow?.cancel();
     _viewSwitches?.removeListener(_onViewSwitch);
     super.dispose();
   }
@@ -167,8 +173,25 @@ class HomeShellState extends ConsumerState<HomeShell>
     return true;
   }
 
-  bool _onGlobalKey(KeyEvent e) {
+  bool _onGlobalKey(KeyEvent e) =>
+      !(e.logicalKey == LogicalKeyboardKey.escape &&
+          FocusManager.instance.primaryFocus != null) &&
+      _onKey(e);
+
+  KeyEventResult _onEarlyKey(KeyEvent e) =>
+      e.logicalKey == LogicalKeyboardKey.escape && _onKey(e)
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored;
+
+  bool _onKey(KeyEvent e) {
     if (!mounted || e is! KeyDownEvent) return false;
+    if (e.logicalKey == LogicalKeyboardKey.browserBack ||
+        e.logicalKey == LogicalKeyboardKey.browserForward) {
+      if (_routeAbove()) return false;
+      _sideStep(e.logicalKey == LogicalKeyboardKey.browserBack ? -1 : 1,
+          byKey: true);
+      return true;
+    }
     final focus = FocusManager.instance.primaryFocus;
     final focusCtx = focus?.context;
     final inText = focusCtx != null &&
@@ -193,9 +216,10 @@ class HomeShellState extends ConsumerState<HomeShell>
       UnifiedSearchPanel.open(context);
       return true;
     }
-    final routeAbove = Navigator.of(context).canPop() ||
-        !(ModalRoute.of(context)?.isCurrent ?? true);
-    if (routeAbove) return false;
+    if (_routeAbove()) {
+      return action == 'escape' &&
+          EscapeLayers.closeTop(minRank: EscapeRank.quickReact);
+    }
     switch (action) {
       case 'settings':
         SettingsScreen.open(context);
@@ -214,18 +238,62 @@ class HomeShellState extends ConsumerState<HomeShell>
       case 'forward':
         return _stepHistory(1);
       case 'escape':
-        if (inText) return false;
-        if (ref.read(infoDockProvider) != null) {
-          _dismissDock();
-          return true;
+        if (inComposer) {
+          return !EscapeLayers.textBusy(focus) && _closeTopLayer();
         }
-        if (ref.read(activeThreadProvider) != null) {
-          ref.read(activeThreadProvider.notifier).state = null;
-          return true;
-        }
-        return false;
+        if (inText) return EscapeLayers.closeTop();
+        return _closeTopLayer();
     }
     return false;
+  }
+
+  bool _routeAbove() =>
+      Navigator.of(context).canPop() ||
+      !(ModalRoute.of(context)?.isCurrent ?? true);
+
+  bool _closeTopLayer() {
+    if (EscapeLayers.closeTop()) return true;
+    if (ref.read(infoDockProvider) != null) {
+      _dismissDock();
+      return true;
+    }
+    if (ref.read(activeThreadProvider) != null) {
+      ref.read(activeThreadProvider.notifier).state = null;
+      return true;
+    }
+    return false;
+  }
+
+  int _sideButtons = 0;
+
+  void _sideButtonDown(PointerDownEvent e) {
+    _sideButtons = e.kind == PointerDeviceKind.mouse
+        ? e.buttons & (kBackMouseButton | kForwardMouseButton)
+        : 0;
+  }
+
+  void _sideButtonUp(PointerUpEvent e) {
+    final b = _sideButtons;
+    _sideButtons = 0;
+    if (b == 0 || !mounted || _routeAbove()) return;
+    _sideStep(b & kBackMouseButton != 0 ? -1 : 1, byKey: false);
+  }
+
+  Timer? _sideWindow;
+  int _sideDelta = 0;
+  bool _sideByKey = false;
+
+  void _sideStep(int delta, {required bool byKey}) {
+    final twin = (_sideWindow?.isActive ?? false) &&
+        _sideDelta == delta &&
+        _sideByKey != byKey;
+    _sideWindow?.cancel();
+    _sideWindow = null;
+    if (twin) return;
+    _sideWindow = Timer(const Duration(milliseconds: 400), () {});
+    _sideDelta = delta;
+    _sideByKey = byKey;
+    _stepHistory(delta);
   }
 
   /// Keeps the Nymbot engine alive from boot, binds it to the identity, and sends the one-time welcome PM.
@@ -446,12 +514,16 @@ class HomeShellState extends ConsumerState<HomeShell>
         : !(_drawerOpen ||
             _meshShown ||
             ref.watch(activeThreadProvider) != null);
-    return PopScope(
+    return Listener(
+      onPointerDown: _sideButtonDown,
+      onPointerUp: _sideButtonUp,
+      child: PopScope(
       canPop: canLeave,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         _popInApp();
       },
+      child: FocusRebuildBoundary(
       child: Scaffold(
       backgroundColor: c.bg,
       body: Stack(
@@ -471,7 +543,7 @@ class HomeShellState extends ConsumerState<HomeShell>
           const Positioned.fill(child: IncomingCallModal()),
         ],
       ),
-    ));
+    ))));
   }
 
   void _meshBackToList() {
@@ -604,24 +676,31 @@ class HomeShellState extends ConsumerState<HomeShell>
                   label: tr('Resize sidebar'),
                   value: '${sidebarW.round()}',
                   slider: true,
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.resizeColumn,
-                    child: Listener(
-                      onPointerDown: (e) => _resizerPointer = e.pointer,
-                      child: GestureDetector(
-                        key: const ValueKey('sidebarResizer'),
-                        behavior: HitTestBehavior.opaque,
-                        dragStartBehavior: DragStartBehavior.down,
-                        onHorizontalDragUpdate: (d) => setState(() => _sidebarW =
-                            clampSidebarWidth((_sidebarW ?? sidebarW) + d.delta.dx)
-                                .toDouble()),
-                        onHorizontalDragEnd: (_) => kv.setString(
-                            StorageKeys.sidebarWidth, '${(_sidebarW ?? sidebarW).round()}'),
-                        onDoubleTap: () {
-                          setState(() => _sidebarW = kSidebarDefault.toDouble());
-                          kv.setString(StorageKeys.sidebarWidth, '$kSidebarDefault');
-                        },
-                        child: const SizedBox.expand(),
+                  child: KeyResizer(
+                    onStep: (dx) {
+                      final w = clampSidebarWidth((_sidebarW ?? sidebarW) + dx);
+                      setState(() => _sidebarW = w.toDouble());
+                      kv.setString(StorageKeys.sidebarWidth, '$w');
+                    },
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeColumn,
+                      child: Listener(
+                        onPointerDown: (e) => _resizerPointer = e.pointer,
+                        child: GestureDetector(
+                          key: const ValueKey('sidebarResizer'),
+                          behavior: HitTestBehavior.opaque,
+                          dragStartBehavior: DragStartBehavior.down,
+                          onHorizontalDragUpdate: (d) => setState(() => _sidebarW =
+                              clampSidebarWidth((_sidebarW ?? sidebarW) + d.delta.dx)
+                                  .toDouble()),
+                          onHorizontalDragEnd: (_) => kv.setString(
+                              StorageKeys.sidebarWidth, '${(_sidebarW ?? sidebarW).round()}'),
+                          onDoubleTap: () {
+                            setState(() => _sidebarW = kSidebarDefault.toDouble());
+                            kv.setString(StorageKeys.sidebarWidth, '$kSidebarDefault');
+                          },
+                          child: const SizedBox.expand(),
+                        ),
                       ),
                     ),
                   ),
@@ -728,14 +807,17 @@ class HomeShellState extends ConsumerState<HomeShell>
                     if (mounted) setState(() => _listDrag = v);
                   },
                   onBack: _closeChatList,
-                  child: Sidebar(
-                    hidden: !_drawerOpen && _listDrag == null,
-                    compact: true,
-                    onItemSelected: phone
-                        ? null
-                        : () => setState(() => _drawerOpen = false),
-                    onClose: phone ? _closeChatList : null,
-                    closeShown: _drawerOpen,
+                  child: ExcludeFocus(
+                    excluding: !_drawerOpen && _listDrag == null,
+                    child: Sidebar(
+                      hidden: !_drawerOpen && _listDrag == null,
+                      compact: true,
+                      onItemSelected: phone
+                          ? null
+                          : () => setState(() => _drawerOpen = false),
+                      onClose: phone ? _closeChatList : null,
+                      closeShown: _drawerOpen,
+                    ),
                   ),
                 ),
               ),

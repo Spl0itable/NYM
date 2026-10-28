@@ -808,6 +808,22 @@ async function handleAccountAction(context, body) {
 var PANIC_TTL_S = 90 * 86400;
 var PANIC_MARK_SKEW_S = 600;
 var PANIC_CHECK_RATE = 30;
+var zapsIndexSeen = new WeakMap();
+var ZAPS_INDEX_RECHECK_MS = 60000;
+
+async function zapsStoredIndexed(binding, db) {
+  var key = binding && typeof binding === "object" ? binding : zapsIndexSeen;
+  var known = zapsIndexSeen.get(key);
+  var now = Date.now();
+  if (known && (known.ok || now - known.at < ZAPS_INDEX_RECHECK_MS)) return known.ok;
+  var ok = false;
+  try {
+    ok = !!(await db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'zaps_stored_at'").first());
+  } catch (e) { ok = false; }
+  zapsIndexSeen.set(key, { ok: ok, at: now });
+  return ok;
+}
+
 var PANIC_DDL = "CREATE TABLE IF NOT EXISTS panic_marks (pubkey TEXT PRIMARY KEY, created_at INTEGER NOT NULL, event_id TEXT NOT NULL, sig TEXT NOT NULL)";
 
 var PANIC_MARK_TAGS = ["nym-panic", "nym-account-deleted"];
@@ -1004,6 +1020,7 @@ var PM_EVENT_MAX = 96 * 1024;
 var CHANNEL_EVENT_MAX = 64 * 1024;
 var CHANNEL_TTL_MS = 24 * 60 * 60 * 1000;
 var CHANNEL_FUTURE_SKEW_S = 600;
+var CATCHUP_ZAP_WALK = 64;
 var ZAP_EVENT_MAX = 32 * 1024;
 var STORAGE_RATE_WINDOW_MS = 60000;
 var PM_DEPOSIT_RATE = 600;
@@ -1043,6 +1060,10 @@ function archivedBadgeRefused(env, row, mode, engine) {
 async function badgeGateMode(env) {
   var engine = spamEngine(env, null);
   var mode = engine.badgeGate();
+  if (mode === "off" && !engine.settings()) {
+    await engine.ready();
+    mode = engine.badgeGate();
+  }
   if (mode === "off" && !engine.settings()) {
     try { mode = (await readSpamSettings(env)).requireBadge || "off"; } catch (e) { mode = "off"; }
   }
@@ -1687,10 +1708,26 @@ async function handleChannelAction(context, body) {
         var zAuthorClause = reqAuthors.length
           ? " AND pubkey IN (" + reqAuthors.map(function () { return "?"; }).join(",") + ")"
           : "";
-        var sinceZaps = (await replica(env.DB_CHANNELS).prepare(
-          "SELECT id, json, stored_at FROM zaps WHERE stored_at >= ? AND target_id IN (SELECT id FROM events WHERE channel IN (" + zcph + ")"
+        var zDb = replica(env.DB_CHANNELS);
+        var zCeil = Math.floor(Date.now() / 1000) + CHANNEL_FUTURE_SKEW_S;
+        var zFull = true;
+        var zByStored = false;
+        if (since >= minTsSec - CHANNEL_FUTURE_SKEW_S && await zapsStoredIndexed(env.DB_CHANNELS, zDb)) {
+          var zWalk = await zDb.prepare(
+            "SELECT COUNT(*) AS walked, COUNT(events.id) AS hits FROM (SELECT target_id FROM zaps WHERE stored_at >= ? LIMIT " + CATCHUP_ZAP_WALK + ") AS z LEFT JOIN events ON events.id = z.target_id AND events.channel IN (" + zcph + ")"
+            + (reqAuthors.length ? " AND events.pubkey IN (" + reqAuthors.map(function () { return "?"; }).join(",") + ")" : "")
+            + " AND events.kind IN (20000, 23333) AND events.created_at >= ? AND events.created_at <= ?"
+          ).bind(since * 1000, ...reqChannels, ...reqAuthors, minTsSec, zCeil).first();
+          var zWalked = zWalk ? Number(zWalk.walked) : CATCHUP_ZAP_WALK;
+          if (zWalked < CATCHUP_ZAP_WALK) {
+            zByStored = Number(zWalk.hits) > 0;
+            zFull = zByStored;
+          }
+        }
+        var sinceZaps = !zFull ? [] : ((await zDb.prepare(
+          "SELECT id, json, stored_at FROM zaps WHERE stored_at >= ? AND " + (zByStored ? "+" : "") + "target_id IN (SELECT id FROM events WHERE channel IN (" + zcph + ")"
           + zAuthorClause + " AND kind IN (20000, 23333) AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC LIMIT ?) ORDER BY created_at DESC LIMIT 1000"
-        ).bind(since * 1000, ...reqChannels, ...reqAuthors, minTsSec, Math.floor(Date.now() / 1000) + CHANNEL_FUTURE_SKEW_S, isSingle ? 500 : 1500).all()).results || [];
+        ).bind(since * 1000, ...reqChannels, ...reqAuthors, minTsSec, zCeil, isSingle ? 500 : 1500).all()).results || []);
         if (sinceZaps.length) {
           var zapSeen = new Set(zapRows.map(function (z) { return z.id; }));
           for (var sz = 0; sz < sinceZaps.length; sz++) {

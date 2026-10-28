@@ -86,7 +86,7 @@ import { hiddenAmong, hiddenSenders } from "./_spam.js";
 import { filterSet, rowHit } from "./_filters.js";
 import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runTurnsRecent, runTurnAdd, runResultPut,
   runResultGet, runGet, runCountLive, runStart, runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent,
-  runSteerAdd, runSteerList, runSteerMark, runSteerMiss, runSteerStatus, runSweep, RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS,
+  runSteerAdd, runSteerList, runSteerMark, runSteerMiss, runSteerStatus, runSweep, runSweepClaim, runSweepRounds, RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS,
   RUN_STEER_CHARS, RUN_RESULT_KEEP_MS } from "./_runs.js";
 
 
@@ -3399,8 +3399,15 @@ function wrapsFor(fetched, ids, botPrivkey, botPq, known) {
 }
 
 // Everything this turn has in hand, including the reply it just sealed, labelled by conversation.
-function wrapsToCache(fetched, extra, botPrivkey, botPq, known) {
-  var all = Object.assign({}, fetched);
+function wrapsToCache(fetched, extra, botPrivkey, botPq, known, onlyIds) {
+  var all = {};
+  if (Array.isArray(onlyIds)) {
+    for (var o = 0; o < onlyIds.length; o++) {
+      if (fetched[onlyIds[o]]) all[onlyIds[o]] = fetched[onlyIds[o]];
+    }
+  } else {
+    all = Object.assign({}, fetched);
+  }
   for (var i = 0; i < extra.length; i++) {
     if (extra[i] && extra[i].id) all[extra[i].id] = extra[i];
   }
@@ -3419,9 +3426,12 @@ function maybeSweepBotWraps(context, env) {
   var now = Date.now();
   if (now - botWrapSweepLastMs < BOT_WRAP_SWEEP_EVERY_MS) return;
   botWrapSweepLastMs = now;
-  var work = botWrapsSweep(env.DB_BOT, now - BOT_WRAP_KEEP_MS, BOT_WRAP_SWEEP_MAX)
-    .catch(function () { return 0; })
-    .then(function () { return runSweep(env.DB_BOT, now, BOT_WRAP_SWEEP_MAX); })
+  var db = env.DB_BOT;
+  var work = runSweepClaim(db, now, BOT_WRAP_SWEEP_EVERY_MS)
+    .then(function (won) {
+      if (!won) return false;
+      return runSweepRounds(db, now, BOT_WRAP_SWEEP_MAX, function (n) { return botWrapsSweep(db, now - BOT_WRAP_KEEP_MS, n); });
+    })
     .catch(function () { return false; });
   try {
     if (context && typeof context.waitUntil === "function") context.waitUntil(work);
@@ -3429,15 +3439,22 @@ function maybeSweepBotWraps(context, env) {
 }
 
 // Awaited rather than deferred so a quick follow-up reply reads a warm cache.
-async function botCacheWraps(env, pubkey, entries, keepIds) {
+async function botCacheWraps(env, pubkey, entries, keepIds, mustId) {
   var live = [];
   for (var i = 0; i < entries.length; i++) {
     var entry = entries[i];
     if (entry && entry.event && isHex64(entry.event.id)) live.push(entry);
   }
   if (!live.length) return;
+  var ok = false;
   try {
-    await botWrapsPut(env.DB_BOT, pubkey, live, keepIds);
+    ok = await botWrapsPut(env.DB_BOT, pubkey, live, keepIds);
+  } catch (e) { }
+  if (ok !== false || !mustId || live.length < 2) return;
+  var must = live.filter(function (entry) { return entry.event.id === mustId; });
+  if (!must.length) return;
+  try {
+    await botWrapsPut(env.DB_BOT, pubkey, must, null);
   } catch (e) { }
 }
 // Split a PM message into its leading quote-reply block.
@@ -3463,7 +3480,9 @@ function errorRef() {
   return Array.from(b).map(function (x) { return x.toString(16).padStart(2, "0"); }).join("");
 }
 
-var BOT_PM_TEXT_MAX = 200000;
+var BOT_ASK_CHANNEL_MAX = 1000;
+var BOT_LONG_TEXT_MAX = 4000000;
+var BOT_PM_TEXT_MAX = BOT_LONG_TEXT_MAX;
 
 function parseBotPMRequest(rawMessage) {
   var freshOnly = false;
@@ -3855,6 +3874,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       source: cat.source, models: list, groups: groups, aliases: cat.aliases,
       unpriced: unpriced, satsPerCredit: BOT_PRO_SATS_PER_CREDIT,
       standardRoutes: routes,
+      standardContext: BOT_STANDARD_CONTEXT,
+      standardOut: BOT_STANDARD_OUT,
       usdPerCredit: btcUsd ? Math.round(BOT_PRO_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6 : null,
       standardUsdPerCredit: btcUsd ? Math.round(BOT_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6 : null,
       btcUsd: btcUsd ? Math.round(btcUsd) : null,
@@ -4561,6 +4582,11 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       return await turnFail({ error: "Message author does not match the authenticated user." }, 403);
     }
     var message = sanitizeInput(currentUnwrapped.rumor.content || "", BOT_PM_TEXT_MAX);
+    var declaredParts = rumorPartTotal(currentUnwrapped.rumor);
+    if (declaredParts > 1 && partIds.length < 2) {
+      var firstGap = rumorPartIndex(currentUnwrapped.rumor) === 1 ? 2 : 1;
+      return await turnFail({ error: "Part " + firstGap + " of " + declaredParts + " of your message did not arrive. Nothing was charged; send it again.", missingPart: firstGap, retryable: true }, 504);
+    }
     // Every part must open, share the author and message id, or the whole question is refused.
     if (partIds.length > 1) {
       var wantMsgId = rumorTagValue(currentUnwrapped.rumor, "x");
@@ -4577,12 +4603,29 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         if (!wantMsgId || rumorTagValue(pu.rumor, "x") !== wantMsgId) {
           return await turnFail({ error: "Those parts are not all from the same message." }, 400);
         }
-        pieces.push({ at: rumorPartIndex(pu.rumor) || (qi + 1), text: String(pu.rumor.content || "") });
+        var pat = rumorPartIndex(pu.rumor) || (qi + 1);
+        if (pieces.some(function (p) { return p.at === pat; })) continue;
+        pieces.push({ at: pat, text: String(pu.rumor.content || "") });
       }
       pieces.sort(function (a, b) { return a.at - b.at; });
+      var partTotal = rumorPartTotal(currentUnwrapped.rumor);
+      for (var pk = 0; pk < pieces.length; pk++) {
+        if (pieces[pk].at !== pk + 1) {
+          return await turnFail({ error: "Part " + (pk + 1) + " of your message did not arrive. Nothing was charged; send it again.", missingPart: pk + 1, retryable: true }, 504);
+        }
+      }
+      if (partTotal && pieces.length !== partTotal) {
+        return await turnFail({ error: "Part " + (pieces.length + 1) + " of " + partTotal + " of your message did not arrive. Nothing was charged; send it again.", missingPart: pieces.length + 1, retryable: true }, 504);
+      }
       message = sanitizeInput(pieces.map(function (p) { return p.text; }).join(""), BOT_PM_TEXT_MAX);
     }
     if (!message) return await turnFail({ error: "Empty message" }, 400);
+    var longLabel = proModel ? (proModel.label || proModelKey) : "the standard model";
+    if (botLongTextRefusal(message, proModel, longLabel, null)) {
+      var longCat = null;
+      try { longCat = await botProCatalog(env); } catch (e) { longCat = null; }
+      return await turnFail(botLongTextRefusal(message, proModel, longLabel, longCat), 413);
+    }
     // Every event the question traveled in, so the next turn replays all of it.
     var askedIds = partIds.length > 1 ? partIds.slice() : [currentId];
     // Claim the message too, so multiple wraps of one rumor buy one answer.
@@ -4668,14 +4711,14 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       try { latest = await botGetThread(env, userPubkey); } catch (e) { latest = thread; }
       var next = latest.filter(function (id) { return askedIds.indexOf(id) === -1; });
       if (remember) {
-        next.push.apply(next, askedIds);
+        next.push.apply(next, askedIds.slice(0, BOT_HISTORY_PARTS));
         next.push(selfEvent.id);
-        await runTurnAdd(env.DB_BOT, runPk, askX, threadKey, askedIds.concat([selfEvent.id]), turnT0);
+        await runTurnAdd(env.DB_BOT, runPk, askX, threadKey, askedIds.slice(0, BOT_HISTORY_PARTS).concat([selfEvent.id]), turnT0);
       }
       var keep = next;
       try { keep = await botPutThread(env, userPubkey, next); } catch (e) { }
       await botCacheWraps(env, userPubkey,
-        wrapsToCache(fetched, [selfEvent], botPrivkey, botPq, scopeOf), keep);
+        wrapsToCache(fetched, [selfEvent], botPrivkey, botPq, scopeOf, askedIds.slice(0, BOT_HISTORY_PARTS).concat(historyIds)), keep, selfEvent.id);
     };
 
     // Drop cached wraps labelled for another conversation without decrypting; unlabelled rows are kept and filtered below.
@@ -6379,8 +6422,59 @@ var BOT_HISTORY_TURN_MIN = 300;
 
 // Pre-budget ceiling on one decrypted turn, bounding memory for pathological messages.
 var BOT_HISTORY_DECRYPT_MAX = 32000;
-// NIP-44 caps a plaintext at 65535 bytes, so long questions arrive split; at most eight wraps (~180 KB).
-var BOT_MESSAGE_PARTS_MAX = 8;
+var BOT_MESSAGE_PARTS_MAX = 1000;
+var BOT_HISTORY_PARTS = 8;
+var BOT_STANDARD_CONTEXT = 128000;
+var BOT_STANDARD_OUT = 8192;
+var BOT_BYTES_PER_TOKEN = 4;
+
+function botTextCost(text) {
+  var s = String(text == null ? "" : text);
+  var cost = 0;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    if (c === 0x22 || c === 0x5C || c === 0x08 || c === 0x09 || c === 0x0A || c === 0x0C || c === 0x0D) cost += 2;
+    else if (c < 0x20) cost += 6;
+    else if (c < 0x80) cost += 1;
+    else if (c < 0x800) cost += 2;
+    else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length && s.charCodeAt(i + 1) >= 0xDC00 && s.charCodeAt(i + 1) <= 0xDFFF) { cost += 4; i++; }
+    else if (c >= 0xD800 && c <= 0xDFFF) cost += 6;
+    else cost += 3;
+  }
+  return cost;
+}
+
+function botContextCheck(cost, context, maxOut) {
+  var tokens = Math.ceil(Math.max(0, Number(cost) || 0) / BOT_BYTES_PER_TOKEN);
+  var ctx = Math.floor(Number(context) || 0);
+  if (!(ctx > 0)) return { ok: true, tokens: tokens, limit: 0, context: 0 };
+  var out = Math.max(0, Math.floor(Number(maxOut) || 0));
+  var limit = out > 0 && out < ctx ? ctx - out : Math.floor(ctx * 3 / 4);
+  return { ok: tokens <= limit, tokens: tokens, limit: limit, context: ctx };
+}
+
+function botLongTextRefusal(message, model, label, catalog) {
+  var cost = botTextCost(message);
+  var ctx = model ? model.context : BOT_STANDARD_CONTEXT;
+  var out = model ? (Number(model.maxTokens) || BOT_STANDARD_OUT) : BOT_STANDARD_OUT;
+  var got = botContextCheck(cost, ctx, out);
+  if (got.ok) return null;
+  var longer = [];
+  var models = catalog && catalog.models ? catalog.models : {};
+  for (var key in models) {
+    var m = models[key];
+    if (!m || !(Number(m.context) > 0)) continue;
+    if (botContextCheck(cost, m.context, Number(m.maxTokens) || BOT_STANDARD_OUT).ok) longer.push({ key: key, label: m.label || key, context: Number(m.context) });
+  }
+  longer.sort(function (a, b) { return a.context - b.context; });
+  var kb = Math.max(1, Math.round(cost / 1024));
+  return {
+    error: "This message is about " + kb + " KB (about " + got.tokens + " tokens), and " + (label || "this model") + " reads at most about " + got.limit + " tokens at once. Nothing was sent to the model and nothing was charged. Switch to a model with a longer context, or send it in parts.",
+    tooLong: { bytes: cost, tokens: got.tokens, limit: got.limit, context: got.context },
+    longer: longer.slice(0, 6)
+  };
+}
+
 
 // One credit per extra wrap, since split questions carry multiples of normal input; clients can price it up front.
 var BOT_PART_SURCHARGE = 1;
@@ -6401,6 +6495,18 @@ function botPartsCount(body) {
   }
   if (typeof body.eventId === "string" && seen.indexOf(body.eventId) === -1) seen.push(body.eventId);
   return Math.max(1, seen.length);
+}
+
+function rumorPartTotal(rumor) {
+  var tags = rumor && Array.isArray(rumor.tags) ? rumor.tags : [];
+  for (var i = 0; i < tags.length; i++) {
+    var tag = tags[i];
+    if (Array.isArray(tag) && tag[0] === "part") {
+      var n = parseInt(tag[2], 10);
+      if (n > 0 && n <= BOT_MESSAGE_PARTS_MAX) return n;
+    }
+  }
+  return 0;
 }
 
 // The part order from the tag, or 0 for a whole message; relay delivery order is meaningless.
@@ -7635,7 +7741,10 @@ function needsWebSearch(question, resolved) {
 }
 
 async function handleAsk(question, context, conversation, channelMessages, activeUsers, senderNym, geohash) {
-  question = sanitizeInput(question);
+  if (typeof question === "string" && question.length > BOT_ASK_CHANNEL_MAX) {
+    return "That question is " + question.length + " characters, and ?ask in a channel reads at most " + BOT_ASK_CHANNEL_MAX + ". Nothing was cut or sent to the model. Send the whole text to Nymbot in a PM, where all of it is read.";
+  }
+  question = sanitizeInput(question, BOT_ASK_CHANNEL_MAX);
   if (!question) {
     return "Usage: ?ask <your question> (or @Nymbot <your question>)";
   }
@@ -9014,6 +9123,15 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 }
 
 export {
+  botTextCost,
+  botContextCheck,
+  botLongTextRefusal,
+  rumorPartTotal,
+  handleAsk,
+  BOT_MESSAGE_PARTS_MAX,
+  BOT_LONG_TEXT_MAX,
+  BOT_HISTORY_PARTS,
+  maybeSweepBotWraps,
   botResultPut,
   botResultGet,
   botLogLine,

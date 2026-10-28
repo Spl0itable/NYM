@@ -30,7 +30,7 @@ class StashKeyValueStore extends KeyValueStore {
 
   @override
   Future<void> setString(String key, String value) =>
-      _inner.setString(_k(key), value);
+      KeyValueStore.guardedSetString(_inner, _k(key), value);
 
   @override
   Future<void> remove(String key) => _inner.remove(_k(key));

@@ -986,7 +986,7 @@ Object.assign(NYM.prototype, {
 
         const users = Array.from(channelUserSet)
             .map(pubkey => this.users.get(pubkey))
-            .filter(u => u && this._seenActive(u.lastSeen, Date.now()))
+            .filter(u => u && this._onlineIn(u, currentChannelKey, Date.now()))
             .filter(u => (typeof this.isPersonHidden === 'function'
                 ? !this.isPersonHidden(u.pubkey, u.nym)
                 : !this.blockedUsers.has(u.pubkey)))
@@ -1248,11 +1248,9 @@ Object.assign(NYM.prototype, {
 
             if (await window.showAppConfirm(`Block channel #${currentChannelName}?`, { danger: true, okLabel: 'Block' })) {
                 this.blockChannel(this.currentGeohash, this.currentGeohash);
-                this.displaySystemMessage(
-                    this.isValidGeohash(this.currentGeohash)
-                        ? `Blocked geohash channel #${this.currentGeohash}`
-                        : `Blocked channel #${this.currentGeohash}`
-                );
+                this.displaySystemMessage(this.isValidGeohash(this.currentGeohash)
+                    ? this.uiText('Blocked geohash channel #{channel}', { channel: this.currentGeohash })
+                    : this.uiText('Blocked channel #{channel}', { channel: this.currentGeohash }));
 
                 this.switchChannel('nymchat', 'nymchat');
 
@@ -1270,11 +1268,9 @@ Object.assign(NYM.prototype, {
             if (this.currentGeohash === channelName) {
                 if (await window.showAppConfirm(`Block and leave channel #${channelName}?`, { danger: true, okLabel: 'Block' })) {
                     this.blockChannel(channelName, channelName);
-                    this.displaySystemMessage(
-                        this.isValidGeohash(channelName)
-                            ? `Blocked geohash channel #${channelName}`
-                            : `Blocked channel #${channelName}`
-                    );
+                    this.displaySystemMessage(this.isValidGeohash(channelName)
+                        ? this.uiText('Blocked geohash channel #{channel}', { channel: channelName })
+                        : this.uiText('Blocked channel #{channel}', { channel: channelName }));
 
                     this.switchChannel('nymchat', 'nymchat');
 

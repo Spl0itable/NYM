@@ -566,9 +566,9 @@
             if (held) {
                 if (held.state === 'waiting') return this.uiText('Pinging…');
                 if (held.state === 'lost') return this.uiText('No reply to ping');
-                if (held.hops === null || held.hops === undefined) return this.uiText(`${held.roundTripMs} ms`);
-                if (held.hops === 1) return this.uiText(`1 hop · ${held.roundTripMs} ms`);
-                return this.uiText(`${held.hops} hops · ${held.roundTripMs} ms`);
+                if (held.hops === null || held.hops === undefined) return this.uiText('{ms} ms', { ms: held.roundTripMs });
+                if (held.hops === 1) return this.uiText('1 hop · {ms} ms', { ms: held.roundTripMs });
+                return this.uiText('{hops} hops · {ms} ms', { hops: held.hops, ms: held.roundTripMs });
             }
             return this.uiText(peer.isVerified ? 'Verified' : 'Not verified yet');
         },
@@ -597,9 +597,10 @@
             const CLOSE = icon('<path d="M18 6 6 18M6 6l12 12"></path>');
             const PLUS = '<svg class="channel-glyph" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
             const short = running && mesh.peerID ? String(mesh.peerID).slice(0, 8) : '';
+            const onLine = esc(this.uiText('On · your mesh ID {id}', { id: '\u0000' })).split('\u0000');
             const powerSub = !running
                 ? u('Chat with people nearby, no internet needed')
-                : (short ? u(`On · your mesh ID ${short}`).replace(esc(short), `<code>${esc(short)}</code>`) : u('Starting…'));
+                : (short ? onLine[0] + `<code>${esc(short)}</code>` + onLine.slice(1).join('') : u('Starting…'));
             const empty = (text) => `<div class="list-empty mesh-empty"><span class="list-empty-text">${u(text)}</span></div>`;
             const section = (title) => `<div class="nav-title mesh-sec"><span class="nav-title-text">${esc(title)}</span></div>`;
             const row = (cls, attrs, lead, name, sub, trail) => `<div class="mesh-row${cls}" ${attrs}>${lead}<span class="mesh-row-text"><span class="mesh-row-name">${name}</span><span class="mesh-row-sub">${sub}</span></span>${trail || ''}</div>`;
@@ -646,7 +647,7 @@
                 ${section(this.uiText('Channels'))}
                 ${row(' mesh-tappable', 'id="meshChannelRow" role="button" tabindex="0" data-action="meshOpenChannel"', `<span class="channel-tile" aria-hidden="true">${this._channelGlyphSvg(true, 10)}</span>`, '#mesh', u('Public · everyone in range'))}
                 ${row(' mesh-tappable', 'id="meshJoinRow" role="button" tabindex="0" data-action="meshOpenJoin"', `<span class="channel-tile" aria-hidden="true">${PLUS}</span>`, u('Join or create a mesh group'), u('Named room · optional password'))}
-                ${section(running && peers.length ? this.uiText(`Peers nearby (${peers.length})`) : this.uiText('Peers nearby'))}
+                ${section(running && peers.length ? this.uiText('Peers nearby ({count})', { count: peers.length }) : this.uiText('Peers nearby'))}
                 ${peersBlock}
                 ${section(this.uiText('Paired devices'))}
                 ${running && links.length ? linkRows : empty('No devices paired yet.')}

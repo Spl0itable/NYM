@@ -897,7 +897,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     savePinnedChannels() {
-        localStorage.setItem('nym_pinned_channels', JSON.stringify(Array.from(this.pinnedChannels)));
+        try { localStorage.setItem('nym_pinned_channels', JSON.stringify(Array.from(this.pinnedChannels))); } catch (_) { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
@@ -1006,7 +1006,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     saveHiddenChannels() {
-        localStorage.setItem('nym_hidden_channels', JSON.stringify(Array.from(this.hiddenChannels)));
+        try { localStorage.setItem('nym_hidden_channels', JSON.stringify(Array.from(this.hiddenChannels))); } catch (_) { }
         if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
         if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
@@ -1017,7 +1017,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     saveBlockedChannels() {
-        localStorage.setItem('nym_blocked_channels', JSON.stringify(Array.from(this.blockedChannels)));
+        try { localStorage.setItem('nym_blocked_channels', JSON.stringify(Array.from(this.blockedChannels))); } catch (_) { }
         if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
         if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
@@ -1863,10 +1863,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.updateUserList();
 
         if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
-            localStorage.setItem('nym_auto_ephemeral_channel', JSON.stringify({
-                channel: channel,
-                geohash: geohash
-            }));
+            try {
+                localStorage.setItem('nym_auto_ephemeral_channel', JSON.stringify({
+                    channel: channel,
+                    geohash: geohash
+                }));
+            } catch (_) { }
         }
 
         this._restoreDraftForContext();
@@ -2180,8 +2182,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     saveUserJoinedChannels() {
         // No union with the stored copy: the in-memory set is authoritative, and merging would undo removals.
         this._capUserJoinedChannels();
-        localStorage.setItem('nym_user_joined_channels',
-            JSON.stringify(Array.from(this.userJoinedChannels)));
+        try { localStorage.setItem('nym_user_joined_channels', JSON.stringify(Array.from(this.userJoinedChannels))); } catch (_) { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
@@ -2233,7 +2234,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         });
 
-        localStorage.setItem('nym_user_channels', JSON.stringify(userChannels));
+        try { localStorage.setItem('nym_user_channels', JSON.stringify(userChannels)); } catch (_) { }
 
         this.saveUserJoinedChannels();
     },

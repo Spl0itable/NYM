@@ -45,6 +45,27 @@ class User {
 
   final Set<String> channels;
 
+  final Map<String, int> channelSeen = <String, int>{};
+
+  void noteChannelSeen(String key, int atMs, int nowMs) {
+    channelSeen.removeWhere((_, at) => !lastSeenIsActive(at, nowMs));
+    final at = atMs < nowMs ? atMs : nowMs;
+    if (key.isEmpty || !lastSeenIsActive(at, nowMs)) return;
+    final k = key.toLowerCase();
+    if (at > (channelSeen[k] ?? 0)) channelSeen[k] = at;
+  }
+
+  bool seenIn(String key, int nowMs) =>
+      lastSeenIsActive(channelSeen[key.toLowerCase()] ?? 0, nowMs);
+
+  final Set<String> postedIn = <String>{};
+
+  bool onlineIn(String key, int nowMs) {
+    if (seenIn(key, nowMs)) return true;
+    return postedIn.contains(key.toLowerCase()) &&
+        lastSeenIsActive(lastSeen, nowMs);
+  }
+
   UserProfile? profile;
   String? awayMessage;
 

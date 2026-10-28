@@ -769,6 +769,13 @@ body.sidebar-reorder-mode .nav-title {
     box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4);
 }
 
+@media (prefers-reduced-motion: reduce) {
+    .context-menu,
+    .context-menu.active {
+        transition: none !important;
+    }
+}
+
 .context-menu-overlay {
     position: fixed;
     top: 0;

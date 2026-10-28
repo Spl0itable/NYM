@@ -1808,6 +1808,19 @@ body.chat-bubbles .read-more-btn {
     background: rgb(from var(--primary) r g b / 0.18);
 }
 
+.message-content .msg-more {
+    display: block;
+    margin-top: 6px;
+    padding: 2px 10px;
+    background: rgb(from var(--primary) r g b / 0.1);
+    border: 1px solid rgb(from var(--primary) r g b / 0.5);
+    border-radius: var(--radius-sm);
+    color: var(--primary);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    cursor: pointer;
+}
+
 .bot-run-status {
     display: flex;
     flex-direction: column;

@@ -2347,6 +2347,37 @@ body.chat-bubbles .crypto-lock-irc {
 .share-nearby-peer[aria-selected="true"] {
     border-color: var(--primary);
     background: rgb(from var(--primary) r g b / 0.1);
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.share-nearby-peer {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.share-nearby-peer svg {
+    flex: 0 0 auto;
+    color: var(--text-dim);
+}
+
+.share-nearby-peer[aria-selected="true"] svg {
+    color: var(--primary);
+}
+
+#shareActions {
+    grid-template-columns: 1fr;
+    gap: 2px;
+}
+
+#shareActions .share-action,
+#shareAppModal [data-app-action="share"] {
+    gap: 14px;
+    min-height: 48px;
+    background: transparent;
+    border-color: transparent;
+    font-size: 14px;
 }
 
 .nearby-inbox {
@@ -2394,6 +2425,14 @@ body.chat-bubbles .crypto-lock-irc {
 .about-share-app {
     align-self: flex-start;
     margin-bottom: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.about-share-app svg,
+.pm-scan-btn svg {
+    color: var(--primary);
 }
 
 .share-options {
@@ -3033,6 +3072,31 @@ body.chat-bubbles .crypto-lock-irc {
     color: var(--warning);
 }
 
+.gx-osm-attr {
+    position: absolute;
+    left: calc(8px + env(safe-area-inset-left, 0px));
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    z-index: 3;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 16px;
+    color: rgba(220, 232, 245, 0.9);
+    background: rgba(0, 0, 0, 0.55);
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.gx-osm-attr:hover,
+.gx-osm-attr:focus-visible {
+    text-decoration: underline;
+}
+
+body.light-mode .gx-osm-attr {
+    color: rgba(30, 40, 55, 0.9);
+    background: rgba(255, 255, 255, 0.8);
+}
+
 .gx-controls {
     position: absolute;
     top: 8px;
@@ -3081,6 +3145,9 @@ body.chat-bubbles .crypto-lock-irc {
     right: 64px;
     width: 240px;
     max-width: calc(100% - 76px);
+    max-height: calc(100% - 180px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 6px 0;
     background: rgba(0, 0, 0, 0.95);
     border: 1px solid var(--glass-border);
@@ -3184,6 +3251,21 @@ body.chat-bubbles .crypto-lock-irc {
 .gx-legend {
     padding: 2px 12px 4px;
     font-size: 11px;
+}
+
+.gx-map-data {
+    margin-top: 4px;
+    padding: 6px 12px 4px;
+    border-top: 1px solid var(--glass-border);
+    font-size: 10px;
+    line-height: 1.4;
+    color: var(--text-dim);
+    overflow-wrap: anywhere;
+}
+
+.gx-map-data-title {
+    font-weight: 600;
+    color: var(--text);
 }
 
 .gx-dot-joined {
@@ -4435,7 +4517,6 @@ html.info-docked .context-menu.docked {
     width: 320px;
     max-width: 320px;
     z-index: 900;
-    transition: none;
     box-shadow: none;
 }
 

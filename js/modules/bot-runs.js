@@ -9,7 +9,115 @@ const BOT_RUN_HEX64 = /^[0-9a-f]{64}$/i;
 const BOT_RUN_STEER_KEEP_MS = 2 * 3600 * 1000;
 const BOT_RUN_ENDED_GRACE_MS = 60000;
 
+const BOT_RUN_STANDALONE_SINCE = 1790812800;
+const BOT_RUN_STANDALONE_PAGE = 500;
+const BOT_RUN_STANDALONE_PAGES = 10;
+
+function nymbotStandaloneRunWrap(seal, rumor, me, botPk) {
+    const NT = typeof window !== 'undefined' ? window.NostrTools : null;
+    if (!NT || typeof NT.verifyEvent !== 'function') return false;
+    if (!seal || !rumor || typeof seal !== 'object' || typeof rumor !== 'object') return false;
+    const named = (list, k) => (Array.isArray(list) ? list : []).filter((t) => Array.isArray(t) && t[0] === k);
+    if (named(rumor.tags, 'nymbot-support').length) return false;
+    if (rumor.kind !== 14 || seal.kind !== 13 || typeof rumor.pubkey !== 'string' || seal.pubkey !== rumor.pubkey) return false;
+    if (!BOT_RUN_HEX64.test(rumor.pubkey) || !BOT_RUN_HEX64.test(String(me || '')) || !BOT_RUN_HEX64.test(String(botPk || ''))) return false;
+    if (rumor.pubkey === me || rumor.pubkey === botPk) return false;
+    if (!named(rumor.tags, 'p').some((t) => t[1] === me)) return false;
+    const runs = named(rumor.tags, 'nymbot-run');
+    if (runs.length !== 1 || typeof runs[0][1] !== 'string' || !runs[0][1] || !['live', 'park', 'done'].includes(runs[0][2])) return false;
+    const certs = named(rumor.tags, 'nymbot-cert');
+    if (certs.length !== 1 || typeof certs[0][1] !== 'string') return false;
+    let cert = null;
+    try { cert = JSON.parse(certs[0][1]); } catch (_) { return false; }
+    if (!cert || typeof cert !== 'object' || cert.kind !== 25519 || cert.pubkey !== botPk || cert.content !== '' || !Array.isArray(cert.tags)) return false;
+    const cp = named(cert.tags, 'p');
+    const cs = named(cert.tags, 's');
+    if (cp.length !== 1 || cp[0][1] !== me || cs.length !== 1 || cs[0][1] !== rumor.pubkey) return false;
+    try { return NT.verifyEvent(cert) === true; } catch (_) { return false; }
+}
+
 Object.assign(NYM.prototype, {
+
+    standaloneNymbotWrap(seal, rumor, me) {
+        return nymbotStandaloneRunWrap(seal, rumor, me || this.pubkey, this.verifiedBot && this.verifiedBot.pubkey);
+    },
+
+    _standaloneNymbotDrop(pk) {
+        if (this._snLeft instanceof Set) this._snLeft.delete(pk);
+        if (!BOT_RUN_HEX64.test(String(pk || '')) || pk === this.pubkey || (this.verifiedBot && pk === this.verifiedBot.pubkey)) return false;
+        const key = this.getPMConversationKey(pk);
+        const had = (this.pmMessages && this.pmMessages.has(key)) || (this.pmConversations && this.pmConversations.has(pk));
+        if (!had) return false;
+        if (this.pmMessages) this.pmMessages.delete(key);
+        if (this.pmConversations) this.pmConversations.delete(pk);
+        if (this.channelDOMCache) this.channelDOMCache.delete(key);
+        if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', key);
+        if (this.unreadCounts && this.unreadCounts.delete(key) && typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
+        if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
+            for (const el of Array.from(document.querySelectorAll('.pm-item'))) {
+                if (el && el.dataset && el.dataset.pubkey === pk) el.remove();
+            }
+        }
+        if (typeof this._updateNotificationBadge === 'function') this._updateNotificationBadge();
+        return true;
+    },
+
+    _standaloneNymbotCandidates() {
+        const out = [];
+        if (!this.pmMessages) return out;
+        for (const [key, list] of this.pmMessages) {
+            if (!Array.isArray(list) || !list.length || list.some((m) => !m || m.isOwn)) continue;
+            const peer = list[0].conversationPubkey || list[0].pubkey;
+            if (!BOT_RUN_HEX64.test(String(peer || '')) || peer === this.pubkey) continue;
+            if (this.verifiedBot && peer === this.verifiedBot.pubkey) continue;
+            if (key !== this.getPMConversationKey(peer)) continue;
+            if (list.some((m) => (m.created_at || 0) >= BOT_RUN_STANDALONE_SINCE)) out.push(peer);
+        }
+        return out;
+    },
+
+    async _standaloneNymbotSweep() {
+        const pk = this.pubkey;
+        if (!pk || this._snSweeping === pk || !this._pmCacheHydrated) return 0;
+        if (typeof this._pmArchiveAllowed !== 'function' || !this._pmArchiveAllowed()) return 0;
+        if (typeof this._storageApiStream !== 'function' || typeof this._readNdjsonStream !== 'function') return 0;
+        const flag = 'nym_sn_sweep_' + pk.slice(0, 16);
+        try { if (localStorage.getItem(flag)) return 0; } catch (_) { return 0; }
+        const mark = () => { try { localStorage.setItem(flag, '1'); } catch (_) { } };
+        const left = new Set(this._standaloneNymbotCandidates());
+        if (!left.size) { mark(); return 0; }
+        this._snSweeping = pk;
+        this._snLeft = left;
+        let dropped = 0;
+        const probe = () => { };
+        const seen = new Set();
+        try {
+            let from = BOT_RUN_STANDALONE_SINCE - (this._giftWrapBackdateSec || 172800);
+            for (let page = 0; page < BOT_RUN_STANDALONE_PAGES; page++) {
+                const wraps = [];
+                const resp = await this._storageApiStream('pm-get', { since: from, asc: true, limit: BOT_RUN_STANDALONE_PAGE });
+                await this._readNdjsonStream(resp, (ev) => { if (ev) wraps.push(ev); });
+                if (this.pubkey !== pk) return dropped;
+                for (const w of wraps) {
+                    if (!w || typeof w.id !== 'string' || seen.has(w.id)) continue;
+                    seen.add(w.id);
+                    const before = this.pmMessages ? this.pmMessages.size : 0;
+                    try { await this.handleGiftWrapDM(w, { fromD1: true, probe }); } catch (_) { }
+                    if (this.pmMessages && this.pmMessages.size < before) dropped += before - this.pmMessages.size;
+                    if (!left.size) { mark(); return dropped; }
+                }
+                const last = wraps.length ? Number(wraps[wraps.length - 1].created_at) || 0 : 0;
+                if (wraps.length < BOT_RUN_STANDALONE_PAGE || last <= from) break;
+                from = last;
+            }
+            mark();
+        } catch (_) {
+        } finally {
+            if (this._snSweeping === pk) this._snSweeping = null;
+            if (this._snLeft === left) this._snLeft = null;
+        }
+        return dropped;
+    },
 
     botRuns() {
         if (!(this._botRuns instanceof Map)) this._botRuns = new Map();
@@ -109,6 +217,7 @@ Object.assign(NYM.prototype, {
         for (const run of this.botRuns().values()) {
             const extra = Object.assign({}, run.extra);
             delete extra.pqAnnouncement;
+            delete extra.wraps;
             out.push({ id: run.id, eventId: run.eventId, thread: run.thread, content: run.label, startedAt: run.startedAt, extra });
         }
         try {
@@ -212,7 +321,7 @@ Object.assign(NYM.prototype, {
         }
         if (data && data.priceUnavailable) {
             this._botRunEnd(run);
-            if (typeof this._showBotPriceRetry === 'function') this._showBotPriceRetry(run.content, run.eventId);
+            if (typeof this._showBotPriceRetry === 'function') this._showBotPriceRetry(run.content, run.eventId, run.extra);
             return;
         }
         if (status >= 400 || !data || data.error) {
@@ -236,11 +345,11 @@ Object.assign(NYM.prototype, {
     },
 
     _botShowNoCredits(data) {
-        const msg = data.error
-            || (data.pro
-                ? `You're out of Nymbot Pro credits (${this._creditFigure((data.balanceCredits != null ? data.balanceCredits : data.balance) || 0)} left). Type ?buy and switch to Pro, or ?model off for standard replies.`
-                : `You're out of Nymbot credits (${this._creditFigure(this._replyBalance(data) || 0)} left). Zap Nymbot or type ?buy to purchase more.`);
-        this.displaySystemMessage(msg);
+        const error = typeof data.error === 'string' ? data.error.trim() : '';
+        const balance = this._creditFigure(this._replyBalance(data) || 0);
+        if (error) this.displaySystemMessage(this.uiText('Nymbot: {error}', { error }));
+        else if (data.pro) this.displaySystemMessage(this.uiText("You're out of Nymbot Pro credits ({balance} left). Type ?buy and switch to Pro, or ?model off for standard replies.", { balance }));
+        else this.displaySystemMessage(this.uiText("You're out of Nymbot credits ({balance} left). Zap Nymbot or type ?buy to purchase more.", { balance }));
         if (this._replyBalance(data) !== null) {
             if (data.pro) this._setBotProCreditDisplay(this._replyBalance(data));
             else this._setBotCreditDisplay(this._replyBalance(data));
@@ -275,9 +384,10 @@ Object.assign(NYM.prototype, {
                 this.displaySystemMessage(this.uiText(`{v1} reply used {replyCost} credits. Balance: {replyBalance}.`, { v1: data.taskType || 'Heavy', replyCost: this._creditFigure(replyCost), replyBalance: this._creditFigure(replyBalance) }));
             }
             if (data.lowBalance) {
-                this.displaySystemMessage(data.pro
-                    ? `Nymbot Pro credits running low: ${this._creditFigure(replyBalance)} left. Type ?buy and switch to Pro to top up.`
-                    : `Nymbot credits running low: ${this._creditFigure(replyBalance)} credit${replyBalance === 1 ? '' : 's'} left. Type ?buy to top up.`);
+                const balance = this._creditFigure(replyBalance);
+                if (data.pro) this.displaySystemMessage(this.uiText('Nymbot Pro credits running low: {balance} left. Type ?buy and switch to Pro to top up.', { balance }));
+                else if (replyBalance === 1) this.displaySystemMessage(this.uiText('Nymbot credits running low: {balance} credit left. Type ?buy to top up.', { balance }));
+                else this.displaySystemMessage(this.uiText('Nymbot credits running low: {balance} credits left. Type ?buy to top up.', { balance }));
             }
         }
     },
@@ -830,13 +940,13 @@ Object.assign(NYM.prototype, {
             const state = r.state === 'waiting' ? 'Waiting for a free slot'
                 : r.state === 'claiming' ? 'Still working on that one…'
                     : r.state === 'capped' ? 'Waiting for a free slot' : '';
-            const meta = [r.remote ? 'On another device' : '', this._botRunAge(r.startedAt)].filter(Boolean).join(' · ');
+            const meta = [r.remote ? 'On another device' : '', this._botRunAge(r.startedAt)].filter(Boolean).map((p) => `<span>${p}</span>`).join(' · ');
             const steer = r.state === 'running' || r.state === 'claiming'
                 ? `<button type="button" class="bot-run-btn" data-action="botRunSteer" data-run-id="${r.id}">Add instructions</button>` : '';
             return `<div class="bot-runs-row">
                 <div class="bot-runs-row-main">
                     <div class="bot-runs-row-label" data-no-i18n>${esc(r.label)}</div>
-                    ${r.progress ? `<div class="bot-runs-row-progress">${esc(r.progress)}</div>` : ''}
+                    ${r.progress ? `<div class="bot-runs-row-progress" data-no-i18n>${esc(r.progress)}</div>` : ''}
                     ${state ? `<div class="bot-runs-row-progress">${state}</div>` : ''}
                     <div class="bot-runs-row-meta">${meta}</div>
                 </div>

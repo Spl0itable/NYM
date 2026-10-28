@@ -316,6 +316,134 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _botLongPieces(content, recipientPubkey) {
+        const LT = typeof window !== 'undefined' ? window.NymLongText : null;
+        if (!LT || !this.isVerifiedBot(recipientPubkey) || LT.bodyCost(content) <= LT.BODY_MAX) return null;
+        const checked = LT.check(content);
+        if (!checked.ok) {
+            throw new Error(this.uiText('This message is {kb} KB, and the most one message to Nymbot can carry is about {max} KB.', { kb: Math.round(checked.cost / 1024), max: Math.round(LT.LONG_MAX / 1024) }));
+        }
+        return LT.split(content);
+    },
+
+    _botLongRumor(rumor, pieces) {
+        const keep = ['p', 'x', 'ms', 'nymthread'];
+        rumor.tags = rumor.tags.filter(t => Array.isArray(t) && keep.includes(t[0]));
+        const n = pieces.length;
+        rumor.tags.push(['part', String(n), String(n)]);
+        rumor.content = pieces[n - 1];
+        return rumor;
+    },
+
+    async _botLongLead(rumor, pieces, wrapBot, wrapSelf) {
+        const n = pieces.length;
+        const ids = [];
+        const wraps = [];
+        const base = rumor.tags.filter(t => !(Array.isArray(t) && t[0] === 'part'));
+        for (let i = 0; i < n - 1; i++) {
+            const part = Object.assign({}, rumor, { tags: base.concat([['part', String(i + 1), String(n)]]), content: pieces[i] });
+            const w = await wrapBot(part);
+            ids.push(w.id);
+            wraps.push(w);
+            await wrapSelf(part);
+        }
+        return { ids, wraps };
+    },
+
+    _botLongNote(wrapped, lead) {
+        if (!(this._botLongParts instanceof Map)) this._botLongParts = new Map();
+        this._botLongParts.set(wrapped.id, { parts: lead.ids.concat([wrapped.id]), wraps: lead.wraps.concat([wrapped]) });
+        while (this._botLongParts.size > 20) this._botLongParts.delete(this._botLongParts.keys().next().value);
+    },
+
+    _botLongJoin(senderPubkey, part, text) {
+        const LT = typeof window !== 'undefined' ? window.NymLongText : null;
+        if (!LT || !part || !part.x) return null;
+        if (!this._botLongAsm) this._botLongAsm = LT.assembler({});
+        const key = String(senderPubkey || '') + ':' + part.x;
+        const got = this._botLongAsm.add(key, part.index, part.total, text);
+        if (!(this._botLongTimers instanceof Map)) this._botLongTimers = new Map();
+        const disarm = (k) => {
+            const t = this._botLongTimers.get(k);
+            if (t == null) return;
+            clearTimeout(t);
+            this._botLongTimers.delete(k);
+        };
+        if (got.state === 'done') {
+            disarm(key);
+            return got.text;
+        }
+        if (got.state === 'wait' && !this._botLongTimers.has(key)) {
+            this._botLongTimers.set(key, setTimeout(() => {
+                this._botLongTimers.delete(key);
+                for (const gone of this._botLongAsm.expired(Date.now())) {
+                    this._botLongAsm.drop(gone.key);
+                    disarm(gone.key);
+                    this.displaySystemMessage(this.uiText('Part {i} of {n} of a long message did not arrive. Ask for it to be sent again.', { i: gone.missing[0], n: gone.total }));
+                }
+            }, LT.WAIT_MS + 1000));
+        }
+        return null;
+    },
+
+    _pmLongHead(message, shown) {
+        const SHOWN = 6000;
+        if (!message || !message.isPM || !message.isOwn || typeof shown !== 'string' || shown.length <= SHOWN) return null;
+        const nl = shown.lastIndexOf('\n', SHOWN - 1);
+        let head = shown.slice(0, nl > SHOWN / 2 ? nl + 1 : SHOWN);
+        if (/[\ud800-\udbff]$/.test(head)) head = head.slice(0, -1);
+        return head;
+    },
+
+    _pmLongHtml(message, full, head) {
+        if (!(this._pmLongTexts instanceof Map)) this._pmLongTexts = new Map();
+        const key = String((message.isPM && message.nymMessageId) || message.id || '');
+        const quoted = this._quotedOf(message);
+        this._pmLongTexts.delete(key);
+        this._pmLongTexts.set(key, { full, head, quoted });
+        while (this._pmLongTexts.size > 200) this._pmLongTexts.delete(this._pmLongTexts.keys().next().value);
+        return `<span class="msg-long-body">${this.formatMessageWithQuotes(head, 0, false, quoted)}</span><button type="button" class="msg-more" data-action="pmLongToggle" data-long-id="${this.escapeHtml(key)}">${this.escapeHtml(this.uiText('Show more'))}</button>`;
+    },
+
+    _pmLongToggle(btn) {
+        const rec = this._pmLongTexts instanceof Map ? this._pmLongTexts.get((btn && btn.dataset && btn.dataset.longId) || '') : null;
+        const body = btn && btn.parentElement ? btn.parentElement.querySelector('.msg-long-body') : null;
+        if (!rec || !body) return;
+        const open = btn.dataset.open !== '1';
+        body.innerHTML = this.formatMessageWithQuotes(open ? rec.full : rec.head, 0, false, rec.quoted);
+        btn.dataset.open = open ? '1' : '';
+        btn.textContent = this.uiText(open ? 'Show less' : 'Show more');
+    },
+
+    async _botLongGate(content) {
+        const LT = typeof window !== 'undefined' ? window.NymLongText : null;
+        if (!LT) return { go: true };
+        const cost = LT.bodyCost(content);
+        if (cost <= LT.BODY_MAX) return { go: true };
+        const cat = this._botProCatalog || {};
+        const pro = typeof this._getBotProModel === 'function' ? this._getBotProModel() : null;
+        const rows = (cat.models || []).filter(m => m && m.key && (!m.kind || m.kind === 'chat'));
+        const row = pro ? rows.find(m => m.key === pro.key) : null;
+        const context = row ? Number(row.context) || 0 : Number(cat.standardContext) || 128000;
+        const out = row ? Number(row.outTokens) || Number(row.maxTokens) || 0 : Number(cat.standardOut) || 8192;
+        const got = LT.contextCheck(cost, context, out);
+        if (got.ok) return { go: true };
+        const label = row ? (row.label || row.key) : (pro ? pro.label : this.uiText('the standard model'));
+        const longer = rows.filter(m => Number(m.context) > 0 && LT.contextCheck(cost, m.context, Number(m.outTokens) || Number(m.maxTokens) || 0).ok)
+            .sort((a, b) => Number(a.context) - Number(b.context))[0] || null;
+        const chunks = LT.chunksFor(content, got.limit);
+        const body = this.uiText('This message is about {kb} KB (about {tokens} tokens), and {model} reads at most about {limit} tokens at once. Nothing has been sent or charged yet.', { kb: Math.max(1, Math.round(cost / 1024)), tokens: got.tokens, model: label, limit: got.limit });
+        const ask = typeof window !== 'undefined' && window.showAppConfirm ? window.showAppConfirm : async () => false;
+        if (longer && await ask(body, { title: this.uiText('Too long for this model'), okLabel: this.uiText('Switch to {model}', { model: longer.label || longer.key }), cancelLabel: this.uiText('Other options') })) {
+            this._setBotProModel(longer.key);
+            return { go: true };
+        }
+        if (await ask(this.uiText('It can go as {n} separate questions, each charged as it is sent.', { n: chunks.length }), { title: this.uiText('Too long for this model'), okLabel: this.uiText('Send in {n} parts', { n: chunks.length }), cancelLabel: this.uiText('Cancel') })) {
+            return { go: false, chunks };
+        }
+        return { go: false };
+    },
+
     async sendNIP17PM(content, recipientPubkey, options = {}) {
         const nowMs = Date.now();
         const now = Math.floor(nowMs / 1000);
@@ -342,6 +470,9 @@ Object.assign(NYM.prototype, {
             content,
             pubkey: this.pubkey
         };
+
+        const longPieces = this._botLongPieces(content, recipientPubkey);
+        if (longPieces) this._botLongRumor(rumor, longPieces);
 
         const supportToken = this.pmSupportTokenFor(recipientPubkey);
         if (supportToken) rumor.tags.push(['nymbot-support', supportToken]);
@@ -401,12 +532,30 @@ Object.assign(NYM.prototype, {
             }
 
             if (plan.nym) {
+                const lead = longPieces ? await this._botLongLead(rumor, longPieces, async (part) => {
+                    const w = recipientKemPk
+                        ? await this.pqWrapForPeerAsync(plan.pq2, part, this.privkey, recipientPubkey, recipientKemPk, expirationTs, supportWrapTags)
+                        : await this.nip59WrapEventAsync(part, this.privkey, recipientPubkey, expirationTs, supportWrapTags);
+                    this.sendDMToRelays(['EVENT', w]);
+                    this._recordGiftWrapId(nymMessageId, w.id);
+                    this._depositPMEvent(w);
+                    return w;
+                }, async (part) => {
+                    const selfKemPk = this.pqSelfKeyFor();
+                    const w = selfKemPk
+                        ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), part, this.privkey, this.pubkey, selfKemPk, expirationTs, supportWrapTags)
+                        : await this.nip59WrapEventAsync(part, this.privkey, this.pubkey, expirationTs, supportWrapTags);
+                    this.sendDMToRelays(['EVENT', w]);
+                    this._recordGiftWrapId(nymMessageId, w.id);
+                    this._archivePMEvent(w);
+                }) : null;
                 const nymWrapped = recipientKemPk
                     ? await this.pqWrapForPeerAsync(plan.pq2, rumor, this.privkey, recipientPubkey, recipientKemPk, expirationTs, supportWrapTags)
                     : await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs, supportWrapTags);
                 this.sendDMToRelays(['EVENT', nymWrapped]);
                 sentWrappedEvents.push(['EVENT', nymWrapped]);
                 wrapped = nymWrapped;
+                if (lead) this._botLongNote(nymWrapped, lead);
                 pqEncrypted = !!recipientKemPk;
                 pqRoot = pqEncrypted && plan.rootSeeded && this.pqHasRoot();
                 this._recordGiftWrapId(nymMessageId, nymWrapped.id);
@@ -965,6 +1114,10 @@ Object.assign(NYM.prototype, {
             }
             if (!senderVerified && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(rumor.pubkey)) return;
             if (!senderVerified && !this._unverifiedWrapAllowed(rumor, parseBitchatMessage)) return;
+            if (senderVerified && typeof this.standaloneNymbotWrap === 'function' && this.standaloneNymbotWrap(seal, rumor)) {
+                this._standaloneNymbotDrop(rumor.pubkey);
+                return;
+            }
             if (probe) { probe(rumor, senderVerified); return; }
             const gap = typeof this._gapWrapVerdict === 'function' ? this._gapWrapVerdict(event.id, rumor) : null;
             const gapStale = !!(gap && gap.stale);
@@ -1346,6 +1499,13 @@ Object.assign(NYM.prototype, {
                 !/\s/.test(messageContent) && /^[A-Za-z0-9+/=_-]+$/.test(messageContent) &&
                 !/^(lnbc|lnurl|lntb|lntbs|cashu|npub1|nsec1|nprofile1|nevent1|naddr1|note1|bc1|tb1|bitcoin:)/i.test(messageContent)) {
                 return;
+            }
+
+            const longPart = window.NymLongText ? window.NymLongText.partOf(rumor.tags) : null;
+            if (longPart) {
+                const joined = this._botLongJoin(senderPubkey, longPart, messageContent);
+                if (joined === null) return;
+                messageContent = joined;
             }
 
             if (!messageContent || !messageContent.trim()) return;
@@ -2091,6 +2251,7 @@ Object.assign(NYM.prototype, {
         const promise = this._pmRestorePass(pk).finally(() => {
             if (this._pmPass && this._pmPass.promise === promise) this._pmPass = null;
             this._pmPassDone = { pk, at: Date.now() };
+            if (typeof this._standaloneNymbotSweep === 'function') this._standaloneNymbotSweep().catch(() => { });
         });
         this._pmPass = { pk, promise };
         return promise;
@@ -2429,6 +2590,17 @@ Object.assign(NYM.prototype, {
             this.aiConsentBlocked('nymbot');
             return false;
         }
+        if (this.isVerifiedBot(recipientPubkey) && !options.longChecked) {
+            const gate = await this._botLongGate(String(content || ''));
+            if (gate.chunks) {
+                let sent = true;
+                for (let i = 0; i < gate.chunks.length; i++) {
+                    sent = await this.sendPM('[Part ' + (i + 1) + ' of ' + gate.chunks.length + ']\n' + gate.chunks[i], recipientPubkey, Object.assign({}, options, { longChecked: true })) && sent;
+                }
+                return sent;
+            }
+            if (!gate.go) return false;
+        }
         const guardKey = (this.isVerifiedBot(recipientPubkey) && typeof this.botSendGuardTake === 'function')
             ? `${recipientPubkey}|${options.threadRoot || ''}|${content}` : null;
         if (guardKey && !this.botSendGuardTake(guardKey)) return true;
@@ -2760,6 +2932,10 @@ Object.assign(NYM.prototype, {
     _clearBotPMHistory() {
         const pubkey = this.verifiedBot && this.verifiedBot.pubkey;
         if (!pubkey) return;
+        if (this._botAnonPending()) {
+            this._botAnonPendingNotice();
+            return;
+        }
         const conversationKey = this.getPMConversationKey(pubkey);
         this._setBotPmClearedAt(Math.floor(Date.now() / 1000));
         this._clearBotServerThread();
@@ -3244,9 +3420,24 @@ Object.assign(NYM.prototype, {
     },
 
     _botChipKey(anon) {
-        const useAnon = typeof anon === 'boolean' ? anon : (typeof this.botAnonReady === 'function' && this.botAnonReady());
-        if (!useAnon) return this.pubkey || null;
+        if (typeof anon !== 'boolean') {
+            if (this._botAnonPending()) return null;
+            anon = typeof this.botAnonReady === 'function' && this.botAnonReady();
+        }
+        if (!anon) return this.pubkey || null;
         return typeof this.botAnonPubkey === 'function' ? this.botAnonPubkey() : null;
+    },
+
+    _botAnonPending() {
+        return typeof this.botAnonEnabled === 'function' && this.botAnonEnabled() &&
+            !(typeof this.botAnonReady === 'function' && this.botAnonReady());
+    },
+
+    _botAnonPendingNotice() {
+        const blocked = typeof this.botAnonBlockedReason === 'function' ? this.botAnonBlockedReason() : null;
+        this.displaySystemMessage(blocked
+            ? this.uiText('Anonymous Nymbot chat: {reason}', { reason: blocked })
+            : this.uiText('Anonymous Nymbot chat is not ready on this device yet.'));
     },
 
     _botFreeSet(key, free) {
@@ -3577,7 +3768,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async _handleBotPM(content, wrapId) {
+    async _handleBotPM(content, wrapId, heldLong) {
         // Fold a localized leading command back to English before ?command matching.
         const trimmed = this.canonicalizeCommandInput((content || '').trim());
         this._markBotPMReceipts('delivered');
@@ -3646,6 +3837,12 @@ Object.assign(NYM.prototype, {
         const isFresh = /^\s*!\s*\S/.test(content);
         const proModel = this._getBotProModel();
         const reqExtra = { eventId: wrapId, fresh: isFresh };
+        const long = heldLong || (this._botLongParts instanceof Map ? this._botLongParts.get(wrapId) : null);
+        if (long) {
+            reqExtra.parts = long.parts.slice();
+            reqExtra.wraps = long.wraps.slice();
+            if (this._botLongParts instanceof Map) this._botLongParts.delete(wrapId);
+        }
         const anonRouted = typeof this.botAnonReady === 'function' && this.botAnonReady();
         const anonAnnouncement = anonRouted ? this._botAnonAnnouncement() : null;
         if (anonAnnouncement) {
@@ -3667,10 +3864,11 @@ Object.assign(NYM.prototype, {
         if (run && run.done) await run.done;
     },
 
-    _showBotPriceRetry(content, wrapId) {
+    _showBotPriceRetry(content, wrapId, extra) {
         if (!this._botPriceRetries) this._botPriceRetries = new Map();
         const id = 'bpr-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-        this._botPriceRetries.set(id, { content, wrapId });
+        const long = extra && Array.isArray(extra.parts) && Array.isArray(extra.wraps) ? { parts: extra.parts.slice(), wraps: extra.wraps.slice() } : null;
+        this._botPriceRetries.set(id, { content, wrapId, long });
         this.displaySystemMessage(
             `Nymbot can’t check the Bitcoin price right now, so it couldn’t price that message. Nothing was charged. <button class="bot-retry-btn" type="button" data-action="botRetryPM" data-retry-id="${id}">Retry</button>`,
             'system', { html: true, feed: true });
@@ -3684,14 +3882,18 @@ Object.assign(NYM.prototype, {
             ? document.querySelector(`[data-retry-id="${id}"]`)
             : null;
         if (btn) btn.remove();
-        await this._handleBotPM(entry.content, entry.wrapId);
+        await this._handleBotPM(entry.content, entry.wrapId, entry.long || null);
     },
 
     async _checkBotCredits(display) {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return null;
-            const key = this._botChipKey();
+            if (this._botAnonPending()) {
+                if (display) this._botAnonPendingNotice();
+                return null;
+            }
+            const key = this._botChipKey(typeof this.botAnonReady === 'function' && this.botAnonReady());
             const { status, data } = await this._botMoneyRequest('balance', {});
             if (status >= 400 || !data || data.error) {
                 if (display) this.displaySystemMessage(this.uiText('Nymbot: {error}', { error: (data && data.error) || this.uiText('could not check balance') }));
@@ -5108,6 +5310,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             this.loadJoinedChannelsFromRelays();
         }
 
+        this._syncPresenceSub();
         this.updateUserList();
     },
 

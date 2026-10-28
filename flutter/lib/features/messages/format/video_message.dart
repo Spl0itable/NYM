@@ -5,6 +5,7 @@ import 'package:video_player/video_player.dart';
 
 import '../../../core/theme/nym_colors.dart';
 import '../../../core/theme/nym_metrics.dart';
+import '../../duo/duo_rail.dart';
 import '../../i18n/i18n.dart';
 import '../../../core/utils/safe_url.dart';
 import 'media_source.dart';
@@ -312,7 +313,7 @@ class _VideoMessageState extends State<VideoMessage> {
       PageRouteBuilder<void>(
         opaque: false,
         barrierColor: Colors.black.withValues(alpha: 0.9),
-        pageBuilder: (_, _, _) => _FullscreenVideo(controller: controller),
+        pageBuilder: (_, _, _) => FullscreenVideoView(controller: controller),
       ),
     );
   }
@@ -345,15 +346,15 @@ class _ExpandButton extends StatelessWidget {
 }
 
 /// Full-screen overlay reusing [controller]; backdrop or close dismisses, video tap toggles play.
-class _FullscreenVideo extends StatefulWidget {
-  const _FullscreenVideo({required this.controller});
+class FullscreenVideoView extends StatefulWidget {
+  const FullscreenVideoView({super.key, required this.controller});
   final VideoPlayerController controller;
 
   @override
-  State<_FullscreenVideo> createState() => _FullscreenVideoState();
+  State<FullscreenVideoView> createState() => _FullscreenVideoState();
 }
 
-class _FullscreenVideoState extends State<_FullscreenVideo> {
+class _FullscreenVideoState extends State<FullscreenVideoView> {
   void _onValue() {
     if (mounted) setState(() {});
   }
@@ -413,9 +414,12 @@ class _FullscreenVideoState extends State<_FullscreenVideo> {
               top: 12,
               right: 12,
               child: SafeArea(
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white),
-                  onPressed: () => Navigator.of(context).maybePop(),
+                child: DuoRailSwap.close(
+                  onTap: () => Navigator.of(context).maybePop(),
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.of(context).maybePop(),
+                  ),
                 ),
               ),
             ),

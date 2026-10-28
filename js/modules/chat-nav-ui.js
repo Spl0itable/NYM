@@ -20,7 +20,7 @@
     Object.assign(NYM.prototype, {
 
         _cn(text, vars) {
-            let s = typeof this.uiText === 'function' ? this.uiText(text) : text;
+            let s = typeof this.uiText === 'function' ? this.uiText(text, vars) : text;
             if (vars) for (const k of Object.keys(vars)) s = s.split('{' + k + '}').join(String(vars[k]));
             return s;
         },
@@ -444,7 +444,7 @@
             const n = N().mentionCount(this._cnShownMentions(key), key);
             at.classList.toggle('nm-hidden', n <= 0);
             at.querySelector('.cn-at-count').textContent = n > 0 ? String(n) : '';
-            at.setAttribute('aria-label', this._cn(N().STRINGS.mentions) + (n ? ' (' + n + ')' : ''));
+            at.setAttribute('aria-label', n ? this._cn('Unread mentions ({n})', { n }) : this._cn(N().STRINGS.mentions));
         },
 
         _cnKeepAnchor(sc, list) {
@@ -761,7 +761,7 @@
                 if (unread && unread.parentNode) unread.parentNode.insertBefore(badge, unread);
                 else item.appendChild(badge);
             }
-            badge.title = this._cn(N().STRINGS.mentions) + ' (' + n + ')';
+            badge.title = this._cn('Unread mentions ({n})', { n });
             badge.setAttribute('aria-label', badge.title);
         },
 
@@ -1207,7 +1207,7 @@
             if (!this._pinSyncAllowed()) return 'local';
             if (!this._pinPending()) return 'synced';
             const online = typeof this._ctOnline === 'function' ? this._ctOnline() : !!this.connected;
-            if (!this.pubkey || !online || !this._settingsHydrated) return 'pending';
+            if (!this.pubkey || !online || !this._settingsHydrated || this._acctGoing) return 'pending';
             if (this._pinSyncing) { this._pinResync = true; return 'pending'; }
             this._pinSyncing = true;
             this._pinResync = false;

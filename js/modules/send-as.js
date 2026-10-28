@@ -459,11 +459,15 @@
                 if (this._sendAsTransports && this._sendAsTransports.get(t.id) === t) this._sendAsTransports.delete(t.id);
             };
             const sockets = () => [...t.sockets.values()];
+            const app = typeof this.appRelay === 'string' ? this.appRelay : '';
+            const appVia = () => (this._userDirectMode && typeof this._getRelayPoolUrl === 'function' && this._getRelayPoolUrl()) || null;
             const open = (url) => {
                 if (t.sockets.has(url)) return;
+                const via = app && url === app ? appVia() : null;
+                if (app && url === app && !via) return;
                 let ws;
-                try { ws = new WebSocket(url); } catch (_) { return; }
-                ws._q = [];
+                try { ws = new WebSocket(via || url); } catch (_) { return; }
+                ws._q = via ? [JSON.stringify(['RELAYS', { relays: [url], dmRelays: [url] }])] : [];
                 t.sockets.set(url, ws);
                 ws.onopen = () => { const q = ws._q; ws._q = []; for (const f of q) { try { ws.send(f); } catch (_) { } } t.connected.add(url); t.check(); };
                 ws.onmessage = (e) => {

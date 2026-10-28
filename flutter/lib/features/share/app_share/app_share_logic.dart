@@ -45,11 +45,11 @@ class AppLinkChoice {
 List<AppLinkChoice> appLinkChoices(String platform) => [
       const AppLinkChoice('Get Nymchat', ShareAppLinks.downloadPage),
       const AppLinkChoice('Web app', ShareAppLinks.webApp),
-      if (platform == 'android') ...const [
+      const AppLinkChoice('App Store (TestFlight)', ShareAppLinks.iosTestFlight),
+      if (platform != 'ios') ...const [
         AppLinkChoice('Google Play', ShareAppLinks.googlePlay),
         AppLinkChoice('Zapstore', ShareAppLinks.zapstore),
-      ] else
-        const AppLinkChoice('App Store (TestFlight)', ShareAppLinks.iosTestFlight),
+      ],
     ];
 
 final RegExp _unsafeName = RegExp(r'[^A-Za-z0-9._+-]');

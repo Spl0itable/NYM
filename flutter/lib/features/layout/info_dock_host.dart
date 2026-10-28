@@ -72,15 +72,28 @@ class InfoDockHost extends ConsumerStatefulWidget {
   ConsumerState<InfoDockHost> createState() => _InfoDockHostState();
 }
 
-class _InfoDockHostState extends ConsumerState<InfoDockHost> {
+class _InfoDockHostState extends ConsumerState<InfoDockHost>
+    with TickerProviderStateMixin {
+  late final AnimationController _slide = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 150));
+  late final AnimationController _out = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 150));
+  DockedInfo? _shown;
+  DockedInfo? _leaving;
+  final Map<String, GlobalKey> _slots = {};
+
   @override
   void initState() {
     super.initState();
     InfoDock.attach();
+    _shown = ref.read(infoDockProvider);
+    if (_shown != null) _slide.value = 1;
   }
 
   @override
   void dispose() {
+    _slide.dispose();
+    _out.dispose();
     InfoDock.detach();
     super.dispose();
   }
@@ -92,41 +105,123 @@ class _InfoDockHostState extends ConsumerState<InfoDockHost> {
     ref.read(settingsProvider.notifier).setInfoPanelOpen(false);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final info = ref.watch(infoDockProvider);
-    if (info == null ||
-        infoPanelMode(MediaQuery.sizeOf(context).width) != 'docked') {
-      return const SizedBox.shrink();
+  void _follow(DockedInfo? next) {
+    if (!mounted) return;
+    final still = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    if (next != null) {
+      final prev = _shown;
+      final opening = prev == null || _slide.status == AnimationStatus.reverse;
+      _shown = next;
+      if (still) {
+        _slide.value = 1;
+        _leaving = null;
+      } else if (opening) {
+        _slide.forward();
+      } else if (prev.isGroup != next.isGroup) {
+        _crossSlide(prev);
+      }
+      return;
     }
-    final Widget panel;
+    _leaving = null;
+    _out.stop();
+    if (still || _shown == null) {
+      _slide.value = 0;
+      _shown = null;
+      return;
+    }
+    _slide.reverse().whenCompleteOrCancel(() {
+      if (!mounted || ref.read(infoDockProvider) != null) return;
+      setState(() => _shown = null);
+    });
+  }
+
+  void _crossSlide(DockedInfo prev) {
+    _leaving = prev;
+    _out.value = _slide.value;
+    _slide.value = 0;
+    _slide.forward();
+    _out.reverse().whenCompleteOrCancel(() {
+      if (!mounted || !identical(_leaving, prev)) return;
+      setState(() => _leaving = null);
+    });
+  }
+
+  Widget _panelFor(DockedInfo info, Animation<double> animation) {
     if (info.isGroup) {
-      panel = GroupContextMenuPanel(
+      return GroupContextMenuPanel(
         key: ValueKey('dock-group-${info.groupId}'),
         groupId: info.groupId!,
-        animation: kAlwaysCompleteAnimation,
+        animation: animation,
         onClose: _close,
         onDismiss: _dismiss,
         docked: true,
       );
-    } else {
-      panel = ContextMenuPanel(
-        key: ValueKey('dock-user-${info.pubkey}-${info.target!.messageId}'),
-        target: info.target!,
-        message: info.message,
-        animation: kAlwaysCompleteAnimation,
-        onReact: info.onReact,
-        onTranslateInline: info.onTranslateInline,
-        backToGroupId: info.backToGroupId,
-        onClose: _close,
-        onDismiss: _dismiss,
-        docked: true,
+    }
+    return ContextMenuPanel(
+      key: ValueKey('dock-user-${info.pubkey}-${info.target!.messageId}'),
+      target: info.target!,
+      message: info.message,
+      animation: animation,
+      onReact: info.onReact,
+      onTranslateInline: info.onTranslateInline,
+      backToGroupId: info.backToGroupId,
+      onClose: _close,
+      onDismiss: _dismiss,
+      docked: true,
+    );
+  }
+
+  String _idOf(DockedInfo info) => info.isGroup
+      ? 'group-${info.groupId}'
+      : 'user-${info.pubkey}-${info.target!.messageId}';
+
+  Widget _slot(DockedInfo info, Animation<double> animation,
+          {required bool ignoring}) =>
+      KeyedSubtree(
+        key: _slots.putIfAbsent(_idOf(info), () => GlobalKey()),
+        child: IgnorePointer(
+          ignoring: ignoring,
+          child: _panelFor(info, animation),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen<DockedInfo?>(infoDockProvider, (_, next) => _follow(next));
+    final live = ref.watch(infoDockProvider);
+    final info = live ?? _shown;
+    if (info == null ||
+        infoPanelMode(MediaQuery.sizeOf(context).width) != 'docked') {
+      return const SizedBox.shrink();
+    }
+    final leaving = live != null &&
+            _leaving != null &&
+            _leaving!.isGroup != info.isGroup
+        ? _leaving
+        : null;
+    final kept = {_idOf(info), if (leaving != null) _idOf(leaving)};
+    _slots.removeWhere((id, _) => !kept.contains(id));
+    if (live == null) {
+      return SizedBox(
+        width: 0,
+        child: OverflowBox(
+          alignment: Alignment.centerRight,
+          minWidth: kDockWidth.toDouble(),
+          maxWidth: kDockWidth.toDouble(),
+          child: _slot(info, _slide, ignoring: true),
+        ),
       );
     }
     return SizedBox(
       key: const ValueKey('infoDock'),
       width: kDockWidth.toDouble(),
-      child: panel,
+      child: Stack(
+        fit: StackFit.passthrough,
+        children: [
+          _slot(info, _slide, ignoring: false),
+          if (leaving != null) _slot(leaving, _out, ignoring: true),
+        ],
+      ),
     );
   }
 }

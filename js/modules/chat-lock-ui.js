@@ -159,7 +159,7 @@
             if (!this._clSyncAllowed()) return 'local';
             if (!this._clPending()) return 'synced';
             const online = typeof this._ctOnline === 'function' ? this._ctOnline() : !!this.connected;
-            if (!this.pubkey || !online || !this._settingsHydrated) return 'pending';
+            if (!this.pubkey || !online || !this._settingsHydrated || this._acctGoing) return 'pending';
             if (this._clSyncing) { this._clResync = true; return 'pending'; }
             this._clSyncing = true;
             this._clResync = false;

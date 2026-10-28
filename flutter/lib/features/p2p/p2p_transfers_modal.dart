@@ -10,6 +10,7 @@ import 'p2p_service.dart';
 import '../../widgets/common/nym_focusable.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/dialog_button.dart';
+import '../duo/duo_rail.dart';
 
 /// Lists seeding files and active transfers, rebuilding live from [P2PService].
 class P2PTransfersModal extends ConsumerWidget {
@@ -391,7 +392,9 @@ class _CloseChipState extends State<_CloseChip> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return NymFocusable(
+    return DuoRailSwap.close(
+      onTap: widget.onTap,
+      child: NymFocusable(
       onActivate: widget.onTap,
       tooltip: tr('Close'),
       excludeChildSemantics: true,
@@ -423,6 +426,7 @@ class _CloseChipState extends State<_CloseChip> {
           ),
         ),
       ),
+    ),
     );
   }
 }

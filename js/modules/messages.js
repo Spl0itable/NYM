@@ -1045,6 +1045,38 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _placeMessageEl(container, messageEl, message, _dedupeId) {
+        if (this._bulkAppending) {
+            (this._bulkContainer || container).appendChild(messageEl);
+            if (this._bulkDomIds) this._bulkDomIds.add(_dedupeId);
+        } else {
+            const msgCreatedAt = this._orderAt(message);
+            const msgOrderMs = this._orderMs(message);
+            const msgHasMs = Number.isFinite(msgOrderMs) && msgOrderMs > msgCreatedAt * 1000;
+            const msgMs = msgHasMs ? msgOrderMs : 0;
+            const msgSeq = message._seq || 0;
+
+            const lastTimestamped = this._lastTimestampedEl(container);
+            if (!lastTimestamped || this._msgSortsAfter(lastTimestamped, msgCreatedAt, msgHasMs, msgMs, msgSeq)) {
+                container.appendChild(messageEl);
+            } else {
+                const allTimestamped = container.querySelectorAll('[data-created-at]');
+                let insertBefore = null;
+                for (let i = allTimestamped.length - 1; i >= 0; i--) {
+                    const cursor = allTimestamped[i];
+                    if (this._msgSortsAfter(cursor, msgCreatedAt, msgHasMs, msgMs, msgSeq)) break;
+                    insertBefore = cursor;
+                }
+
+                if (insertBefore && insertBefore.parentNode) {
+                    insertBefore.parentNode.insertBefore(messageEl, insertBefore);
+                } else {
+                    container.appendChild(messageEl);
+                }
+            }
+        }
+    },
+
     displayMessage(message) {
         if (this.deletedEventIds.has(message.id) ||
             (message.nymMessageId && this.deletedEventIds.has(message.nymMessageId)) ||
@@ -1218,6 +1250,27 @@ Object.assign(NYM.prototype, {
         // Only the incremental path needs to clear the shimmer or "no messages" note.
         if (!this._bulkAppending && (container._skelTimer || container._emptyNote)) this._clearMessageSkeleton(container);
 
+        if (message.isNotice) {
+            const noticeEl = document.createElement('div');
+            noticeEl.className = 'system-message group-notice';
+            noticeEl.dataset.messageId = _dedupeId;
+            noticeEl.dataset.timestamp = message.timestamp.getTime();
+            noticeEl.dataset.createdAt = this._orderAt(message);
+            noticeEl.dataset.ms = this._orderMsForDom(message);
+            noticeEl.dataset.seq = message._seq || 0;
+            const named = (message.people || []).filter((pk) => typeof pk === 'string' && pk && pk !== this.pubkey);
+            const shown = this.localizeCommandTokensIn(message.content || '');
+            if (named.length) {
+                noticeEl.dataset.people = named.join(',');
+                noticeEl._feedLine = { content: shown, html: false, names: this._feedNames(named, false) };
+                this._paintFeedLine(noticeEl);
+            } else {
+                this.renderNymText(noticeEl, shown);
+            }
+            this._placeMessageEl(container, noticeEl, message, _dedupeId);
+            return;
+        }
+
         // Clamp timestamp to now so messages never appear in the future.
         const _clampedMs = this._stableClampMs(message.id, message.timestamp.getTime());
         const displayTimestamp = _clampedMs === message.timestamp.getTime()
@@ -1390,9 +1443,12 @@ Object.assign(NYM.prototype, {
 
             const _botAuthored = !!(message.isBot || this.isVerifiedBot(message.pubkey));
             const _shown = this._shownContent(message);
-            const preformatted = _botAuthored ? null : (this._fmtCache && this._fmtCache.get(_shown));
+            const _longHead = _botAuthored || typeof this._pmLongHead !== 'function' ? null : this._pmLongHead(message, _shown);
+            const preformatted = _botAuthored || _longHead != null ? null : (this._fmtCache && this._fmtCache.get(_shown));
             let formattedContent;
-            if (preformatted != null) {
+            if (_longHead != null) {
+                formattedContent = this._pmLongHtml(message, _shown, _longHead);
+            } else if (preformatted != null) {
                 formattedContent = preformatted;
             } else if (!_botAuthored && this._shouldDeferLiveFormat(message)) {
                 formattedContent = this._placeholderContentHtml(_shown);
@@ -1632,36 +1688,7 @@ Object.assign(NYM.prototype, {
         }
 
 
-        // Bulk render is pre-sorted, so just append; a per-message querySelectorAll would be O(N²).
-        if (this._bulkAppending) {
-            (this._bulkContainer || container).appendChild(messageEl);
-            if (this._bulkDomIds) this._bulkDomIds.add(_dedupeId);
-        } else {
-            const msgCreatedAt = this._orderAt(message);
-            const msgOrderMs = this._orderMs(message);
-            const msgHasMs = Number.isFinite(msgOrderMs) && msgOrderMs > msgCreatedAt * 1000;
-            const msgMs = msgHasMs ? msgOrderMs : 0;
-            const msgSeq = message._seq || 0;
-
-            const lastTimestamped = this._lastTimestampedEl(container);
-            if (!lastTimestamped || this._msgSortsAfter(lastTimestamped, msgCreatedAt, msgHasMs, msgMs, msgSeq)) {
-                container.appendChild(messageEl);
-            } else {
-                const allTimestamped = container.querySelectorAll('[data-created-at]');
-                let insertBefore = null;
-                for (let i = allTimestamped.length - 1; i >= 0; i--) {
-                    const cursor = allTimestamped[i];
-                    if (this._msgSortsAfter(cursor, msgCreatedAt, msgHasMs, msgMs, msgSeq)) break;
-                    insertBefore = cursor;
-                }
-
-                if (insertBefore && insertBefore.parentNode) {
-                    insertBefore.parentNode.insertBefore(messageEl, insertBefore);
-                } else {
-                    container.appendChild(messageEl);
-                }
-            }
-        }
+        this._placeMessageEl(container, messageEl, message, _dedupeId);
 
         if (!_threadRender && !_cvContainer && typeof this._announceNewMessage === 'function') this._announceNewMessage(message, messageEl);
         this._updateBubbleGrouping(messageEl);
@@ -1815,12 +1842,12 @@ Object.assign(NYM.prototype, {
     _makeReadMoreBtn(inner) {
         const btn = document.createElement('button');
         btn.className = 'read-more-btn';
-        btn.textContent = 'Read more';
+        btn.textContent = this.uiText('Read more');
         btn.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
             const isExpanded = inner.classList.toggle('truncated-expanded');
-            btn.textContent = isExpanded ? 'Show less' : 'Read more';
+            btn.textContent = this.uiText(isExpanded ? 'Show less' : 'Read more');
         });
         return btn;
     },
@@ -2786,7 +2813,7 @@ Object.assign(NYM.prototype, {
             authorEl.textContent = author;
         }
         // Strip markdown/HTML, keep shortcodes so they can render as images.
-        const cleanText = this._notifPreviewText(text).replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
+        const cleanText = this._notifPreviewText(strippedText).replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
         const truncated = cleanText.length > 120 ? cleanText.substring(0, 120) + '...' : cleanText;
         textEl.innerHTML = this.renderCustomEmojiInEscapedText(this.escapeHtml(truncated));
         preview.style.display = 'flex';
@@ -3232,6 +3259,49 @@ Object.assign(NYM.prototype, {
 
         container.addEventListener('touchend', handleTouchEnd, { passive: true });
         container.addEventListener('touchcancel', handleTouchEnd, { passive: true });
+    },
+
+    setupMessageCopy() {
+        if (this._messageCopyBound) return;
+        this._messageCopyBound = true;
+        document.addEventListener('copy', (e) => {
+            if (!e.clipboardData) return;
+            const text = this.messageSelectionText(window.getSelection());
+            if (text === null) return;
+            e.preventDefault();
+            e.clipboardData.setData('text/plain', text);
+        });
+    },
+
+    messageSelectionText(sel) {
+        if (!sel || sel.isCollapsed || sel.rangeCount !== 1) return null;
+        const range = sel.getRangeAt(0);
+        const common = range.commonAncestorContainer;
+        const root = common.nodeType === 1 ? common : common.parentElement;
+        if (!root || root.closest('.message')) return null;
+        const msgs = [...root.querySelectorAll('.message')].filter((m) => range.intersectsNode(m));
+        if (!msgs.length) return null;
+        const parts = [];
+        try {
+            for (const m of msgs) {
+                const c = m.querySelector('.message-content');
+                if (!c || !range.intersectsNode(c)) continue;
+                const r = document.createRange();
+                r.selectNodeContents(c);
+                const meta = c.querySelector(':scope > .bubble-time-inner');
+                if (meta) r.setEndBefore(meta);
+                if (range.compareBoundaryPoints(Range.START_TO_START, r) > 0) r.setStart(range.startContainer, range.startOffset);
+                if (range.compareBoundaryPoints(Range.END_TO_END, r) < 0) r.setEnd(range.endContainer, range.endOffset);
+                sel.removeAllRanges();
+                sel.addRange(r);
+                const t = sel.toString();
+                if (t) parts.push(t);
+            }
+        } finally {
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+        return parts.join('\n');
     },
 
     setupDoubleClickToReply(container = document.getElementById('messagesContainer')) {
@@ -5033,6 +5103,8 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    MSG_VERIFY_PERSIST_MAX: 2000,
+
     _msgVerifyKey(id) {
         return id ? String(id).toUpperCase() : '';
     },
@@ -5071,7 +5143,7 @@ Object.assign(NYM.prototype, {
         clearTimeout(this._msgVerifyPersistTimer);
         this._msgVerifyPersistTimer = setTimeout(() => {
             try {
-                const arr = Array.from(this._msgVerifyStatus.entries()).map(([k, v]) => [k, v ? 1 : 0]);
+                const arr = Array.from(this._msgVerifyStatus.entries()).slice(-this.MSG_VERIFY_PERSIST_MAX).map(([k, v]) => [k, v ? 1 : 0]);
                 localStorage.setItem('nym_msg_verify_status', JSON.stringify(arr));
             } catch (_) { }
         }, 3000);

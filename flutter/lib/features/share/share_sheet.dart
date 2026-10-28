@@ -212,7 +212,7 @@ class ShareSheetBody extends ConsumerWidget {
         if (launcher != null)
           ShareActionRow(
             key: const ValueKey('share-action-app'),
-            svg: NymIcons.phone,
+            svg: NymIcons.shareNodes,
             label: tr('Share Nymchat app'),
             onTap: () => unawaited(launcher(context)),
           ),

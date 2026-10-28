@@ -8,6 +8,7 @@ import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/chat/message_row.dart';
+import '../../widgets/chat/message_selection.dart';
 import '../../widgets/chat/typing_indicator.dart';
 import '../../widgets/common/nym_label.dart';
 import '../../widgets/nym_icons.dart';
@@ -227,10 +228,13 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
             ),
           ),
           Expanded(
-            child: ListView(
+            child: MessageSelection(
+            builder: (keepAlives) => ListView(
+              addAutomaticKeepAlives: keepAlives,
               controller: _scroll,
               padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
               children: [
+                for (final w in <Widget>[
                 if (root != null) ...[
                   DaySeparator(
                     createdAt: root.createdAt,
@@ -283,8 +287,10 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
                   row(replies[i]),
                   const SizedBox(height: 3),
                 ],
+              ])
+                  MessageSelection.item(context, w),
               ],
-            ),
+            )),
           ),
           if (widget.showTyping) const TypingIndicatorRow(),
         ],

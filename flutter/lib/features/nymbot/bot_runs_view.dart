@@ -5,6 +5,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../models/message.dart';
 import '../../state/app_state.dart' show kNymbotPubkey;
 import '../../widgets/common/app_dialog.dart';
+import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import 'bot_runs.dart';
 import 'nymbot_providers.dart';
@@ -326,7 +327,12 @@ Future<void> showBotRunsSheet(
     context: context,
     isScrollControlled: true,
     backgroundColor: colors.bgSecondary,
-    builder: (sheetContext) => _BotRunsSheet(colors: colors, onOpen: onOpen),
+    builder: (sheetContext) => DuoRailItems(
+      active: DuoScope.railOf(sheetContext),
+      priority: kDuoSheetPriority,
+      items: [duoCloseItem(() => Navigator.of(sheetContext).maybePop())],
+      child: _BotRunsSheet(colors: colors, onOpen: onOpen),
+    ),
   ).whenComplete(() => controller.runsSheetOpen = false);
 }
 

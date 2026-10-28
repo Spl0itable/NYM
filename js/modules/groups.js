@@ -699,10 +699,7 @@ Object.assign(NYM.prototype, {
         const targetName = this.getNymFromPubkey(targetPubkey);
         const actorName = this.getNymFromPubkey(senderPubkey);
         if (this.inPMMode && this.currentGroup === groupId) {
-            const line = spec.grant
-                ? `${targetName} was ${spec.verb} by ${actorName}.`
-                : `${targetName}${spec.verb} by ${actorName}.`;
-            this.displaySystemMessage(line, 'system', { feed: true, people: [targetPubkey, senderPubkey] });
+            this.displaySystemMessage(this._groupRoleFeedLine(spec, targetName, actorName), 'system', { feed: true, people: [targetPubkey, senderPubkey] });
             this.openGroup(groupId);
         }
         if (targetPubkey !== this.pubkey) return;
@@ -976,6 +973,12 @@ Object.assign(NYM.prototype, {
         this._gcHandleDropped(groupId, rosterDropped);
     },
 
+    _joinAnswerVerdict(group, reqEpoch) {
+        if (!group || !group.inviteEnabled) return 'drop';
+        if ((Number(reqEpoch) || 0) !== (group.inviteEpoch || 0)) return 'drop';
+        return group.joinApproval === true ? 'queue' : 'admit';
+    },
+
     async _handleGroupJoinRequest(rumor, groupId, joinerPubkey, opts) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -1016,6 +1019,15 @@ Object.assign(NYM.prototype, {
         if (!now || now.members.includes(joinerPubkey)) return;
         if (this.leftGroups && this.leftGroups.has(groupId)) return;
         if (Array.isArray(now.banned) && now.banned.includes(joinerPubkey)) return;
+        const verdict = this._joinAnswerVerdict(now, reqEpoch);
+        if (verdict === 'drop') return;
+        if (verdict === 'queue') {
+            if (typeof this._gtQueueJoinRequest === 'function') {
+                const queueNow = Math.floor(Date.now() / 1000);
+                await this._gtQueueJoinRequest(groupId, joinerPubkey, this.pubkey, Math.min(reqTs || queueNow, queueNow), true);
+            }
+            return;
+        }
         if (!this._canAddMembers(groupId, this.pubkey)) return;
         if (this._gcIsFull(groupId)) {
             await this._gcRefuseFullJoin(groupId, joinerPubkey);
@@ -1407,7 +1419,11 @@ Object.assign(NYM.prototype, {
         }
 
         if (typeTag && typeTag[1] === 'group-join-request') {
-            if (!isOwn) await this._handleGroupJoinRequest(rumor, groupId, senderPubkey, { replay: fromD1 });
+            if (!isOwn) {
+                const answering = this._handleGroupJoinRequest(rumor, groupId, senderPubkey, { replay: fromD1 });
+                if (fromD1) answering.catch(() => { });
+                else await answering;
+            }
             return;
         }
 
@@ -1417,6 +1433,7 @@ Object.assign(NYM.prototype, {
         if (msgType && typeof this._gtHandleGroupControl === 'function'
             && await this._gtHandleGroupControl(msgType, rumor, groupId, senderPubkey, isOwn)) return;
 
+        let inviteForKnownGroup = false;
         // The group-invite rumor author is always the group creator.
         if (typeTag && typeTag[1] === 'group-invite') {
             // Pre-create with createdBy before _addGroupMessage, or addGroupConversation sets it to null.
@@ -1447,6 +1464,7 @@ Object.assign(NYM.prototype, {
                     : (inviteGenesis === true || (inviteGenesis === null && this._isGroupBareShell(existingInviteGroup)));
                 if (!inviteFromOwner) return;
             }
+            inviteForKnownGroup = !!existingInviteGroup && !this.leftGroups.has(groupId);
             if (this.leftGroups.has(groupId)) {
                 if (inviteGenesis !== true) return;
                 this.leftGroups.delete(groupId);
@@ -1490,9 +1508,10 @@ Object.assign(NYM.prototype, {
             if (grp && inviteAdmins.length > 0 && (!Array.isArray(grp.admins) || grp.admins.length === 0)) {
                 grp.admins = [...inviteAdmins];
             }
-            if (grp && inviteAvatar && !grp.avatar) grp.avatar = inviteAvatar;
-            if (grp && inviteBanner && !grp.banner) grp.banner = inviteBanner;
-            if (grp && inviteDesc && !grp.description) grp.description = inviteDesc;
+            const inviteMetaFresh = !existingInviteGroup || !((existingInviteGroup.metaUpdatedAt || 0) > Math.floor(rumor.created_at || 0));
+            if (grp && inviteMetaFresh && inviteAvatar && !grp.avatar) grp.avatar = inviteAvatar;
+            if (grp && inviteMetaFresh && inviteBanner && !grp.banner) grp.banner = inviteBanner;
+            if (grp && inviteMetaFresh && inviteDesc && !grp.description) grp.description = inviteDesc;
             if (grp) this._noteGroupMetaBy(grp, inviteMetaBefore, senderPubkey);
             const inviteNotStale = !!grp && !(isOwn && existingInviteGroup) && !((grp.metaUpdatedAt || 0) > Math.floor(rumor.created_at || 0));
             if (inviteNotStale && inviteAllowInvites !== undefined) grp.allowMemberInvites = inviteAllowInvites;
@@ -1601,6 +1620,8 @@ Object.assign(NYM.prototype, {
                 for (const pk of newMembers) this._bumpModTargetTs(existingGroup, pk, addTs);
             }
             const addAt = Math.min(Math.floor(rumor.created_at || 0), Math.floor(Date.now() / 1000));
+            const addMetaFresh = !existingGroup || !((existingGroup.metaUpdatedAt || 0) > Math.floor(rumor.created_at || 0));
+            const addMetaTrusted = trustBootstrap && addMetaFresh;
             const addMetaBefore = this._groupMetaSnapshot(existingGroup);
             this.addGroupConversation(
                 groupId,
@@ -1615,15 +1636,15 @@ Object.assign(NYM.prototype, {
                     admins: trustBootstrap ? addAdmins : [],
                     genesisOwner: addGenesis === true ? addGOwner : undefined,
                     genesisNonce: addGenesis === true ? addGNonce : undefined,
-                    avatar: trustBootstrap ? addAvatar : undefined,
-                    banner: trustBootstrap ? addBanner : undefined,
-                    description: trustBootstrap ? addDesc : undefined,
-                    allowMemberInvites: trustBootstrap && addAllowInvTag ? addAllowInvTag[1] !== '0' : undefined,
-                    inviteEnabled: trustBootstrap && addInviteEnabledTag ? addInviteEnabledTag[1] === '1' : undefined,
-                    inviteEpoch: trustBootstrap && addInviteEpochTag ? (parseInt(addInviteEpochTag[1], 10) || 0) : undefined,
-                    shareHistory: trustBootstrap && addShareHistTag ? addShareHistTag[1] === '1' : undefined,
-                    nameAuthoritative: trustBootstrap
-                        || (!!existingGroup && existingGroup.createdBy === senderPubkey)
+                    avatar: addMetaTrusted ? addAvatar : undefined,
+                    banner: addMetaTrusted ? addBanner : undefined,
+                    description: addMetaTrusted ? addDesc : undefined,
+                    allowMemberInvites: addMetaTrusted && addAllowInvTag ? addAllowInvTag[1] !== '0' : undefined,
+                    inviteEnabled: addMetaTrusted && addInviteEnabledTag ? addInviteEnabledTag[1] === '1' : undefined,
+                    inviteEpoch: addMetaTrusted && addInviteEpochTag ? (parseInt(addInviteEpochTag[1], 10) || 0) : undefined,
+                    shareHistory: addMetaTrusted && addShareHistTag ? addShareHistTag[1] === '1' : undefined,
+                    nameAuthoritative: addMetaFresh && (trustBootstrap
+                        || (!!existingGroup && existingGroup.createdBy === senderPubkey))
                 }
             );
             const grpAdd = this.groupConversations.get(groupId);
@@ -1633,14 +1654,7 @@ Object.assign(NYM.prototype, {
                 newMembers.length = 0;
                 newMembers.push(...kept);
             }
-            if (trustBootstrap && grpAdd && addAvatar && !grpAdd.avatar) grpAdd.avatar = addAvatar;
-            if (trustBootstrap && grpAdd && addBanner && !grpAdd.banner) grpAdd.banner = addBanner;
-            if (trustBootstrap && grpAdd && addDesc && !grpAdd.description) grpAdd.description = addDesc;
             if (grpAdd) this._noteGroupMetaBy(grpAdd, addMetaBefore, senderPubkey);
-            if (trustBootstrap && grpAdd && addAllowInvTag) grpAdd.allowMemberInvites = addAllowInvTag[1] !== '0';
-            if (trustBootstrap && grpAdd && addInviteEnabledTag) grpAdd.inviteEnabled = addInviteEnabledTag[1] === '1';
-            if (trustBootstrap && grpAdd && addInviteEpochTag) grpAdd.inviteEpoch = parseInt(addInviteEpochTag[1], 10) || 0;
-            if (trustBootstrap && grpAdd && addShareHistTag) grpAdd.shareHistory = addShareHistTag[1] === '1';
             if (trustBootstrap && grpAdd && !existingGroup && typeof this._gtApplyMetaTags === 'function') {
                 this._gtApplyMetaTags(grpAdd, rumor, Math.floor(rumor.created_at || 0));
             }
@@ -1703,6 +1717,11 @@ Object.assign(NYM.prototype, {
             if (removedPubkey === this.pubkey) {
                 const removedFrom = shownGroupName();
                 this.leftGroups.add(groupId);
+                if (this.leftGroupTimes) {
+                    const removedAt = Math.min(Math.floor(rumor.created_at || 0), Math.floor(Date.now() / 1000));
+                    if (removedAt > (this.leftGroupTimes.get(groupId) || 0)) this.leftGroupTimes.set(groupId, removedAt);
+                    try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(this.leftGroupTimes))); } catch { }
+                }
                 this._saveLeftGroups();
                 this.groupConversations.delete(groupId);
                 if (typeof this._callGroupRemoved === 'function') this._callGroupRemoved(groupId);
@@ -1743,10 +1762,15 @@ Object.assign(NYM.prototype, {
                     this._saveGroupConversations();
                     this._debouncedNostrSettingsSave();
                     this.updateGroupConversationUI(groupId);
-                    if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
-                        this.openGroup(groupId);
-                        this.displaySystemMessage(this.uiText(`{removedName} was removed by {removerName}.`, { removedName, removerName }), 'system', { feed: true, people: [removedPubkey, senderPubkey] });
-                    }
+                    if (!isOwn && this.inPMMode && this.currentGroup === groupId) this.openGroup(groupId);
+                    const noticeX = ((rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'x' && t[1]) || [])[1] || rumor.id || event.id;
+                    this._storeGroupNotice(groupId, {
+                        key: noticeX, ts: rumor.created_at, type: banTag ? 'ban' : 'remove', target: removedPubkey, actor: senderPubkey,
+                        people: removerMask ? [removedPubkey] : [removedPubkey, senderPubkey], historical: fromD1,
+                        content: banTag
+                            ? this.uiText('{kickedName} was banned by {kickerName}.', { kickedName: removedName, kickerName: removerName })
+                            : this.uiText('{removedName} was removed by {removerName}.', { removedName, removerName })
+                    });
                 }
             }
             return;
@@ -1943,7 +1967,7 @@ Object.assign(NYM.prototype, {
         this._recordMsgVerification(nymMsgId, senderVerified);
 
         if (typeof this._gtAbsorbLive === 'function' && this._gtAbsorbLive(msg, list)) return;
-        list.push(msg);
+        if (!inviteForKnownGroup) list.push(msg);
         list.sort((a, b) => {
             return this._compareMessages(a, b);
         });
@@ -1958,10 +1982,12 @@ Object.assign(NYM.prototype, {
             || (!grpForRoster.createdBy && grpForRoster.members.filter(pk => pk !== this.pubkey).length === 0)
             || grpForRoster.members.includes(senderPubkey);
         const touchesGroup = !blockedMember && !(groupHidden && !grpForRoster);
+        const staleBootstrap = (msgType === 'group-invite' || msgType === 'group-add-member')
+            && !!grpForRoster && (grpForRoster.metaUpdatedAt || 0) > Math.floor(rumor.created_at || 0);
         if (touchesGroup) {
             this.addGroupConversation(groupId, groupName, rosterFromSender ? memberPubkeys : [], groupHidden ? 0 : tsSec * 1000, {
                 memberAt: tsSec,
-                nameAuthoritative: !!grpForRoster && grpForRoster.createdBy === senderPubkey,
+                nameAuthoritative: !staleBootstrap && !!grpForRoster && grpForRoster.createdBy === senderPubkey,
                 nameBy: senderPubkey
             });
         }
@@ -1978,6 +2004,7 @@ Object.assign(NYM.prototype, {
             this._debouncedNostrSettingsSave(15000);
         }
         if (!groupHidden) this.moveGroupToTop(groupId, tsSec * 1000);
+        if (inviteForKnownGroup) return;
 
         if (!isOwn) {
             const convTypers = this.typingUsers.get(groupConvKey);
@@ -2716,11 +2743,7 @@ Object.assign(NYM.prototype, {
 
     // Archive every group rumor, including control events, so a new device can reconstruct group state.
     _isArchivableGroupRumor(rumor) {
-        if (!rumor || (rumor.kind !== 14 && rumor.kind !== 7)) return false;
-        // group-metadata is empty-content; never archive it or it restores as a blank bubble.
-        const typeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type');
-        if (typeTag && typeTag[1] === 'group-metadata') return false;
-        return true;
+        return !!rumor && (rumor.kind === 14 || rumor.kind === 7);
     },
 
     // Self-addressed D1 copy so group chats restore on other devices; local-key path only.
@@ -3175,7 +3198,34 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.updateGroupConversationUI(groupId);
         this.openGroup(groupId);
-        this.displaySystemMessage(content, 'system', { feed: true, people: [pubkey] });
+        const noticeText = ban
+            ? this.uiText('{kickedName} was banned by {kickerName}.', { kickedName, kickerName })
+            : this.uiText('{kickedName} was removed by {kickerName}.', { kickedName, kickerName });
+        this._storeGroupNotice(groupId, {
+            key: nymMessageId, ts: now, type: ban ? 'ban' : 'remove', target: pubkey, actor: this.pubkey, people: [pubkey],
+            content: noticeText, quiet: true
+        });
+        this.displaySystemMessage(noticeText, 'system', { feed: true, people: [pubkey] });
+    },
+
+    _storeGroupNotice(groupId, n) {
+        if (!this.groupConversations.has(groupId) || this.leftGroups.has(groupId)) return null;
+        const convKey = this.getGroupConversationKey(groupId);
+        const list = this.pmMessages.get(convKey) || [];
+        const id = 'notice-' + n.key;
+        if (list.some((m) => m.id === id)) return null;
+        const sec = Math.floor(n.ts || 0) || Math.floor(Date.now() / 1000);
+        const msg = {
+            id, isNotice: true, notice: { type: n.type, target: n.target, actor: n.actor }, people: n.people || [],
+            content: n.content, author: '', pubkey: '', created_at: sec, timestamp: new Date(sec * 1000),
+            isPM: true, isGroup: true, groupId, conversationKey: convKey, isOwn: false, isHistorical: !!n.historical
+        };
+        list.push(msg);
+        list.sort((a, b) => this._compareMessages(a, b));
+        this.pmMessages.set(convKey, list);
+        this.persistPMMessages(convKey);
+        if (!n.quiet && this.inPMMode && this.currentGroup === groupId) this.displayMessage(msg);
+        return msg;
     },
 
     // Owner-only; does not re-invite the user.
@@ -3300,7 +3350,15 @@ Object.assign(NYM.prototype, {
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.updateGroupConversationUI(groupId);
-        this.displaySystemMessage(content, 'system', { feed: true, people: [pubkey] });
+        this.displaySystemMessage(this._groupRoleFeedLine(spec, targetName, actorName), 'system', { feed: true, people: [pubkey] });
+    },
+
+    _groupRoleFeedLine(spec, target, actor) {
+        const args = { target, actor };
+        if (spec.log === 'promote-admin') return this.uiText('{target} was promoted to admin by {actor}.', args);
+        if (spec.log === 'revoke-admin') return this.uiText("{target}'s admin role was revoked by {actor}.", args);
+        if (spec.log === 'promote') return this.uiText('{target} was promoted to moderator by {actor}.', args);
+        return this.uiText("{target}'s moderator role was revoked by {actor}.", args);
     },
 
 
@@ -3549,7 +3607,7 @@ Object.assign(NYM.prototype, {
         if (!trimmed || trimmed === group.name) return;
         const before = this._groupMetaSnapshot(group);
         group.name = trimmed;
-        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000), before);
+        this._stampGroupMeta(group, this.pubkey, this._nextGroupMetaTs(group, Math.floor(Date.now() / 1000)), before);
         this.groupConversations.set(groupId, group);
         this.updateGroupConversationUI(groupId);
         this._saveGroupConversations();
@@ -3570,7 +3628,7 @@ Object.assign(NYM.prototype, {
         if (trimmed === (group.description || null)) return;
         const before = this._groupMetaSnapshot(group);
         group.description = trimmed;
-        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000), before);
+        this._stampGroupMeta(group, this.pubkey, this._nextGroupMetaTs(group, Math.floor(Date.now() / 1000)), before);
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3588,7 +3646,7 @@ Object.assign(NYM.prototype, {
         const next = !!allow;
         if (next === (group.allowMemberInvites !== false)) return;
         group.allowMemberInvites = next;
-        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000));
+        this._stampGroupMeta(group, this.pubkey, this._nextGroupMetaTs(group, Math.floor(Date.now() / 1000)));
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3609,7 +3667,7 @@ Object.assign(NYM.prototype, {
         const next = !!enabled;
         if (next === (group.shareHistory === true)) return;
         group.shareHistory = next;
-        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000));
+        this._stampGroupMeta(group, this.pubkey, this._nextGroupMetaTs(group, Math.floor(Date.now() / 1000)));
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3629,7 +3687,7 @@ Object.assign(NYM.prototype, {
         const next = !!enabled;
         if (next === !!group.inviteEnabled) return;
         group.inviteEnabled = next;
-        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000));
+        this._stampGroupMeta(group, this.pubkey, this._nextGroupMetaTs(group, Math.floor(Date.now() / 1000)));
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3648,7 +3706,7 @@ Object.assign(NYM.prototype, {
             return;
         }
         group.inviteEpoch = (group.inviteEpoch || 0) + 1;
-        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000));
+        this._stampGroupMeta(group, this.pubkey, this._nextGroupMetaTs(group, Math.floor(Date.now() / 1000)));
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3661,7 +3719,7 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         const before = this._groupMetaSnapshot(group);
         group[kind] = url;
-        this._stampGroupMeta(group, this.pubkey, Math.floor(Date.now() / 1000), before);
+        this._stampGroupMeta(group, this.pubkey, this._nextGroupMetaTs(group, Math.floor(Date.now() / 1000)), before);
         this.groupConversations.set(groupId, group);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
@@ -3998,6 +4056,10 @@ Object.assign(NYM.prototype, {
         const by = data ? this._cleanGroupMetaBy(data.metaBy) : null;
         if (by) return by[field] || '';
         return data && typeof data.metaUpdatedBy === 'string' ? data.metaUpdatedBy : '';
+    },
+
+    _nextGroupMetaTs(group, now) {
+        return Math.max(now, ((group && group.metaUpdatedAt) || 0) + 1);
     },
 
     _stampGroupMeta(group, pubkey, ts, before) {
@@ -4476,7 +4538,7 @@ Object.assign(NYM.prototype, {
             }
         }
         const nameCls = (!customAvatar && otherMembers.length > 0) ? 'nm-grp-ml8' : '';
-        const memberLabel = `<div class="channel-location"><span class="loc-country">${this.abbreviateNumber(group.members.length)} members</span></div>`;
+        const memberLabel = `<div class="channel-location"><span class="loc-country">${this.escapeHtml(this.uiText('{n} members', { n: this.abbreviateNumber(group.members.length) }))}</span></div>`;
         const descLine = window.NymGroupTools ? window.NymGroupTools.descriptionLine((typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''))) : '';
         const descHtml = descLine
             ? `<div class="gt-desc-line" role="button" tabindex="0" data-action="gtShowDescription" data-group-id="${this.escapeHtml(groupId)}" title="${this.escapeHtml(descLine)}">${this.escapeHtml(descLine)}</div>`
@@ -4645,13 +4707,18 @@ Object.assign(NYM.prototype, {
         }
 
         document.getElementById('grpCtxName').textContent = (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'));
-        const capText = (x) => (typeof this.uiText === 'function' ? this.uiText(x) : x);
+        const capText = (x, a) => (typeof this.uiText === 'function' ? this.uiText(x, a) : x);
         const capMax = this.MAX_GROUP_MEMBERS || 100;
         const capCount = group.members.length;
         const capFull = capCount >= capMax;
         const capEl = document.getElementById('grpCtxMemberCount');
-        capEl.textContent = capText('{n}/{max} members').split('{n}').join(String(capCount)).split('{max}').join(String(capMax))
-            + (capFull ? ' · ' + capText('Full') : '');
+        const capParts = [document.createTextNode(capText('{n}/{max} members', { n: capCount, max: capMax }).split('{n}').join(String(capCount)).split('{max}').join(String(capMax)))];
+        if (capFull) {
+            const capFullEl = document.createElement('span');
+            capFullEl.textContent = capText('Full');
+            capParts.push(document.createTextNode(' · '), capFullEl);
+        }
+        capEl.replaceChildren(...capParts);
         capEl.classList.toggle('group-full', capFull);
         document.getElementById('grpCtxBio').textContent = (typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''));
 
@@ -5268,14 +5335,14 @@ Object.assign(NYM.prototype, {
 
     toggleGroupMentionsOnly(enabled) {
         this.groupNotifyMentionsOnly = enabled;
-        localStorage.setItem('nym_group_notify_mentions_only', String(enabled));
+        try { localStorage.setItem('nym_group_notify_mentions_only', String(enabled)); } catch (_) { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
     // Thread-scoped twin of toggleGroupMentionsOnly, applying to replies in any thread.
     toggleThreadMentionsOnly(enabled) {
         this.threadNotifyMentionsOnly = enabled;
-        localStorage.setItem('nym_thread_notify_mentions_only', String(enabled));
+        try { localStorage.setItem('nym_thread_notify_mentions_only', String(enabled)); } catch (_) { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 

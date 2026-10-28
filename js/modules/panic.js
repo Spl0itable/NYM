@@ -405,7 +405,7 @@ Object.assign(NYM.prototype, {
       }
     } catch (e) {}
     try {
-      const names = new Set(['nym-cache', 'nym-accounts'].concat(accountDbs));
+      const names = new Set(['nym-cache', 'nym-accounts', 'nym-map'].concat(accountDbs));
       try {
         if (indexedDB.databases) {
           const dbs = (await indexedDB.databases()) || [];

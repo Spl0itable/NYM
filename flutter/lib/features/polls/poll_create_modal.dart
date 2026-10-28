@@ -10,6 +10,7 @@ import '../i18n/i18n.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/dialog_button.dart';
+import '../duo/duo_rail.dart';
 
 /// Poll form is valid with a non-empty question and at least 2 non-empty options.
 bool pollFormValid(String question, List<String> options) {
@@ -237,7 +238,9 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
       );
 
   Widget _closeButton(NymColors c) {
-    return InkWell(
+    return DuoRailSwap.close(
+      onTap: () => Navigator.of(context).pop(),
+      child: InkWell(
       onTap: () => Navigator.of(context).pop(),
       borderRadius: const BorderRadius.all(Radius.circular(16)),
       child: Container(
@@ -252,6 +255,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
         child: Icon(Icons.close,
             semanticLabel: tr('Close'), size: 16, color: c.textDim),
       ),
+    ),
     );
   }
 

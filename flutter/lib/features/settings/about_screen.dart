@@ -18,6 +18,8 @@ import '../../models/nostr_event.dart';
 import '../../services/api/api_client.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../globe/geo_places.dart';
+import '../globe/street_layer.dart';
 import '../i18n/i18n.dart';
 import '../share/share_actions.dart';
 import '../share/share_sheet.dart';
@@ -427,6 +429,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                     _links(c),
                     _shareAppRow(c),
                     _license(c),
+                    _mapCredits(c),
                     const SizedBox(height: 20),
                     Container(height: 1, color: c.glassBorder),
                     const SizedBox(height: 20),
@@ -899,7 +902,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       padding: const EdgeInsets.only(top: 14),
       child: ShareActionRow(
         key: const ValueKey('about-share-app'),
-        svg: NymIcons.phone,
+        svg: NymIcons.shareNodes,
         label: tr('Share Nymchat app'),
         onTap: () => unawaited(launch(context)),
       ),
@@ -916,6 +919,24 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
           _creditLink(c, kAboutCopyright, kCopyrightUrl),
           Text(' · ', style: TextStyle(color: c.textDim, fontSize: 12)),
           _creditLink(c, tr('Licensed under AGPL-3.0'), kLicenseUrl),
+        ],
+      ),
+    );
+  }
+
+  Widget _mapCredits(NymColors c) {
+    return Padding(
+      key: const ValueKey('about-map-credits'),
+      padding: const EdgeInsets.only(top: 6),
+      child: Column(
+        children: [
+          Text(kGeoPlacesCredit,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: c.textDim, fontSize: 12)),
+          KeyedSubtree(
+            key: const ValueKey('about-street-odbl'),
+            child: _creditLink(c, kStreetOdbl, kStreetOdblUrl),
+          ),
         ],
       ),
     );

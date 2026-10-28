@@ -218,6 +218,7 @@ class AccountLogic {
     'anonymous',
   ];
   static const String cacheDb = 'nym-cache';
+  static const String mapDb = 'nym-map';
 
   static const Set<String> deviceKeys = {
     'nym_theme',
@@ -741,6 +742,7 @@ class AccountLogic {
       final a = before.byId(e.substring(5));
       if (a != null) out.add(dbName(cacheDb, a.ns));
     }
+    if (out.isNotEmpty) out.add(mapDb);
     return out;
   }
 

@@ -9,6 +9,7 @@ import '../nymbot/bot_runs.dart' show botReplyToFromTags;
 import '../p2p/p2p_models.dart';
 import 'pm_support_tokens.dart';
 import 'upload_activity.dart';
+import '../nymbot/long_text.dart';
 
 /// Socket-free NIP-17 PM logic: rumor construction, rumor-to-[Message] mapping, receipt and typing parsing.
 class PmLogic {
@@ -102,10 +103,17 @@ class PmLogic {
     if ((rumor['kind'] as num?)?.toInt() != EventKind.dmRumor) return null;
     final senderPubkey = rumor['pubkey'] as String?;
     if (senderPubkey == null || senderPubkey.isEmpty) return null;
-    final content = rumor['content'];
-    if (content is! String) return null;
+    final raw = rumor['content'];
+    if (raw is! String) return null;
 
     final tags = _tags(rumor);
+    var content = raw;
+    final longPart = LongText.partOf(tags);
+    if (longPart != null) {
+      final joined = LongText.join('$senderPubkey:${longPart.x}', longPart.index, longPart.total, raw);
+      if (joined == null) return null;
+      content = joined;
+    }
     final peer = senderPubkey == selfPubkey
         ? _tagValue(tags, 'p') ?? senderPubkey
         : senderPubkey;

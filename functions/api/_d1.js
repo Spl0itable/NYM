@@ -258,21 +258,24 @@ async function repairBotWraps(db) {
 }
 
 // Returns `ok` separately: "not stored" and "store unreachable" differ, and only the latter justifies a relay fetch.
+var BOT_WRAPS_KEEP_MS = 90 * 86400 * 1000;
+
 export async function botWrapsGet(db, pk, ids) {
   var out = {};
   if (!hasD1(db)) return { ok: false, rows: out };
   if (!ids || ids.length === 0) return { ok: true, rows: out };
   var ph = ids.map(function () { return "?"; }).join(",");
-  var sql = "SELECT id, json, root, msg, misses FROM botpm_wraps WHERE pubkey = ? AND id IN (" + ph + ")";
+  var sql = "SELECT id, json, root, msg, misses FROM botpm_wraps WHERE pubkey = ? AND id IN (" + ph + ") AND stored_at >= ?";
+  var keepFloor = Date.now() - BOT_WRAPS_KEEP_MS;
   var rs = null;
   try {
-    rs = await db.prepare(sql).bind(pk, ...ids).all();
+    rs = await db.prepare(sql).bind(pk, ...ids, keepFloor).all();
   } catch (e) {
     // A missing table or missing scope columns is repairable and must not disable the cache.
     noteWrapErr(e);
     await repairBotWraps(db);
     try {
-      rs = await db.prepare(sql).bind(pk, ...ids).all();
+      rs = await db.prepare(sql).bind(pk, ...ids, keepFloor).all();
     } catch (e2) {
       noteWrapErr(e2);
       return { ok: false, rows: out };
@@ -330,11 +333,11 @@ export async function botWrapsPut(db, pk, entries, keepIds) {
       "AND id NOT IN (SELECT j.value FROM (SELECT ids FROM botpm_turns WHERE pubkey = ? ORDER BY at DESC LIMIT 200) t, json_each(t.ids) j)"
     ).bind(pk, ...keepIds, String(pk).toLowerCase()));
   }
-  if (!stmts.length) return;
+  if (!stmts.length) return true;
   try {
     await db.batch(stmts);
     botWrapsDiag.ok++;
-    return;
+    return true;
   } catch (e) {
     noteWrapErr(e);
   }
@@ -342,8 +345,10 @@ export async function botWrapsPut(db, pk, entries, keepIds) {
   try {
     await db.batch(stmts);
     botWrapsDiag.ok++;
+    return true;
   } catch (e2) {
     noteWrapErr(e2);
+    return false;
   }
 }
 

@@ -1,5 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'storage_guard.dart';
+
 /// SharedPreferences wrapper mirroring the PWA's localStorage access pattern.
 class KeyValueStore {
   KeyValueStore(this._prefs);
@@ -14,7 +16,30 @@ class KeyValueStore {
   String? getString(String key) => _prefs.getString(key);
 
   Future<void> setString(String key, String value) =>
-      _prefs.setString(key, value);
+      guardedSetString(_prefs, key, value);
+
+  static Future<void> guardedSetString(
+      SharedPreferences prefs, String key, String value) async {
+    final r = await StorageGuard.write(
+      key: key,
+      value: value,
+      lang: _currentLang(prefs),
+      set: prefs.setString,
+      remove: prefs.remove,
+      keys: prefs.getKeys,
+      sizeOf: (k) => (prefs.get(k)?.toString() ?? '').length,
+    );
+    if (!r.ok && r.user) StorageGuard.reportFull(key);
+  }
+
+  static String _currentLang(SharedPreferences prefs) {
+    try {
+      final v = prefs.get('nym_ui_language');
+      return v is String ? v : '';
+    } catch (_) {
+      return '';
+    }
+  }
 
   Future<void> remove(String key) => _prefs.remove(key);
 
@@ -33,7 +58,7 @@ class KeyValueStore {
   }
 
   Future<void> setBool(String key, bool value) =>
-      _prefs.setString(key, value ? 'true' : 'false');
+      guardedSetString(_prefs, key, value ? 'true' : 'false');
 
   int getInt(String key, {required int defaultValue}) {
     final v = _prefs.getString(key);
@@ -42,7 +67,7 @@ class KeyValueStore {
   }
 
   Future<void> setInt(String key, int value) =>
-      _prefs.setString(key, value.toString());
+      guardedSetString(_prefs, key, value.toString());
 
   Set<String> getStringSet(String key) {
     final v = _prefs.getString(key);

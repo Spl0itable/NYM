@@ -6,6 +6,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../widgets/context_menu/context_menu_actions.dart';
 import '../../widgets/nym_icons.dart';
 import '../messages/format/message_content.dart';
+import '../shortcuts/escape_layers.dart';
 import '../../widgets/anchored_popup.dart';
 import '../../widgets/common/nym_tooltip.dart';
 
@@ -313,7 +314,9 @@ void showQuickReactPopup(
 }) {
   final overlay = Overlay.of(context, rootOverlay: true);
   late OverlayEntry entry;
+  EscapeLayer? layer;
   void close() {
+    EscapeLayers.remove(layer);
     if (entry.mounted) entry.remove();
   }
 
@@ -353,6 +356,7 @@ void showQuickReactPopup(
     ),
   );
   overlay.insert(entry);
+  layer = EscapeLayers.add(EscapeRank.quickReact, () => entry.mounted, close);
 }
 
 /// Dim scrim, pill and optional context menu, which flips above the pill on overflow.

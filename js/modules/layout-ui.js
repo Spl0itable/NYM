@@ -773,7 +773,7 @@
         if (kind === 'channel') return '#' + id;
         if (kind === 'group') {
             var g = n.groupConversations && n.groupConversations.get(id);
-            return g ? (typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || 'Group')) : ui('Group');
+            return g ? (typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || ui('Group'))) : ui('Group');
         }
         if (kind === 'pm') {
             var nymName = typeof n.getNymFromPubkey === 'function' ? n.getNymFromPubkey(id) : '';
@@ -946,7 +946,10 @@
             var h = document.createElement('div');
             h.className = 'group-ctx-section-title';
             h.dataset.section = sec.key;
-            h.textContent = ui(SECTION_TITLES[sec.key]) + ' · ' + sec.items.length;
+            var hl = document.createElement('span');
+            hl.textContent = ui(SECTION_TITLES[sec.key]);
+            h.textContent = '';
+            h.append(hl, ' · ' + sec.items.length);
             frag.appendChild(h);
             sec.items.forEach(function (i) { frag.appendChild(rows[i]); });
         });
@@ -1286,7 +1289,7 @@
         return typeof n.channelGeohashKey === 'function' ? n.channelGeohashKey(n.currentChannel, n.currentGeohash) : '';
     }
 
-    function uiT(n, s) { return n && typeof n.uiText === 'function' ? n.uiText(s) : s; }
+    function uiT(n, s, a) { return n && typeof n.uiText === 'function' ? n.uiText(s, a) : (a ? s.replace(/\{(\w+)\}/g, function (m, k) { return a[k] != null ? String(a[k]) : m; }) : s); }
 
     function textOf(el) { return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : ''; }
 
@@ -1356,7 +1359,7 @@
             title.textContent = g ? (typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || uiT(n, 'Group'))) : textOf(src.querySelector('.group-name-text'));
             var count = g ? (typeof n.abbreviateNumber === 'function' ? n.abbreviateNumber(g.members.length) : g.members.length) : '';
             var desc = g && window.NymGroupTools ? window.NymGroupTools.descriptionLine((typeof n._groupDescription === 'function' ? n._groupDescription(g) : (g.description || ''))) : '';
-            subText = joinSub([count !== '' ? uiT(n, count + ' members') : '', desc ? userPart(desc) : enc]);
+            subText = joinSub([count !== '' ? uiT(n, '{count} members', { count: count }) : '', desc ? userPart(desc) : enc]);
         } else if (kind === 'geohash') {
             av.innerHTML = n._channelGlyphSvg(true, 18);
             title.textContent = '#' + geoKey(n);

@@ -2635,8 +2635,16 @@ class StorageSync {
     return Duration(milliseconds: r.waitMs);
   }
 
+  bool _depositsHalted = false;
+
+  void haltDeposits() {
+    _depositsHalted = true;
+    _depositTimer?.cancel();
+    _depositTimer = null;
+  }
+
   void _armDepositRetry() {
-    if (_depositQueue.isEmpty) return;
+    if (_depositsHalted || _depositQueue.isEmpty) return;
     final backlog = _depositDelay(true);
     var wait = _depositRetryWait();
     final pace = _depositPaceWait();
@@ -2647,6 +2655,7 @@ class StorageSync {
 
   Future<void> _flushDeposits({bool rearm = true}) async {
     _depositTimer = null;
+    if (_depositsHalted) return;
     final now = _nowMs();
     final before = _depositQueue.length;
     _depositQueue.removeWhere((e) => now - e.at > kPmDepositMaxAgeMs);
@@ -2698,7 +2707,8 @@ class StorageSync {
   Future<void> flushDeposits() async {
     _depositTimer?.cancel();
     _depositTimer = null;
-    while (_depositQueue.isNotEmpty &&
+    while (!_depositsHalted &&
+        _depositQueue.isNotEmpty &&
         _depositRetryWait() == Duration.zero &&
         _depositPaceWait() == Duration.zero) {
       await _flushDeposits(rearm: false);

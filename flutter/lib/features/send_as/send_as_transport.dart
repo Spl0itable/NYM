@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../../core/constants/relays.dart';
 import '../../models/nostr_event.dart';
+import '../../services/api/api_config.dart';
 import '../../services/relay/relay_pool.dart';
 import '../../services/relay/relay_pool_proxy.dart';
 
@@ -33,15 +34,16 @@ class PoolSendAsTransport implements SendAsTransport {
     PoolTransport Function(
             bool direct, List<String> relays, List<String> blocked)?
         pool,
-  }) : _poolFactory = pool ?? _defaultPool;
+  }) : _poolFactory = pool ?? defaultPool;
 
-  static PoolTransport _defaultPool(
+  static PoolTransport defaultPool(
           bool direct, List<String> relays, List<String> blocked) =>
       direct
           ? RelayPool(
               relays: relays,
               writeOnlyRelays: RelayConfig.writeOnlyRelays,
               blockedRelays: blocked,
+              appRelayVia: ApiConfig.relayPoolUrl(),
             )
           : RelayPoolProxy(
               relays: relays,

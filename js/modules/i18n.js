@@ -1,4 +1,6 @@
 // User-generated subtrees that must never be machine translated, for text nodes and attributes alike.
+const NYM_I18N_CATALOG = '00000000';
+
 const NYM_I18N_SKIP_SELECTOR = [
     '#messagesScroller', '#autocompleteDropdown', '#messageInput',
     '.channel-name', '.pm-name', '.group-name', '.channel-title', '.channel-title-line',
@@ -12,6 +14,16 @@ const NYM_I18N_SKIP_SELECTOR = [
     // Transient status strings that interpolate nicknames inline.
     '#typingIndicator', '.typing-indicator', '.typing-indicator-text', '.cv-typing',
     '.notification-item-author', '.file-offer-name', '.shop-item-name',
+    '.messages-container', '.messages-list', '.message[data-message-id]',
+    '.cv-col-title', '.cv-tab-title', '.cv-picker-row-label',
+    '.row-preview-name', '.row-preview-body', '.blocked-item > span:first-child',
+    '#messageAnnouncer', '.nym-toast-title', '.nym-toast-meta', '.nym-toast-body',
+    '.quote-preview-text', '.us-row', '.message-content',
+    '.gx-peek-list', '.gx-step', '.gx-row', '.gx-result',
+    '.sl-preview', '.sl-time', '.ct-version-time', '.ct-saved-chat', '.ct-saved-time',
+    '.gt-inv-name', '.gt-inv-desc',
+    '.notif-group-title', '.notification-item-body', '.notification-item-context',
+    '.context-menu-bio', '.share-preview-from', '.share-preview-title', '.nearby-card-title',
     '.command-name', '.help-cmd-name', '.translate-dropdown-name',
     '.translate-lang-option', '.emoji-name', '.emoji-option', '.hashtag',
     // Language names are endonyms and must never be translated.
@@ -51,13 +63,24 @@ Object.assign(NYM.prototype, {
     _i18nLoadCache(lang) {
         const store = this._i18nCacheStore();
         if (store[lang]) return store[lang];
-        let obj = {};
+        const obj = {};
         try {
             const raw = localStorage.getItem('nym_ui_i18n_' + lang);
-            if (raw) { const p = JSON.parse(raw); if (p && typeof p === 'object') obj = p; }
+            if (raw) {
+                const p = JSON.parse(raw);
+                if (p && typeof p === 'object' && p.v === this._i18nCacheVersion() && p.m && typeof p.m === 'object') {
+                    for (const [k, v] of Object.entries(p.m)) if (typeof v === 'string') obj[k] = v;
+                } else {
+                    localStorage.removeItem('nym_ui_i18n_' + lang);
+                }
+            }
         } catch (_) { }
         store[lang] = obj;
         return obj;
+    },
+
+    _i18nCacheVersion() {
+        return 'c' + NYM_I18N_CATALOG + (typeof NYMCHAT_BUILD === 'number' ? '.b' + NYMCHAT_BUILD : '');
     },
 
     // Concurrent callers share one fetch; a failed fetch is not memoized so a later switch retries.
@@ -73,6 +96,7 @@ Object.assign(NYM.prototype, {
                 const pack = await res.json();
                 if (!pack || typeof pack !== 'object') return;
                 const cache = this._i18nLoadCache(lang);
+                (this._i18nPackKeys || (this._i18nPackKeys = {}))[lang] = new Set(Object.keys(pack));
                 let added = 0;
                 for (const [key, translated] of Object.entries(pack)) {
                     if (typeof translated !== 'string' || !translated) continue;
@@ -115,10 +139,39 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _i18nPruneOtherCaches(keep) {
+        const prefixes = ['nym_ui_i18n_', 'nym_cmd_i18n_'];
+        const drop = [];
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (!k) continue;
+                const p = prefixes.find((x) => k.startsWith(x));
+                if (p && k.slice(p.length) !== keep) drop.push(k);
+            }
+        } catch (_) { return; }
+        for (const k of drop) { try { localStorage.removeItem(k); } catch (_) { } }
+        for (const store of [this._i18nCache, this._cmdI18nStore]) {
+            if (!store) continue;
+            for (const l of Object.keys(store)) if (l !== keep) delete store[l];
+        }
+    },
+
+    I18N_RUNTIME_MAX: 1000,
+
+    _i18nTrimRuntime(lang, obj) {
+        const pack = this._i18nPackKeys && this._i18nPackKeys[lang];
+        if (!pack) return;
+        const extra = [];
+        for (const k of Object.keys(obj)) if (!pack.has(k)) extra.push(k);
+        for (let i = 0; i < extra.length - this.I18N_RUNTIME_MAX; i++) delete obj[extra[i]];
+    },
+
     _i18nWriteCache(lang) {
         const obj = this._i18nCacheStore()[lang];
         if (!obj) return;
-        try { localStorage.setItem('nym_ui_i18n_' + lang, JSON.stringify(obj)); } catch (_) { }
+        this._i18nTrimRuntime(lang, obj);
+        try { localStorage.setItem('nym_ui_i18n_' + lang, JSON.stringify({ v: this._i18nCacheVersion(), m: obj })); } catch (_) { }
     },
 
     i18nSendable(text) {
@@ -536,6 +589,7 @@ Object.assign(NYM.prototype, {
 
         if (this._i18nLang && this._i18nLang !== lang) this._i18nResetQueue();
         this._i18nLang = lang;
+        this._i18nPruneOtherCaches(lang);
 
         document.documentElement.setAttribute('lang', lang);
         this._i18nLoadCache(lang);

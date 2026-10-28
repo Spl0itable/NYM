@@ -351,7 +351,7 @@
         },
 
         _botAnonAutoRoute(action) {
-            if (!this.botAnonReady()) return false;
+            if (!this.botAnonEnabled()) return false;
             return action === 'pm' || action === 'balance' || action === 'clear-history' ||
                 action === 'pm-cancel' || action === 'pm-steer' || action === 'pm-claim' || action === 'pm-runs';
         },
@@ -425,6 +425,8 @@
                 content,
                 pubkey: id.pk
             };
+            const longPieces = this._botLongPieces(content, recipientPubkey);
+            if (longPieces) this._botLongRumor(rumor, longPieces);
             const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
                 ? now + this.settings.dmTTLSeconds
                 : null;
@@ -433,10 +435,29 @@
                 try { await this.ensurePqAnnouncement(recipientPubkey); } catch (_) { }
             }
             const plan = this.pqPmPlan(recipientPubkey);
+            const lead = longPieces ? await this._botLongLead(rumor, longPieces, async (part) => {
+                const w = plan.kemPk
+                    ? await this.pqWrapForPeerAsync(plan.pq2, part, id.sk, recipientPubkey, plan.kemPk, expirationTs)
+                    : await this.nip59WrapEventAsync(part, id.sk, recipientPubkey, expirationTs);
+                if (typeof this._markAnonLane === 'function') this._markAnonLane([w.id]);
+                this.sendDMToRelays(['EVENT', w]);
+                this._recordGiftWrapId(nymMessageId, w.id);
+                return w;
+            }, async (part) => {
+                const k = this._botAnonKem(id);
+                const w = k
+                    ? await this.pqWrapForPeerAsync(true, part, id.sk, id.pk, k.publicKey, expirationTs)
+                    : await this.nip59WrapEventAsync(part, id.sk, id.pk, expirationTs);
+                if (typeof this._markAnonLane === 'function') this._markAnonLane([w.id]);
+                this.sendDMToRelays(['EVENT', w]);
+                this._recordGiftWrapId(nymMessageId, w.id);
+                this._botAnonArchive(w);
+            }) : null;
             const wrapped = plan.kemPk
                 ? await this.pqWrapForPeerAsync(plan.pq2, rumor, id.sk, recipientPubkey, plan.kemPk, expirationTs)
                 : await this.nip59WrapEventAsync(rumor, id.sk, recipientPubkey, expirationTs);
             if (typeof this._markAnonLane === 'function') this._markAnonLane([wrapped.id]);
+            if (lead) this._botLongNote(wrapped, lead);
             this.sendDMToRelays(['EVENT', wrapped]);
             this._recordGiftWrapId(nymMessageId, wrapped.id);
 
@@ -965,7 +986,7 @@
             el.textContent = 'Checking balances…';
             const b = await this.botAnonBalances();
             const fmt = (v) => (typeof v === 'number' ? String(v) : '—');
-            el.textContent = `Anonymous: ${fmt(b.anon)} standard · ${fmt(b.anonPro)} Pro. Your identity: ${fmt(b.identity)} standard · ${fmt(b.identityPro)} Pro.`;
+            el.textContent = this.uiText('Anonymous: {anon} standard · {anonPro} Pro. Your identity: {identity} standard · {identityPro} Pro.', { anon: fmt(b.anon), anonPro: fmt(b.anonPro), identity: fmt(b.identity), identityPro: fmt(b.identityPro) });
         },
 
         async botAnonToggleFromModal(on) {
@@ -989,11 +1010,14 @@
             this._setBotAnonStatus('Moving credits…');
             try {
                 const credited = await this.botAnonMoveCredits(amount, tier);
-                this._setBotAnonStatus(`Moved ${credited} ${tier === 'pro' ? 'Pro ' : ''}credit${credited === 1 ? '' : 's'} to your anonymous key.`, 'ok');
+                const movedText = tier === 'pro'
+                    ? (credited === 1 ? 'Moved {n} Pro credit to your anonymous key.' : 'Moved {n} Pro credits to your anonymous key.')
+                    : (credited === 1 ? 'Moved {n} credit to your anonymous key.' : 'Moved {n} credits to your anonymous key.');
+                this._setBotAnonStatus(this.uiText(movedText, { n: credited }), 'ok');
                 if (amountEl) amountEl.value = '';
                 this._refreshBotAnonBalances();
             } catch (e) {
-                this._setBotAnonStatus(e.message || 'Could not move credits.', 'warn');
+                this._setBotAnonStatus(e && e.message ? this.uiText('Could not move credits: {error}', { error: e.message }) : 'Could not move credits.', 'warn');
             }
         },
 
@@ -1012,7 +1036,7 @@
             this._renderBotAnonBody();
             this._refreshBotAnonBalances();
             this._setBotAnonStatus(moved
-                ? `New anonymous key created. The old key's ${moved} credit${moved === 1 ? '' : 's'} became anonymous vouchers the new key uses as needed.`
+                ? this.uiText(moved === 1 ? 'New anonymous key created. The old key\'s {n} credit became anonymous vouchers the new key uses as needed.' : 'New anonymous key created. The old key\'s {n} credits became anonymous vouchers the new key uses as needed.', { n: moved })
                 : 'New anonymous key created.', 'ok');
         }
     });

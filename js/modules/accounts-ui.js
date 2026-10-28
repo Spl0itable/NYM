@@ -295,12 +295,24 @@
             return location.pathname + hash;
         },
 
+        _acctMute(on) {
+            const kinds = ['visibilitychange', 'resume', 'focus', 'online', 'pageshow'];
+            if (on && !this._acctMuter) {
+                this._acctMuter = (e) => e.stopImmediatePropagation();
+                for (const k of kinds) window.addEventListener(k, this._acctMuter, true);
+            } else if (!on && this._acctMuter) {
+                for (const k of kinds) window.removeEventListener(k, this._acctMuter, true);
+                this._acctMuter = null;
+            }
+        },
+
         async _acctGo(r) {
             const A = M();
             if (!r || !r.ok || this._acctGoing) return false;
             const wipes = r.effects.filter((e) => e.startsWith('wipe:'));
             if (r.effects.includes('reload')) {
                 this._acctGoing = true;
+                this._acctMute(true);
                 const overlay = document.getElementById('acctSwitchOverlay');
                 if (overlay) overlay.classList.add('active');
                 const leaving = A.pageId;
@@ -320,6 +332,7 @@
                     if (carried) await A.carryDel(leaving);
                     if (overlay) overlay.classList.remove('active');
                     this._acctGoing = false;
+                    this._acctMute(false);
                     this._acctSyncWatchers();
                     this._acctFail(res);
                     return false;
@@ -631,7 +644,7 @@
             const anyMuted = gates && !!this.autoMutedPubkeys && this.autoMutedPubkeys.size > 0;
             const userFilters = blocked.length > 0 || keywords.some((k) => k.trim()) || friendsOnly || accept !== 'enabled'
                 || packIds.length > 0 || blockedChannels.length > 0;
-            if (!userFilters && !spamOn && !anyMuted) return false;
+            const filtering = userFilters || spamOn || anyMuted;
             const sk = names.length && typeof this._sendAsKeyFor === 'function'
                 ? this._sendAsKeyFor(a, (k) => (vals[k] == null ? null : String(vals[k]))) : null;
             if (!sk) return userFilters ? 'locked' : false;
@@ -642,6 +655,9 @@
             try {
                 const res = C.unwrapGiftWrap(wrap, cands);
                 if (!res || !res.seal || !res.rumor) return userFilters;
+                if (typeof nymbotStandaloneRunWrap === 'function'
+                    && nymbotStandaloneRunWrap(res.seal, res.rumor, a.pubkey, this.verifiedBot && this.verifiedBot.pubkey)) return true;
+                if (!filtering) return false;
                 const sender = String(res.seal.pubkey || '');
                 if (!sender || sender === a.pubkey) return false;
                 const content = typeof res.rumor.content === 'string' ? res.rumor.content : '';

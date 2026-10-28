@@ -32,6 +32,11 @@ class MeshNearbyLink implements NearbyLink {
       service.sendNiToken(peerID, token, replyRequested: replyRequested);
 }
 
+String nearbyPeerLabel(String? nickname, String peerID) {
+  final n = nickname?.trim() ?? '';
+  return n.isEmpty ? peerID : n;
+}
+
 class NearbySender {
   const NearbySender({
     required this.peerID,
@@ -47,10 +52,9 @@ class NearbySender {
 
   static NearbySender? fromPeer(MeshPeer? peer) {
     if (peer == null) return null;
-    final nick = peer.nickname?.trim() ?? '';
     return NearbySender(
       peerID: peer.peerID,
-      nick: nick.isEmpty ? peer.peerID : nick,
+      nick: nearbyPeerLabel(peer.nickname, peer.peerID),
       pubkey: peer.nostrPubkey,
       verified: peer.nostrLinkVerified,
     );

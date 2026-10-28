@@ -9,6 +9,7 @@ import '../../services/storage/at_rest_cipher.dart';
 import '../../services/storage/cache_store.dart';
 import '../../services/storage/mesh_file_store.dart';
 import '../../services/storage/secure_store.dart';
+import '../globe/street_cache.dart';
 import '../identity/biometric_secret_store.dart';
 import 'account_logic.dart';
 
@@ -68,11 +69,13 @@ class AccountRuntime {
     AccountSecretBackend? secrets,
     Future<void> Function(String ns)? dropFiles,
     Future<void> Function()? dropBiometric,
+    Future<void> Function()? dropMap,
     String Function()? newId,
     int Function()? now,
   })  : _secrets = secrets ?? const PlatformSecretBackend(),
         _dropFiles = dropFiles ?? _defaultDropFiles,
         _dropBiometric = dropBiometric ?? _defaultDropBiometric,
+        _dropMap = dropMap ?? _defaultDropMap,
         _newId = newId ?? AccountLogic.randomId,
         _now = now ?? _wallClock;
 
@@ -87,6 +90,8 @@ class AccountRuntime {
     } catch (_) {}
   }
 
+  static Future<void> _defaultDropMap() => StreetCacheWipe().wipe();
+
   static Future<void> _defaultDropBiometric() =>
       PlatformBiometricSecretStore().delete();
 
@@ -94,6 +99,7 @@ class AccountRuntime {
   final AccountSecretBackend _secrets;
   final Future<void> Function(String ns) _dropFiles;
   final Future<void> Function() _dropBiometric;
+  final Future<void> Function() _dropMap;
   final String Function() _newId;
   final int Function() _now;
 
@@ -280,6 +286,12 @@ class AccountRuntime {
 
   Future<void> _dropDbs(List<String> dbs) async {
     for (final name in dbs) {
+      if (name == AccountLogic.mapDb) {
+        try {
+          await _dropMap();
+        } catch (_) {}
+        continue;
+      }
       final ns = name == AccountLogic.cacheDb
           ? ''
           : (name.startsWith('${AccountLogic.cacheDb}~')

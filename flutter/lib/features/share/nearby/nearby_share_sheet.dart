@@ -47,10 +47,7 @@ class NearbySendGuard {
   }
 }
 
-String _nickOf(MeshPeer p) {
-  final n = p.nickname?.trim() ?? '';
-  return n.isEmpty ? p.peerID : n;
-}
+String _nickOf(MeshPeer p) => nearbyPeerLabel(p.nickname, p.peerID);
 
 class NearbyShareSheet extends ConsumerStatefulWidget {
   const NearbyShareSheet({super.key, required this.target});

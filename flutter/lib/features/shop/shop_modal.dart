@@ -75,6 +75,9 @@ const String kShopCreditsText =
     'Credits pay for private messages with Nymbot. Standard and Pro credits '
     'are charged on the tokens each reply uses.';
 
+const String kShopFlairNotice = 'Flair cannot be purchased in this app. '
+    'Anything you already own works here as usual.';
+
 /// Flair shop with tabbed item cards and a real Lightning invoice flow; recovery codes restore purchases.
 class ShopModal extends ConsumerStatefulWidget {
   const ShopModal({super.key, this.initialTab = ShopTab.styles});
@@ -217,9 +220,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
                 borderRadius: NymRadius.rsm,
               ),
               child: Text(
-                tr('Flair cannot be purchased in this app. Items are bought '
-                    'from the Nymchat web app in your browser. Anything you '
-                    'already own works here as usual.'),
+                tr(kShopFlairNotice),
                 style: TextStyle(color: c.textDim, fontSize: 12, height: 1.45),
               ),
             ),

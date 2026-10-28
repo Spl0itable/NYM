@@ -34,6 +34,7 @@ import 'unified_search.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/common/nym_label.dart';
+import '../duo/duo_rail.dart';
 
 export '../../widgets/common/nym_label.dart' show nymSuffixStyle;
 
@@ -739,12 +740,15 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
                 ),
               ),
             ),
-            IconButton(
-              key: const ValueKey('unifiedSearchClose'),
-              tooltip: _s('close'),
-              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-              onPressed: () => Navigator.of(context).maybePop(),
-              icon: Icon(Icons.close, size: 20, color: c.textDim),
+            DuoRailSwap.close(
+              onTap: () => Navigator.of(context).maybePop(),
+              child: IconButton(
+                key: const ValueKey('unifiedSearchClose'),
+                tooltip: _s('close'),
+                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: Icon(Icons.close, size: 20, color: c.textDim),
+              ),
             ),
           ]),
         ),

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -22,6 +23,7 @@ import 'chat_nav_providers.dart';
 import 'chat_nav_service.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../duo/duo_rail.dart';
 
 class ChatNavIcons {
   const ChatNavIcons._();
@@ -897,10 +899,13 @@ class _PanelShell extends StatelessWidget {
                 ),
               ),
             ),
-            IconButton(
-              tooltip: tr('Close'),
-              onPressed: () => Navigator.of(context).maybePop(),
-              icon: Icon(Icons.close, size: 18, color: c.textDim),
+            DuoRailSwap.close(
+              onTap: () => Navigator.of(context).maybePop(),
+              child: IconButton(
+                tooltip: tr('Close'),
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: Icon(Icons.close, size: 18, color: c.textDim),
+              ),
             ),
           ],
         ),
@@ -1412,6 +1417,7 @@ class PinnedReorder extends ConsumerStatefulWidget {
 class _PinnedReorderState extends ConsumerState<PinnedReorder> {
   Offset? _downAt;
   Offset? _lastAt;
+  bool _mouseDown = false;
 
   void _started() {
     SidebarRowGestures.suppressMenu = true;
@@ -1422,7 +1428,9 @@ class _PinnedReorderState extends ConsumerState<PinnedReorder> {
     final down = _downAt;
     final last = _lastAt;
     _downAt = null;
-    if (!chatNavTouchDrag() || down == null || last == null) return;
+    if (!chatNavTouchDrag() || _mouseDown || down == null || last == null) {
+      return;
+    }
     if ((last - down).distance <= SidebarRowGestures.moveThreshold) {
       widget.onHoldMenu?.call(down);
     }
@@ -1452,15 +1460,22 @@ class _PinnedReorderState extends ConsumerState<PinnedReorder> {
       );
       final dragging = Opacity(opacity: 0.5, child: widget.child);
       final Widget draggable = chatNavTouchDrag()
-          ? LongPressDraggable<String>(
+          ? _MouseDraggable<String>(
               key: ValueKey('pin-drag-$key'),
               data: key,
-              delay: const Duration(milliseconds: 350),
               feedback: feedback,
               childWhenDragging: dragging,
               onDragStarted: _started,
               onDragEnd: (_) => _ended(),
-              child: widget.child,
+              child: _TouchLongPressDraggable<String>(
+                data: key,
+                delay: const Duration(milliseconds: 350),
+                feedback: feedback,
+                childWhenDragging: dragging,
+                onDragStarted: _started,
+                onDragEnd: (_) => _ended(),
+                child: widget.child,
+              ),
             )
           : Draggable<String>(
               key: ValueKey('pin-drag-$key'),
@@ -1475,6 +1490,7 @@ class _PinnedReorderState extends ConsumerState<PinnedReorder> {
         onPointerDown: (e) {
           _downAt = e.position;
           _lastAt = e.position;
+          _mouseDown = e.kind == PointerDeviceKind.mouse;
         },
         onPointerMove: (e) => _lastAt = e.position,
         child: DragTarget<String>(
@@ -1495,4 +1511,52 @@ class _PinnedReorderState extends ConsumerState<PinnedReorder> {
       );
     });
   }
+}
+
+class _MouseDraggable<T extends Object> extends Draggable<T> {
+  const _MouseDraggable({
+    super.key,
+    required super.child,
+    required super.feedback,
+    super.data,
+    super.childWhenDragging,
+    super.onDragStarted,
+    super.onDragEnd,
+  });
+
+  @override
+  MultiDragGestureRecognizer createRecognizer(
+          GestureMultiDragStartCallback onStart) =>
+      ImmediateMultiDragGestureRecognizer(
+        supportedDevices: const {PointerDeviceKind.mouse},
+      )..onStart = onStart;
+}
+
+class _TouchLongPressDraggable<T extends Object> extends LongPressDraggable<T> {
+  const _TouchLongPressDraggable({
+    required super.child,
+    required super.feedback,
+    super.data,
+    super.childWhenDragging,
+    super.onDragStarted,
+    super.onDragEnd,
+    super.delay,
+  });
+
+  @override
+  DelayedMultiDragGestureRecognizer createRecognizer(
+          GestureMultiDragStartCallback onStart) =>
+      DelayedMultiDragGestureRecognizer(
+        delay: delay,
+        supportedDevices: {
+          for (final k in PointerDeviceKind.values)
+            if (k != PointerDeviceKind.mouse) k,
+        },
+      )..onStart = (Offset position) {
+          final result = onStart(position);
+          if (result != null && hapticFeedbackOnStart) {
+            HapticFeedback.selectionClick();
+          }
+          return result;
+        };
 }

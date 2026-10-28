@@ -825,7 +825,7 @@ Object.assign(NYM.prototype, {
     },
 
     _shopStyleDemo(item) {
-        return `<div class="shop-msg-demo"><div class="message ${item.id}"><div class="message-content"><span>Preview message</span></div></div></div>`;
+        return `<div class="shop-msg-demo"><div class="message ${item.id}"><div class="message-content"><span>${this.escapeHtml(this.uiText('Preview message'))}</span></div></div></div>`;
     },
 
     renderStylesTab(container) {
@@ -876,7 +876,7 @@ Object.assign(NYM.prototype, {
 
     // Reuses the real cosmetic classes, so it reflects the user's current bubble mode.
     _shopCosmeticDemo(item) {
-        const text = 'Preview message';
+        const text = this.escapeHtml(this.uiText('Preview message'));
         if (item.id === 'cosmetic-redacted') {
             return `<div class="shop-msg-demo"><div class="message"><div class="message-content cosmetic-redacted-message">${text}</div></div></div>`;
         }
@@ -1060,7 +1060,7 @@ Object.assign(NYM.prototype, {
     <div class="shop-active-items-title">Preview</div>
     <div class="${classes.join(' ')}">
         <span class="message-author self ${colorClass}${authorExtra}"><span class="nym-bracket">&lt;</span>${nym}<span class="nym-suffix">#${suffix}</span>${flairHtml}${supporterBadge}<span class="nym-bracket">&gt;</span></span>
-        <span class="message-content ${colorClass}">This is how your messages look.</span>
+        <span class="message-content ${colorClass}">${this.escapeHtml(this.uiText('This is how your messages look.'))}</span>
     </div>
 </div>`;
     },
@@ -1343,7 +1343,7 @@ TRANSFER TO PUBKEY
             }
         } catch (error) {
             document.getElementById('zapStatus').className = 'zap-status error';
-            document.getElementById('zapStatus').textContent = `Failed: ${error.message}`;
+            document.getElementById('zapStatus').textContent = this.uiText('Failed: {error}', { error: error.message });
             setTimeout(() => {
                 const inv = document.getElementById('zapInvoiceSection');
                 const amt = document.getElementById('zapAmountSection');
@@ -1646,7 +1646,7 @@ TRANSFER TO PUBKEY
         } catch (e) {
             if (zapStatus) {
                 zapStatus.className = 'zap-status error';
-                zapStatus.textContent = 'Purchase confirmation failed: ' + e.message;
+                zapStatus.textContent = this.uiText('Purchase confirmation failed: {error}', { error: e.message });
             }
         }
     },
@@ -1852,7 +1852,7 @@ ${bundleCodes || (code ? `
                 this.renderInventoryTab(document.getElementById('shopBody'));
             }
         } catch (error) {
-            errorEl.textContent = 'Transfer failed: ' + error.message;
+            errorEl.textContent = this.uiText('Transfer failed: {error}', { error: error.message });
             errorEl.style.display = 'block';
         }
     },
