@@ -310,7 +310,6 @@ class GeoLayersMenu extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   legend(nym.primary, tr('Active')),
-                  legend(const Color(0xFF28E07A), tr('Joined')),
                   legend(const Color(0xFFF5C518), tr('Saved'), ring: true),
                   if (showLocationLegend)
                     legend(nym.warning, tr('Your Location')),

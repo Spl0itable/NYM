@@ -164,7 +164,7 @@
         if (!url) return null;
         const safeUrl = escapeHtml(proxiedEmoji(url, ctx.proxyBase));
         const safeCode = escapeHtml(code);
-        return `<img class="custom-emoji" src="${safeUrl}" alt=":${safeCode}:" title=":${safeCode}:" data-emoji-code="${safeCode}" width="30" height="30" decoding="async" loading="lazy" draggable="false">`;
+        return `<img class="custom-emoji" src="${safeUrl}" alt=":${safeCode}:" data-tip="" data-tip-raw=":${safeCode}:" data-emoji-code="${safeCode}" width="30" height="30" decoding="async" loading="lazy" draggable="false">`;
     }
 
     function geohashValid(str) {

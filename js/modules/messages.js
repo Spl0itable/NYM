@@ -1978,7 +1978,7 @@ Object.assign(NYM.prototype, {
         }
 
         this._attachLinkPreviews(messageEl);
-        if (typeof this._attachNostrCards === 'function') this._attachNostrCards(messageEl);
+        if (typeof this._attachNostrCards === 'function') this._attachNostrCards(messageEl, message);
         this._attachMediaFallbacks(messageEl);
     },
 
@@ -4349,12 +4349,7 @@ Object.assign(NYM.prototype, {
         // Regroup after bulk render, since per-insert grouping is fragile to order and late bubble settings.
         this._recomputeAllBubbleGrouping(container);
 
-        const zapBackfillIds = [];
-        for (const m of renderMessages) {
-            if (m.id) zapBackfillIds.push(m.id);
-            if (m.isPM && m.nymMessageId && m.nymMessageId !== m.id) zapBackfillIds.push(m.nymMessageId);
-        }
-        this._backfillZapReceipts(zapBackfillIds);
+        this._backfillZapReceiptsForMessages(renderMessages);
 
         // The reverse-column container keeps the bottom pinned as media loads, so no follow-up is needed.
         if (scrollToBottom && this.settings.autoscroll) {

@@ -26,7 +26,7 @@
         'nym_nostr_login_nsec', 'nym_session_nsec', 'nym_dev_nsec', 'nym_vault_enabled',
         'nym_keypair_mode', 'nym_random_keypair_per_session', 'nym_ai_consent',
         'nym_nostr_login_profile', 'nym_auto_ephemeral_nick', 'nym_pow_difficulty',
-        'nym_attest_badge', 'nym_custom_emojis', 'nym_custom_emoji_packs', 'nym_show_status',
+        'nym_attest_badge', 'nym_custom_emojis', 'nym_custom_emoji_packs', 'nym_custom_emoji_pinned', 'nym_show_status',
         'nym_shop_record', 'nym_remote_panic', 'nym_panic_login_at', 'nym_blocked_relays',
     ];
 

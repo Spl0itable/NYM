@@ -37,7 +37,6 @@ class GeoMapStyle {
     required this.daynightStroke,
     required this.primary,
     required this.warning,
-    required this.joined,
     required this.lake,
     required this.river,
   });
@@ -59,7 +58,6 @@ class GeoMapStyle {
   final Color daynightStroke;
   final Color primary;
   final Color warning;
-  final Color joined;
   final Color lake;
   final Color river;
 
@@ -90,7 +88,6 @@ class GeoMapStyle {
           isLight ? const Color(0x73283C64) : const Color(0x59B4C8E6),
       primary: primary,
       warning: warning,
-      joined: const Color(0xFF28E07A),
       lake: isLight ? const Color(0xFFD6E8F1) : const Color(0xFF0A131E),
       river: isLight ? const Color(0xB35A96BE) : const Color(0x8C4678A0),
     );
@@ -856,8 +853,7 @@ class GeoMapPainter extends CustomPainter {
       if (!_inView(p, 12, size)) continue;
       final isHover = hoveredGeohash != null && hoveredGeohash == ch.geohash;
       final r = isHover ? baseR + 2 : baseR;
-      final color = ch.isJoined ? style.joined : style.primary;
-      canvas.drawCircle(p, r, Paint()..color = color);
+      canvas.drawCircle(p, r, Paint()..color = style.primary);
       canvas.drawCircle(
         p,
         r,

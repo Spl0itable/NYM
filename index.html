@@ -1340,7 +1340,9 @@
                     <span class="relay-stats-mode-label">Connection</span>
                     <span class="relay-stats-mode-value" id="rsConnectionModeValue">Connecting...</span>
                     <button type="button" class="relay-stats-mode-btn" id="rsTransportBtn" data-action="toggleRelayTransportFromStats" hidden></button>
+                    <button type="button" class="relay-stats-mode-btn relay-stats-mode-btn-alt" id="rsTransportDirectBtn" data-action="useDirectRelaysFromStats" hidden></button>
                     <span class="relay-stats-mode-hint" id="rsConnectionModeHint"></span>
+                    <span class="relay-stats-mode-note" id="rsTransportNote" role="status" aria-live="polite" hidden></span>
                 </div>
                 <!-- Summary Cards -->
                 <div class="relay-stats-cards">
@@ -1372,6 +1374,11 @@
                     <div class="relay-stats-graph-wrap">
                         <canvas id="rsThroughputCanvas" width="440" height="100"></canvas>
                     </div>
+                </div>
+
+                <div class="relay-stats-section">
+                    <div class="relay-stats-section-title">Recent connection changes</div>
+                    <div class="relay-stats-changes" id="rsConnectionChanges"></div>
                 </div>
 
                 <!-- Relay List -->

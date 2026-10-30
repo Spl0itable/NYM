@@ -601,60 +601,68 @@
         return { x0, y0, x1, y1, flipped };
     }
 
-    const STREET = Object.freeze({ drawZv: 13.5, fetchZv: 14, maxCells: 6, cellsPerMinute: 12, concurrent: 2, settleMs: 400, unavailableRetryMs: 600000, tooLargeRetryMs: 86400000, cacheTtlMs: 2592000000, pwaCacheBytes: 50331648, flutterCacheBytes: 100663296 });
+    const STREET2 = Object.freeze({ minZ: 5, maxZ: 15, tileBias: 0.5, maxViewTiles: 48, settleMs: 150, concurrent: 4, maxPer10s: 120, windowMs: 10000, maxBodyBytes: 524288, metaTtlMs: 3600000, unavailableRetryMs: 600000, tooLargeRetryMs: 86400000, malformedRetryMs: 86400000, cacheTtlMs: 2592000000, pwaCacheBytes: 50331648, flutterCacheBytes: 100663296, memDecodedTiles: 96, memGzipBytes: 16777216 });
     const LINE_LABEL = Object.freeze({ endPad: 8, maxTurnDeg: 20, edgePad: 4, repeatPx: 256, maxLabels: 40 });
-    const P5_DEG = 360 / 8192;
-    const MERC_MAX_LAT = 85.0511287798066;
+    const LABEL_FROM = Object.freeze({ hw: 7.99, major: 11.49, minor: 14.49, service: 14.49, path: 14.49, river: 9.99, stream: 12.99, wlabel: 5.99 });
+    const MAX_STREET_LABELS = [[9.99, 12], [12.99, 24]];
     const PLAN_MAX_LAT = 85.0511287798;
 
     function zvOf(pxPerDeg) { return Math.log2(pxPerDeg * 360 / 256); }
 
     function mercY(lat) { const r = lat * Math.PI / 180; return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2; }
+    function tileLatOf(y, z) { return (2 * Math.atan(Math.exp(Math.PI * (1 - 2 * y / 2 ** z))) - Math.PI / 2) * 180 / Math.PI; }
 
-    function cellTiles(geohash, zmin, zmax) {
-        const b = cellBounds(geohash);
-        const out = [];
-        if (!b) return out;
-        const s = Math.max(b.latLo, -MERC_MAX_LAT), n = Math.min(b.latHi, MERC_MAX_LAT);
-        if (s >= n) return out;
-        for (let z = zmin; z <= zmax; z++) {
-            const N = 2 ** z;
-            const x0 = Math.floor((b.lngLo + 180) / 360 * N), x1 = Math.ceil((b.lngHi + 180) / 360 * N) - 1;
-            const y0 = Math.max(0, Math.floor(mercY(n) * N)), y1 = Math.min(N - 1, Math.ceil(mercY(s) * N) - 1);
-            for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) out.push([z, x, y]);
-        }
-        return out;
+    const bucketExpOf = (pxPerDeg) => Math.round(2 * Math.log2(pxPerDeg));
+    const bucketZvOf = (e) => e / 2 + Math.log2(360 / 256);
+
+    function baseTileZoom(pxPerDeg) {
+        const t = Math.floor(bucketZvOf(bucketExpOf(pxPerDeg)) - STREET2.tileBias);
+        return t < STREET2.minZ ? null : Math.min(STREET2.maxZ, t);
     }
 
-    function planCells(v) {
-        const zv = zvOf(v.pxPerDeg);
-        const out = { zv: Math.round(zv * 1e6) / 1e6, draw: zv >= STREET.drawZv, fetch: zv >= STREET.fetchZv, cells: [] };
-        if (!out.draw) return out;
-        const hw = v.width / 2 / v.pxPerDeg, hh = v.height / 2 / v.pxPerDeg;
+    function viewTileRange(v, z) {
+        const hw = v.width / 2 / v.pxPerDeg, hh = v.height / 2 / v.pxPerDeg, N = 2 ** z;
         const w = Math.max(-180, v.cx - hw), e = Math.min(180, v.cx + hw);
         const s = Math.max(-PLAN_MAX_LAT, v.cy - hh), n = Math.min(PLAN_MAX_LAT, v.cy + hh);
-        if (w >= e || s >= n) return out;
-        const c0 = Math.floor((w + 180) / P5_DEG), c1 = Math.ceil((e + 180) / P5_DEG) - 1;
-        const r0 = Math.floor((s + 90) / P5_DEG), r1 = Math.ceil((n + 90) / P5_DEG) - 1;
-        const list = [];
-        for (let r = r0; r <= r1; r++) {
-            for (let c = c0; c <= c1; c++) {
-                const lat = -90 + (r + 0.5) * P5_DEG, lng = -180 + (c + 0.5) * P5_DEG;
-                list.push({ d: (lat - v.cy) ** 2 + (lng - v.cx) ** 2, gh: encodeGeohash(lat, lng, 5) });
-            }
-        }
-        list.sort((a, b) => a.d - b.d || cmp(a.gh, b.gh));
-        out.visible = list.length;
-        out.cells = list.slice(0, STREET.maxCells).map((x) => x.gh);
-        return out;
+        if (w >= e || s >= n) return null;
+        return { x0: Math.max(0, Math.floor((w + 180) / 360 * N)), x1: Math.min(N - 1, Math.ceil((e + 180) / 360 * N) - 1), y0: Math.max(0, Math.floor(mercY(n) * N)), y1: Math.min(N - 1, Math.ceil(mercY(s) * N) - 1) };
     }
 
-    function tileZoomFor(zv, available) {
-        const a = available.slice().sort((x, y) => x - y);
-        let pick = null;
-        for (const z of a) if (z <= zv + 0.25) pick = z;
-        return pick === null ? (a.length ? a[0] : null) : pick;
+    function planTiles(v) {
+        const e = bucketExpOf(v.pxPerDeg), bz = bucketZvOf(e);
+        const out = { zv: Math.round(zvOf(v.pxPerDeg) * 1e6) / 1e6, bucketExp: e, bucketZv: Math.round(bz * 1e6) / 1e6, tz: null, draw: false, visible: 0, tiles: [] };
+        if (v.on === false) return out;
+        let tz = baseTileZoom(v.pxPerDeg);
+        if (tz === null) return out;
+        let r = viewTileRange(v, tz);
+        if (!r) return out;
+        const count = (q) => (q.x1 - q.x0 + 1) * (q.y1 - q.y0 + 1);
+        while (count(r) > STREET2.maxViewTiles && tz > STREET2.minZ) { tz--; r = viewTileRange(v, tz); }
+        if (count(r) > STREET2.maxViewTiles) return out;
+        const N = 2 ** tz, list = [];
+        for (let y = r.y0; y <= r.y1; y++) for (let x = r.x0; x <= r.x1; x++) {
+            const lng = (x + 0.5) / N * 360 - 180, lat = tileLatOf(y + 0.5, tz);
+            list.push({ d: (lng - v.cx) ** 2 + (lat - v.cy) ** 2, t: [tz, x, y] });
+        }
+        list.sort((a, b) => a.d - b.d || a.t[2] - b.t[2] || a.t[1] - b.t[1]);
+        return Object.assign(out, { tz, draw: true, visible: list.length, tiles: list.map((q) => q.t) });
     }
+
+    function fallbackFor(want, have) {
+        const S = have instanceof Set ? have : new Set(have.map((t) => t.join('/')));
+        const [z, x, y] = want;
+        if (S.has(want.join('/'))) return [want];
+        for (let k = 1; z - k >= STREET2.minZ; k++) { const p = [z - k, x >> k, y >> k]; if (S.has(p.join('/'))) return [p]; }
+        const kids = [];
+        if (z < STREET2.maxZ) for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) { const c = [z + 1, 2 * x + dx, 2 * y + dy]; if (S.has(c.join('/'))) kids.push(c); }
+        return kids;
+    }
+
+    const labelAllowed = (cls, bz) => LABEL_FROM[cls] !== undefined && bz >= LABEL_FROM[cls];
+    function maxStreetLabels(bz) { for (const [lim, n] of MAX_STREET_LABELS) if (bz < lim) return n; return LINE_LABEL.maxLabels; }
+    const roadDrawn = (mz, bz) => !(typeof mz === 'number' && mz > bz - STREET2.tileBias);
+    const tilePath = (build, z, x, y) => `/api/map/v2/${build}/${z}/${x}/${y}`;
+    const tileCacheKey = (build, z, x, y) => `${build}/${z}/${x}/${y}`;
 
     function turnAbs(a, b) {
         let d = b - a;
@@ -696,10 +704,11 @@
         return { x: best.cx, y: best.cy, angle: a, boxes, len: best.len };
     }
 
-    function placeLineLabels(cands, blocked, pad) {
+    function placeLineLabels(cands, blocked, pad, cap) {
         const pd = typeof pad === 'number' ? pad : 2, placed = (blocked || []).slice(), out = [], seen = [];
+        const most = typeof cap === 'number' ? Math.min(cap, LINE_LABEL.maxLabels) : LINE_LABEL.maxLabels;
         const hit = (b) => placed.some((o) => b.x0 - pd < o.x1 && o.x0 < b.x1 + pd && b.y0 - pd < o.y1 && o.y0 < b.y1 + pd);
-        for (let i = 0; i < cands.length && out.length < LINE_LABEL.maxLabels; i++) {
+        for (let i = 0; i < cands.length && out.length < most; i++) {
             const c = cands[i];
             if (!c) continue;
             if (seen.some((x) => x.name === c.name && Math.hypot(x.x - c.x, x.y - c.y) < LINE_LABEL.repeatPx)) continue;
@@ -719,6 +728,6 @@
         rankPlaces, buildPlaceIndex, buildSearchResults, roomPlaceLabel, formatLength, cellSizeMeters, precisionSteps, haversineKm, formatDistanceKm,
         rankActive, rankNearby, clusterChannels, clusterRadius, isRecent, normalizeWindowHours, summarizePeek, peekCapped, peekCountLabel, PEEK_FETCH_CAP,
         MAX_DPR, TIER_PX_PER_DEG, LABEL_PAD, capDpr, tierFor, cityRankCutoff, placeLabels, fitLabelBox,
-        STREET, LINE_LABEL, zvOf, cellTiles, planCells, tileZoomFor, lineLabel, placeLineLabels,
+        STREET2, LINE_LABEL, LABEL_FROM, zvOf, bucketExpOf, bucketZvOf, baseTileZoom, planTiles, fallbackFor, labelAllowed, maxStreetLabels, roadDrawn, tilePath, tileCacheKey, lineLabel, placeLineLabels,
     });
 })();

@@ -478,13 +478,8 @@ Object.assign(NYM.prototype, {
         this._updateThreadDivider(replies.length);
         this._scheduleScrollToBottom(true);
 
-        if (typeof this._backfillZapReceipts === 'function') {
-            const ids = [];
-            for (const m of (root ? [root, ...replies] : replies)) {
-                if (m.id) ids.push(m.id);
-                if (m.isPM && m.nymMessageId && m.nymMessageId !== m.id) ids.push(m.nymMessageId);
-            }
-            if (ids.length) this._backfillZapReceipts(ids);
+        if (typeof this._backfillZapReceiptsForMessages === 'function') {
+            this._backfillZapReceiptsForMessages(root ? [root, ...replies] : replies);
         }
     },
 

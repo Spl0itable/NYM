@@ -11,6 +11,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 
 import '../../services/api/api_config.dart';
+import 'blurred_image.dart';
+import 'cover_resize_image.dart';
 
 import 'pausable_animated_image.dart';
 
@@ -88,6 +90,7 @@ class InlineNetworkImage extends StatefulWidget {
     this.errorChild,
     this.memoryOnly = false,
     this.retryOnError = false,
+    this.blurSigma,
   });
 
   /// Already-proxied image URL.
@@ -107,6 +110,7 @@ class InlineNetworkImage extends StatefulWidget {
 
   /// Up to 2 cache-busting `_r=N` retries at 800ms·n; for emoji call sites only.
   final bool retryOnError;
+  final double? blurSigma;
 
   /// URL -> decoded result, so repeats share one fetch and bad URLs don't crash-loop.
   static final Map<String, Future<_Decoded?>> _cache = {};
@@ -327,19 +331,71 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
     );
   }
 
-  /// Decode width capped to the physical display size (1.5x for cover), or null for full-size surfaces; one dimension only.
   int? _decodeCacheWidth(BuildContext context) {
     final logical = (widget.width ?? widget.height);
     if (logical == null || !logical.isFinite || logical <= 0) return null;
     final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0;
-    final cover = widget.fit == BoxFit.cover ? 1.5 : 1.0;
-    return (logical * dpr * cover).ceil();
+    return (logical * dpr).ceil();
+  }
+
+  ImageProvider? _coverDecode(BuildContext context, ImageProvider image) {
+    final w = widget.width;
+    final h = widget.height;
+    if (widget.fit != BoxFit.cover ||
+        w == null ||
+        h == null ||
+        !w.isFinite ||
+        !h.isFinite ||
+        w <= 0 ||
+        h <= 0) {
+      return null;
+    }
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0;
+    return CoverResizeImage(image,
+        width: (w * dpr).ceil(), height: (h * dpr).ceil());
+  }
+
+  Widget _coverImage(ImageProvider image,
+          {FilterQuality filterQuality = FilterQuality.medium,
+          bool fadeIn = false}) =>
+      Image(
+        image: image,
+        filterQuality: filterQuality,
+        width: widget.width,
+        height: widget.height,
+        fit: widget.fit,
+        gaplessPlayback: true,
+        frameBuilder: fadeIn ? _fadeInFrame : null,
+        errorBuilder: (ctx, _, _) => _fallback(ctx),
+      );
+
+  Widget _fadeInFrame(
+      BuildContext context, Widget child, int? frame, bool sync) {
+    final placeholder = widget.placeholder ?? Container();
+    if (frame == null) return placeholder;
+    if (sync) return child;
+    return _FadeInOver(placeholder: placeholder, child: child);
   }
 
   @override
   Widget build(BuildContext context) {
+    final sigma = widget.blurSigma;
+    if (sigma == null) return _build(context);
+    final url = _effectiveUrl;
+    if (widget.memoryOnly || isSvgUrl(url) || isAnimatedImageUrl(url)) {
+      return ImageFiltered(
+        imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+        child: _build(context),
+      );
+    }
+    return BlurredPhoto(sigma: sigma, child: _build(context));
+  }
+
+  Widget _build(BuildContext context) {
     final cacheWidth = _decodeCacheWidth(context);
     if (isAssetImageUrl(_baseUrl)) {
+      final cover = _coverDecode(context, AssetImage(_baseUrl));
+      if (cover != null) return _coverImage(cover);
       return Image.asset(
         _baseUrl,
         width: widget.width,
@@ -394,6 +450,8 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
                 errorBuilder: _fallback,
               );
             }
+            final cover = _coverDecode(ctx, MemoryImage(d.raster!));
+            if (cover != null) return _coverImage(cover);
             return Image.memory(
               d.raster!,
               width: widget.width,
@@ -425,6 +483,13 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
         errorBuilder: _fallback,
       );
     }
+    final cover = _coverDecode(
+        context,
+        CachedNetworkImageProvider(url,
+            headers: InlineNetworkImage.imageHeadersFor(url)));
+    if (cover != null) {
+      return _coverImage(cover, filterQuality: FilterQuality.low, fadeIn: true);
+    }
     return CachedNetworkImage(
       imageUrl: url,
       httpHeaders: InlineNetworkImage.imageHeadersFor(url),
@@ -441,6 +506,49 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
 }
 
 /// Gives a baseline-less child a baseline [drop] px above its bottom, like CSS `vertical-align: -Nem` on inline emoji.
+class _FadeInOver extends StatefulWidget {
+  const _FadeInOver({required this.placeholder, required this.child});
+
+  final Widget placeholder;
+  final Widget child;
+
+  @override
+  State<_FadeInOver> createState() => _FadeInOverState();
+}
+
+class _FadeInOverState extends State<_FadeInOver>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _clock = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 1000))
+    ..addStatusListener((status) {
+      if (status.isCompleted && mounted) setState(() {});
+    })
+    ..forward();
+  late final Animation<double> _in = CurvedAnimation(
+      parent: _clock, curve: const Interval(0, 0.5, curve: Curves.easeIn));
+  late final Animation<double> _out =
+      ReverseAnimation(CurvedAnimation(parent: _clock, curve: Curves.easeOut));
+
+  @override
+  void dispose() {
+    _clock.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_clock.isCompleted) return widget.child;
+    return Stack(
+      fit: StackFit.passthrough,
+      alignment: Alignment.center,
+      children: [
+        FadeTransition(opacity: _in, child: widget.child),
+        FadeTransition(opacity: _out, child: widget.placeholder),
+      ],
+    );
+  }
+}
+
 class EmojiBaselineDrop extends SingleChildRenderObjectWidget {
   const EmojiBaselineDrop({super.key, required this.drop, super.child});
 

@@ -7,6 +7,7 @@
     const STASH_DB = 'nym-accounts';
     const MAP_DB = 'nym-map';
     const DROP_KEY = 'nymacct:drop';
+    const KEEP_KEY = 'nymacct:keep';
     const AVATAR_MAX = 4096;
 
     const DEVICE_KEYS = new Set([
@@ -263,6 +264,43 @@
 
     function failure(e) { return { ok: false, error: isQuota(e) ? 'quota' : 'storage' }; }
 
+    function storageGuard() { return typeof self !== 'undefined' && self.NymStorage ? self.NymStorage : null; }
+
+    function strictly(fn) {
+        const g = storageGuard();
+        return g && g.strictly ? g.strictly(fn) : fn();
+    }
+
+    function heldAccountEntries() {
+        const g = storageGuard();
+        return g && g.heldEntries ? g.heldEntries().filter(([k]) => classify(k) === 'account') : [];
+    }
+
+    function dropHeldAccount() {
+        const g = storageGuard();
+        if (g && g.drop) g.drop((k) => { const c = classify(k); return c === 'account' || c === 'volatile'; });
+    }
+
+    function readKeep(store) {
+        try {
+            const k = JSON.parse(store.getItem(KEEP_KEY) || 'null');
+            if (k && typeof k.id === 'string' && Array.isArray(k.keys)) return { id: k.id, keys: k.keys.map(String), all: k.all === true };
+        } catch (_) { }
+        return null;
+    }
+
+    function keepHeld(stash, id, lock) {
+        const entries = heldAccountEntries();
+        dropHeldAccount();
+        if (!entries.length || !stash || !id) return Promise.resolve(false);
+        const run = lock || ((fn) => fn());
+        return Promise.resolve(run(async () => {
+            let all = true;
+            for (const [k, v] of entries) all = (await stash.setKey(id, k, v)) && all;
+            return all;
+        })).catch(() => false);
+    }
+
     function snapshot(store) {
         const out = {};
         for (const k of storeKeys(store)) {
@@ -339,33 +377,49 @@
         try { store.setItem(DROP_KEY, JSON.stringify(all)); } catch (_) { }
     }
 
-    function swapIn(store, prev, nextIndex, journal, cur, data, curId) {
+    function bare(x) { return Object.assign(clone(x), { accounts: x.accounts.map((a) => Object.assign({}, a, { avatar: '' })) }); }
+
+    function putIndex(store, x) {
+        try { strictly(() => store.setItem(INDEX_KEY, JSON.stringify(x))); return true; } catch (_) { }
+        try { strictly(() => store.setItem(INDEX_KEY, JSON.stringify(bare(x)))); return true; } catch (_) { return false; }
+    }
+
+    function swapIn(store, prev, nextIndex, journal, cur, held, data, curId) {
         const pending = Object.assign(clone(nextIndex), { journal });
         let done = Object.assign(clone(nextIndex), { journal: null });
-        const bare = (x) => Object.assign(clone(x), { accounts: x.accounts.map((a) => Object.assign({}, a, { avatar: '' })) });
         try {
-            clearAccount(store);
-            store.setItem(INDEX_KEY, JSON.stringify(pending));
-            try {
-                writeAll(store, data);
-            } catch (e) {
-                if (!isQuota(e)) throw e;
-                store.setItem(INDEX_KEY, JSON.stringify(bare(pending)));
-                writeAll(store, data);
-                done = bare(done);
-            }
+            strictly(() => {
+                dropHeldAccount();
+                clearAccount(store);
+                store.setItem(INDEX_KEY, JSON.stringify(pending));
+                try {
+                    writeAll(store, data);
+                } catch (e) {
+                    if (!isQuota(e)) throw e;
+                    store.setItem(INDEX_KEY, JSON.stringify(bare(pending)));
+                    writeAll(store, data);
+                    done = bare(done);
+                }
+            });
         } catch (e) {
-            let restored = true;
-            try { clearAccount(store); writeAll(store, cur); } catch (_) { restored = false; }
             const back = Object.assign(clone(prev), { journal: null });
-            if (!restored && curId) back.journal = { effects: ['clear', 'restore:' + curId], dbs: [], store: 'idb' };
-            try { store.setItem(INDEX_KEY, JSON.stringify(back)); } catch (_) { }
+            const home = curId ? Object.assign(clone(back), { journal: { effects: ['clear', 'restore:' + curId], dbs: [], store: 'idb' } }) : back;
+            let restored = false;
+            try { clearAccount(store); } catch (_) { }
+            if (putIndex(store, home)) {
+                try {
+                    writeAll(store, cur);
+                    for (const [k, v] of held) store.setItem(k, v);
+                    restored = true;
+                } catch (_) { restored = false; }
+                if (restored && home !== back) putIndex(store, back);
+            }
             return Object.assign(failure(e), { restored });
         }
         try {
-            store.setItem(INDEX_KEY, JSON.stringify(done));
+            strictly(() => store.setItem(INDEX_KEY, JSON.stringify(done)));
         } catch (_) {
-            try { store.setItem(INDEX_KEY, JSON.stringify(bare(done))); } catch (__) { return { ok: true, settled: false }; }
+            try { strictly(() => store.setItem(INDEX_KEY, JSON.stringify(bare(done)))); } catch (__) { return { ok: true, settled: false }; }
         }
         return { ok: true, settled: true };
     }
@@ -379,7 +433,7 @@
         const ids = effectIds(effects);
         if (!result.effects.includes('reload')) {
             const next = Object.assign(clone(result.index), { journal: null });
-            try { store.setItem(INDEX_KEY, JSON.stringify(next)); } catch (e) { return failure(e); }
+            try { strictly(() => store.setItem(INDEX_KEY, JSON.stringify(next))); } catch (e) { return failure(e); }
             for (const id of ids.wipes) { try { await stash.del(id); } catch (_) { } }
             return { ok: true, deferred: false, dbs };
         }
@@ -387,11 +441,21 @@
         const swapping = ids.clear || ids.stash.length > 0 || !!ids.restore;
         const curId = prev.active;
         let cur = {};
+        let held = [];
         let data = {};
         try {
             await migrateLegacy(store, stash);
             cur = snapshot(store);
-            if (swapping && curId) await stash.put(curId, cur);
+            held = heldAccountEntries();
+            const all = Object.assign({}, cur);
+            for (const [k, v] of held) all[k] = v;
+            const keep = readKeep(store);
+            if (swapping && curId && keep && keep.id === curId) {
+                const old = (await stash.get(curId)) || {};
+                const names = keep.all ? Object.keys(old).filter((k) => classify(k) === 'account') : keep.keys;
+                for (const k of names) if (!(k in all) && typeof old[k] === 'string') all[k] = old[k];
+            }
+            if (swapping && curId) await stash.put(curId, all);
             if (ids.restore) data = (await stash.get(ids.restore)) || {};
         } catch (e) {
             return failure(e);
@@ -399,13 +463,15 @@
         if (h.before) h.before();
         let settled = true;
         if (swapping) {
-            const r = swapIn(store, prev, result.index, { effects, dbs, store: 'idb' }, cur, data, curId);
+            const r = swapIn(store, prev, result.index, { effects, dbs, store: 'idb' }, cur, held, data, curId);
             if (!r.ok) return r;
             settled = r.settled;
         } else {
-            try { store.setItem(INDEX_KEY, JSON.stringify(Object.assign(clone(result.index), { journal: null }))); } catch (e) { return failure(e); }
+            try { strictly(() => store.setItem(INDEX_KEY, JSON.stringify(Object.assign(clone(result.index), { journal: null })))); } catch (e) { return failure(e); }
         }
         mergeDrop(store, dbs);
+        const kept = readKeep(store);
+        if (kept && swapping && (kept.id === curId || kept.id === ids.restore)) { try { store.removeItem(KEEP_KEY); } catch (_) { } }
         if (!settled) return { ok: true, deferred: true, dbs };
         for (const id of ids.wipes) { try { await stash.del(id); } catch (_) { } }
         if (ids.restore && !ids.wipes.includes(ids.restore)) { try { await stash.drop(ids.restore); } catch (_) { } }
@@ -421,18 +487,73 @@
         if (!j.store) {
             const snap = snapshot(store);
             for (const id of ids.stash) await stash.put(id, Object.assign((await stash.get(id)) || {}, snap));
-            store.setItem(INDEX_KEY, JSON.stringify(Object.assign(clone(idx), { journal: Object.assign({}, j, { store: 'idb' }) })));
+            strictly(() => store.setItem(INDEX_KEY, JSON.stringify(Object.assign(clone(idx), { journal: Object.assign({}, j, { store: 'idb' }) }))));
         }
         const data = ids.restore ? ((await stash.get(ids.restore)) || {}) : {};
-        if (ids.clear || ids.stash.length || ids.restore) {
-            clearAccount(store);
-            writeAll(store, data);
-        }
-        store.setItem(INDEX_KEY, JSON.stringify(Object.assign(clone(idx), { journal: null })));
+        strictly(() => {
+            if (ids.clear || ids.stash.length || ids.restore) {
+                dropHeldAccount();
+                clearAccount(store);
+                writeAll(store, data);
+            }
+            store.setItem(INDEX_KEY, JSON.stringify(Object.assign(clone(idx), { journal: null })));
+        });
         mergeDrop(store, j.dbs);
         for (const id of ids.wipes) { try { await stash.del(id); } catch (_) { } }
         if (ids.restore && !ids.wipes.includes(ids.restore)) { try { await stash.drop(ids.restore); } catch (_) { } }
         return true;
+    }
+
+    async function settle(store, stash) {
+        const idx = parseIndex(store.getItem(INDEX_KEY));
+        if (!idx || !idx.journal) return false;
+        const j = idx.journal;
+        const ids = effectIds(j.effects);
+        await migrateLegacy(store, stash);
+        if (!j.store) {
+            const snap = snapshot(store);
+            for (const id of ids.stash) await stash.put(id, Object.assign((await stash.get(id)) || {}, snap));
+        }
+        const next = Object.assign(clone(idx), { journal: null });
+        let land = ids.restore;
+        const home = ids.restore ? ids.stash.find((id) => id !== ids.restore && idx.accounts.some((a) => a.id === id)) : null;
+        if (home && (await stash.get(home))) { land = home; next.active = home; }
+        const data = land ? ((await stash.get(land)) || {}) : {};
+        const names = Object.keys(data).filter((k) => classify(k) === 'account' && typeof data[k] === 'string');
+        const marking = !!land && names.length > 0;
+        if (ids.clear || ids.stash.length || ids.restore) {
+            dropHeldAccount();
+            clearAccount(store);
+            if (marking) {
+                try { strictly(() => store.setItem(KEEP_KEY, JSON.stringify({ id: land, keys: names }))); } catch (_) { throw new Error('keep'); }
+            }
+            writeAll(store, data);
+        }
+        if (!putIndex(store, next)) throw new Error('index');
+        const over = heldAccountEntries().map(([k]) => k);
+        dropHeldAccount();
+        if (marking) {
+            try {
+                if (over.length) strictly(() => store.setItem(KEEP_KEY, JSON.stringify({ id: land, keys: over })));
+                else store.removeItem(KEEP_KEY);
+            } catch (_) { }
+        }
+        mergeDrop(store, j.dbs);
+        for (const id of ids.wipes) { try { await stash.del(id); } catch (_) { } }
+        if (land && !over.length && !ids.wipes.includes(land)) { try { await stash.drop(land); } catch (_) { } }
+        return true;
+    }
+
+    function release(store) {
+        try {
+            const idx = parseIndex(store.getItem(INDEX_KEY));
+            if (!idx || !idx.journal) return;
+            if (idx.active) {
+                try { strictly(() => store.setItem(KEEP_KEY, JSON.stringify({ id: idx.active, keys: [], all: true }))); } catch (_) { }
+            }
+            mergeDrop(store, idx.journal.dbs);
+            store.setItem(INDEX_KEY, JSON.stringify(Object.assign(idx, { journal: null })));
+        } catch (_) { }
     }
 
     async function sweep(store, stash, opts) {
@@ -440,10 +561,12 @@
         if (!idx || idx.journal) return [];
         const o = opts || {};
         const known = new Set(idx.accounts.map((a) => a.id));
+        const keep = readKeep(store);
+        if (keep && !known.has(keep.id)) { try { store.removeItem(KEEP_KEY); } catch (_) { } }
         const gone = [];
         for (const id of await stash.ids()) {
             if (!known.has(id)) { await stash.del(id); gone.push(id); }
-            else if (id === idx.active && o.active) { await stash.drop(id); gone.push(id); }
+            else if (id === idx.active && o.active && !(keep && keep.id === id)) { await stash.drop(id); gone.push(id); }
         }
         for (const id of await stash.carryIds()) {
             if (!known.has(id)) { await stash.del(id); if (!gone.includes(id)) gone.push(id); }
@@ -629,9 +752,9 @@
     }
 
     const api = {
-        MAX_ACCOUNTS, INDEX_KEY, NS_PREFIX, METHODS, CACHE_DB, STASH_DB, DROP_KEY, AVATAR_MAX, SETTINGS_SCOPE,
+        MAX_ACCOUNTS, INDEX_KEY, NS_PREFIX, METHODS, CACHE_DB, STASH_DB, DROP_KEY, KEEP_KEY, AVATAR_MAX, SETTINGS_SCOPE,
         nsKey, dbName, classify, methodFromStorage, nymFromStorage, ownNym, parseIndex, loadOrMigrate,
-        emptyIndex, plan, runEffects, commit, recover, sweep, boot, randomId, activeOf, isQuota,
+        emptyIndex, plan, runEffects, commit, recover, settle, release, sweep, boot, keepHeld, randomId, activeOf, isQuota,
         snapshot, legacyStashes, migrateLegacy, memStash, idbStash, hidesPreviews, inactiveNotice
     };
     self.NymAccounts = api;
@@ -667,6 +790,7 @@
     api.read = function () { return parseIndex(ls.getItem(INDEX_KEY)) || emptyIndex(); };
     api.frozen = false;
     api.stash = stash;
+    api.keepHeld = (s, id) => keepHeld(s, id, locked);
     api.adopt = function (account) {
         api.page = Object.assign({}, account);
         api.pageId = account.id;
@@ -678,7 +802,7 @@
         const next = fn(clone(idx));
         if (!next) return null;
         next.journal = null;
-        try { raw.setItem(INDEX_KEY, JSON.stringify(next)); } catch (_) { return null; }
+        try { strictly(() => raw.setItem(INDEX_KEY, JSON.stringify(next))); } catch (_) { return null; }
         return next;
     };
     api.freeze = function (reloadMs) {
@@ -766,6 +890,8 @@
         if (!idx && e.key !== null && e.newValue === null && !api.pageId) return;
         api.frozenByOther = true;
         api.freeze(1500);
+        if (!now && e.key === null) { const g = storageGuard(); if (g && g.drop) g.drop(); }
+        else api.keepHeld(stash, api.pageId);
     });
     if (booted.recovering && stash) {
         api.freeze();
@@ -778,11 +904,10 @@
             try { location.reload(); } catch (_) { }
         };
         if (tries >= 2) {
-            try {
-                const idx = parseIndex(raw.getItem(INDEX_KEY));
-                if (idx) raw.setItem(INDEX_KEY, JSON.stringify(Object.assign(idx, { journal: null })));
-            } catch (_) { }
-            finish();
+            Promise.resolve(locked(() => settle(raw, stash))).catch((e) => {
+                if (e && e.message === 'keep') return new Promise(() => { });
+                release(raw);
+            }).then(finish, finish);
         } else {
             Promise.resolve(locked(() => recover(raw, stash))).then(finish, finish);
         }
@@ -790,8 +915,10 @@
         if (booted.recovering) {
             try {
                 const idx = parseIndex(raw.getItem(INDEX_KEY));
-                if (idx && idx.journal && !idx.journal.store) runEffects(raw, idx.journal.effects);
-                if (idx) raw.setItem(INDEX_KEY, JSON.stringify(Object.assign(idx, { journal: null })));
+                strictly(() => {
+                    if (idx && idx.journal && !idx.journal.store) runEffects(raw, idx.journal.effects);
+                    if (idx) raw.setItem(INDEX_KEY, JSON.stringify(Object.assign(idx, { journal: null })));
+                });
                 try { sessionStorage.clear(); } catch (_) { }
             } catch (_) { }
         }

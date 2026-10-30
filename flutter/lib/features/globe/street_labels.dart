@@ -115,13 +115,14 @@ StreetLineLabel? lineLabel(
 
 List<int> placeLineLabels(
     List<StreetLabelCandidate?> cands, List<StreetBox> blocked,
-    {double pad = 2}) {
+    {double pad = 2, int? maxLabels}) {
+  final cap = maxLabels ?? kLineLabel.maxLabels;
   final placed = [...blocked];
   final out = <int>[];
   final seen = <StreetLabelCandidate>[];
   bool hit(StreetBox b) => placed.any((o) =>
       b.x0 - pad < o.x1 && o.x0 < b.x1 + pad && b.y0 - pad < o.y1 && o.y0 < b.y1 + pad);
-  for (var i = 0; i < cands.length && out.length < kLineLabel.maxLabels; i++) {
+  for (var i = 0; i < cands.length && out.length < cap; i++) {
     final c = cands[i];
     if (c == null) continue;
     if (seen.any((s) =>

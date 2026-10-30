@@ -466,6 +466,7 @@ window.nymHaptic = function (kind) {
         'resetTextSize':              function () { window.resetTextSize(); },
         'toggleLowDataModeFromStats': function (e) { window.toggleLowDataModeFromStats(e); },
         'toggleRelayTransportFromStats': function () { window.toggleRelayTransportFromStats(); },
+        'useDirectRelaysFromStats': function () { window.useDirectRelaysFromStats(); },
         'onTransparencyChange':       function (_e, t) { window.onTransparencyChange(t.value); },
         'onColumnsWallpaperChange':   function (_e, t) { window.onColumnsWallpaperChange(!!t.checked); },
         'addBlockedKeyword':          function () { nym().addBlockedKeyword(); },

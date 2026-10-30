@@ -69,6 +69,7 @@ import flutter_webrtc
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    raiseOpenFileLimit()
     UNUserNotificationCenter.current().delegate = self
     excludeMessageStoreFromBackup()
     NotificationCenter.default.addObserver(
@@ -120,6 +121,16 @@ import flutter_webrtc
       startVoipRegistry()
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  private func raiseOpenFileLimit() {
+    var limit = rlimit()
+    guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else { return }
+    let wanted: rlim_t = 4096
+    let target = min(wanted, limit.rlim_max)
+    guard limit.rlim_cur < target else { return }
+    limit.rlim_cur = target
+    _ = setrlimit(RLIMIT_NOFILE, &limit)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {

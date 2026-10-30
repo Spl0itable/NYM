@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/channels/channel_manager.dart';
 import '../../features/chat_lock/chat_lock_providers.dart';
+import '../../core/utils/nym_utils.dart';
 import '../../features/chat_nav/chat_nav.dart' show pinSort;
 import '../../features/chat_nav/chat_nav_providers.dart';
 import '../../features/groups/group_logic.dart';
@@ -273,18 +274,165 @@ final sidebarNymRowsProvider = Provider<SidebarRows<User>>((ref) {
     };
   }
   final now = DateTime.now().millisecondsSinceEpoch;
-  final users = nymsList.values
-      .where((u) => only == null || only.contains(u.pubkey))
-      .toList()
-    ..sort((a, b) => compareNymsListRows(a, b, now));
+  final users = only == null
+      ? nymsList.values
+      : nymsList.values.where((u) => only!.contains(u.pubkey));
   final controller = ref.read(nostrControllerProvider);
-  return SidebarRows([
-    for (final u in users)
-      SidebarRow(u, (
-        u,
-        u.nym,
-        u.effectiveStatus(isVerifiedBot: controller.isVerifiedBot(u.pubkey)),
-        u.profile?.picture,
-      )),
-  ], count: nymsListOnlineCount(users, now));
+  final order = ref.read(_nymOrderProvider)
+    ..update(users, now, controller.isVerifiedBot);
+  return SidebarRows(order.rows,
+      count: nymsListOnlineCount(order.users, now));
 });
+
+final _nymOrderProvider = Provider<NymListOrder>((ref) => NymListOrder());
+
+class _NymSlot {
+  _NymSlot(this.user, this.rank, this.nym)
+      : name = stripPubkeySuffix(nym).toLowerCase();
+
+  User user;
+  int rank;
+  String nym;
+  String name;
+  int seen = 0;
+  int seq = 0;
+  SidebarRow<User>? row;
+}
+
+int _nymRank(User u, int now) => switch (nymStatus(u, now)) {
+      UserStatus.online => 0,
+      UserStatus.away => 1,
+      _ => 2,
+    };
+
+int _slotOrder(_NymSlot a, _NymSlot b) {
+  final r = a.rank - b.rank;
+  if (r != 0) return r;
+  final n = a.name.compareTo(b.name);
+  if (n != 0) return n;
+  return a.seq - b.seq;
+}
+
+class NymListOrder {
+  final Map<String, _NymSlot> _slots = {};
+  List<_NymSlot> _order = [];
+  int _gen = 0;
+  int _seq = 0;
+
+  @visibleForTesting
+  int fullSorts = 0;
+
+  @visibleForTesting
+  int moves = 0;
+
+  List<User> users = const [];
+  List<SidebarRow<User>> rows = const [];
+
+  int _find(_NymSlot slot) {
+    var lo = 0;
+    var hi = _order.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (_slotOrder(_order[mid], slot) < 0) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
+
+  void update(Iterable<User> next, int now, bool Function(String) isBot) {
+    final gen = ++_gen;
+    final moved = <(_NymSlot, int, String)>[];
+    final added = <_NymSlot>[];
+    var kept = 0;
+    var last = 0;
+    var resequence = false;
+    for (final u in next) {
+      final nym = u.nym;
+      final rank = _nymRank(u, now);
+      final slot = _slots[u.pubkey];
+      if (slot == null) {
+        added.add(_slots[u.pubkey] = _NymSlot(u, rank, nym)
+          ..seen = gen
+          ..seq = last = ++_seq);
+        continue;
+      }
+      kept++;
+      if (slot.seq < last) resequence = true;
+      last = slot.seq;
+      slot
+        ..seen = gen
+        ..user = u;
+      if (slot.rank != rank || slot.nym != nym) {
+        moved.add((slot, rank, nym));
+      }
+    }
+    final gone = kept == _order.length
+        ? const <_NymSlot>[]
+        : [for (final s in _order) if (s.seen != gen) s];
+    final churn = moved.length + added.length + gone.length;
+    if (resequence) {
+      for (final u in next) {
+        _slots[u.pubkey]!.seq = ++_seq;
+      }
+    }
+    if (churn > 0 || resequence) {
+      if (resequence ||
+          _order.isEmpty ||
+          churn * 8 > _order.length + added.length) {
+        for (final (slot, rank, nym) in moved) {
+          slot
+            ..rank = rank
+            ..nym = nym
+            ..name = stripPubkeySuffix(nym).toLowerCase();
+        }
+        for (final s in gone) {
+          _slots.remove(s.user.pubkey);
+        }
+        _order = _slots.values.toList()..sort(_slotOrder);
+        fullSorts++;
+      } else {
+        for (final s in [...gone, for (final m in moved) m.$1]) {
+          final i = _find(s);
+          if (i < _order.length && identical(_order[i], s)) {
+            _order.removeAt(i);
+          } else {
+            _order.remove(s);
+          }
+        }
+        for (final s in gone) {
+          _slots.remove(s.user.pubkey);
+        }
+        for (final (slot, rank, nym) in moved) {
+          slot
+            ..rank = rank
+            ..nym = nym
+            ..name = stripPubkeySuffix(nym).toLowerCase();
+        }
+        for (final s in [for (final m in moved) m.$1, ...added]) {
+          _order.insert(_find(s), s);
+          moves++;
+        }
+      }
+    }
+    users = [for (final s in _order) s.user];
+    rows = [
+      for (final s in _order) _rowFor(s, isBot),
+    ];
+  }
+
+  SidebarRow<User> _rowFor(_NymSlot s, bool Function(String) isBot) {
+    final u = s.user;
+    final sig = (
+      u,
+      s.nym,
+      u.effectiveStatus(isVerifiedBot: isBot(u.pubkey)),
+      u.profile?.picture,
+    );
+    final row = s.row;
+    if (row != null && row.sig == sig) return row;
+    return s.row = SidebarRow(u, sig);
+  }
+}

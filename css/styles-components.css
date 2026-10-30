@@ -3268,10 +3268,6 @@ body.light-mode .gx-osm-attr {
     color: var(--text);
 }
 
-.gx-dot-joined {
-    background: #28e07a;
-}
-
 .gx-dot-saved {
     background: transparent;
     border: 2px solid #f5c518;

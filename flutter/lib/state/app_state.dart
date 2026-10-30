@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/constants/event_kinds.dart';
 import '../core/constants/history_window.dart';
 import '../core/utils/nym_utils.dart';
+import '../features/accounts/account_host.dart';
 import '../features/sync/sync_merge.dart'
     show SyncMergeCaps, tsMapMerge, tsMapNorm;
 import '../features/channels/channel_manager.dart';
@@ -24,6 +25,9 @@ import '../features/emoji/custom_emoji.dart'
         emojiPrefsProvider,
         kCustomEmojiMapKey,
         kCustomEmojiPacksKey,
+        kCustomEmojiPinnedKey,
+        kEmojiPackCoordRx,
+        kEmojiPacksUsedKey,
         loadCustomEmojiState;
 import '../features/emoji/emoji_data.dart';
 import '../features/emoji/emoji_prefetch.dart' show scheduleCustomEmojiPrefetch;
@@ -2893,7 +2897,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final existing = state.pmConversations.where((c) => c.pubkey == peer);
     if (hidden && existing.isEmpty) {
       _consumePendingEdit(id: m.id, nymMessageId: m.nymMessageId);
-      _scheduleEmit();
+      _scheduleEmitFor(key);
       onPmMessageIngested?.call(key);
       return true;
     }
@@ -2946,7 +2950,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
     // Apply a buffered out-of-order edit, matching on id or nymMessageId.
     _consumePendingEdit(id: m.id, nymMessageId: m.nymMessageId);
-    _scheduleEmit();
+    _scheduleEmitFor(key);
     onPmMessageIngested?.call(key);
     return true;
   }
@@ -3027,7 +3031,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       markChannelRead(key, m.createdAt);
     }
     _consumePendingEdit(id: m.id, nymMessageId: m.nymMessageId);
-    _scheduleEmit();
+    _scheduleEmitFor(key);
     onPmMessageIngested?.call(key);
     if (!blockedMember &&
         (idx >= 0 || m.isOwn || !state.isMessageFiltered(m))) {
@@ -7636,6 +7640,145 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
 
   final Set<String> _tagged = <String>{};
 
+  static const int pinnedMax = 120;
+  static const int usedMax = 40;
+  final List<String> _used = <String>[];
+  final Set<String> _wanted = <String>{};
+  final Set<String> _coordsTried = <String>{};
+  void Function()? _onCoordsWanted;
+  Timer? _coordTimer;
+
+  set onCoordsWanted(void Function()? f) => _onCoordsWanted = f;
+
+  Set<String> pinnedKeys() {
+    final keys = <String>{};
+    try {
+      final raw = jsonDecode(
+          _ref.read(keyValueStoreProvider).getString(kEmojiPackFavoritesKey) ??
+              '[]');
+      if (raw is List) keys.addAll(raw.whereType<String>());
+    } catch (_) {}
+    String? self;
+    try {
+      self = _ref.read(appStateProvider).selfPubkey;
+    } catch (_) {
+      self = null;
+    }
+    if (self != null && self.isNotEmpty) {
+      for (final p in _packsByKey.values) {
+        if (p.pubkey == self) keys.add(p.key);
+      }
+    }
+    for (final ref in _userPackRefs) {
+      if (ref.length > 6) keys.add(ref.substring(6));
+    }
+    keys.addAll(_used.reversed);
+    return keys;
+  }
+
+  Set<String> _ownPubkeys() {
+    final out = <String>{};
+    try {
+      final self = _ref.read(appStateProvider).selfPubkey;
+      if (self.isNotEmpty) out.add(self);
+    } catch (_) {}
+    try {
+      final accounts = _ref.read(accountsProvider);
+      if (accounts != null) {
+        for (final a in accounts.changes.value.accounts) {
+          if (a.pubkey.isNotEmpty) out.add(a.pubkey);
+        }
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  Future<List<Map<String, dynamic>>> fetchWanted(
+      Future<({List<Map<String, dynamic>> events, List<String> answered})>
+              Function(List<String> coords)
+          load) async {
+    final wanted = wantedCoords();
+    if (wanted.isEmpty) return const [];
+    final got = await load(wanted);
+    markCoordsTried(got.answered);
+    return got.events;
+  }
+
+  List<String> wantedCoords() {
+    final out = <String>[];
+    final seen = <String>{};
+    void add(String coord) {
+      if (!kEmojiPackCoordRx.hasMatch(coord) || !seen.add(coord)) return;
+      if (_packsByKey.containsKey(coord.substring(6))) return;
+      if (_coordsTried.contains(coord)) return;
+      out.add(coord);
+    }
+
+    for (final k in pinnedKeys()) {
+      add('30030:$k');
+    }
+    for (final c in _wanted) {
+      add(c);
+    }
+    return out;
+  }
+
+  void markCoordsTried(Iterable<String> coords) {
+    for (final c in coords) {
+      _coordsTried.add(c);
+      _wanted.remove(c);
+    }
+  }
+
+  void requestPack(String coord) {
+    if (!kEmojiPackCoordRx.hasMatch(coord)) return;
+    if (_packsByKey.containsKey(coord.substring(6))) return;
+    if (_wanted.length >= 500) return;
+    _wanted.add(coord);
+    scheduleCoordFetch();
+  }
+
+  void scheduleCoordFetch() {
+    if (_coordTimer != null) return;
+    _coordTimer = Timer(const Duration(milliseconds: 300), () {
+      _coordTimer = null;
+      final run = _onCoordsWanted;
+      if (run != null && mounted) run();
+    });
+  }
+
+  bool isPackUsed(CustomEmojiPack pack) => _used.contains(pack.key);
+
+  void noteUsed(String key) {
+    if (key.isEmpty) return;
+    if (_used.isNotEmpty && _used.last == key) return;
+    _used.remove(key);
+    _used.add(key);
+    while (_used.length > usedMax) {
+      _used.removeAt(0);
+    }
+    try {
+      _prefs?.setString(kEmojiPacksUsedKey, jsonEncode(_used));
+    } catch (_) {}
+    _persist();
+  }
+
+  String packKeyFor(String code, String url) {
+    final pinned = pinnedKeys();
+    final own = _ownPubkeys();
+    String found = '';
+    for (final p in _packsByKey.values) {
+      if (own.contains(p.pubkey)) continue;
+      for (final e in p.emojis) {
+        if (e.shortcode == code && e.url == url) {
+          if (found.isEmpty || pinned.contains(p.key)) found = p.key;
+          break;
+        }
+      }
+    }
+    return found;
+  }
+
   final Set<String> _asked = <String>{};
   bool _askPending = false;
   Timer? _askTimer;
@@ -7658,6 +7801,20 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     _asked.add(code);
     _askPending = true;
     if (_askTimer == null && _onLookup != null) _scheduleAsk();
+  }
+
+  void lookupDone({required bool more}) {
+    if (!more || !mounted) return;
+    String? again;
+    for (final code in _asked) {
+      if (!_codeToUrl.containsKey(code)) {
+        again = code;
+        break;
+      }
+    }
+    if (again == null) return;
+    _asked.remove(again);
+    noteMissing(again);
   }
 
   void _scheduleAsk() {
@@ -7692,6 +7849,12 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
       final prefs = await _ref.read(emojiPrefsProvider.future);
       _prefs = prefs;
       final cached = loadCustomEmojiState(prefs);
+      try {
+        final used = jsonDecode(prefs.getString(kEmojiPacksUsedKey) ?? '[]');
+        if (used is List) {
+          _used.addAll(used.whereType<String>().take(usedMax));
+        }
+      } catch (_) {}
       _codeToUrl.addAll(cached.codeToUrl);
       _tagged.addAll(cached.tagged);
       for (final p in cached.packs) {
@@ -7752,6 +7915,7 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
           marked = true;
           if (_tagged.length > 4000) _tagged.remove(_tagged.first);
         }
+        if (t.length >= 4 && !_codeToUrl.containsKey(t[1])) requestPack(t[3]);
       }
     }
     if (changed) {
@@ -7807,17 +7971,16 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
         if (registerEmojiQuiet(t[1], t[2])) changed = true;
       }
     }
-    if (changed) {
-      _publish();
-      _persist();
-    }
+    if (changed) _publish();
+    _persist();
+    scheduleCoordFetch();
   }
 
   bool isPackSubscribed(CustomEmojiPack pack) =>
       _userPackRefs.contains('30030:${pack.pubkey}:${pack.identifier}');
 
   /// NIP-30 emoji tags for known custom shortcodes in [content].
-  List<List<String>> emojiTagsForContent(String content) {
+  List<List<String>> emojiTagsForContent(String content, {bool anon = false}) {
     if (content.isEmpty || _codeToUrl.isEmpty) return const [];
     final out = <List<String>>[];
     final added = <String>{};
@@ -7827,7 +7990,13 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
       final url = _codeToUrl[code];
       if (url != null) {
         added.add(code);
-        out.add(['emoji', code, url]);
+        final packKey = anon ? '' : packKeyFor(code, url);
+        if (packKey.isNotEmpty) {
+          out.add(['emoji', code, url, '30030:$packKey']);
+          noteUsed(packKey);
+        } else {
+          out.add(['emoji', code, url]);
+        }
       }
     }
     return out;
@@ -7843,11 +8012,18 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     _packsByKey.clear();
     _userPackRefs.clear();
     _userListTs = 0;
+    _used.clear();
+    _wanted.clear();
+    _coordsTried.clear();
+    _coordTimer?.cancel();
+    _coordTimer = null;
     if (mounted) state = CustomEmojiState.empty;
     final prefs = _prefs;
     if (prefs != null) {
       prefs.remove(kCustomEmojiMapKey);
       prefs.remove(kCustomEmojiPacksKey);
+      prefs.remove(kCustomEmojiPinnedKey);
+      prefs.remove(kEmojiPacksUsedKey);
     }
   }
 
@@ -7878,6 +8054,8 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
   void dispose() {
     _askTimer?.cancel();
     _askTimer = null;
+    _coordTimer?.cancel();
+    _coordTimer = null;
     if (customEmojiMissingSink == noteMissing) customEmojiMissingSink = null;
     // Flush a pending write so teardown never loses registrations.
     if (_persistTimer != null) {
@@ -7903,11 +8081,20 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
           ? mapEntries.sublist(mapEntries.length - 5000)
           : mapEntries;
       prefs.setString(kCustomEmojiMapKey, jsonEncode(kept));
-      final packs = _packsByKey.values.toList()
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      final pinned = <CustomEmojiPack>[];
+      final keptKeys = <String>{};
+      for (final k in pinnedKeys()) {
+        if (pinned.length >= pinnedMax) break;
+        final p = _packsByKey[k];
+        if (p != null && keptKeys.add(k)) pinned.add(p);
+      }
+      final packs = <CustomEmojiPack>[
+        for (final p in _packsByKey.values)
+          if (!keptKeys.contains(p.key)) p,
+      ];
+      packs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       final capped = packs.length > 200 ? packs.sublist(0, 200) : packs;
-      final packJson = capped
-          .map((p) => {
+      Map<String, Object> packMap(CustomEmojiPack p) => {
                 'pubkey': p.pubkey,
                 'identifier': p.identifier,
                 'title': p.title,
@@ -7915,9 +8102,11 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
                 'emojis': p.emojis
                     .map((e) => {'shortcode': e.shortcode, 'url': e.url})
                     .toList(),
-              })
-          .toList();
-      prefs.setString(kCustomEmojiPacksKey, jsonEncode(packJson));
+              };
+      prefs.setString(
+          kCustomEmojiPinnedKey, jsonEncode(pinned.map(packMap).toList()));
+      prefs.setString(
+          kCustomEmojiPacksKey, jsonEncode(capped.map(packMap).toList()));
     } catch (_) {
       // Quota or serialization failures are non-fatal.
     }

@@ -13,6 +13,10 @@ import 'emoji_data.dart';
 /// Persisted keys: loose [shortcode,url] pairs (max 5000) and packs (max 200).
 const String kCustomEmojiMapKey = 'nym_custom_emojis';
 const String kCustomEmojiPacksKey = 'nym_custom_emoji_packs';
+const String kCustomEmojiPinnedKey = 'nym_custom_emoji_pinned';
+const String kEmojiPacksUsedKey = 'nym_emoji_packs_used';
+final RegExp kEmojiPackCoordRx =
+    RegExp(r'^30030:[0-9a-f]{64}:[^\x00-\x1f\x7f]{0,1024}$');
 
 final RegExp _rxShortcode = RegExp(r'^[a-zA-Z0-9_]+$');
 
@@ -96,7 +100,7 @@ CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read) {
 
   final packs = <CustomEmojiPack>[];
   final seenPackKeys = <String>{};
-  final rawPacks = read(kCustomEmojiPacksKey);
+  for (final rawPacks in [read(kCustomEmojiPinnedKey), read(kCustomEmojiPacksKey)]) {
   if (rawPacks != null && rawPacks.isNotEmpty) {
     try {
       final decoded = jsonDecode(rawPacks);
@@ -134,6 +138,7 @@ CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read) {
         }
       }
     } catch (_) {}
+  }
   }
 
   // Newest first; approximates the PWA order without live ownership info.

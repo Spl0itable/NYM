@@ -62,6 +62,9 @@ import '../features/i18n/i18n.dart';
 import '../features/i18n/localization_service.dart';
 import '../features/messages/format/nym_format.dart' show NymFormat;
 import '../features/globe/geo_explore.dart';
+import '../features/globe/street_cache.dart' show StreetCacheWipe;
+import 'package:flutter_cache_manager/flutter_cache_manager.dart'
+    show DefaultCacheManager;
 import '../features/messages/archive_gate.dart';
 import '../features/messages/trust_graph.dart';
 import '../features/messages/media_fallbacks.dart';
@@ -194,7 +197,10 @@ class _PendingDm {
 /// Ties identity, relays and crypto to the [AppState] store; composer sends flow through here.
 class NostrController {
   NostrController(this._ref) {
-    StorageGuard.onFull = (_) => _storageFullNotice();
+    StorageGuard.pruners
+      ..clear()
+      ..add(() => DefaultCacheManager().emptyCache())
+      ..add(() => StreetCacheWipe().wipe());
     try {
       ApiConfig.directMedia = _ref
           .read(keyValueStoreProvider)
@@ -760,7 +766,7 @@ class NostrController {
         .setBool(StorageKeys.relayDirectAck, true));
   }
 
-  Future<void> setUserDirectMode(bool direct) async {
+  Future<RelaySwitchOutcome> setUserDirectMode(bool direct) async {
     final kv = _ref.read(keyValueStoreProvider);
     if (direct) {
       await kv.setBool(StorageKeys.relayDirectMode, true);
@@ -769,13 +775,21 @@ class NostrController {
     }
     ApiConfig.directMedia = direct;
     final svc = _service;
-    if (svc == null) return;
-    await svc.setUserDirect(direct);
+    if (svc == null) return RelaySwitchOutcome.failed;
+    final outcome = await svc.setUserDirect(direct);
     _ref.read(appStateProvider.notifier).setProxyMode(svc.isProxyMode);
     _refreshEphemeralSubscriptions();
+    return outcome;
   }
 
-  void retryProxyNow() => _service?.retryProxyNow();
+  Future<RelaySwitchOutcome> retryProxyNow() async {
+    final svc = _service;
+    if (svc == null) return RelaySwitchOutcome.failed;
+    final outcome = await svc.tapRetryProxy();
+    _ref.read(appStateProvider.notifier).setProxyMode(svc.isProxyMode);
+    if (outcome == RelaySwitchOutcome.done) _refreshEphemeralSubscriptions();
+    return outcome;
+  }
 
   /// Surfaces command feedback in the active conversation; defaults to a debug print.
   void Function(String text)? _systemMessageSink;
@@ -796,16 +810,6 @@ class NostrController {
   }
 
   void showSystemNotice(String text) => _emitSystemMessage(text);
-
-  DateTime? _storageFullAt;
-
-  void _storageFullNotice() {
-    final now = DateTime.now();
-    final last = _storageFullAt;
-    if (last != null && now.difference(last).inSeconds < 60) return;
-    _storageFullAt = now;
-    showToast(tr('Storage on this device is full. Some changes could not be saved here.'));
-  }
 
   void _emitSystemMessage(String text) {
     final sink = _systemMessageSink;
@@ -2163,6 +2167,7 @@ class NostrController {
   }
 
   void _onEvent(NostrEvent event) {
+    if (_localEchoIds.isNotEmpty) _localEchoIds.remove(event.id);
     final appState = _ref.read(appStateProvider.notifier);
     if (event.kind == EventKind.appData) {
       // Kind 30078 is multiplexed by its `t` topic.
@@ -3731,6 +3736,14 @@ class NostrController {
 
   final Set<String> _anonOwnKeys = <String>{};
 
+  final Set<String> _localEchoIds = <String>{};
+
+  void _noteLocalEcho(String id) {
+    if (id.isEmpty) return;
+    _localEchoIds.add(id);
+    if (_localEchoIds.length > 500) _localEchoIds.remove(_localEchoIds.first);
+  }
+
   void _noteOwnAnonKey(String pubkey) {
     if (pubkey.isEmpty) return;
     _anonOwnKeys.add(pubkey);
@@ -4540,6 +4553,7 @@ class NostrController {
       m.nymMessageId = null;
     }
     m.expiresAt = u.expiration;
+    if (anonAuthor || _isAnonBotPubkey(u.recipient)) m.anonLane = true;
     if (anonAuthor) m.pubkey = self;
     // Our own archived copy says nothing about the recipient's encryption, so ask the recipient's verdict instead.
     if (m.isOwn) {
@@ -5833,7 +5847,7 @@ class NostrController {
               content: content,
               nym: anonNym,
               geohash: isGeo ? view.id : null,
-              emojiTags: _contentTags(content),
+              emojiTags: _contentTags(content, anon: true),
               powDifficulty: _ref.read(settingsProvider.notifier).powDifficulty,
               signerOverride: ephemeralSigner,
               threadRoot: threadRoot,
@@ -5851,6 +5865,7 @@ class NostrController {
           realMs: int.tryParse(signed.tagValue('ms') ?? ''),
           powTarget: EventMapper.powTargetOf(signed),
         );
+        _noteLocalEcho(signed.id);
       }
       if (publishHook == null) {
         final ok =
@@ -8281,8 +8296,10 @@ class NostrController {
     }
   }
 
-  List<List<String>> _contentTags(String content) => [
-        ..._ref.read(liveCustomEmojiProvider.notifier).emojiTagsForContent(content),
+  List<List<String>> _contentTags(String content, {bool anon = false}) => [
+        ..._ref
+            .read(liveCustomEmojiProvider.notifier)
+            .emojiTagsForContent(content, anon: anon),
         ...media_notes.imetaTagsForContent(
             content, _ref.read(mediaFallbacksProvider).fallbacksFor),
         ...quoteTagsForContent(content),
@@ -12361,9 +12378,20 @@ class NostrController {
 
   /// Persists the read watermark so a relaunch backfill isn't counted as unread.
   void _persistChannelLastRead() {
+    final st = _ref.read(appStateProvider);
+    final open = <String>{
+      for (final c in st.channels) ...[c.channel, c.geohash],
+      for (final p in st.pmConversations) p.pubkey,
+      for (final g in st.groups) g.id,
+    }..remove('');
+    final prefix = RegExp(r'^(#|pm[-:]|group[-:]|g:)');
     _ref.read(keyValueStoreProvider).setString(
           StorageKeys.channelLastRead,
-          jsonEncode(_ref.read(appStateProvider.notifier).channelLastRead),
+          jsonEncode(StorageGuard.bounded(
+            _ref.read(appStateProvider.notifier).channelLastRead,
+            (k) => open.contains(k) || open.contains(k.replaceFirst(prefix, '')),
+            nowMs: DateTime.now().millisecondsSinceEpoch,
+          )),
         );
   }
 
@@ -13153,22 +13181,12 @@ class NostrController {
     if (archive == null) return;
     final msgs = _ref.read(appStateProvider).messages[storageKey];
     if (msgs == null || msgs.isEmpty) return;
-    final ids = <String>[];
-    for (final m in msgs) {
-      if (m.id.isNotEmpty) ids.add(m.id);
-      final shared = m.nymMessageId;
-      if (scope == 'pm' &&
-          shared != null &&
-          shared.isNotEmpty &&
-          shared != m.id) {
-        ids.add(shared);
-      }
-    }
-    if (ids.isEmpty) return;
     final appState = _ref.read(appStateProvider.notifier);
-    unawaited(archive.backfill(
-      ids,
+    unawaited(archive.backfillMessages(
+      List<Message>.of(msgs),
       scope,
+      (m) => zapLookupSkip(m,
+          anonBotKey: _isAnonBotPubkey, localEchoes: _localEchoIds),
       (receipt) => _onPublicZapReceipt(receipt, appState),
     ));
   }
@@ -16218,16 +16236,53 @@ class NostrController {
   }
 
   /// Hydrates custom emoji from D1, verifying each event and routing through the live ingest handlers; best-effort.
-  Future<void> _restoreEmojiFromD1(StorageSync sync,
-      {bool force = false}) async {
+  Future<void> _restoreEmojiFromD1(StorageSync sync) async {
     if (_ownerGone) return;
-    _ref.read(liveCustomEmojiProvider.notifier).onLookup =
-        () => unawaited(_restoreEmojiFromD1(sync, force: true));
+    final live = _ref.read(liveCustomEmojiProvider.notifier);
+    live.onLookup = () => unawaited(_lookupEmoji(sync, live));
+    live.onCoordsWanted = () => unawaited(_fetchEmojiCoords(sync));
+    await _fetchEmojiCoords(sync);
+    final pinned = live.pinnedKeys();
+    await _applyArchivedEmoji(await sync.emojiGet(
+        heldPacks: _ref
+            .read(liveCustomEmojiProvider)
+            .packs
+            .any((p) => !pinned.contains(p.key))));
+  }
+
+  Future<void> _lookupEmoji(
+      StorageSync sync, LiveCustomEmojiNotifier live) async {
     try {
-      final events = await sync.emojiGet(
-          force: force,
-          heldPacks:
-              !force && _ref.read(liveCustomEmojiProvider).packs.isNotEmpty);
+      if (!_ownerGone) await _applyArchivedEmoji(await sync.emojiNextPage());
+    } catch (_) {}
+    live.lookupDone(more: sync.emojiCursor.isNotEmpty);
+  }
+
+  bool _emojiCoordsBusy = false;
+  bool _emojiCoordsAgain = false;
+
+  Future<void> _fetchEmojiCoords(StorageSync sync) async {
+    if (_ownerGone) return;
+    if (_emojiCoordsBusy) {
+      _emojiCoordsAgain = true;
+      return;
+    }
+    _emojiCoordsBusy = true;
+    try {
+      final live = _ref.read(liveCustomEmojiProvider.notifier);
+      await _applyArchivedEmoji(await live.fetchWanted(sync.emojiCoords));
+    } catch (_) {
+    } finally {
+      _emojiCoordsBusy = false;
+    }
+    if (_emojiCoordsAgain) {
+      _emojiCoordsAgain = false;
+      _ref.read(liveCustomEmojiProvider.notifier).scheduleCoordFetch();
+    }
+  }
+
+  Future<void> _applyArchivedEmoji(List<Map<String, dynamic>> events) async {
+    try {
       final parsed = <NostrEvent>[];
       for (final raw in events) {
         try {

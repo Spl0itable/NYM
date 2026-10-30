@@ -254,8 +254,9 @@ Object.assign(NYM.prototype, {
     async _storageApiStream(action, extra, withAuth = true, opts) {
         const apiHost = this._getApiHost();
         if (!apiHost) throw new Error('Storage is unavailable on this host.');
+        const noIdentity = !withAuth && !!(opts && opts.noIdentity);
         // Public reads (withAuth === false) ride the api socket even logged out.
-        if (this.pubkey || !withAuth) {
+        if (!noIdentity && (this.pubkey || !withAuth)) {
             try {
                 await this._ensureApiSocket();
                 return await this._apiSocketSend(action, extra, { stream: true, statsAction: opts && opts.statsAction });
@@ -267,11 +268,13 @@ Object.assign(NYM.prototype, {
             body.pubkey = this.pubkey;
             body.auth = await this._signBotAuth(action, 'storage');
         }
-        const resp = await this._edgeFetch(`https://${apiHost}/api/storage`, {
+        const init = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
-        });
+        };
+        if (noIdentity) init.credentials = 'omit';
+        const resp = await this._edgeFetch(`https://${apiHost}/api/storage`, init);
         const ct = resp.headers.get('Content-Type') || '';
         if (!resp.ok || ct.indexOf('application/x-ndjson') < 0) {
             let msg = `Request failed (${resp.status})`;
@@ -312,35 +315,92 @@ Object.assign(NYM.prototype, {
         if (buf) handle(buf);
     },
 
-    loadShopActiveCache() {
-        try {
-            const raw = localStorage.getItem('nym_shop_active_cache');
-            if (!raw) return;
-            const cache = JSON.parse(raw);
-            const now = Date.now();
-            const maxAge = 24 * 60 * 60 * 1000;
+    _SHOP_ACTIVE_KEY: 'nym_shop_active_cache',
+    _SHOP_ACTIVE_MAX_AGE: 24 * 60 * 60 * 1000,
+    _SHOP_ACTIVE_MAX: 400,
+    _SHOP_ACTIVE_BYTES: 200000,
+    _SHOP_ACTIVE_DELAY: 2000,
 
+    _shopActiveMem() {
+        if (this._shopActive) return this._shopActive;
+        const mem = new Map();
+        this._shopActive = mem;
+        let raw = null;
+        try { raw = localStorage.getItem(this._SHOP_ACTIVE_KEY); } catch (e) { raw = null; }
+        if (!raw) return mem;
+        let cache = null;
+        try { cache = JSON.parse(raw); } catch (e) { cache = null; }
+        const now = Date.now();
+        const rows = [];
+        if (cache && typeof cache === 'object') {
             for (const [pubkey, entry] of Object.entries(cache)) {
-                if (entry && entry.items && (now - entry.ts < maxAge)) {
-                    this.otherUsersShopItems.set(pubkey, entry.items);
-                    this.shopItemsCache.set(pubkey, {
-                        items: entry.items,
-                        timestamp: entry.ts,
-                        updatedAt: entry.updatedAt || 0
-                    });
-                }
+                if (entry && entry.items && typeof entry.ts === 'number' && now - entry.ts < this._SHOP_ACTIVE_MAX_AGE && now - entry.ts >= -60000) rows.push([pubkey, entry]);
             }
+        }
+        rows.sort((a, b) => a[1].ts - b[1].ts);
+        for (const [pubkey, entry] of rows.slice(-this._SHOP_ACTIVE_MAX)) mem.set(pubkey, entry);
+        const text = this._shopActiveText();
+        if (text !== raw) this._shopActiveWrite(text);
+        return mem;
+    },
+
+    _shopActiveText() {
+        const mem = this._shopActive;
+        const now = Date.now();
+        for (const [pubkey, entry] of mem) {
+            if (now - entry.ts >= this._SHOP_ACTIVE_MAX_AGE) mem.delete(pubkey);
+            else break;
+        }
+        while (mem.size > this._SHOP_ACTIVE_MAX) mem.delete(mem.keys().next().value);
+        const parts = [];
+        let size = 2;
+        const list = [...mem].reverse();
+        for (const [pubkey, entry] of list) {
+            const part = JSON.stringify(pubkey) + ':' + JSON.stringify(entry);
+            if (size + part.length + 1 > this._SHOP_ACTIVE_BYTES) break;
+            size += part.length + 1;
+            parts.push(part);
+        }
+        for (const [pubkey] of list.slice(parts.length)) mem.delete(pubkey);
+        return '{' + parts.reverse().join(',') + '}';
+    },
+
+    _shopActiveWrite(text) {
+        try {
+            if (text === '{}') localStorage.removeItem(this._SHOP_ACTIVE_KEY);
+            else localStorage.setItem(this._SHOP_ACTIVE_KEY, text);
         } catch (e) {}
     },
 
+    _shopActiveSchedule() {
+        if (this._shopActiveTimer) return;
+        this._shopActiveTimer = setTimeout(() => {
+            this._shopActiveTimer = null;
+            if (this._panicking || this._deletingAccount) return;
+            if (this._shopActive) this._shopActiveWrite(this._shopActiveText());
+        }, this._SHOP_ACTIVE_DELAY);
+    },
+
+    loadShopActiveCache() {
+        const mem = this._shopActiveMem();
+        for (const [pubkey, entry] of mem) {
+            this.otherUsersShopItems.set(pubkey, entry.items);
+            this.shopItemsCache.set(pubkey, {
+                items: entry.items,
+                timestamp: entry.ts,
+                updatedAt: entry.updatedAt || 0
+            });
+        }
+    },
+
     cacheShopActiveItems(pubkey, items, updatedAt = 0) {
-        try {
-            const raw = localStorage.getItem('nym_shop_active_cache');
-            const cache = raw ? JSON.parse(raw) : {};
-            cache[pubkey] = { items, ts: Date.now(), updatedAt };
-            localStorage.setItem('nym_shop_active_cache', JSON.stringify(cache));
-            this.shopItemsCache.set(pubkey, { items, timestamp: Date.now(), updatedAt });
-        } catch (e) {}
+        const now = Date.now();
+        const mem = this._shopActiveMem();
+        mem.delete(pubkey);
+        mem.set(pubkey, { items, ts: now, updatedAt });
+        if (mem.size > this._SHOP_ACTIVE_MAX) mem.delete(mem.keys().next().value);
+        this.shopItemsCache.set(pubkey, { items, timestamp: now, updatedAt });
+        this._shopActiveSchedule();
     },
 
     invalidateShopCache(pubkey) {
@@ -350,16 +410,7 @@ Object.assign(NYM.prototype, {
         if (this._shopStatusMissAt) this._shopStatusMissAt.delete(pubkey);
         if (!this._shopStatusForceFresh) this._shopStatusForceFresh = new Set();
         this._shopStatusForceFresh.add(pubkey);
-        try {
-            const raw = localStorage.getItem('nym_shop_active_cache');
-            if (raw) {
-                const cache = JSON.parse(raw);
-                if (cache[pubkey]) {
-                    delete cache[pubkey];
-                    localStorage.setItem('nym_shop_active_cache', JSON.stringify(cache));
-                }
-            }
-        } catch (e) {}
+        if (this._shopActiveMem().delete(pubkey)) this._shopActiveSchedule();
         this._queueShopStatusFetch(pubkey);
     },
 

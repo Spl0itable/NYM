@@ -1103,7 +1103,7 @@ export async function onRequest(context) {
 
   function emojiCoord(kind, pubkey, dTag) {
     if (!pubkey) return null;
-    if (typeof dTag === 'string' && /\s/.test(dTag)) return null;
+    if (kind === 30030 && typeof dTag === 'string' && (dTag.length > 1024 || /[\u0000-\u001f\u007f]/.test(dTag))) return null;
     return kind + ':' + pubkey + ':' + (kind === 30030 ? (dTag || '') : '');
   }
 
@@ -1131,6 +1131,11 @@ export async function onRequest(context) {
       'CREATE TABLE IF NOT EXISTS emoji_packs (coord TEXT PRIMARY KEY, kind INTEGER NOT NULL, ' +
       'pubkey TEXT NOT NULL, d TEXT, created_at INTEGER NOT NULL, json TEXT NOT NULL, stored_at INTEGER NOT NULL)'
     ).run();
+    try {
+      await CHANNELS_DB.prepare(
+        'CREATE INDEX IF NOT EXISTS emoji_packs_kind_created_coord ON emoji_packs (kind, created_at DESC, coord DESC)'
+      ).run();
+    } catch {}
     emojiSchemaReady = true;
   }
 
@@ -2321,6 +2326,7 @@ export async function onRequest(context) {
           if (msgType === 'RELAYS') {
             const config = msg[1];
             if (!config || typeof config !== 'object') return;
+            sendPoolStatus();
             if (!relaysBucket.take()) {
               pendingRelaysConfig = config;
               if (!relaysTimer) {

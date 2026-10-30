@@ -5,21 +5,44 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 
 import '../identity/panic_wipe.dart';
-import 'street_bundle.dart';
 import 'street_plan.dart';
 
 const String kStreetCacheDir = 'nym-map';
 
+typedef StreetMeta = ({int build, int fetchedAt});
+
+class StreetHalt {
+  static final Set<void Function()> _live = {};
+
+  static void add(void Function() halt) => _live.add(halt);
+
+  static void remove(void Function() halt) => _live.remove(halt);
+
+  static void haltAll() {
+    for (final h in [..._live]) {
+      try {
+        h();
+      } catch (_) {}
+    }
+  }
+}
+
 abstract class StreetStore {
-  Future<Uint8List?> read(String cell);
-  Future<void> write(String cell, Uint8List bytes);
-  Future<int?> negativeUntil(String cell);
-  Future<void> putNegative(String cell, int untilMs);
+  Future<Uint8List?> read(String key);
+  Future<void> write(String key, Uint8List bytes);
+  Future<int?> negativeUntil(String key);
+  Future<void> putNegative(String key, int untilMs);
+  Future<StreetMeta?> readMeta();
+  Future<void> writeMeta(int build, int fetchedAt);
+  Future<void> dropOtherBuilds(int build);
   Future<void> sweep();
   Future<void> wipe();
+  void close();
 }
 
 int _wallNow() => DateTime.now().millisecondsSinceEpoch;
+
+bool _ofBuild(String key, int build) => key.startsWith('$build/');
 
 class StreetMemoryStore implements StreetStore {
   StreetMemoryStore({this.capBytes = 16777216, int Function()? now})
@@ -29,18 +52,29 @@ class StreetMemoryStore implements StreetStore {
   final int Function() _now;
   final Map<String, Uint8List> _data = {};
   final Map<String, int> _neg = {};
+  StreetMeta? _meta;
+  bool _closed = false;
 
   @override
-  Future<Uint8List?> read(String cell) async {
-    final b = _data.remove(cell);
-    if (b != null) _data[cell] = b;
+  void close() {
+    _closed = true;
+    _data.clear();
+    _neg.clear();
+    _meta = null;
+  }
+
+  @override
+  Future<Uint8List?> read(String key) async {
+    final b = _data.remove(key);
+    if (b != null) _data[key] = b;
     return b;
   }
 
   @override
-  Future<void> write(String cell, Uint8List bytes) async {
-    _data.remove(cell);
-    _data[cell] = bytes;
+  Future<void> write(String key, Uint8List bytes) async {
+    if (_closed || parseStreetCacheKey(key) == null) return;
+    _data.remove(key);
+    _data[key] = bytes;
     var total = _data.values.fold<int>(0, (a, b) => a + b.length);
     while (total > capBytes && _data.length > 1) {
       final k = _data.keys.first;
@@ -49,18 +83,34 @@ class StreetMemoryStore implements StreetStore {
   }
 
   @override
-  Future<int?> negativeUntil(String cell) async {
-    final u = _neg[cell];
+  Future<int?> negativeUntil(String key) async {
+    final u = _neg[key];
     if (u == null) return null;
     if (_now() >= u) {
-      _neg.remove(cell);
+      _neg.remove(key);
       return null;
     }
     return u;
   }
 
   @override
-  Future<void> putNegative(String cell, int untilMs) async => _neg[cell] = untilMs;
+  Future<void> putNegative(String key, int untilMs) async {
+    if (!_closed) _neg[key] = untilMs;
+  }
+
+  @override
+  Future<StreetMeta?> readMeta() async => _meta;
+
+  @override
+  Future<void> writeMeta(int build, int fetchedAt) async {
+    if (!_closed) _meta = (build: build, fetchedAt: fetchedAt);
+  }
+
+  @override
+  Future<void> dropOtherBuilds(int build) async {
+    _data.removeWhere((k, _) => !_ofBuild(k, build));
+    _neg.removeWhere((k, _) => !_ofBuild(k, build));
+  }
 
   @override
   Future<void> sweep() async {}
@@ -69,6 +119,7 @@ class StreetMemoryStore implements StreetStore {
   Future<void> wipe() async {
     _data.clear();
     _neg.clear();
+    _meta = null;
   }
 }
 
@@ -85,19 +136,38 @@ class StreetFileCache implements StreetStore {
   final int capBytes;
   final int Function() _now;
   Map<String, int>? _neg;
+  bool _closed = false;
 
-  Future<Directory> _dir() async =>
-      Directory('${(await _base()).path}/$kStreetCacheDir/v1');
+  bool get _off => _closed || PanicWipe.inProgress;
 
-  Future<File?> _file(String cell) async {
-    if (!kStreetCellRe.hasMatch(cell)) return null;
-    return File('${(await _dir()).path}/$cell.nmt');
+  @override
+  void close() {
+    _closed = true;
+    _neg = null;
+  }
+
+  Future<void> _scrub() async {
+    try {
+      final d = Directory(await _root());
+      if (await d.exists()) await d.delete(recursive: true);
+    } catch (_) {}
+  }
+
+  Future<String> _root() async => '${(await _base()).path}/$kStreetCacheDir';
+
+  Future<Directory> _dir() async => Directory('${await _root()}/v2');
+
+  Future<File?> _file(String key) async {
+    final k = parseStreetCacheKey(key);
+    if (k == null) return null;
+    return File('${await _root()}/${streetFlutterFile(k.build, k.z, k.x, k.y).substring(kStreetCacheDir.length + 1)}');
   }
 
   @override
-  Future<Uint8List?> read(String cell) async {
-    final f = await _file(cell);
-    if (f == null) return null;
+  Future<Uint8List?> read(String key) async {
+    if (_closed) return null;
+    final f = await _file(key);
+    if (f == null || _closed) return null;
     try {
       if (!await f.exists()) return null;
       final saved = (await f.lastModified()).millisecondsSinceEpoch;
@@ -114,17 +184,15 @@ class StreetFileCache implements StreetStore {
   }
 
   @override
-  Future<void> write(String cell, Uint8List bytes) async {
-    if (PanicWipe.inProgress) return;
-    final f = await _file(cell);
-    if (f == null || PanicWipe.inProgress) return;
+  Future<void> write(String key, Uint8List bytes) async {
+    if (_off) return;
+    final f = await _file(key);
+    if (f == null || _off) return;
     try {
       await f.parent.create(recursive: true);
+      if (_off) return await _scrub();
       await f.writeAsBytes(bytes, flush: true);
-      if (PanicWipe.inProgress) {
-        await f.delete();
-        return;
-      }
+      if (_off) return await _scrub();
       final t = DateTime.fromMillisecondsSinceEpoch(_now());
       await f.setLastModified(t);
       await f.setLastAccessed(t);
@@ -136,8 +204,8 @@ class StreetFileCache implements StreetStore {
     final d = await _dir();
     if (!await d.exists()) return const [];
     final out = <(File, FileStat)>[];
-    await for (final e in d.list()) {
-      if (e is File && e.path.endsWith('.nmt')) out.add((e, await e.stat()));
+    await for (final e in d.list(recursive: true)) {
+      if (e is File && e.path.endsWith('.mvt.gz')) out.add((e, await e.stat()));
     }
     return out;
   }
@@ -147,7 +215,10 @@ class StreetFileCache implements StreetStore {
 
   @override
   Future<void> sweep() async {
+    if (_off) return;
     try {
+      final v1 = Directory('${await _root()}/v1');
+      if (await v1.exists()) await v1.delete(recursive: true);
       await _evict();
     } catch (_) {}
   }
@@ -191,44 +262,83 @@ class StreetFileCache implements StreetStore {
     return _neg = out;
   }
 
-  Future<void> _saveNeg(Map<String, int> m) async {
-    if (PanicWipe.inProgress) return;
+  Future<void> _saveJson(String name, Object value) async {
+    if (_off) return;
     try {
       final d = await _dir();
-      if (PanicWipe.inProgress) return;
+      if (_off) return;
       await d.create(recursive: true);
-      await File('${d.path}/neg.json').writeAsString(jsonEncode(m), flush: true);
+      if (_off) return await _scrub();
+      await File('${d.path}/$name').writeAsString(jsonEncode(value), flush: true);
+      if (_off) return await _scrub();
     } catch (_) {}
   }
 
   @override
-  Future<int?> negativeUntil(String cell) async {
+  Future<int?> negativeUntil(String key) async {
     final m = await _loadNeg();
-    final u = m[cell];
+    final u = m[key];
     if (u == null) return null;
     if (_now() >= u) {
-      m.remove(cell);
-      await _saveNeg(m);
+      m.remove(key);
+      await _saveJson('neg.json', m);
       return null;
     }
     return u;
   }
 
   @override
-  Future<void> putNegative(String cell, int untilMs) async {
-    if (PanicWipe.inProgress) return;
+  Future<void> putNegative(String key, int untilMs) async {
+    if (_off || parseStreetCacheKey(key) == null) return;
     final m = await _loadNeg();
     final now = _now();
     m.removeWhere((_, v) => v <= now);
-    m[cell] = untilMs;
-    await _saveNeg(m);
+    m[key] = untilMs;
+    await _saveJson('neg.json', m);
+  }
+
+  @override
+  Future<StreetMeta?> readMeta() async {
+    if (_closed) return null;
+    try {
+      final f = File('${(await _dir()).path}/meta.json');
+      if (_closed || !await f.exists()) return null;
+      final j = jsonDecode(await f.readAsString());
+      if (j is Map && j['build'] is int && j['fetchedAt'] is int && (j['build'] as int) > 0) {
+        return (build: j['build'] as int, fetchedAt: j['fetchedAt'] as int);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  @override
+  Future<void> writeMeta(int build, int fetchedAt) =>
+      _saveJson('meta.json', {'build': build, 'fetchedAt': fetchedAt});
+
+  @override
+  Future<void> dropOtherBuilds(int build) async {
+    if (_off) return;
+    try {
+      final d = await _dir();
+      if (await d.exists()) {
+        await for (final e in d.list()) {
+          if (e is Directory && e.uri.pathSegments.where((s) => s.isNotEmpty).last != '$build') {
+            await e.delete(recursive: true);
+          }
+        }
+      }
+      final m = await _loadNeg();
+      final before = m.length;
+      m.removeWhere((k, _) => !_ofBuild(k, build));
+      if (m.length != before) await _saveJson('neg.json', m);
+    } catch (_) {}
   }
 
   @override
   Future<void> wipe() async {
     _neg = null;
     try {
-      final d = Directory('${(await _base()).path}/$kStreetCacheDir');
+      final d = Directory(await _root());
       if (await d.exists()) await d.delete(recursive: true);
     } catch (_) {}
   }
@@ -240,5 +350,8 @@ class StreetCacheWipe implements PanicFileStore {
   final Future<Directory> Function() _base;
 
   @override
-  Future<void> wipe() => StreetFileCache(base: _base).wipe();
+  Future<void> wipe() {
+    StreetHalt.haltAll();
+    return StreetFileCache(base: _base).wipe();
+  }
 }

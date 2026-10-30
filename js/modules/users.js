@@ -2447,21 +2447,8 @@ Object.assign(NYM.prototype, {
             localStorage.setItem(key, value);
             return true;
         } catch (e) {
-            const guard = typeof NymStorage !== 'undefined' && NymStorage && typeof NymStorage.isQuota === 'function' ? NymStorage : null;
-            if (!guard || guard.isQuota(e)) this._storageFullNotice();
             return false;
         }
-    },
-
-    _storageFullNotice() {
-        const now = Date.now();
-        if (this._storageFullNoticeAt && now - this._storageFullNoticeAt < 60000) return;
-        this._storageFullNoticeAt = now;
-        const text = typeof this.uiText === 'function'
-            ? this.uiText('Storage on this device is full. Some changes could not be saved here.')
-            : 'Storage on this device is full. Some changes could not be saved here.';
-        if (typeof this.showToast === 'function') this.showToast(text, { kind: 'error' });
-        else if (typeof this.displaySystemMessage === 'function') this.displaySystemMessage(text);
     },
 
     isFriend(pubkey) {
@@ -2756,8 +2743,3 @@ Object.defineProperty(NYM.prototype, 'nym', {
 
 NYM.prototype.isUsableNym = nymUsableNick;
 
-if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-    window.addEventListener('nym-storage-full', () => {
-        if (typeof nym !== 'undefined' && nym && typeof nym._storageFullNotice === 'function') nym._storageFullNotice();
-    });
-}

@@ -23,6 +23,8 @@ import '../../../services/platform/deep_links.dart';
 import '../../../state/app_state.dart';
 import '../../../state/nostr_controller.dart';
 import '../../../state/settings_provider.dart';
+import '../../../widgets/chat/row_tap.dart';
+import '../../../widgets/chat/eased.dart';
 import '../../../widgets/chat/messages_list.dart'
     show MessageListScroller, messageListScrollerProvider;
 import '../../../widgets/chat/relative_time_ticker.dart';
@@ -865,7 +867,7 @@ class _RichInlineState extends State<_RichInline> {
       labeled = true;
     }
 
-    Widget blurred(Widget child) => GestureDetector(
+    Widget blurred(Widget child) => RowTap(
           behavior: HitTestBehavior.opaque,
           onTap: onReveal,
           child: ExcludeSemantics(
@@ -1153,6 +1155,12 @@ class _RichInlineState extends State<_RichInline> {
           retryOnError: true,
           errorChild: Text(':$shortcode:', style: base),
         );
+        final tipped = NymTooltip(
+          message: ':$shortcode:',
+          excludeFromSemantics: true,
+          triggerMode: TooltipTriggerMode.manual,
+          child: image,
+        );
         // Bottom 0.375em below the baseline; emoji-only centers instead.
         return WidgetSpan(
           alignment: emojiOnly
@@ -1162,8 +1170,8 @@ class _RichInlineState extends State<_RichInline> {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 1),
             child: emojiOnly
-                ? image
-                : EmojiBaselineDrop(drop: size * 0.375, child: image),
+                ? tipped
+                : EmojiBaselineDrop(drop: size * 0.375, child: tipped),
           ),
         );
       case ChannelLinkChip(:final ref, :final label):
@@ -1540,7 +1548,7 @@ class _MentionChip extends ConsumerWidget {
     }
 
     if (onTap == null) return chip;
-    return GestureDetector(
+    return RowTap(
       behavior: HitTestBehavior.opaque,
       onTap: () => onTap!(node),
       child: chip,
@@ -1589,7 +1597,7 @@ class _InviteChip extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    return GestureDetector(
+    return RowTap(
       onTap: () => _join(context, ref),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -1634,7 +1642,7 @@ class _CallLinkChipView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return GestureDetector(
+    return RowTap(
       key: const ValueKey('gtCallLinkChip'),
       onTap: () => joinCallLinkFlow(context, token),
       child: Container(
@@ -2845,7 +2853,7 @@ class _CodeCopyButtonState extends State<_CodeCopyButton> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return GestureDetector(
+    return RowTap(
       onTap: _copy,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -3265,10 +3273,10 @@ class _QuoteBox extends ConsumerWidget {
       );
     }
     return _HoverBuilder(
-      builder: (context, hovered) => GestureDetector(
+      builder: (context, hovered) => RowTap(
         behavior: HitTestBehavior.translucent,
         onTap: () => _jumpToQuotedSource(ref),
-        child: AnimatedContainer(
+        child: EasedContainer(
           duration: NymMotion.transition,
           curve: NymMotion.curve,
           padding: const EdgeInsets.only(left: 12),
@@ -3525,11 +3533,13 @@ class _MediaTile extends ConsumerWidget {
     }
 
     // SVG-aware; undecodable images show a placeholder instead of throwing.
-    final image = InlineNetworkImage(
+    InlineNetworkImage photo({double? blurSigma, Size? cell}) =>
+        InlineNetworkImage(
       url: proxiedMedia(item.url),
       fallbackUrls: [for (final u in mirrors) proxiedMedia(u)],
       fit: BoxFit.cover,
-      width: maxSize,
+      width: cell?.width ?? maxSize,
+      height: cell?.height,
       // 300px-wide 4:3 slot while the image decodes.
       placeholder: Container(
         width: maxSize,
@@ -3543,18 +3553,28 @@ class _MediaTile extends ConsumerWidget {
         alignment: Alignment.center,
         child: Icon(Icons.broken_image, color: c.textDim),
       ),
+      blurSigma: blurSigma,
     );
 
-    // Tap opens fullscreen, after revealing any blur.
-    final tappableImage = blur
-        ? _BlurReveal(
-            onRevealedTap: () => _openFullscreen(context),
-            child: image,
-          )
-        : GestureDetector(
-            onTap: () => _openFullscreen(context),
-            child: image,
-          );
+    Widget tappable([Size? cell]) {
+      final image = photo(cell: cell);
+      return blur
+          ? _BlurReveal(
+              onRevealedTap: () => _openFullscreen(context),
+              blurred: photo(blurSigma: 20, cell: cell),
+              child: image,
+            )
+          : RowTap(
+              onTap: () => _openFullscreen(context),
+              child: image,
+            );
+    }
+
+    final tappableImage = inGallery
+        ? LayoutBuilder(
+            builder: (context, box) => tappable(
+                box.hasTightWidth && box.hasTightHeight ? box.biggest : null))
+        : tappable();
     // Desktop hover lift, shadow and border brighten; never on touch.
     if (inGallery) {
       // Gallery cells have no border and are clipped by the cell.
@@ -3563,10 +3583,10 @@ class _MediaTile extends ConsumerWidget {
           borderRadius: radius,
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: maxSize, maxHeight: maxSize),
-            child: AnimatedScale(
-              scale: hovered ? 1.02 : 1.0,
+            child: EasedScale(
               duration: NymMotion.transition,
               curve: NymMotion.curve,
+              scale: hovered ? 1.02 : 1.0,
               child: tappableImage,
             ),
           ),
@@ -3575,11 +3595,11 @@ class _MediaTile extends ConsumerWidget {
     }
     // Lone images have a glass border that brightens on hover.
     return _HoverBuilder(
-      builder: (context, hovered) => AnimatedScale(
-        scale: hovered ? 1.02 : 1.0,
+      builder: (context, hovered) => EasedScale(
         duration: NymMotion.transition,
         curve: NymMotion.curve,
-        child: AnimatedContainer(
+        scale: hovered ? 1.02 : 1.0,
+        child: EasedContainer(
           duration: NymMotion.transition,
           curve: NymMotion.curve,
           decoration: BoxDecoration(
@@ -3953,7 +3973,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
       return Semantics(
         button: true,
         label: tr('Spoiler, tap to reveal'),
-        child: GestureDetector(
+        child: RowTap(
           key: const ValueKey('viewerSpoiler'),
           onTap: _reveal,
           child: Container(
@@ -4009,7 +4029,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
         body: Stack(
           children: [
             Positioned.fill(
-              child: GestureDetector(
+              child: RowTap(
                 onTap: () => Navigator.of(context).maybePop(),
                 behavior: HitTestBehavior.opaque,
                 child: ColoredBox(
@@ -4140,7 +4160,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
       button: true,
       label: label,
       excludeSemantics: label != null,
-      child: GestureDetector(
+      child: RowTap(
         onTap: onTap,
         child: Container(
           width: side,
@@ -4164,7 +4184,9 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
 
 /// Image blurred until tapped.
 class _BlurReveal extends StatefulWidget {
-  const _BlurReveal({required this.child, this.onRevealedTap});
+  const _BlurReveal(
+      {required this.blurred, required this.child, this.onRevealedTap});
+  final Widget blurred;
   final Widget child;
 
   /// Tapped once revealed, e.g. to open fullscreen.
@@ -4180,18 +4202,14 @@ class _BlurRevealState extends State<_BlurReveal> {
   @override
   Widget build(BuildContext context) {
     if (_revealed) {
-      return GestureDetector(
+      return RowTap(
         onTap: widget.onRevealedTap,
         child: widget.child,
       );
     }
-    // blur(20px); the desktop hover lightening is omitted.
-    return GestureDetector(
+    return RowTap(
       onTap: () => setState(() => _revealed = true),
-      child: ImageFiltered(
-        imageFilter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: widget.child,
-      ),
+      child: widget.blurred,
     );
   }
 }
@@ -4408,7 +4426,7 @@ class _CollapsibleState extends ConsumerState<_Collapsible> {
         ),
         // Full-width primary toggle; bubbles add a top divider. Shown only while overflowing.
         if (!fits)
-          GestureDetector(
+          RowTap(
             behavior: HitTestBehavior.opaque,
             onTap: () => _setExpanded(!_expanded),
             child: Container(

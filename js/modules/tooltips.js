@@ -114,13 +114,15 @@
     }
 
     function textFor(el) {
+        var raw = el.getAttribute('data-tip-raw');
+        if (raw) return { label: raw, key: '', raw: true };
         var explicit = el.getAttribute('data-tip');
         var label = explicit ? ui(explicit) : (el.getAttribute('aria-label') || '');
         var key = el.getAttribute('data-tip-key') || '';
         return { label: label, key: key };
     }
 
-    var POPUPS = '#sendMenu, #attachMenu, #translateInputDropdown.active, #gifPicker.active, .enhanced-emoji-modal';
+    var POPUPS = '#sendMenu, #attachMenu, #translateInputDropdown.active, #gifPicker.active, .enhanced-emoji-modal, .reactors-modal';
 
     function popupRects(el) {
         var out = [];
@@ -178,6 +180,10 @@
         t.textContent = '';
         var span = document.createElement('span');
         span.textContent = parts.label;
+        if (parts.raw) {
+            span.setAttribute('translate', 'no');
+            span.setAttribute('data-no-i18n', '');
+        }
         t.appendChild(span);
         if (parts.key) {
             var k = document.createElement('kbd');

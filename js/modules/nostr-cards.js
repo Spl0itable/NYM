@@ -129,13 +129,13 @@
         },
 
         // Local stores first, then a one-shot relay REQ; results are cached and concurrent lookups shared.
-        resolveNostrRef(token) {
+        resolveNostrRef(token, opts) {
             const ref = this._decodeNostrRef(token);
             if (!ref) return Promise.resolve(null);
             const key = this._nostrRefCacheKey(ref);
             if (!key) return Promise.resolve(null);
 
-            const local = this._localNostrRefCard(ref);
+            const local = this._localNostrRefCard(ref, opts);
             if (local) return Promise.resolve(local);
 
             this._loadNostrRefCache();
@@ -158,13 +158,20 @@
             return p;
         },
 
-        _localNostrRefCard(ref) {
+        _anonLookupContext(m) {
+            if (!m) return false;
+            if (typeof this._anonNymbotMessage === 'function' && this._anonNymbotMessage(m)) return true;
+            const pk = typeof m.pubkey === 'string' ? m.pubkey : '';
+            return !!(pk && pk !== this.pubkey && typeof this._ownOtherKey === 'function' && this._ownOtherKey(pk));
+        },
+
+        _localNostrRefCard(ref, opts) {
             if (!ref) return null;
             if (ref.type === 'profile') {
                 const card = this._profileNostrRefCard(ref.pubkey);
                 if (card) return card;
                 if (typeof this.queueProfileFetch === 'function') {
-                    try { this.queueProfileFetch(ref.pubkey); } catch (_) { }
+                    try { this.queueProfileFetch(ref.pubkey, opts && opts.anon ? { anon: true } : undefined); } catch (_) { }
                 }
                 return null;
             }
@@ -356,12 +363,12 @@
                 `${suffix ? `<span class="nym-suffix">#${esc(suffix)}</span>` : ''}</span>`;
         },
 
-        _hydrateCardAuthor(cardEl, data) {
+        _hydrateCardAuthor(cardEl, data, anon) {
             const pubkey = data && data.pubkey;
             if (!cardEl || !pubkey) return;
             if (typeof this.hasResolvedNym === 'function' && this.hasResolvedNym(pubkey)) return;
             if (typeof this.fetchProfileDirect !== 'function') return;
-            Promise.resolve(this.fetchProfileDirect(pubkey)).then(() => {
+            Promise.resolve(this.fetchProfileDirect(pubkey, anon ? { anon: true } : undefined)).then(() => {
                 const span = cardEl.querySelector('.nostr-card-author');
                 const nym = this.resolveDisplayNym(pubkey, '');
                 if (!span || !nym || nym.toLowerCase() === 'nym') return;
@@ -443,7 +450,7 @@
         },
 
         // Idempotent, and paints straight from the cache when warm.
-        _attachNostrCards(messageEl) {
+        _attachNostrCards(messageEl, message) {
             if (!messageEl || messageEl.dataset.nostrCardsAttached === '1') return;
             const chips = messageEl.querySelectorAll('.nostr-ref[data-nostr-ref]');
             if (chips.length === 0) return;
@@ -462,6 +469,7 @@
                 if (tokens.length >= 4) break;
             }
             if (tokens.length === 0) return;
+            const anon = this._anonLookupContext(message);
 
             const paint = (data) => {
                 if (!data || !container.isConnected) return;
@@ -473,12 +481,12 @@
                 el.innerHTML = html;
                 container.appendChild(el);
                 this._attachCardBody(el, data);
-                this._hydrateCardAuthor(el, data);
+                this._hydrateCardAuthor(el, data, anon);
             };
 
             const run = () => {
                 for (const token of tokens) {
-                    this.resolveNostrRef(token).then(paint).catch(() => { });
+                    this.resolveNostrRef(token, anon ? { anon: true } : undefined).then(paint).catch(() => { });
                 }
             };
 

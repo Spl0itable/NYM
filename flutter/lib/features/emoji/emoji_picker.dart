@@ -195,7 +195,9 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
         ? 0
         : isOwn(p)
             ? 1
-            : (isSubscribed(p) ? 2 : 3);
+            : (isSubscribed(p)
+                ? 2
+                : (liveNotifier.isPackUsed(p) ? 3 : 4));
     final orderedPacks = [...custom.packs]..sort((a, b) {
         final r = rank(a).compareTo(rank(b));
         if (r != 0) return r;

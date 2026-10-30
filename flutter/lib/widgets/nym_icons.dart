@@ -645,11 +645,15 @@ class NymSvgIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Tint via `currentColor`, not a srcIn colorFilter, which forces a per-frame saveLayer and caused scroll jank.
-    return SvgPicture.string(
-      svg,
-      width: size,
-      height: size,
-      theme: SvgTheme(currentColor: color),
+    return Center(
+      widthFactor: 1,
+      heightFactor: 1,
+      child: SvgPicture.string(
+        svg,
+        width: size,
+        height: size,
+        theme: SvgTheme(currentColor: color),
+      ),
     );
   }
 }

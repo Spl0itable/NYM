@@ -1271,7 +1271,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     if (kIsWeb || size.isEmpty) return;
     final s = _view.scale(size);
     if (_streetLayer == null) {
-      if (!_street || streetZvOf(s) < kStreet.drawZv) return;
+      if (!_street || streetBaseTileZoom(s) == null) return;
       _streetLayer = ref.read(streetLayerFactoryProvider)();
     }
     _streetLayer!.update(

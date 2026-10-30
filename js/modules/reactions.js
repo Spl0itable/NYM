@@ -551,6 +551,9 @@ Object.assign(NYM.prototype, {
             else messageEl.appendChild(reactionsRow);
         }
 
+        if (this.reactorsModal && this.reactorsModal._hover && reactionsRow.contains(this.reactorsModal._anchor)) {
+            this.closeReactorsModal();
+        }
         reactionsRow.innerHTML = '';
 
         if (zapBadge) {
@@ -583,7 +586,13 @@ Object.assign(NYM.prototype, {
                 badge.click();
             });
 
-            badge.innerHTML = `${this.renderReactionEmoji(emoji)} ${this.abbreviateNumber(reactors.size)}`;
+            badge.innerHTML = `${this.renderReactionEmoji(emoji, false)} ${this.abbreviateNumber(reactors.size)}`;
+            const tipLabel = this._reactionTipLabel(emoji);
+            if (tipLabel) {
+                badge.setAttribute('data-tip', '');
+                badge.setAttribute('data-tip-raw', tipLabel);
+            }
+            this._hoverModalBind(badge, () => this.showReactorsModal(messageId, emoji, badge), 'reactorsModal', messageId + '\n' + emoji);
 
             let longPressTimer = null;
             let didLongPress = false;
@@ -626,6 +635,7 @@ Object.assign(NYM.prototype, {
                     e.preventDefault();
                     return;
                 }
+                if (this.reactorsModal && this.reactorsModal._hover) this.closeReactorsModal();
                 if (!hasReacted) {
                     await this.sendReaction(messageId, emoji);
                 } else {
@@ -664,7 +674,72 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
+    _reactionTipLabel(emoji) {
+        if (typeof emoji !== 'string' || !emoji) return '';
+        if (/^:[a-zA-Z0-9_]+:$/.test(emoji)) return emoji;
+        const names = this._getEmojiToNames()[emoji];
+        return Array.isArray(names) && names.length ? names[0] : '';
+    },
+
+    _hoverModalBind(anchor, open, key, hold) {
+        if (!anchor || anchor._hoverModalBound) return;
+        anchor._hoverModalBound = true;
+        let timer = 0;
+        if (hold) {
+            anchor.addEventListener('pointerdown', (e) => {
+                if (e.pointerType === 'mouse') this._hoverModalHold = hold;
+            });
+        }
+        anchor.addEventListener('pointerenter', (e) => {
+            if (e.pointerType !== 'mouse') return;
+            if (hold && this._hoverModalHold === hold) return;
+            const cur = this[key];
+            if (cur && cur._anchor === anchor) {
+                clearTimeout(cur._hoverClose);
+                return;
+            }
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+                timer = 0;
+                if (!anchor.isConnected || !anchor.matches(':hover')) return;
+                open();
+                const m = this[key];
+                if (!m || m._anchor !== anchor) return;
+                m._hover = true;
+                m.addEventListener('pointerenter', () => clearTimeout(m._hoverClose));
+                m.addEventListener('pointerleave', (ev) => {
+                    if (ev.pointerType === 'mouse') this._hoverModalLeave(key, m);
+                });
+                if (window.NymTooltip && anchor.hasAttribute('data-tip')) window.NymTooltip.show(anchor);
+            }, 400);
+        });
+        anchor.addEventListener('pointerleave', (e) => {
+            if (e.pointerType !== 'mouse') return;
+            if (hold && this._hoverModalHold === hold) this._hoverModalHold = null;
+            clearTimeout(timer);
+            timer = 0;
+            const cur = this[key];
+            if (cur && cur._anchor === anchor) this._hoverModalLeave(key, cur);
+        });
+    },
+
+    _hoverModalLeave(key, m) {
+        if (!m._hover) return;
+        clearTimeout(m._hoverClose);
+        m._hoverClose = setTimeout(() => {
+            if (this[key] !== m || m.matches(':hover') || (m._anchor && m._anchor.matches(':hover'))) return;
+            if (key === 'reactorsModal') this.closeReactorsModal();
+            else this.closeReadersModal();
+        }, 300);
+    },
+
     showReactorsModal(messageId, emoji, badge) {
+        const cur = this.reactorsModal;
+        if (cur && cur._hover && cur._anchor === badge) {
+            cur._hover = false;
+            clearTimeout(cur._hoverClose);
+            return;
+        }
         this.closeReactorsModal();
 
         const reactions = this._visibleReactions(messageId);
@@ -698,6 +773,7 @@ Object.assign(NYM.prototype, {
             <div class="reactors-modal-list">${userItems}${overflowItem}</div>
         `;
 
+        modal._anchor = badge;
         document.body.appendChild(modal);
         this.reactorsModal = modal;
 
@@ -736,6 +812,7 @@ Object.assign(NYM.prototype, {
 
     closeReactorsModal() {
         if (this.reactorsModal) {
+            clearTimeout(this.reactorsModal._hoverClose);
             this.reactorsModal.remove();
             this.reactorsModal = null;
         }

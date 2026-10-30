@@ -28,7 +28,10 @@ import '../../models/channel.dart' as ch;
 import '../../models/nostr_event.dart';
 import '../api/api_client.dart';
 import '../api/api_config.dart';
+import '../relay/connection_changes.dart';
+import '../relay/relay_connection.dart';
 import '../relay/dm_outbox.dart';
+import '../relay/proxy_down_rule.dart';
 import '../relay/queued_sends.dart';
 import '../relay/relay_message.dart';
 import 'event_provenance.dart';
@@ -39,6 +42,8 @@ import '../../features/presence/geo_presence.dart';
 import 'event_mapper.dart';
 import 'event_signer.dart';
 import 'identity_service.dart';
+
+enum RelaySwitchOutcome { done, proxyUnreachable, offline, busy, failed }
 
 /// Parses the bitchat geo-relay CSV (`host,lat,lng`), stripping scheme and slashes and skipping bad rows.
 List<GeoRelay> parseGeoRelaysCsv(String csv) {
@@ -438,7 +443,12 @@ class NostrService {
     ..setBlockedRelays(_blockedRelays)
     ..setAddedRelays(_addedRelays)
     ..anonKeys = _anonKeys
-    ..anonLane = _anonLane;
+    ..anonLane = _anonLane
+    ..downRule = ProxyDownRule(link: _link);
+
+  final ProxyLinkState _link = ProxyLinkState();
+
+  bool _autoEpisode = false;
 
   Set<String> _blockedRelays = const {};
 
@@ -1063,6 +1073,8 @@ class NostrService {
 
   void probePool({bool wake = true}) {
     _foreground = true;
+    RelayConnection.backgrounded = false;
+    _link.resumed(relayClock());
     if (wake) networkChanged();
   }
 
@@ -1070,21 +1082,25 @@ class NostrService {
 
   void networkLost() {
     _networkUp = false;
+    RelayConnection.offline = true;
+    _link.offline();
     _downTicks = 0;
   }
 
   void networkChanged() {
     _networkUp = true;
+    RelayConnection.offline = false;
     _downTicks = 0;
+    _link.onlineAgain(relayClock());
     if (_stopped || _switchHold) return;
     final p = _pool;
     if (p is RelayPoolProxy) p.wake();
-    if (p is RelayPool) p.wake();
     _restoreProbe?.wake();
     if (_poolFallbackActive && !_userDirect) {
       _bgRestoreAttempts = 0;
       retryProxyNow();
     }
+    if (p is RelayPool) p.wake();
   }
 
   bool _switchHold = false;
@@ -1092,15 +1108,10 @@ class NostrService {
   void holdForSwitch() {
     _switchHold = true;
     _foreground = false;
+    _link.paused();
     _downTicks = 0;
-    final probe = _restoreProbe;
     _stopBgRestore();
     _dropIncoming();
-    if (probe != null) {
-      probe.onProxyConnected = null;
-      probe.onProxyUnreachable = null;
-      unawaited(probe.disconnectAll());
-    }
     final p = _pool;
     if (p is RelayPoolProxy) p.holdLiveness();
     if (p is RelayPool) p.holdLiveness();
@@ -1108,6 +1119,8 @@ class NostrService {
 
   void appBackgrounded() {
     _foreground = false;
+    RelayConnection.backgrounded = true;
+    _link.paused();
     _downTicks = 0;
   }
 
@@ -1191,16 +1204,18 @@ class NostrService {
       return;
     }
     _poolFallbackActive = true;
+    _autoEpisode = true;
+    connectionChanges.add(ConnectionChangeReason.proxyDown);
     onAutoFallback?.call();
     unawaited(_swapToDirect(_newDirectPool()));
   }
 
   /// Replaces the proxy with [direct], replaying live subscriptions onto it, then arms the restore loop.
-  Future<void> _swapToDirect(RelayPool direct) async {
-    if (_swapping) return;
+  Future<bool> _swapToDirect(RelayPool direct) async {
+    if (_swapping) return false;
     if (_switchHold || _stopped) {
       unawaited(direct.disconnectAll());
-      return;
+      return false;
     }
     _swapping = true;
     _incoming = direct;
@@ -1212,7 +1227,7 @@ class NostrService {
 
       // Detach the old pool's sockets without closing the subscriptions.
       await _detachSockets(old).timeout(detachLimit, onTimeout: () {});
-      if (!_takeIncoming(direct)) return;
+      if (!_takeIncoming(direct)) return false;
 
       // Replay live subs on the direct pool, but rebuild the main REQ since its filters are mode-shaped.
       direct.setAddedRelays(_directAdded);
@@ -1240,9 +1255,25 @@ class NostrService {
 
       _scheduleBgRestore();
       _handlers?.onConnectionChanged?.call(_pool.connectedCount);
+      return true;
     } finally {
       if (identical(_incoming, direct)) _incoming = null;
-      _swapping = false;
+      _endSwap();
+    }
+  }
+
+  Completer<void>? _swapDone;
+
+  void _endSwap() {
+    _swapping = false;
+    final done = _swapDone;
+    _swapDone = null;
+    if (done != null && !done.isCompleted) done.complete();
+  }
+
+  Future<void> _settleSwap() async {
+    while (_swapping) {
+      await (_swapDone ??= Completer<void>()).future;
     }
   }
 
@@ -1304,44 +1335,79 @@ class NostrService {
     _bgRestoreTimer = Timer(delay, _tryRestoreProxy);
   }
 
+  static const Duration restoreEvery = Duration(seconds: 30);
+  static const Duration restoreProbeLimit = Duration(seconds: 20);
+
   Duration _bgRestoreBackoff(int attempts) {
-    final expIdx = min(attempts - 1, 4);
-    final base = min(15000 * pow(2, expIdx).toInt(), 120000);
-    // 50–100% jitter.
+    final cap = _foreground ? restoreEvery.inMilliseconds : 120000;
+    final base = min(15000 * pow(2, min(attempts - 1, 3)).toInt(), cap);
     final jittered = (base * (0.5 + _bgRng.nextDouble() * 0.5)).floor();
     return Duration(milliseconds: jittered);
   }
 
+  Timer? _restoreDeadline;
+
   final Random _bgRng = Random();
 
   /// Probes a fresh proxy; swaps back when it confirms, else its unreachable trigger reschedules.
-  void _tryRestoreProxy() {
+  void _tryRestoreProxy({bool byHand = false}) {
     _bgRestoreTimer = null;
     if (!_poolFallbackActive || _userDirect || _stopped || _switchHold) return;
+    if (!_networkUp && !byHand) {
+      _scheduleBgRestore();
+      return;
+    }
     _bgRestoreAttempts++;
     _bgRestoreInFlight = true;
 
     // Short-lived probe: adopted if it confirms, discarded with backoff if not.
-    final probe = _newProxyPool();
+    final probe = _newProxyPool()..oneTry = true;
     _restoreProbe = probe;
+    _restoreDeadline?.cancel();
+    _restoreDeadline = Timer(restoreProbeLimit, () {
+      _restoreDeadline = null;
+      if (!identical(_restoreProbe, probe)) return;
+      _restoreProbe = null;
+      _bgRestoreInFlight = false;
+      probe.onProxyConnected = null;
+      probe.onProxyUnreachable = null;
+      unawaited(probe.disconnectAll());
+      _settleRestore(_unreachableOutcome);
+      _scheduleBgRestore();
+    });
     probe.onProxyUnreachable = () {
+      _restoreDeadline?.cancel();
+      _restoreDeadline = null;
       if (identical(_restoreProbe, probe)) _restoreProbe = null;
       _bgRestoreInFlight = false;
       unawaited(probe.disconnectAll());
+      _settleRestore(_unreachableOutcome);
       _scheduleBgRestore();
     };
     probe.onProxyConnected = () {
+      _restoreDeadline?.cancel();
+      _restoreDeadline = null;
       if (identical(_restoreProbe, probe)) _restoreProbe = null;
       // Probe reached the host: promote it to the live transport.
       if (!_poolFallbackActive) {
         // A concurrent restore already happened; discard this probe.
         unawaited(probe.disconnectAll());
+        _settleRestore(_pool is RelayPoolProxy
+            ? RelaySwitchOutcome.done
+            : RelaySwitchOutcome.busy);
         return;
       }
       _bgRestoreInFlight = false;
       _bgRestoreAttempts = 0;
+      final waiter = _restoreWaiter;
+      _restoreWaiter = null;
       // The probe is already connected; adopt it without re-running connectAll.
-      unawaited(_adoptRestoredProxy(probe));
+      unawaited(_adoptRestoredProxy(probe).then((_) {
+        if (waiter == null || waiter.isCompleted) return;
+        waiter.complete(_pool is RelayPoolProxy
+            ? RelaySwitchOutcome.done
+            : RelaySwitchOutcome.failed);
+      }));
     };
     probe.connectAll();
   }
@@ -1350,6 +1416,9 @@ class NostrService {
   Future<void> _adoptRestoredProxy(RelayPoolProxy restored) async {
     if (_swapping || !_poolFallbackActive || _switchHold || _stopped) {
       unawaited(restored.disconnectAll());
+      if (_swapping && _poolFallbackActive && !_switchHold && !_stopped) {
+        _scheduleBgRestore();
+      }
       return;
     }
     _swapping = true;
@@ -1360,6 +1429,7 @@ class NostrService {
       await _detachSockets(old).timeout(detachLimit, onTimeout: () {});
       if (!_takeIncoming(restored)) return;
       _pool = restored;
+      restored.goLive();
       _wireCount(restored);
       restored.geoOriginAllows = geoOriginAllowsEvent;
       restored.onProxyUnreachable = _onProxyUnreachable; // Future blips.
@@ -1378,6 +1448,10 @@ class NostrService {
       resubscribeMain();
       _poolFallbackActive = false;
       _stopBgRestore();
+      if (_autoEpisode) {
+        _autoEpisode = false;
+        connectionChanges.add(ConnectionChangeReason.proxyBack);
+      }
       // Re-shard the geo relays onto the restored proxy.
       applyGeoRelays();
       debugPrint('[NostrService] proxy restored; swapped direct → proxy '
@@ -1385,7 +1459,7 @@ class NostrService {
       _handlers?.onConnectionChanged?.call(_pool.connectedCount);
     } finally {
       if (identical(_incoming, restored)) _incoming = null;
-      _swapping = false;
+      _endSwap();
     }
   }
 
@@ -1403,8 +1477,31 @@ class NostrService {
 
   RelayPoolProxy? _restoreProbe;
 
+  Completer<RelaySwitchOutcome>? _restoreWaiter;
+
+  RelaySwitchOutcome get _unreachableOutcome => _networkUp
+      ? RelaySwitchOutcome.proxyUnreachable
+      : RelaySwitchOutcome.offline;
+
+  void _settleRestore(RelaySwitchOutcome outcome) {
+    final w = _restoreWaiter;
+    _restoreWaiter = null;
+    if (w != null && !w.isCompleted) w.complete(outcome);
+  }
+
   void _stopBgRestore() {
+    _settleRestore(_pool is RelayPoolProxy
+        ? RelaySwitchOutcome.done
+        : RelaySwitchOutcome.busy);
+    final probe = _restoreProbe;
     _restoreProbe = null;
+    if (probe != null) {
+      probe.onProxyConnected = null;
+      probe.onProxyUnreachable = null;
+      unawaited(probe.disconnectAll());
+    }
+    _restoreDeadline?.cancel();
+    _restoreDeadline = null;
     _bgRestoreTimer?.cancel();
     _bgRestoreTimer = null;
     _bgRestoreInFlight = false;
@@ -1415,12 +1512,16 @@ class NostrService {
 
   bool get isBgRestoreArmed => _bgRestoreTimer != null || _bgRestoreInFlight;
 
-  Future<void> setUserDirect(bool direct) async {
-    if (!_autoFallback || _stopped) return;
+  Future<RelaySwitchOutcome> setUserDirect(bool direct) async {
+    if (!_autoFallback || _stopped) return RelaySwitchOutcome.failed;
     if (direct) {
+      if (!_userDirect) connectionChanges.add(ConnectionChangeReason.chosenDirect);
+      _autoEpisode = false;
       _userDirect = true;
       _poolFallbackActive = false;
       _stopBgRestore();
+      await _settleSwap();
+      if (_stopped || !_userDirect) return RelaySwitchOutcome.busy;
       final current = _pool;
       if (current is RelayPool) {
         current.setAddedRelays(_directAdded);
@@ -1428,22 +1529,32 @@ class NostrService {
       }
       if (current is! RelayPoolProxy) {
         _handlers?.onConnectionChanged?.call(_pool.connectedCount);
-        return;
+        return RelaySwitchOutcome.done;
       }
       final next = _newDirectPool();
       next.connectAll();
       await _awaitConnected(next, userDirectConnectWait);
+      await _settleSwap();
       if (_stopped || !_userDirect || _pool is! RelayPoolProxy) {
         unawaited(next.disconnectAll());
-        return;
+        return _userDirect && _pool is RelayPool
+            ? RelaySwitchOutcome.done
+            : RelaySwitchOutcome.busy;
       }
-      await _swapToDirect(next);
-      return;
+      if (!await _swapToDirect(next)) {
+        unawaited(next.disconnectAll());
+        return RelaySwitchOutcome.failed;
+      }
+      return RelaySwitchOutcome.done;
     }
+    if (_userDirect) connectionChanges.add(ConnectionChangeReason.chosenProxy);
+    _autoEpisode = false;
     _userDirect = false;
+    await _settleSwap();
+    if (_stopped || _userDirect) return RelaySwitchOutcome.busy;
     if (_pool is RelayPoolProxy) {
       _handlers?.onConnectionChanged?.call(_pool.connectedCount);
-      return;
+      return RelaySwitchOutcome.done;
     }
     _poolFallbackActive = true;
     final current = _pool;
@@ -1451,7 +1562,28 @@ class NostrService {
       current.setAddedRelays(_directAdded);
       current.setAppRelayVia(null);
     }
-    retryProxyNow();
+    return tapRetryProxy();
+  }
+
+  Future<RelaySwitchOutcome> tapRetryProxy() async {
+    await _settleSwap();
+    if (!_autoFallback || _stopped || _switchHold) return RelaySwitchOutcome.failed;
+    if (_userDirect) return RelaySwitchOutcome.busy;
+    if (!_poolFallbackActive) {
+      return _pool is RelayPoolProxy
+          ? RelaySwitchOutcome.done
+          : RelaySwitchOutcome.busy;
+    }
+    final waiter = _restoreWaiter ??= Completer<RelaySwitchOutcome>();
+    if (!_bgRestoreInFlight) {
+      _bgRestoreTimer?.cancel();
+      _bgRestoreTimer = null;
+      _tryRestoreProxy(byHand: true);
+    }
+    if (!_bgRestoreInFlight && !waiter.isCompleted) {
+      _settleRestore(RelaySwitchOutcome.failed);
+    }
+    return waiter.future;
   }
 
   void retryProxyNow() {

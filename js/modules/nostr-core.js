@@ -375,6 +375,7 @@ Object.assign(NYM.prototype, {
 
         // Early dedup so reconnects don't re-process channel messages.
         if (event.kind === 20000 || event.kind === 23333) {
+            if (typeof this._localEchoReturned === 'function') this._localEchoReturned(event.id);
             if (this.processedMessageEventIds.has(event.id)) {
                 return;
             }
@@ -2077,7 +2078,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Routes through the batched queue so concurrent callers share one REQ (per-relay concurrency limits).
-    async fetchProfileDirect(pubkey) {
+    async fetchProfileDirect(pubkey, opts) {
         if (!pubkey) return;
 
         const lastFetch = (this.profileFetchedAt && this.profileFetchedAt.get(pubkey)) || 0;
@@ -2093,7 +2094,7 @@ Object.assign(NYM.prototype, {
             }, 2500);
             const entry = { resolve, timer };
             this.pendingProfileResolvers.get(pubkey).push(entry);
-            try { this.queueProfileFetch(pubkey); } catch (_) { resolve(); }
+            try { this.queueProfileFetch(pubkey, opts); } catch (_) { resolve(); }
         });
     },
 
@@ -2200,7 +2201,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Batched within 150ms, fire-and-forget; the kind 0 handler updates renders retroactively.
-    queueProfileFetch(pubkey) {
+    queueProfileFetch(pubkey, opts) {
         const lastFetch = this.profileFetchedAt && this.profileFetchedAt.get(pubkey) || 0;
         const fresh = Date.now() - lastFetch < 5 * 60 * 1000;
         const appliedKind0 = this._kind0Ts && this._kind0Ts.has(pubkey);
@@ -2208,10 +2209,15 @@ Object.assign(NYM.prototype, {
             && this.hasResolvedNym(pubkey)) return;
 
         if (this._profileBatchSet && this._profileBatchSet.has(pubkey)) return;
-        if (!this._profileBatchQueue) this._profileBatchQueue = [];
-        if (!this._profileBatchSet) this._profileBatchSet = new Set();
-        this._profileBatchQueue.push(pubkey);
-        this._profileBatchSet.add(pubkey);
+        if (opts && opts.anon) {
+            if (!this._profileRelayOnly) this._profileRelayOnly = new Set();
+            this._profileRelayOnly.add(pubkey);
+        } else {
+            if (!this._profileBatchQueue) this._profileBatchQueue = [];
+            if (!this._profileBatchSet) this._profileBatchSet = new Set();
+            this._profileBatchQueue.push(pubkey);
+            this._profileBatchSet.add(pubkey);
+        }
         if (this._profileBatchTimer) return;
         this._profileBatchTimer = setTimeout(() => {
             this._flushProfileBatch();
@@ -2219,20 +2225,25 @@ Object.assign(NYM.prototype, {
     },
 
     async _flushProfileBatch() {
-        const pubkeys = this._profileBatchQueue;
+        const pubkeys = this._profileBatchQueue || [];
+        const relayOnly = this._profileRelayOnly ? Array.from(this._profileRelayOnly).filter(pk => !pubkeys.includes(pk)) : [];
         this._profileBatchQueue = [];
         this._profileBatchSet = new Set();
+        this._profileRelayOnly = null;
         this._profileBatchTimer = null;
-        if (pubkeys.length === 0) return;
+        if (pubkeys.length === 0 && relayOnly.length === 0) return;
 
         // D1 first; fall back to a relay REQ for anyone not stored there.
         let missing = pubkeys;
-        try {
-            const found = await this._fetchProfilesFromD1(pubkeys);
-            if (found && found.size) {
-                missing = pubkeys.filter(pk => !found.has(pk) || !this.hasResolvedNym(pk));
-            }
-        } catch (_) { }
+        if (pubkeys.length) {
+            try {
+                const found = await this._fetchProfilesFromD1(pubkeys);
+                if (found && found.size) {
+                    missing = pubkeys.filter(pk => !found.has(pk) || !this.hasResolvedNym(pk));
+                }
+            } catch (_) { }
+        }
+        missing = missing.concat(relayOnly);
         if (missing.length === 0) return;
 
         // D1 only holds owner-mirrored profiles, so a miss is normal; relay REQs are rate-limited per pubkey.
@@ -3136,7 +3147,7 @@ Object.assign(NYM.prototype, {
             }
 
             // NIP-30 custom emoji.
-            tags.push(...this.customEmojiTagsForContent(wireContent));
+            tags.push(...this.customEmojiTagsForContent(wireContent, null, { anon: true }));
             if (typeof this.quoteTagsForContent === 'function') tags.push(...this.quoteTagsForContent(content));
 
             // NIP-92 Blossom mirror URLs.
@@ -3187,6 +3198,7 @@ Object.assign(NYM.prototype, {
                     if (psDifficulty > 0) event = await this._minePow(event, psDifficulty);
                     const signedEvent = window.NostrTools.finalizeEvent(event, ephSk);
                     this._replaceOptimisticMessage(tempId, signedEvent, storageKey, false);
+                    if (typeof this._noteLocalEcho === 'function') this._noteLocalEcho(signedEvent.id);
                     sentId = signedEvent.id;
                     const res = await lane.publish(signedEvent);
                     if (!res || !res.ok) throw new Error(res && !res.transport && res.reason && res.reason !== 'timeout' ? res.reason : 'Not connected to relay');

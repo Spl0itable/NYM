@@ -4314,6 +4314,29 @@ body.a11y-contrast.light-mode {
     display: none;
 }
 
+.relay-stats-mode-btn-alt {
+    margin-left: 6px;
+}
+
+@media (pointer: coarse) {
+    .relay-stats-mode-btn {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 3px 12px;
+    }
+}
+
+.relay-stats-mode-note {
+    flex-basis: 100%;
+    font-family: var(--font-sans);
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+.relay-stats-mode-note[hidden] {
+    display: none;
+}
+
 .relay-stats-mode-hint {
     flex-basis: 100%;
     font-family: var(--font-sans);
@@ -4371,6 +4394,30 @@ body.a11y-contrast.light-mode {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 8px;
+}
+
+.relay-stats-changes {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+}
+
+.relay-stats-change {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+}
+
+.relay-stats-change-time {
+    color: var(--text-dim);
+    font-family: monospace;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+.relay-stats-change-empty {
+    color: var(--text-dim);
 }
 
 .relay-stats-graph-wrap {

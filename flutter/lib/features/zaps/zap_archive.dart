@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import '../../core/crypto/schnorr.dart' as schnorr;
+import '../../models/message.dart';
 import '../../models/nostr_event.dart';
 import '../../services/api/storage_sync.dart';
 import '../../services/nostr/verified_rows.dart';
@@ -158,6 +159,27 @@ class ZapArchive {
   }
 
   /// Backfills receipts for [ids] (max 500) through [onReceipt]; best-effort.
+  Future<void> backfillMessages(
+    List<Message> msgs,
+    String scope,
+    bool Function(Message m) skip,
+    void Function(NostrEvent receipt) onReceipt,
+  ) async {
+    final ids = <String>[];
+    for (final m in msgs) {
+      if (skip(m)) continue;
+      if (m.id.isNotEmpty) ids.add(m.id);
+      final shared = m.nymMessageId;
+      if (scope == 'pm' &&
+          shared != null &&
+          shared.isNotEmpty &&
+          shared != m.id) {
+        ids.add(shared);
+      }
+    }
+    if (ids.isNotEmpty) await backfill(ids, scope, onReceipt);
+  }
+
   Future<void> backfill(
     List<String> ids,
     String scope,
@@ -182,3 +204,14 @@ class ZapArchive {
     _flushTimer = null;
   }
 }
+
+bool zapLookupSkip(
+  Message m, {
+  required bool Function(String pubkey) anonBotKey,
+  required Set<String> localEchoes,
+}) =>
+    m.anonLane ||
+    anonBotKey(m.pubkey) ||
+    anonBotKey(m.conversationPubkey ?? '') ||
+    m.optimistic ||
+    localEchoes.contains(m.id);

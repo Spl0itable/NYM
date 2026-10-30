@@ -7,7 +7,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/storage/account_scope.dart';
 import '../../services/storage/at_rest_cipher.dart';
 import '../../services/storage/cache_store.dart';
+import '../../services/storage/key_value_store.dart';
 import '../../services/storage/mesh_file_store.dart';
+import '../../services/relay/connection_changes.dart';
 import '../../services/storage/secure_store.dart';
 import '../globe/street_cache.dart';
 import '../identity/biometric_secret_store.dart';
@@ -82,6 +84,7 @@ class AccountRuntime {
   static int _wallClock() => DateTime.now().millisecondsSinceEpoch;
 
   static Future<void> _defaultDropFiles(String ns) async {
+    connectionChanges.clear();
     try {
       await CacheStore.deleteAccountFiles(ns);
     } catch (_) {}
@@ -241,11 +244,15 @@ class AccountRuntime {
   }
 
   Future<void> _runEffects(List<String> effects, AccountIndex before) async {
+    await KeyValueStore.settle();
+    final pending = KeyValueStore.takeHeld(
+        prefs, (k) => AccountLogic.classifyNative(k) != 'device');
     final snapshot = <String, Object>{};
     for (final k in prefs.getKeys()) {
       final v = prefs.get(k);
       if (v != null) snapshot[k] = v;
     }
+    snapshot.addAll(pending);
     final store = _RecordingStore(snapshot);
     AccountLogic.runEffects(store, effects,
         classifier: AccountLogic.classifyNative);
@@ -262,6 +269,12 @@ class AccountRuntime {
         await prefs.setDouble(key, value);
       } else if (value is List) {
         await prefs.setStringList(key, [for (final x in value) '$x']);
+      }
+    }
+    final touched = {for (final (key, _) in store.ops) key};
+    for (final e in pending.entries) {
+      if (!touched.contains(e.key)) {
+        await KeyValueStore.guardedSetString(prefs, e.key, e.value);
       }
     }
     Map<String, String> secrets;

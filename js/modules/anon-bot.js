@@ -418,7 +418,7 @@
                     ['x', nymMessageId],
                     ['ms', String(nowMs)],
                     ...(threadRoot ? [['nymthread', threadRoot]] : []),
-                    ...this.customEmojiTagsForContent(content),
+                    ...this.customEmojiTagsForContent(content, null, { anon: true }),
                     ...(typeof this.imetaTagsForContent === 'function' ? this.imetaTagsForContent(content) : []),
                     ...(typeof this.quoteTagsForContent === 'function' ? this.quoteTagsForContent(content) : [])
                 ],

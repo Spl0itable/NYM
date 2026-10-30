@@ -12,6 +12,7 @@ class NymFocusable extends StatefulWidget {
     required this.onActivate,
     required this.child,
     this.label,
+    this.hint,
     this.tooltip,
     this.tooltipKeys,
     this.radius = NymRadius.rxs,
@@ -23,6 +24,7 @@ class NymFocusable extends StatefulWidget {
   final VoidCallback? onActivate;
   final Widget child;
   final String? label;
+  final String? hint;
   final String? tooltip;
   final String? tooltipKeys;
   final BorderRadius radius;
@@ -121,6 +123,7 @@ class _NymFocusableState extends State<NymFocusable> {
       focusable: enabled,
       focused: _focused,
       label: widget.label ?? widget.tooltip,
+      hint: widget.hint,
       excludeSemantics: widget.excludeChildSemantics,
       onTap: widget.onActivate,
       onFocus: enabled ? _node.requestFocus : null,

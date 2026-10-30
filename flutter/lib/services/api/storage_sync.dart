@@ -3814,7 +3814,7 @@ class StorageSync {
   static final RegExp _etagRe = RegExp(r'^[0-9a-f]{32}$');
 
   Future<List<Map<String, dynamic>>> emojiGet(
-      {bool force = false, bool heldPacks = false}) async {
+      {bool force = false, bool heldPacks = false, bool socket = true}) async {
     final now = _nowMs();
     if (!force && _emojiFetchedAt != 0 && now - _emojiFetchedAt < 600000) {
       return const [];
@@ -3839,26 +3839,52 @@ class StorageSync {
     _emojiFetchedAt = now;
     final held = meta?['etag'];
     final etag = held is String && _etagRe.hasMatch(held) ? held : null;
-    StorageStream stream;
-    try {
-      // Empty body so the HTTP fallback stays anonymous; the authed socket adds our 10030 server-side.
-      stream = await _api.storageStream({
-        'action': 'emoji-get',
-        'etag': ?etag,
-      });
-    } catch (_) {
-      _emojiFetchedAt = 0; // Allow a retry.
-      return const [];
-    }
     final events = <Map<String, dynamic>>[];
     var packs = 0;
-    for (final item in stream.items) {
-      if (item is! Map) continue;
-      if (item['kind'] == 30030) packs++;
-      events.add(Map<String, dynamic>.from(item));
+    void take(StorageStream stream) {
+      for (final item in stream.items) {
+        if (item is! Map) continue;
+        if (item['kind'] == 30030) packs++;
+        events.add(Map<String, dynamic>.from(item));
+      }
     }
-    final tag = stream.headers['x-etag'];
-    final same = etag != null && stream.headers['x-same'] == '1';
+
+    StorageStream head;
+    var paged = true;
+    try {
+      head = await _api.storageStream({
+        'action': 'emoji-page',
+        'etag': ?etag,
+      }, socket: socket);
+    } catch (_) {
+      paged = false;
+      try {
+        head = await _api.storageStream({
+          'action': 'emoji-get',
+          'etag': ?etag,
+        }, socket: socket);
+      } catch (_) {
+        _emojiFetchedAt = 0;
+        return const [];
+      }
+    }
+    take(head);
+    final tag = head.headers['x-etag'];
+    final same = etag != null && head.headers['x-same'] == '1';
+    emojiCursor = paged ? (head.headers['x-next'] ?? '') : '';
+    for (var page = 1;
+        !same && !force && page < emojiPageWalk && emojiCursor.isNotEmpty;
+        page++) {
+      try {
+        final more = await _api.storageStream(
+            {'action': 'emoji-page', 'cursor': emojiCursor},
+            socket: socket);
+        emojiCursor = more.headers['x-next'] ?? '';
+        take(more);
+      } catch (_) {
+        break;
+      }
+    }
     final keep = tag != null &&
             _etagRe.hasMatch(tag) &&
             (same || packs <= emojiPackCacheMax)
@@ -3870,6 +3896,61 @@ class StorageSync {
       } catch (_) {}
     }
     return events;
+  }
+
+  static const int emojiPageWalk = 5;
+  static const int emojiCoordsChunk = 12;
+
+  String emojiCursor = '';
+  int _emojiCursorFails = 0;
+
+  Future<List<Map<String, dynamic>>> emojiNextPage() async {
+    final cursor = emojiCursor;
+    if (cursor.isEmpty) return emojiGet(force: true, socket: false);
+    emojiCursor = '';
+    try {
+      final more = await _api.storageStream(
+          {'action': 'emoji-page', 'cursor': cursor},
+          socket: false);
+      emojiCursor = more.headers['x-next'] ?? '';
+      _emojiCursorFails = 0;
+      return [
+        for (final item in more.items)
+          if (item is Map) Map<String, dynamic>.from(item),
+      ];
+    } catch (_) {
+      _emojiCursorFails++;
+      if (_emojiCursorFails < 3) {
+        emojiCursor = cursor;
+      } else {
+        _emojiCursorFails = 0;
+      }
+      return const [];
+    }
+  }
+
+  Future<({List<Map<String, dynamic>> events, List<String> answered})>
+      emojiCoords(List<String> coords) async {
+    final out = <Map<String, dynamic>>[];
+    final answered = <String>[];
+    for (var i = 0; i < coords.length; i += emojiCoordsChunk) {
+      final chunk = coords.sublist(
+          i,
+          i + emojiCoordsChunk > coords.length
+              ? coords.length
+              : i + emojiCoordsChunk);
+      try {
+        final stream =
+            await _api.storageStream({'action': 'emoji-coords', 'coords': chunk});
+        for (final item in stream.items) {
+          if (item is Map) out.add(Map<String, dynamic>.from(item));
+        }
+        answered.addAll(chunk);
+      } catch (_) {
+        break;
+      }
+    }
+    return (events: out, answered: answered);
   }
 
   // Zap-receipt archive (D1 `zap-put` / `zap-get`)

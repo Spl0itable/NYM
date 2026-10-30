@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -252,6 +253,7 @@ class RelayPool implements PoolTransport {
     Set<String>? writeOnlyRelays,
     Iterable<String>? blockedRelays,
     RelayConnection Function(String url)? connectionFactory,
+    DialGate? gate,
     this._appRelayVia,
     RelayConnection Function(String url, String via)? appConnectionFactory,
     Random? random,
@@ -263,16 +265,20 @@ class RelayPool implements PoolTransport {
         _writeOnly = writeOnlyRelays ?? RelayConfig.writeOnlyRelays,
         _blocked = RelayBlock.toSet(blockedRelays),
         _connectionFactory =
-            connectionFactory ?? ((url) => RelayConnection(url)),
+            connectionFactory ?? _gatedFactory(gate ?? DialGate()),
         _appConnectionFactory =
             appConnectionFactory ?? RelayConnection.viaPool,
         _rng = random ?? Random() {
+    _baseRelays.addAll(relays);
     for (final url in relays) {
       if (url == RelayConfig.appRelay && _appRelayVia == null) continue;
       _wanted.add(url);
       _addRelayInternal(url);
     }
   }
+
+  static RelayConnection Function(String url) _gatedFactory(DialGate gate) =>
+      (url) => RelayConnection(url, gate: gate);
 
   String? _appRelayVia;
 
@@ -375,7 +381,25 @@ class RelayPool implements PoolTransport {
     }
   }
 
+  final Set<String> _baseRelays = {};
+
+  bool _geoOnly(String url) =>
+      _geoUrls.contains(url) &&
+      !_baseRelays.contains(url) &&
+      !_added.contains(url) &&
+      url != RelayConfig.appRelay &&
+      !RelayConfig.defaultRelays.contains(url);
+
+  static bool _geoShaped(NostrFilter f) => (f.tags['g'] ?? const []).isNotEmpty;
+
   List<NostrFilter>? _filtersFor(String url, List<NostrFilter> filters) {
+    if (_geoOnly(url)) {
+      final geo = [
+        for (final f in filters)
+          if (_geoShaped(f)) f
+      ];
+      return geo.isEmpty ? null : geo;
+    }
     if (!_added.contains(url)) return filters;
     final keys = anonKeys?.call() ?? const <String>{};
     if (keys.isEmpty) return filters;
@@ -564,15 +588,35 @@ class RelayPool implements PoolTransport {
     }
   }
 
+  static const int wakeBatch = 32;
+  static const Duration wakeStep = Duration(milliseconds: 250);
+  Timer? _wakeTimer;
+
   void wake() {
     if (_disposed || !_started || _livenessHeld) return;
-    for (final conn in _connections.values.toList()) {
-      if (conn.isConnected) {
-        conn.checkAlive(resumeProbeTimeout);
-      } else {
-        conn.reconnectNow();
+    _wakeTimer?.cancel();
+    final queue = ListQueue<String>.from([
+      for (final u in _connections.keys)
+        if (!_geoOnly(u)) u,
+      for (final u in _connections.keys)
+        if (_geoOnly(u)) u,
+    ]);
+    void step() {
+      _wakeTimer = null;
+      if (_disposed || !_started || _livenessHeld) return;
+      for (var i = 0; i < wakeBatch && queue.isNotEmpty; i++) {
+        final conn = _connections[queue.removeFirst()];
+        if (conn == null) continue;
+        if (conn.isConnected) {
+          conn.checkAlive(resumeProbeTimeout);
+        } else {
+          conn.reconnectNow();
+        }
       }
+      if (queue.isNotEmpty) _wakeTimer = Timer(wakeStep, step);
     }
+
+    step();
   }
 
   void retryNow() {
@@ -597,6 +641,11 @@ class RelayPool implements PoolTransport {
   Future<void> disconnectAll() async {
     _disposed = true;
     _started = false;
+    for (final c in _connections.values) {
+      c.retire();
+    }
+    _wakeTimer?.cancel();
+    _wakeTimer = null;
     _held.dropAll();
     _stopSampler();
     final subs = _subscriptions.values.toList();
@@ -625,7 +674,9 @@ class RelayPool implements PoolTransport {
   @override
   Subscription subscribe(List<NostrFilter> filters, {String? subId}) {
     final id = subId ?? generateSubId(_rng);
-    final readable = _connections.keys.where(_isReadable).length;
+    final readable = _connections.keys
+        .where((u) => _isReadable(u) && _filtersFor(u, filters) != null)
+        .length;
     final sub = Subscription._(
       id,
       this,
@@ -686,9 +737,14 @@ class RelayPool implements PoolTransport {
 
   /// Closes sockets but keeps [Subscription]s alive for the direct/proxy swap.
   Future<void> disconnectSocketsOnly() async {
+    _wakeTimer?.cancel();
+    _wakeTimer = null;
     _stopSampler();
     _subscriptions.clear();
     _activeFilters.clear();
+    for (final c in _connections.values) {
+      c.retire();
+    }
     final closing = [for (final c in _connections.values) c.close()];
     _connections.clear();
     for (final s in _msgSubs.values) {
@@ -704,13 +760,24 @@ class RelayPool implements PoolTransport {
 
   /// Broadcasts [event]; returns how many relays accepted it.
   @override
-  Future<int> publish(NostrEvent event) async {
+  Future<int> publish(NostrEvent event) => _publishTo(event, null);
+
+  Future<int> _publishTo(NostrEvent event, Set<String>? geoTargets) async {
     if (!_disposed && connectedCount == 0) {
-      return _held.hold((via) => via.publish(event), event: event);
+      return _held.hold(
+          (via) => geoTargets == null
+              ? via.publish(event)
+              : via.publishGeo(event, geoTargets.toList()),
+          event: event);
     }
+    final geoTagged = (event.tagValue('g') ?? '').isNotEmpty;
     final futures = <Future<OkMessage>>[];
     for (final entry in _connections.entries) {
       if (_anonEventFor(entry.key, event)) continue;
+      if (_geoOnly(entry.key) &&
+          !(geoTargets?.contains(entry.key) ?? geoTagged)) {
+        continue;
+      }
       // Write-only relays still receive EVENTs.
       if (_isWritable) {
         futures.add(entry.value.publish(event));
@@ -728,7 +795,7 @@ class RelayPool implements PoolTransport {
   /// Direct mode has no proxy frames: geo events publish as plain EVENTs.
   @override
   Future<int> publishGeo(NostrEvent event, List<String> closestRelayUrls) =>
-      publish(event);
+      _publishTo(event, closestRelayUrls.toSet());
 
   bool Function(NostrEvent event, String? relayUrl)? _geoOriginAllows;
   @override

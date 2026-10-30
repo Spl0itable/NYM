@@ -4370,6 +4370,7 @@ Object.assign(NYM.prototype, {
                 this.showChannelReadersModal(messageId, el);
             }, 500);
         };
+        this._hoverModalBind(el, () => this.showChannelReadersModal(messageId, el), 'readersModal');
         const cancel = (e) => { if (e) e.stopPropagation(); if (timer) { clearTimeout(timer); timer = null; } };
         el.addEventListener('mousedown', start);
         el.addEventListener('touchstart', start, { passive: false });
@@ -4423,6 +4424,7 @@ Object.assign(NYM.prototype, {
                 this.showReadersModal(nymMessageId, el);
             }, 500);
         };
+        this._hoverModalBind(el, () => this.showReadersModal(nymMessageId, el), 'readersModal');
         const cancel = (e) => { if (e) e.stopPropagation(); if (timer) { clearTimeout(timer); timer = null; } };
         el.addEventListener('mousedown', start);
         el.addEventListener('touchstart', start, { passive: false });
@@ -4441,6 +4443,12 @@ Object.assign(NYM.prototype, {
     },
 
     _showReadersModalFromMap(rawReaders, anchorEl) {
+        const cur = this.readersModal;
+        if (cur && cur._hover && cur._anchor === anchorEl) {
+            cur._hover = false;
+            clearTimeout(cur._hoverClose);
+            return;
+        }
         this.closeReadersModal();
         const readers = this._visibleReaders(rawReaders);
         if (!readers || readers.size === 0) return;
@@ -4461,6 +4469,7 @@ Object.assign(NYM.prototype, {
 
         const modal = document.createElement('div');
         modal.className = 'reactors-modal readers-modal';
+        modal._anchor = anchorEl;
         modal.innerHTML = `
             <div class="reactors-modal-header">Seen by <span class="reactors-modal-count">${this.abbreviateNumber(readers.size)}</span></div>
             <div class="reactors-modal-list">${userItems}</div>
@@ -4493,6 +4502,7 @@ Object.assign(NYM.prototype, {
 
     closeReadersModal() {
         if (this.readersModal) {
+            clearTimeout(this.readersModal._hoverClose);
             this.readersModal.remove();
             this.readersModal = null;
         }

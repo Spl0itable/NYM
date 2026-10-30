@@ -409,17 +409,16 @@ class _SidebarState extends ConsumerState<Sidebar> {
     final index = <Key, int>{
       for (var i = 0; i < count; i++) ValueKey<Key>(keys[i]): lead + i,
     };
-    return SliverList.builder(
-      itemCount: lead + count + trailing.length,
-      addAutomaticKeepAlives: false,
-      addRepaintBoundaries: false,
-      addSemanticIndexes: false,
-      findChildIndexCallback: (key) => index[key],
-      itemBuilder: (context, i) {
-        if (i < lead) return leading[i];
-        if (i < lead + count) return rowAt(i - lead);
-        return trailing[i - lead - count];
-      },
+    return SliverList(
+      delegate: _RowsDelegate(
+        count: lead + count + trailing.length,
+        index: index,
+        childAt: (i) {
+          if (i < lead) return leading[i];
+          if (i < lead + count) return rowAt(i - lead);
+          return trailing[i - lead - count];
+        },
+      ),
     );
   }
 
@@ -834,20 +833,23 @@ class _SidebarState extends ConsumerState<Sidebar> {
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               slivers: [
                 SliverToBoxAdapter(
-                  child: DuoClear(
-                    child: UnifiedSearchButton(onTap: () {
-                      widget.onItemSelected?.call();
-                      UnifiedSearchPanel.open(context);
-                    }),
+                  child: RepaintBoundary(
+                    child: DuoClear(
+                      child: UnifiedSearchButton(onTap: () {
+                        widget.onItemSelected?.call();
+                        UnifiedSearchPanel.open(context);
+                      }),
+                    ),
                   ),
                 ),
                 if (widget.compact)
                   SliverToBoxAdapter(
                     child: DuoScope.railOf(context)
                         ? const SizedBox.shrink()
-                        : DuoClear(
-                            child: _SidebarActions(
-                                onItemSelected: widget.onItemSelected)),
+                        : RepaintBoundary(
+                            child: DuoClear(
+                                child: _SidebarActions(
+                                    onItemSelected: widget.onItemSelected))),
                   ),
                 for (final s in _order)
                   if (!(settings.groupChatPMOnlyMode &&
@@ -1696,6 +1698,28 @@ class _SidebarLiveState extends ConsumerState<_SidebarLive> {
   }
 }
 
+class _RowsDelegate extends SliverChildDelegate {
+  const _RowsDelegate(
+      {required this.count, required this.index, required this.childAt});
+
+  final int count;
+  final Map<Key, int> index;
+  final Widget Function(int) childAt;
+
+  @override
+  Widget? build(BuildContext context, int index) =>
+      index < 0 || index >= count ? null : childAt(index);
+
+  @override
+  int get estimatedChildCount => count;
+
+  @override
+  int? findIndexByKey(Key key) => index[key];
+
+  @override
+  bool shouldRebuild(_RowsDelegate oldDelegate) => true;
+}
+
 enum _TargetSlot { sliver, box }
 
 class _SliverTarget
@@ -1915,7 +1939,7 @@ class _NavSection extends StatelessWidget {
     );
     final group = SliverMainAxisGroup(
       slivers: [
-        SliverToBoxAdapter(child: header),
+        SliverToBoxAdapter(child: RepaintBoundary(child: header)),
         SliverPadding(
           padding: pad.copyWith(
               top: 0, bottom: pad.bottom + (border?.bottom.width ?? 0)),

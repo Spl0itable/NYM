@@ -4,11 +4,16 @@
     const GREEN = new Set(['park', 'forest', 'wood', 'grass', 'garden', 'cemetery', 'golf_course', 'nature_reserve', 'playground', 'pitch', 'recreation_ground', 'village_green', 'meadow', 'scrub', 'allotments']);
     const ROAD_CLASS = { highway: 'hw', major_road: 'major', path: 'path', rail: 'rail' };
     const LABEL_RANK = { hw: 0, major: 1, minor: 2, service: 3, path: 4, river: 5, stream: 5 };
-    const DECODED_MAX = 64;
+    const DECODED_MAX = 96;
+    const WIDTH_ZV = [6, 8, 10, 12, 14, 16, 18];
     const WIDTHS = {
-        hw: [2, 5, 10], major: [1.6, 4, 8], minor: [0.8, 2.6, 5], service: [0.5, 1.4, 3],
-        path: [0.5, 1, 1.5], rail: [0.8, 1.2, 1.5], river: [1, 2.5, 4], stream: [0.5, 1, 1.5],
+        hw: [0.6, 0.9, 1.2, 1.6, 2, 5, 10], major: [0.4, 0.5, 0.7, 1.1, 1.6, 4, 8], minor: [0.3, 0.3, 0.4, 0.5, 0.8, 2.6, 5], service: [0.3, 0.3, 0.3, 0.4, 0.5, 1.4, 3],
+        path: [0.3, 0.3, 0.3, 0.4, 0.5, 1, 1.5], rail: [0.4, 0.5, 0.6, 0.7, 0.8, 1.2, 1.5], river: [0.5, 0.6, 0.8, 0.9, 1, 2.5, 4], stream: [0.3, 0.3, 0.4, 0.4, 0.5, 1, 1.5],
     };
+    const LABEL_FROM = { hw: 7.99, major: 11.49, minor: 14.49, service: 14.49, path: 14.49, river: 9.99, stream: 12.99, wlabel: 5.99 };
+    const LOW_LIGHT = { hw: '#e8c58a', major: '#f0d9a8' };
+    const LOW_FILL_BELOW = 12.99;
+    const TILE_BIAS = 0.5;
     const PALETTE = {
         light: {
             land: '#eef2f4', water: '#d6e8f1', river: 'rgba(90,150,190,0.7)', green: '#dcebd9', landuse: '#e8ecef',
@@ -165,7 +170,7 @@
         if (layer === 'water') {
             if (type === 3) return 'water';
             if (type === 2) return p.kind === 'river' || p.kind === 'canal' ? 'river' : 'stream';
-            if (type === 1) return p.name ? 'waterLabel' : null;
+            if (type === 1) return p.name ? 'wlabel' : null;
             return null;
         }
         if (layer === 'landuse') return type === 3 ? (GREEN.has(p.kind) ? 'green' : 'landuse') : null;
@@ -176,6 +181,28 @@
             return ROAD_CLASS[p.kind] || null;
         }
         return null;
+    }
+
+    const roadDrawn = (mz, bz) => !(typeof mz === 'number' && mz > bz - TILE_BIAS);
+    const labelAllowed = (cls, bz) => LABEL_FROM[cls] !== undefined && bz >= LABEL_FROM[cls];
+    function labelText(cls, p) {
+        if (cls === 'hw' || cls === 'major') return p.name || p.ref || null;
+        if (cls === 'rail' || cls === 'land' || cls === 'water' || cls === 'green' || cls === 'landuse' || cls === 'bld') return null;
+        return p.name || null;
+    }
+
+    function tileStats(raw, bz) {
+        const classes = {}, labelCandidates = {};
+        for (const L of decodeTile(raw, { geometry: false })) {
+            for (const F of L.features) {
+                const cls = classify(L.name, F.props, F.type);
+                if (!cls) continue;
+                if (L.name === 'roads' && !roadDrawn(F.props.min_zoom, bz)) continue;
+                classes[cls] = (classes[cls] || 0) + 1;
+                if (labelText(cls, F.props) && labelAllowed(cls, bz)) labelCandidates[cls] = (labelCandidates[cls] || 0) + 1;
+            }
+        }
+        return { classes, labelCandidates };
     }
 
     function buildTile(raw, z, x, y) {
@@ -206,13 +233,14 @@
                 const cls = classify(L.name, F.props, F.type);
                 if (!cls) continue;
                 const parts = rings(F.cmds);
-                if (cls === 'waterLabel') {
-                    for (const r of parts) labels.push({ name: String(F.props.name), rank: 6, kind: 'point', pts: toLocal(r.slice(0, 2), ext) });
+                if (cls === 'wlabel') {
+                    for (const r of parts) labels.push({ name: String(F.props.name), rank: 6, cls, mz: 0, kind: 'point', pts: toLocal(r.slice(0, 2), ext) });
                     continue;
                 }
                 const road = L.name === 'roads';
                 const st = road ? (F.props.is_tunnel ? 1 : (F.props.is_bridge ? 2 : 0)) : 0;
                 const mz = road && typeof F.props.min_zoom === 'number' ? F.props.min_zoom : 0;
+                const text = labelText(cls, F.props);
                 const poly = F.type === 3;
                 const g = groupFor(cls, st, mz, poly);
                 const use = poly ? polygons(parts).flat() : parts.filter((r) => r.length >= 4);
@@ -220,10 +248,7 @@
                     g.parts.push(g.pts.length / 2);
                     const loc = toLocal(r, ext);
                     for (let i = 0; i < loc.length; i++) g.pts.push(loc[i]);
-                    if (!poly && LABEL_RANK[cls] !== undefined) {
-                        const name = F.props.name || (cls === 'hw' && F.props.ref) || '';
-                        if (name && (road || F.props.name)) labels.push({ name: String(name), rank: LABEL_RANK[cls], kind: 'line', pts: loc });
-                    }
+                    if (!poly && LABEL_RANK[cls] !== undefined && text) labels.push({ name: String(text), rank: LABEL_RANK[cls], cls, mz, kind: 'line', pts: loc });
                 }
             }
         }
@@ -237,12 +262,17 @@
     }
 
     function widthAt(cls, zv) {
-        const t = WIDTHS[cls];
-        if (!t) return 1;
-        if (zv <= 14) return t[0];
-        if (zv <= 16) return t[0] + (t[1] - t[0]) * (zv - 14) / 2;
-        if (zv <= 18) return t[1] + (t[2] - t[1]) * (zv - 16) / 2;
-        return t[2];
+        const w = WIDTHS[cls], a = WIDTH_ZV;
+        if (!w) return 1;
+        if (zv <= a[0]) return w[0];
+        for (let i = 1; i < a.length; i++) if (zv <= a[i]) return w[i - 1] + (w[i] - w[i - 1]) * (zv - a[i - 1]) / (a[i] - a[i - 1]);
+        return w[w.length - 1];
+    }
+
+    function roadFill(theme, cls, bz) {
+        const P = PALETTE[theme] || PALETTE.dark;
+        if (theme === 'light' && bz < LOW_FILL_BELOW && LOW_LIGHT[cls]) return LOW_LIGHT[cls];
+        return P[cls];
     }
 
     function pathOf(g) {
@@ -262,12 +292,23 @@
     function paintBlock(ctx, tiles, o) {
         const P = PALETTE[o.theme] || PALETTE.dark;
         const k = o.k, unit = o.dpr / k, zv = o.zv;
-        const list = tiles.filter(Boolean);
-        const keep = (g) => g.cls === 'bld' || g.cls === 'land' || g.cls === 'water' || g.cls === 'green' || g.cls === 'landuse' || g.cls === 'river' || g.cls === 'stream' || zv >= 15 || g.mz <= zv + 1;
+        const clips = o.clips || [];
+        const list = [];
+        tiles.forEach((t, i) => { if (t) list.push({ t, clip: clips[i] || null }); });
+        const road = (g) => g.cls === 'hw' || g.cls === 'major' || g.cls === 'minor' || g.cls === 'service' || g.cls === 'path' || g.cls === 'rail';
+        const keep = (g) => !road(g) || roadDrawn(g.mz, zv);
         const each = (fn) => {
-            for (const t of list) {
+            for (const { t, clip } of list) {
+                if (clip) {
+                    ctx.save();
+                    ctx.setTransform(1, 0, 0, 1, 0, 0);
+                    ctx.beginPath();
+                    ctx.rect((clip[0] - o.lngW) * k, (o.latN - clip[1]) * k, (clip[2] - clip[0]) * k, (clip[1] - clip[3]) * k);
+                    ctx.clip();
+                }
                 ctx.setTransform(k, 0, 0, k, (t.lngW - o.lngW) * k, (o.latN - t.latN) * k);
                 for (const g of t.groups) if (keep(g)) fn(g);
+                if (clip) ctx.restore();
             }
         };
         ctx.lineJoin = 'round';
@@ -292,7 +333,7 @@
             ctx.globalAlpha = alpha;
             const order = casing ? CASED : FILL_ORDER;
             for (const cls of order) {
-                ctx.strokeStyle = casing ? P.casing : P[cls];
+                ctx.strokeStyle = casing ? P.casing : roadFill(o.theme, cls, zv);
                 ctx.lineWidth = (widthAt(cls, zv) + (casing ? 1.5 : 0)) * unit;
                 each((g) => { if (g.cls === cls && g.st === st && !g.poly) ctx.stroke(pathOf(g)); });
             }
@@ -312,7 +353,7 @@
         return new Uint8Array(await new Response(stream).arrayBuffer());
     }
 
-    G.NymStreetDecode = Object.freeze({ decodeTile, decodeGeometry, tileLat, reproject, tileLocal, classify, buildTile, paintBlock, widthAt, gunzip, PALETTE, WIDTHS });
+    G.NymStreetDecode = Object.freeze({ decodeTile, decodeGeometry, tileLat, reproject, tileLocal, classify, buildTile, tileStats, paintBlock, widthAt, roadDrawn, roadFill, labelText, gunzip, PALETTE, WIDTHS });
 
     if (typeof WorkerGlobalScope === 'undefined' || !(G instanceof WorkerGlobalScope)) return;
 
@@ -326,7 +367,7 @@
         const r = raw.get(key);
         if (!r) return null;
         try { t = buildTile(await gunzip(r.gz), r.z, r.x, r.y); } catch (_) { t = null; }
-        if (!t) return null;
+        if (!t) { raw.delete(key); G.postMessage({ op: 'bad', key }); return null; }
         decoded.set(key, t);
         while (decoded.size > DECODED_MAX) decoded.delete(decoded.keys().next().value);
         return t;
@@ -361,7 +402,7 @@
                     if (!canRaster || d.noRaster) {
                         const out = [], transfer = [];
                         tiles.forEach((t, i) => {
-                            if (!t) return;
+                            if (!t) { out.push(null); return; }
                             const groups = copyGroups(t);
                             for (const g of groups) transfer.push(g.pts.buffer, g.parts.buffer);
                             out.push({ key: d.keys[i], lngW: t.lngW, latN: t.latN, w: t.w, h: t.h, groups });
@@ -385,7 +426,7 @@
                     for (const k of d.keys) {
                         const t = await tileFor(k);
                         if (!t) continue;
-                        for (const l of t.labels) items.push({ key: k, lngW: t.lngW, latN: t.latN, name: l.name, rank: l.rank, kind: l.kind, pts: l.pts.slice() });
+                        for (const l of t.labels) items.push({ key: k, lngW: t.lngW, latN: t.latN, name: l.name, rank: l.rank, cls: l.cls, mz: l.mz, kind: l.kind, pts: l.pts.slice() });
                     }
                 } catch (_) { items.length = 0; }
                 G.postMessage({ op: 'labels', id: d.id, items });

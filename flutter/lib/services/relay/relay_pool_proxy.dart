@@ -8,12 +8,13 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../core/constants/relays.dart';
 import '../../features/relays/relay_add.dart';
 import '../../features/relays/relay_block.dart';
+import 'proxy_down_rule.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
 import '../api/api_config.dart';
 import 'held_publishes.dart';
 import 'relay_connection.dart'
-    show WebSocketChannelFactory, defaultRelayChannelFactory;
+    show WebSocketChannelFactory, defaultRelayChannelFactory, relayClock;
 import 'relay_message.dart';
 import 'relay_pool.dart';
 import 'relay_stats.dart';
@@ -448,16 +449,25 @@ class _ShardSocket {
     required this.onClosed,
     this.onLost,
     this.onLinked,
+    this.onFirstFrame,
     this.reqFilter,
     this.confirmTimeout = const Duration(seconds: 12),
     DateTime Function()? now,
-  }) : _now = now ?? DateTime.now;
+  }) : _now = now ?? relayClock;
 
   final String? Function(String frame)? reqFilter;
 
   final void Function(_ShardSocket sock, DateTime? lastLiveAt)? onLost;
 
   final void Function(_ShardSocket sock)? onLinked;
+
+  final void Function(_ShardSocket sock)? onFirstFrame;
+
+  Object? _closeError;
+
+  bool lastCloseFailed = false;
+
+  bool lastCloseRateLimited = false;
 
   bool linked = false;
 
@@ -529,6 +539,8 @@ class _ShardSocket {
 
   bool get isOpen => _open;
 
+  bool get isHeld => _held;
+
   void connect() {
     _closedByUser = false;
     if (_open) return;
@@ -540,6 +552,7 @@ class _ShardSocket {
     healthyAt = null;
     probe = null;
     _lostAtOverride = null;
+    _closeError = null;
     try {
       final ch = channelFactory(Uri.parse(url));
       _channel = ch;
@@ -553,7 +566,10 @@ class _ShardSocket {
       } catch (_) {}
       _sub = ch.stream.listen(
         _onData,
-        onError: (Object _) => _onDone(),
+        onError: (Object e) {
+          _closeError = e;
+          _onDone();
+        },
         onDone: _onDone,
         cancelOnError: false,
       );
@@ -564,6 +580,7 @@ class _ShardSocket {
       onConnected(this);
     } catch (e) {
       debugPrint('[RelayPoolProxy] Failed to open shard socket ($url): $e');
+      _closeError = e;
       _onDone();
     }
   }
@@ -594,7 +611,9 @@ class _ShardSocket {
     if (msg == null) return;
     // A real inbound frame proves the connection, so reset the backoff.
     _reconnectAttempt = 0;
+    final first = !_frameSinceConnect;
     _frameSinceConnect = true;
+    if (first) onFirstFrame?.call(this);
     failuresSinceFrame = 0;
     failureStreakStartedAt = null;
     _confirmTimer?.cancel();
@@ -634,6 +653,11 @@ class _ShardSocket {
     }
     connectedRelays = const [];
     linked = false;
+    lastCloseFailed = !_frameSinceConnect && !_closedByUser;
+    lastCloseRateLimited =
+        proxyCloseNamesRateLimit(_closeError, reason: _channel?.closeReason);
+    _closeError = null;
+    if (lastCloseRateLimited && _reconnectAttempt < 4) _reconnectAttempt = 4;
     _cleanup();
     onClosed(this);
     if (wasLive && !_closedByUser) onLost?.call(this, lastLiveAt);
@@ -656,6 +680,8 @@ class _ShardSocket {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
   }
+
+  void unhold() => _held = false;
 
   void _scheduleReconnect({bool quick = false}) {
     if (_closedByUser || _held) return;
@@ -740,16 +766,14 @@ class RelayPoolProxy implements PoolTransport {
     this.onProxyConnected,
     this.onShardLost,
     this.onShardReconnected,
-    this.maxPreConnectFailures = 2,
     this.confirmTimeout = const Duration(seconds: 12),
-    this.postConfirmGrace = const Duration(seconds: 30),
     DateTime Function()? now,
     this.eoseQuorum = 0.6,
     this.eoseTimeout = const Duration(seconds: 4),
     Duration heldWait = const Duration(seconds: 15),
   })  : _verify = verify ?? ((_) async => true),
         _held = HeldPublishes(max: heldMax, wait: heldWait),
-        _now = now ?? DateTime.now,
+        _now = now ?? relayClock,
         _allRelays = {...relays},
         _geoRelayUrls = [...?geoRelayUrls],
         _dmRelays = dmRelays ?? RelayConfig.defaultRelays,
@@ -775,7 +799,6 @@ class RelayPoolProxy implements PoolTransport {
   final double eoseQuorum;
   final Duration eoseTimeout;
 
-  /// Fires once after [maxPreConnectFailures] pre-confirm shard failures, so [NostrService] can swap to direct.
   void Function()? onProxyUnreachable;
 
   /// Fires once when a shard first confirms the proxy, for background-restore promotion.
@@ -937,7 +960,7 @@ class RelayPoolProxy implements PoolTransport {
         sock.recycle();
       }
     }
-    reconnectDownShards();
+    retryDownShards();
     probeNow(timeout: resumeProbeTimeout);
   }
 
@@ -984,12 +1007,7 @@ class RelayPoolProxy implements PoolTransport {
     onShardLost?.call(lastLiveAt);
   }
 
-  /// Pre-confirm failures that trip [onProxyUnreachable] (PWA threshold: 2).
-  final int maxPreConnectFailures;
-
   final Duration confirmTimeout;
-
-  final Duration postConfirmGrace;
 
   final DateTime Function() _now;
 
@@ -1207,6 +1225,7 @@ class RelayPoolProxy implements PoolTransport {
         onMessage: _onShardMessage,
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
+        onFirstFrame: _onShardFirstFrame,
         onLost: _onShardLost,
         onLinked: (_) => _noteCount(),
         reqFilter: _addedFrame,
@@ -1428,6 +1447,7 @@ class RelayPoolProxy implements PoolTransport {
         onMessage: _onShardMessage,
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
+        onFirstFrame: _onShardFirstFrame,
         onLost: _onShardLost,
         onLinked: (_) => _noteCount(),
         reqFilter: _addedFrame,
@@ -1538,24 +1558,42 @@ class RelayPoolProxy implements PoolTransport {
     _held.flush(this);
   }
 
+  ProxyDownRule downRule = ProxyDownRule();
+
+  bool oneTry = false;
+
+  void goLive() {
+    oneTry = false;
+    downRule = ProxyDownRule(link: downRule.link);
+    if (_disposed || _livenessHeld) return;
+    for (final sock in _sockets) {
+      sock.unhold();
+    }
+    retryDownShards();
+  }
+
+  void _onShardFirstFrame(_ShardSocket sock) => downRule.success();
+
   void _onShardClosed(_ShardSocket sock) {
     _noteCount();
-    // Only detect host-unreachable here: repeated closes before the pool ever confirmed.
-    if (_unreachableFired || _disposed) return;
-    final streak = _proxyEverConnected
-        ? sock.failuresSinceFrame
-        : sock.failuresBeforeConfirm;
-    if (streak < maxPreConnectFailures) return;
-    if (_proxyEverConnected) {
-      final since = sock.failureStreakStartedAt;
-      if (since == null || _now().difference(since) < postConfirmGrace) return;
+    if (_unreachableFired || _disposed || !sock.lastCloseFailed) return;
+    final bool down;
+    if (oneTry) {
+      sock.hold();
+      down = _sockets.every((s) => s.isHeld && !s.isOpen);
+    } else {
+      down = downRule.failure(_now(),
+          shard: sock.shard.id,
+          shardCount: _sockets.length,
+          rateLimited: sock.lastCloseRateLimited);
     }
+    if (!down) return;
     if (_sockets.any((s) => s.isOpen && s.hasFrameSinceConnect)) return;
     _unreachableFired = true;
     final cb = onProxyUnreachable;
     if (cb != null) {
-      debugPrint('[RelayPoolProxy] proxy unreachable after '
-          '$streak consecutive failures on ${sock.shard.id}; '
+      debugPrint('[RelayPoolProxy] proxy unreachable: ${downRule.failures} '
+          'failed connects over ${downRule.span.inSeconds}s; '
           'falling back to direct relays');
       cb();
     }

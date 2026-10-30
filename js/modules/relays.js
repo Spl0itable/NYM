@@ -360,53 +360,131 @@ Object.assign(NYM.prototype, {
         this.ensureGeoRelayCoverage();
     },
 
-    // Direct mode covers only visible channels; the pool Worker can hold the whole ~415-entry directory.
-    GEO_COVERAGE_MAX: 40,
+    DIRECT_DIAL_CONCURRENCY: 24,
+    DIRECT_SOCKET_RESERVE: 24,
+    DIRECT_REFUSAL_RUN: 16,
+    DIRECT_CEILING_HOLD_MS: 600000,
 
-    // Covers every geohash channel in view, not just the one on screen.
     async ensureGeoRelayCoverage() {
-        if (this.useRelayProxy) return;   // The pool already carries all of them.
+        if (this.useRelayProxy) return;
         if (this.settings && this.settings.groupChatPMOnlyMode) return;
         if (this._geoRelaysReady) await this._geoRelaysReady;
+        if (this.useRelayProxy) return;
 
         const wanted = [];
         const seen = new Set();
+        const push = (url) => {
+            if (typeof url !== 'string' || !url || url === this.appRelay || seen.has(url)) return;
+            seen.add(url);
+            wanted.push(url);
+        };
         const add = (name) => {
-            if (wanted.length >= this.GEO_COVERAGE_MAX) return;
             const gh = typeof name === 'string' ? name.toLowerCase() : '';
             if (!gh || !this.isValidGeohash(gh)) return;
-            for (const r of this.getClosestRelaysForGeohash(gh)) {
-                if (wanted.length >= this.GEO_COVERAGE_MAX) return;
-                if (seen.has(r.url)) continue;
-                seen.add(r.url);
-                wanted.push(r.url);
-            }
+            for (const r of this.getClosestRelaysForGeohash(gh)) push(r.url);
         };
-        // On screen first, so the cap can never cut the channel being read.
         add(this.currentGeohash);
         for (const c of (this.userJoinedChannels || [])) add(c);
         for (const c of (this.pinnedChannels || [])) add(c);
         for (const k of (this.channels ? this.channels.keys() : [])) add(k);
+        for (const r of (this.geoRelays || [])) push(r && (r.url || r));
+        this._directQueue = wanted;
+        this._pumpDirectDials();
+    },
 
-        for (const relayUrl of wanted) {
-            const existing = this.relayPool.get(relayUrl);
-            if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
-                this.currentGeoRelays.add(relayUrl);
-                this._ensureGeoRelayLiveSub(existing, relayUrl);
-                continue;
-            }
-            if (this.blacklistedRelays.has(relayUrl) && !this.isBlacklistExpired(relayUrl)) continue;
-            if (!this.shouldRetryRelay(relayUrl)) continue;
-            try {
-                await this.connectToRelayWithTimeout(relayUrl, 'relay', 3000);
-                const relay = this.relayPool.get(relayUrl);
-                if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    this.currentGeoRelays.add(relayUrl);
-                    this._ensureGeoRelayLiveSub(relay, relayUrl);
+    _directOpenCount() {
+        let n = 0;
+        this.relayPool.forEach((r) => { if (r && r.ws && r.ws.readyState === WebSocket.OPEN) n++; });
+        return n;
+    },
+
+    _pumpDirectDials() {
+        if (this.useRelayProxy || !Array.isArray(this._directQueue)) return;
+        if (!this._directActive) this._directActive = 0;
+        while (this._directActive < this.DIRECT_DIAL_CONCURRENCY && this._directQueue.length > 0) {
+            if (this._directCeiling) {
+                if (Date.now() - (this._directCeilingAt || 0) >= this.DIRECT_CEILING_HOLD_MS) {
+                    this._directCeiling = Math.min(this._directCeiling + 1, this._directOpenCount() + 1);
+                    this._directCeilingAt = Date.now();
                 }
-            } catch (_) { /* One unreachable relay is not a failure. */ }
+                if (this._directOpenCount() + this._directActive >= this._directCeiling) return;
+            }
+            const relayUrl = this._directQueue.shift();
+            this._directActive++;
+            Promise.resolve(this._dialGeoRelay(relayUrl)).catch(() => { }).then(() => {
+                this._directActive--;
+                this._pumpDirectDials();
+            });
         }
-        this.updateRelayStatus();
+        if (this._directActive === 0 && this._directQueue.length === 0) this.updateRelayStatus();
+    },
+
+    async _dialGeoRelay(relayUrl) {
+        if (this.useRelayProxy) return;
+        const existing = this.relayPool.get(relayUrl);
+        if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
+            this.currentGeoRelays.add(relayUrl);
+            this._ensureGeoRelayLiveSub(existing, relayUrl);
+            return;
+        }
+        if (this.blacklistedRelays.has(relayUrl) && !this.isBlacklistExpired(relayUrl)) return;
+        if (!this.shouldRetryRelay(relayUrl)) return;
+        try {
+            await this.connectToRelayWithTimeout(relayUrl, 'relay', 5000);
+        } catch (_) { }
+        const relay = this.relayPool.get(relayUrl);
+        if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+            this._directRefused = 0;
+            this.currentGeoRelays.add(relayUrl);
+            this._ensureGeoRelayLiveSub(relay, relayUrl);
+            if (this._directCeiling) this._shedDirectSockets(this._directOpenCount() - this._directCeiling);
+            return;
+        }
+        this._noteDirectRefusal(relayUrl);
+    },
+
+    _noteDirectRefusal(relayUrl) {
+        if (!Array.isArray(this._directRefusedUrls)) this._directRefusedUrls = [];
+        this._directRefusedUrls.push(relayUrl);
+        this._directRefused = (this._directRefused || 0) + 1;
+        if (this._directRefused < this.DIRECT_REFUSAL_RUN) return;
+        const open = this._directOpenCount();
+        if (open < 128) return;
+        this._directRefused = 0;
+        this._directCeiling = Math.max(8, open - this.DIRECT_SOCKET_RESERVE);
+        this._directCeilingAt = Date.now();
+        const retry = this._directRefusedUrls.splice(0);
+        for (const u of retry) {
+            this.failedRelays.delete(u);
+            this.blacklistedRelays.delete(u);
+            if (Array.isArray(this._directQueue)) this._directQueue.push(u);
+        }
+        this._shedDirectSockets(open - this._directCeiling);
+    },
+
+    _shedDirectSockets(n) {
+        if (n <= 0) return;
+        const keep = new Set([this.appRelay, ...(this.broadcastRelays || [])]);
+        const geo = [];
+        this.relayPool.forEach((r, u) => {
+            if (keep.has(u) || !this.currentGeoRelays.has(u)) return;
+            if (r && r.ws && r.ws.readyState === WebSocket.OPEN) geo.push([u, r]);
+        });
+        if (!this._droppedRelays) this._droppedRelays = new Set();
+        for (const [u, r] of geo.slice(-n)) {
+            this._droppedRelays.add(u);
+            this.currentGeoRelays.delete(u);
+            try { r.ws.close(1000); } catch (_) { }
+            if (Array.isArray(this._directQueue)) this._directQueue.push(u);
+        }
+    },
+
+    directSocketSummary() {
+        return {
+            open: this._directOpenCount(),
+            known: new Set([...(this.broadcastRelays || []), ...((this.geoRelays || []).map((r) => r && (r.url || r)))]).size,
+            ceiling: this._directCeiling || 0,
+        };
     },
 
     _ensureGeoRelayLiveSub(relay, relayUrl) {
@@ -1125,6 +1203,7 @@ Object.assign(NYM.prototype, {
     },
 
     async connectToRelays() {
+        this._bindProxyLink();
         if (typeof this._botChannelRunsRecover === 'function') this._botChannelRunsRecover();
         try {
             this.initialConnectionInProgress = true;
@@ -1134,8 +1213,8 @@ Object.assign(NYM.prototype, {
 
             if (this.useRelayProxy) {
                 let poolConnected = false;
-                const maxRetries = 2;
-                for (let attempt = 0; attempt < maxRetries; attempt++) {
+                let gaveUp = false;
+                for (let attempt = 0; !poolConnected && !gaveUp; attempt++) {
                     try {
                         if (attempt > 0) {
                             const base = Math.min(2000 * Math.pow(2, attempt - 1), 8000);
@@ -1147,8 +1226,9 @@ Object.assign(NYM.prototype, {
                         poolConnected = true;
                         break;
                     } catch (poolErr) {
-                        console.warn(`[NYM] Relay pool attempt ${attempt + 1}/${maxRetries} failed:`, poolErr.message);
-                        if (attempt === maxRetries - 1) {
+                        console.warn(`[NYM] Relay pool attempt ${attempt + 1} failed:`, poolErr.message);
+                        if (this._proxyDownFailure(Date.now(), 'pool', 1, this._closeNamesRateLimit(poolErr))) {
+                            gaveUp = true;
                             // All retries exhausted: use direct connections and keep retrying the pool in the background.
                             console.warn('[NYM] Relay pool failed, falling back to direct connections');
                             this.useRelayProxy = false;
@@ -1794,6 +1874,105 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
+    PROXY_DOWN: { minFailures: 4, windowMs: 45000, resumeGraceMs: 10000, maxGapMs: 20000 },
+    RESTORE_EVERY_MS: 30000,
+    RELAY_SWITCH_LIMIT_MS: 25000,
+    CONNECTION_CHANGES_MAX: 20,
+
+    _proxyLinkState() {
+        if (!this._proxyLink) this._proxyLink = { foreground: true, online: true, graceUntil: 0, epoch: 0 };
+        return this._proxyLink;
+    },
+
+    _proxyLinkPaused() {
+        const l = this._proxyLinkState();
+        l.foreground = false;
+        l.epoch++;
+    },
+
+    _proxyLinkResumed(now) {
+        const l = this._proxyLinkState();
+        l.foreground = true;
+        l.graceUntil = now + this.PROXY_DOWN.resumeGraceMs;
+        l.epoch++;
+    },
+
+    _proxyLinkOffline() {
+        const l = this._proxyLinkState();
+        l.online = false;
+        l.epoch++;
+    },
+
+    _proxyLinkOnline(now) {
+        const l = this._proxyLinkState();
+        l.online = true;
+        l.graceUntil = now + this.PROXY_DOWN.resumeGraceMs;
+        l.epoch++;
+    },
+
+    _proxyDownSuccess() {
+        this._proxyDown = null;
+    },
+
+    _proxyDownFailure(now, shard, shardCount, rateLimited) {
+        const l = this._proxyLinkState();
+        const counts = l.foreground && l.online && now >= (l.graceUntil || 0);
+        if (rateLimited || !counts) {
+            this._proxyDown = null;
+            return false;
+        }
+        let d = this._proxyDown;
+        if (!d || d.epoch !== l.epoch) {
+            d = this._proxyDown = { failures: 0, shards: new Set(), span: 0, lastAt: null, epoch: l.epoch };
+        }
+        if (d.lastAt !== null && now >= d.lastAt) d.span += Math.min(now - d.lastAt, this.PROXY_DOWN.maxGapMs);
+        d.lastAt = now;
+        d.failures++;
+        d.shards.add(shard);
+        if (d.failures < this.PROXY_DOWN.minFailures || d.span < this.PROXY_DOWN.windowMs) return false;
+        return shardCount <= 1 || d.shards.size >= 2;
+    },
+
+    _closeNamesRateLimit(x) {
+        if (!x) return false;
+        const s = typeof x === 'string' ? x : [x.reason, x.message].filter(Boolean).join(' ');
+        return /rate.?limit|too many (connections|requests)|\b429\b/i.test(s);
+    },
+
+    _bindProxyLink() {
+        if (this._proxyLinkBound || typeof document === 'undefined' || typeof window === 'undefined') return;
+        this._proxyLinkBound = true;
+        if (document.visibilityState === 'hidden') this._proxyLinkPaused();
+        if (navigator.onLine === false) this._proxyLinkOffline();
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') this._proxyLinkResumed(Date.now());
+            else this._proxyLinkPaused();
+        });
+        window.addEventListener('pagehide', () => this._proxyLinkPaused());
+        window.addEventListener('pageshow', () => this._proxyLinkResumed(Date.now()));
+        window.addEventListener('offline', () => this._proxyLinkOffline());
+        window.addEventListener('online', () => this._proxyLinkOnline(Date.now()));
+    },
+
+    _noteConnectionChange(reason) {
+        if (!Array.isArray(this._connectionChanges)) this._connectionChanges = [];
+        this._connectionChanges.unshift({ at: Date.now(), reason });
+        if (this._connectionChanges.length > this.CONNECTION_CHANGES_MAX) {
+            this._connectionChanges.length = this.CONNECTION_CHANGES_MAX;
+        }
+        if (typeof window !== 'undefined' && typeof window.renderConnectionChanges === 'function') {
+            try { window.renderConnectionChanges(); } catch (_) { }
+        }
+    },
+
+    connectionChanges() {
+        return Array.isArray(this._connectionChanges) ? this._connectionChanges.slice() : [];
+    },
+
+    clearConnectionChanges() {
+        this._connectionChanges = [];
+    },
+
     _fallbackToDirectConnections() {
         if (!this.useRelayProxy) return;
 
@@ -1829,10 +2008,19 @@ Object.assign(NYM.prototype, {
         this._schedulePoolReconnectInBackground();
     },
 
-    _schedulePoolReconnectInBackground(immediate = false) {
-        if (!this._poolFallbackActive) return;
-        if (!this._getApiHost()) return;
-        if (this._bgPoolReconnectInFlight) return;
+    _restoreDelay() {
+        const n = this._bgPoolReconnectAttempts || 0;
+        if (n <= 0) return 15000;
+        const background = !!this._proxyLink && this._proxyLink.foreground === false;
+        const cap = background ? 120000 : this.RESTORE_EVERY_MS;
+        const base = Math.min(15000 * Math.pow(2, Math.min(n - 1, 3)), cap);
+        return Math.floor(base * (0.5 + Math.random() * 0.5));
+    },
+
+    _schedulePoolReconnectInBackground(immediate = false, manual = false) {
+        if (!this._poolFallbackActive) return null;
+        if (!this._getApiHost()) return null;
+        if (this._bgPoolReconnectInFlight) return this._restoreAttempt || null;
 
         if (this._bgPoolReconnectTimer) {
             if (!immediate) return;
@@ -1844,12 +2032,13 @@ Object.assign(NYM.prototype, {
             this._bgPoolReconnectAttempts = 0;
         }
 
-        const tryRestore = () => {
+        const tryRestore = (byHand) => {
             this._bgPoolReconnectTimer = null;
-            if (!this._poolFallbackActive) return;
-            if (!navigator.onLine) {
+            if (!this._poolFallbackActive) return null;
+            if (byHand !== true && !navigator.onLine) {
                 this._bgPoolReconnectAttempts = 0;
-                return;
+                this._bgPoolReconnectTimer = setTimeout(tryRestore, this._restoreDelay());
+                return null;
             }
 
             this._bgPoolReconnectAttempts++;
@@ -1860,7 +2049,7 @@ Object.assign(NYM.prototype, {
             this._poolReconnecting = false;
             this._bgPoolReconnectInFlight = true;
 
-            this._connectToRelayPool()
+            const attempt = this._connectToRelayPool()
                 .then(() => {
                     this._bgPoolReconnectInFlight = false;
                     if (this._userDirectMode) {
@@ -1870,6 +2059,10 @@ Object.assign(NYM.prototype, {
                     }
                     this._bgPoolReconnectAttempts = 0;
                     this._poolFallbackActive = false;
+                    if (this._autoEpisode) {
+                        this._autoEpisode = false;
+                        this._noteConnectionChange('proxyBack');
+                    }
                     console.log('[NYM] Pool mode restored');
                     this._fallbackNoticeEpisode = false;
                     this._startPoolShardHealthCheck();
@@ -1878,6 +2071,7 @@ Object.assign(NYM.prototype, {
                     });
                     this.relayPool.clear();
                     this._afterTransportSwitch();
+                    return 'done';
                 })
                 .catch(() => {
                     this._bgPoolReconnectInFlight = false;
@@ -1885,15 +2079,25 @@ Object.assign(NYM.prototype, {
                     this.useRelayProxy = false;
                     if (!this._poolFallbackActive) return;
                     this._recoverFromEdgeChallenge().catch(() => { });
-                    const expIdx = Math.min(this._bgPoolReconnectAttempts - 1, 4);
-                    const base = Math.min(15000 * Math.pow(2, expIdx), 120000);
-                    const delay = this._jitter(base);
-                    this._bgPoolReconnectTimer = setTimeout(tryRestore, delay);
+                    this._bgPoolReconnectTimer = setTimeout(tryRestore, this._restoreDelay());
+                    return byHand === true && !navigator.onLine ? 'offline' : 'proxyUnreachable';
+                })
+                .then((outcome) => {
+                    if (this._restoreAttempt === attempt) this._restoreAttempt = null;
+                    return outcome || 'busy';
                 });
+            this._restoreAttempt = attempt;
+            return attempt;
         };
 
+        if (manual) {
+            if (this._bgPoolReconnectTimer) clearTimeout(this._bgPoolReconnectTimer);
+            this._bgPoolReconnectTimer = null;
+            return tryRestore(true);
+        }
         const initialDelay = immediate ? 0 : 15000;
         this._bgPoolReconnectTimer = setTimeout(tryRestore, initialDelay);
+        return null;
     },
 
     fallbackNoticeEnabled() {
@@ -1915,6 +2119,10 @@ Object.assign(NYM.prototype, {
     },
 
     _noteAutoFallback() {
+        if (!this._userDirectMode) {
+            this._autoEpisode = true;
+            this._noteConnectionChange('proxyDown');
+        }
         if (this._userDirectMode || this._fallbackNoticeEpisode) return;
         this._fallbackNoticeEpisode = true;
         if (!this.fallbackNoticeEnabled() || typeof this.showToast !== 'function') return;
@@ -1980,10 +2188,12 @@ Object.assign(NYM.prototype, {
     },
 
     async setUserDirectMode(direct) {
-        if (!this.canSwitchRelayTransport()) return;
+        if (!this.canSwitchRelayTransport()) return 'failed';
         this._writeUserDirectPref(!!direct);
         this._fallbackNoticeEpisode = !direct;
         if (direct) {
+            if (!this._userDirectMode) this._noteConnectionChange('chosenDirect');
+            this._autoEpisode = false;
             this._userDirectMode = true;
             this._poolFallbackActive = false;
             this._stopPoolReconnectInBackground();
@@ -1992,13 +2202,15 @@ Object.assign(NYM.prototype, {
             this.startAppRelayWatchdog();
             this.ensureAppRelayConnected();
             this.updateConnectionStatus();
-            return;
+            return this.useRelayProxy ? 'failed' : 'done';
         }
+        if (this._userDirectMode) this._noteConnectionChange('chosenProxy');
+        this._autoEpisode = false;
         this._userDirectMode = false;
-        if (this.useRelayProxy) return;
+        if (this.useRelayProxy) return 'done';
         this._poolFallbackActive = true;
         this._dropAddedDirect();
-        this._schedulePoolReconnectInBackground(true);
+        return this.retryProxyNow(true);
     },
 
     relayTransportAction() {
@@ -2008,18 +2220,28 @@ Object.assign(NYM.prototype, {
         return 'direct';
     },
 
+    relayTransportActions() {
+        const action = this.relayTransportAction();
+        if (!action) return [];
+        return action === 'retry' ? ['retry', 'direct'] : [action];
+    },
+
     relayTransportBusy() {
         return !!this._relayTransportSwitching || (this._poolFallbackActive === true && this._bgPoolReconnectInFlight === true);
     },
 
-    async requestRelayTransportToggle() {
-        if (this.relayTransportBusy()) return false;
-        const action = this.relayTransportAction();
-        if (action === 'retry') {
-            this.retryProxyNow();
-            return true;
-        }
-        if (action !== 'direct' && action !== 'proxy') return false;
+    relayTransportNote() {
+        if (this.relayTransportBusy()) return 'switching';
+        const n = this._relayTransportNote;
+        if (!n || this._relayTransportNoteFor !== this.relayTransportAction()) return '';
+        return n;
+    },
+
+    async requestRelayTransportToggle(which) {
+        if (this._relayTransportSwitching) return false;
+        const actions = this.relayTransportActions();
+        const action = which || actions[0];
+        if (!actions.includes(action)) return false;
         if (action === 'direct' && !this._relayDirectAcknowledged()) {
             const ui = (s) => (typeof this.uiText === 'function' ? this.uiText(s) : s);
             const message = ui("Nymchat will disconnect from the relay pool proxy and connect to each relay directly. Images, videos, voice messages, avatars, custom emoji, GIFs and link previews will also load straight from the sites that host them, and uploads will go straight to them. Relays and those sites will see your IP address, and the proxy's spam filtering won't apply. You can switch back anytime from Network Stats.");
@@ -2034,17 +2256,38 @@ Object.assign(NYM.prototype, {
             this._acknowledgeRelayDirect();
         }
         this._relayTransportSwitching = true;
+        this._relayTransportNote = '';
+        let outcome;
+        let limit = null;
         try {
-            await this.setUserDirectMode(action === 'direct');
+            const run = action === 'retry'
+                ? this.retryProxyNow(true)
+                : this.setUserDirectMode(action === 'direct');
+            outcome = await Promise.race([
+                Promise.resolve(run).catch(() => 'failed'),
+                new Promise((resolve) => { limit = setTimeout(() => resolve('failed'), this.RELAY_SWITCH_LIMIT_MS); }),
+            ]);
+        } catch (_) {
+            outcome = 'failed';
         } finally {
+            if (limit) clearTimeout(limit);
             this._relayTransportSwitching = false;
         }
-        return true;
+        if (outcome === 'done' || outcome === 'busy') {
+            this._relayTransportNote = '';
+            return outcome === 'done';
+        }
+        this._relayTransportNote = outcome === 'proxyUnreachable' || outcome === 'offline' ? outcome : 'failed';
+        this._relayTransportNoteFor = this.relayTransportAction();
+        return false;
     },
 
-    retryProxyNow() {
-        if (this._userDirectMode || !this._poolFallbackActive || this._bgPoolReconnectInFlight) return;
-        this._schedulePoolReconnectInBackground(true);
+    retryProxyNow(manual = false) {
+        if (this._userDirectMode || !this._poolFallbackActive) {
+            return Promise.resolve(this.useRelayProxy ? 'done' : 'busy');
+        }
+        if (this._bgPoolReconnectInFlight) return Promise.resolve(this._restoreAttempt || 'busy');
+        return Promise.resolve(this._schedulePoolReconnectInBackground(true, manual === true) || 'busy');
     },
 
     async _switchPoolToDirect() {
@@ -2319,7 +2562,7 @@ Object.assign(NYM.prototype, {
                             attempt(retries, false);
                             return;
                         }
-                        if (retries < 1) {
+                        if (!this._proxyDownFailure(Date.now(), 'pool', 1, this._closeNamesRateLimit(err))) {
                             attempt(retries + 1, false);
                         } else {
                             this._poolReconnecting = false;
@@ -2329,8 +2572,7 @@ Object.assign(NYM.prototype, {
                                 console.warn('[NYM] The edge refuses the pool socket while plain requests pass. The clearance is not being honoured for WebSocket upgrades; check the Security Events row for /api/relay-pool.');
                                 this._logEdgeTrace();
                             }
-                            // 2 consecutive failures — fall back to direct relay connections
-                            console.warn('[NYM] Relay pool failed after 2 attempts, falling back to direct connections');
+                            console.warn('[NYM] Relay pool unreachable for the whole window, falling back to direct connections');
                             this._fallbackToDirectConnections();
                         }
                     });
@@ -2706,6 +2948,7 @@ Object.assign(NYM.prototype, {
             };
 
             ws.onmessage = (event) => {
+                this._proxyDownSuccess();
                 try {
                     const dataLen = typeof event.data === 'string' ? event.data.length : (event.data.byteLength || 0);
                     this.relayStats.bytesReceived += dataLen;

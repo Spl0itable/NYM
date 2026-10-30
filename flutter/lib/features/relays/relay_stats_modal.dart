@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/relays.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../services/nostr/nostr_service.dart';
 import '../../services/relay/relay_stats.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -25,6 +26,7 @@ import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import 'added_relays.dart';
 import 'blocked_relays.dart';
+import 'recent_connection_changes.dart';
 import 'relay_add.dart';
 import 'relay_add_check.dart';
 import 'relay_block.dart';
@@ -92,18 +94,59 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     if (nostr.isUserDirectMode) {
       await _runSwitch(() => nostr.setUserDirectMode(false));
     } else {
-      nostr.retryProxyNow();
-      if (mounted) setState(() {});
+      await _runSwitch(nostr.retryProxyNow);
     }
   }
 
-  Future<void> _runSwitch(Future<void> Function() action) async {
-    setState(() => _switching = true);
-    try {
-      await action();
-    } finally {
-      if (mounted) setState(() => _switching = false);
+  static const Duration switchTimeout = Duration(seconds: 25);
+
+  String _note = '';
+
+  String _noteFor = '';
+
+  Timer? _switchTimer;
+
+  String _modeKey() {
+    final nostr = ref.read(nostrControllerProvider);
+    final proxy = ref.read(appStateProvider).proxyMode;
+    return '$proxy/${nostr.isProxyFallbackActive}/${nostr.isUserDirectMode}';
+  }
+
+  Future<void> _runSwitch(Future<RelaySwitchOutcome> Function() action) async {
+    if (_switching) return;
+    setState(() {
+      _switching = true;
+      _note = '';
+    });
+    final settled = Completer<RelaySwitchOutcome>();
+    void settle(RelaySwitchOutcome o) {
+      if (!settled.isCompleted) settled.complete(o);
     }
+
+    _switchTimer?.cancel();
+    _switchTimer = Timer(switchTimeout, () => settle(RelaySwitchOutcome.failed));
+    try {
+      action().then(settle, onError: (Object _) => settle(RelaySwitchOutcome.failed));
+    } catch (_) {
+      settle(RelaySwitchOutcome.failed);
+    }
+    final outcome = await settled.future;
+    _switchTimer?.cancel();
+    _switchTimer = null;
+    if (!mounted) {
+      _switching = false;
+      return;
+    }
+    setState(() {
+      _switching = false;
+      _note = switch (outcome) {
+        RelaySwitchOutcome.done || RelaySwitchOutcome.busy => '',
+        RelaySwitchOutcome.proxyUnreachable => 'proxyUnreachable',
+        RelaySwitchOutcome.offline => 'offline',
+        RelaySwitchOutcome.failed => 'failed',
+      };
+      _noteFor = _modeKey();
+    });
   }
 
   final TextEditingController _search = TextEditingController();
@@ -383,6 +426,7 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
 
   @override
   void dispose() {
+    _switchTimer?.cancel();
     _ticker?.cancel();
     _search.dispose();
     _searchFocus.dispose();
@@ -449,9 +493,13 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                         fallbackActive: fallbackActive,
                         userDirect: userDirect,
                         canSwitch: nostr.canSwitchRelayTransport,
-                        switching: _switching ||
-                            (fallbackActive &&
-                                nostr.isProxyRetryInFlight),
+                        switching: _switching,
+                        probing:
+                            fallbackActive && nostr.isProxyRetryInFlight,
+                        note: _noteFor ==
+                                '$proxyMode/$fallbackActive/$userDirect'
+                            ? _note
+                            : '',
                         onUseDirect: _useDirect,
                         onUseProxy: _useProxy,
                       ),
@@ -461,6 +509,8 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                       _ThroughputSection(
                         history: stats?.throughputHistory ?? const [],
                       ),
+                      const SizedBox(height: 14),
+                      const RecentConnectionChanges(),
                       const SizedBox(height: 14),
                       _RelayListSection(
                         relayStatus: relayStatus,
@@ -609,6 +659,8 @@ class _ConnectionModeLine extends StatelessWidget {
     this.userDirect = false,
     this.canSwitch = false,
     this.switching = false,
+    this.probing = false,
+    this.note = '',
     this.onUseDirect,
     this.onUseProxy,
   });
@@ -619,6 +671,8 @@ class _ConnectionModeLine extends StatelessWidget {
   final bool userDirect;
   final bool canSwitch;
   final bool switching;
+  final bool probing;
+  final String note;
   final VoidCallback? onUseDirect;
   final VoidCallback? onUseProxy;
 
@@ -649,6 +703,7 @@ class _ConnectionModeLine extends StatelessWidget {
       hint = '';
     }
     final Widget? action;
+    Widget? second;
     if (!canSwitch) {
       action = null;
     } else if (userDirect && !proxyMode) {
@@ -664,6 +719,12 @@ class _ConnectionModeLine extends StatelessWidget {
         label: tr('Use proxy'),
         tooltip: tr('Try reconnecting to the proxy now'),
         onTap: switching ? null : onUseProxy,
+      );
+      second = _ModeButton(
+        key: const ValueKey('relay-mode-use-direct'),
+        label: tr('Use direct'),
+        tooltip: tr('Stay on direct connections'),
+        onTap: switching ? null : onUseDirect,
       );
     } else {
       action = _ModeButton(
@@ -684,32 +745,42 @@ class _ConnectionModeLine extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            runSpacing: 4,
             children: [
-              Text(
-                tr('Connection').toUpperCase(),
-                style: TextStyle(
-                  color: c.textDim,
-                  fontSize: 9,
-                  letterSpacing: 0.4,
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(
+                    tr('Connection').toUpperCase(),
+                    style: TextStyle(
+                      color: c.textDim,
+                      fontSize: 9,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    value,
+                    style: TextStyle(
+                      color: c.primary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 10),
-              Text(
-                value,
-                style: TextStyle(
-                  color: c.primary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  fontFamily: 'monospace',
+              if (action != null)
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [action, ?second],
                 ),
-              ),
-              if (action != null) ...[
-                const Spacer(),
-                action,
-              ],
             ],
           ),
           if (hint.isNotEmpty) ...[
@@ -717,6 +788,33 @@ class _ConnectionModeLine extends StatelessWidget {
             Text(
               hint,
               style: TextStyle(color: c.textDim, fontSize: 11, height: 1.35),
+            ),
+          ],
+          if (switching || probing) ...[
+            const SizedBox(height: 4),
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                tr('Switching...'),
+                key: const ValueKey('relay-mode-switching'),
+                style: TextStyle(color: c.textDim, fontSize: 11, height: 1.35),
+              ),
+            ),
+          ] else if (note.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                switch (note) {
+                  'proxyUnreachable' => tr("Couldn't reach the proxy. Staying "
+                      'on direct connections; the app keeps retrying.'),
+                  'offline' => tr('No network right now. Try again when you '
+                      'are back online.'),
+                  _ => tr("Couldn't switch. Try again."),
+                },
+                key: const ValueKey('relay-mode-error'),
+                style: TextStyle(color: c.danger, fontSize: 11, height: 1.35),
+              ),
             ),
           ],
         ],
@@ -749,41 +847,51 @@ class _ModeButtonState extends State<_ModeButton> {
     final c = context.nym;
     final enabled = widget.onTap != null;
     final hovered = _hover && enabled;
-    return NymTooltip(
-      message: widget.tooltip,
-      child: Semantics(
-        button: true,
-        enabled: enabled,
-        label: widget.tooltip,
-        excludeSemantics: true,
+    return NymFocusable(
+      onActivate: widget.onTap,
+      label: widget.label,
+      hint: widget.tooltip,
+      excludeChildSemantics: true,
+      radius: NymRadius.rsm,
+      child: NymTooltip(
+        message: widget.tooltip,
+        excludeFromSemantics: true,
         child: MouseRegion(
           onEnter: (_) => setState(() => _hover = true),
           onExit: (_) => setState(() => _hover = false),
           cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
           child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onTap: widget.onTap,
-            child: Opacity(
-              opacity: enabled ? 1 : 0.5,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  borderRadius: NymRadius.rsm,
-                  color: hovered
-                      ? c.primary.withValues(alpha: 0.12)
-                      : Colors.white.withValues(alpha: 0.05),
-                  border: Border.all(
-                    color: hovered
-                        ? c.primary.withValues(alpha: 0.4)
-                        : c.glassBorder,
-                  ),
-                ),
-                child: Text(
-                  widget.label,
-                  style: TextStyle(
-                    color: hovered ? c.primary : c.text,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+              child: Align(
+                widthFactor: 1,
+                heightFactor: 1,
+                child: Opacity(
+                  opacity: enabled ? 1 : 0.5,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      borderRadius: NymRadius.rsm,
+                      color: hovered
+                          ? c.primary.withValues(alpha: 0.12)
+                          : Colors.white.withValues(alpha: 0.05),
+                      border: Border.all(
+                        color: hovered
+                            ? c.primary.withValues(alpha: 0.4)
+                            : c.glassBorder,
+                      ),
+                    ),
+                    child: Text(
+                      widget.label,
+                      style: TextStyle(
+                        color: hovered ? c.primary : c.text,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
               ),

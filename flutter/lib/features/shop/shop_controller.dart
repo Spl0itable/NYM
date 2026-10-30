@@ -922,11 +922,20 @@ final shopControllerProvider =
 /// Persisted cache of other users' active items, fetched in debounced `shop-status` batches.
 class OtherUsersShopController
     extends StateNotifier<Map<String, ShopStatusActive>> {
-  OtherUsersShopController(this._kv, {ApiClient? api})
+  OtherUsersShopController(this._kv,
+      {ApiClient? api, this.writeDelay = const Duration(seconds: 2)})
       : _api = api ?? ApiClient(),
         super(const {}) {
     _restore();
   }
+
+  final Duration writeDelay;
+
+  static const int maxEntries = 400;
+  static const int maxBytes = 200000;
+
+  final Map<String, Map<String, dynamic>> _mem = {};
+  Timer? _writeTimer;
 
   final KeyValueStore _kv;
   final ApiClient _api;
@@ -957,6 +966,7 @@ class OtherUsersShopController
   @override
   void dispose() {
     _timer?.cancel();
+    _writeTimer?.cancel();
     _api.dispose();
     super.dispose();
   }
@@ -1027,7 +1037,7 @@ class OtherUsersShopController
           }
           _updatedAt[key] = status.updatedAt;
           next[key] = status.active;
-          _persistPut(key, status.active, status.updatedAt);
+          cacheActive(key, status.active, status.updatedAt);
           changed = true;
         });
         if (changed) state = next;
@@ -1047,42 +1057,83 @@ class OtherUsersShopController
   void _restore() {
     final raw = _kv.getString(_cacheKey);
     if (raw == null || raw.isEmpty) return;
+    Object? cache;
     try {
-      final cache = jsonDecode(raw);
-      if (cache is! Map) return;
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final restored = <String, ShopStatusActive>{};
+      cache = jsonDecode(raw);
+    } catch (_) {
+      cache = null;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final rows = <MapEntry<String, Map<String, dynamic>>>[];
+    if (cache is Map) {
       cache.forEach((pk, entry) {
-        if (entry is! Map) return;
+        if (entry is! Map || entry['items'] is! Map) return;
         final ts = (entry['ts'] as num?)?.toInt() ?? 0;
-        if (now - ts >= _cacheMaxAgeMs) return;
-        final items = entry['items'];
-        if (items is! Map) return;
-        final key = pk.toString().toLowerCase();
-        restored[key] =
-            ShopStatusActive.fromJson(items.cast<String, dynamic>());
-        _updatedAt[key] = (entry['updatedAt'] as num?)?.toInt() ?? 0;
+        if (now - ts >= _cacheMaxAgeMs || ts - now > 60000) return;
+        rows.add(MapEntry(pk.toString().toLowerCase(),
+            entry.cast<String, dynamic>()));
       });
-      if (restored.isNotEmpty) state = restored;
-    } catch (_) {
-      // Corrupt cache: ignore.
+    }
+    rows.sort((a, b) => (a.value['ts'] as num).compareTo(b.value['ts'] as num));
+    final keep = rows.length > maxEntries
+        ? rows.sublist(rows.length - maxEntries)
+        : rows;
+    final restored = <String, ShopStatusActive>{};
+    for (final e in keep) {
+      _mem[e.key] = e.value;
+    }
+    final text = _cacheText();
+    for (final e in _mem.entries) {
+      try {
+        restored[e.key] = ShopStatusActive.fromJson(
+            (e.value['items'] as Map).cast<String, dynamic>());
+        _updatedAt[e.key] = (e.value['updatedAt'] as num?)?.toInt() ?? 0;
+      } catch (_) {}
+    }
+    if (restored.isNotEmpty) state = restored;
+    if (text != raw) _writeCache(text);
+  }
+
+  String _cacheText() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _mem.removeWhere(
+        (_, e) => now - ((e['ts'] as num?)?.toInt() ?? 0) >= _cacheMaxAgeMs);
+    while (_mem.length > maxEntries) {
+      _mem.remove(_mem.keys.first);
+    }
+    final parts = <String>[];
+    var size = 2;
+    final list = _mem.entries.toList().reversed.toList();
+    for (final e in list) {
+      final part = '${jsonEncode(e.key)}:${jsonEncode(e.value)}';
+      if (size + part.length + 1 > maxBytes) break;
+      size += part.length + 1;
+      parts.add(part);
+    }
+    for (final e in list.skip(parts.length)) {
+      _mem.remove(e.key);
+    }
+    return '{${parts.reversed.join(',')}}';
+  }
+
+  void _writeCache(String text) {
+    if (text == '{}') {
+      _kv.remove(_cacheKey);
+    } else {
+      _kv.setString(_cacheKey, text);
     }
   }
 
-  Map<String, dynamic> _readCache() {
-    final raw = _kv.getString(_cacheKey);
-    if (raw == null || raw.isEmpty) return {};
-    try {
-      final c = jsonDecode(raw);
-      return c is Map ? c.cast<String, dynamic>() : {};
-    } catch (_) {
-      return {};
-    }
+  void _scheduleWrite() {
+    _writeTimer ??= Timer(writeDelay, () {
+      _writeTimer = null;
+      _writeCache(_cacheText());
+    });
   }
 
-  void _persistPut(String pubkey, ShopStatusActive items, int updatedAt) {
-    final cache = _readCache();
-    cache[pubkey] = {
+  void cacheActive(String pubkey, ShopStatusActive items, int updatedAt) {
+    _mem.remove(pubkey);
+    _mem[pubkey] = {
       'items': {
         'style': items.style,
         'flair': items.flair,
@@ -1093,14 +1144,12 @@ class OtherUsersShopController
       'ts': DateTime.now().millisecondsSinceEpoch,
       'updatedAt': updatedAt,
     };
-    _kv.setString(_cacheKey, jsonEncode(cache));
+    if (_mem.length > maxEntries) _mem.remove(_mem.keys.first);
+    _scheduleWrite();
   }
 
   void _persistRemove(String pubkey) {
-    final cache = _readCache();
-    if (cache.remove(pubkey) != null) {
-      _kv.setString(_cacheKey, jsonEncode(cache));
-    }
+    if (_mem.remove(pubkey) != null) _scheduleWrite();
   }
 }
 

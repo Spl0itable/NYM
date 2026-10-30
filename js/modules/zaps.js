@@ -2,6 +2,42 @@
 
 Object.assign(NYM.prototype, {
 
+    _anonNymbotMessage(m) {
+        if (!m) return false;
+        if (m.anonWrap || m.anonSender) return true;
+        if (typeof this.isBotAnonPubkey !== 'function') return false;
+        return !!(m.pubkey && this.isBotAnonPubkey(m.pubkey)) || !!(m.conversationPubkey && this.isBotAnonPubkey(m.conversationPubkey));
+    },
+
+    _noteLocalEcho(id) {
+        if (!id) return;
+        if (!this._localEchoIds) this._localEchoIds = new Set();
+        this._localEchoIds.add(id);
+        if (this._localEchoIds.size > 500) this._localEchoIds.delete(this._localEchoIds.values().next().value);
+    },
+
+    _localEchoReturned(id) {
+        if (this._localEchoIds && this._localEchoIds.size) this._localEchoIds.delete(id);
+    },
+
+    _zapLookupSkip(m) {
+        if (!m || this._anonNymbotMessage(m)) return true;
+        if (m._optimistic) return true;
+        if (this._localEchoIds && this._localEchoIds.has(m.id)) return true;
+        return !!(this._sendAsEchoes instanceof Map && this._sendAsEchoes.has(m.id));
+    },
+
+    _backfillZapReceiptsForMessages(messages) {
+        if (!Array.isArray(messages)) return;
+        const ids = [];
+        for (const m of messages) {
+            if (this._zapLookupSkip(m)) continue;
+            if (m.id) ids.push(m.id);
+            if (m.isPM && m.nymMessageId && m.nymMessageId !== m.id) ids.push(m.nymMessageId);
+        }
+        if (ids.length) this._backfillZapReceipts(ids);
+    },
+
     _backfillZapReceipts(messageIds) {
         if (!Array.isArray(messageIds)) return;
         const seen = new Set();

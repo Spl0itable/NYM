@@ -4,6 +4,8 @@ import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'street_plan.dart';
+
 class MvtFeature {
   const MvtFeature(this.id, this.type, this.props, this.cmds);
   final int? id;
@@ -274,7 +276,7 @@ String? classifyStreet(String layer, Map<String, Object?> p, int type) {
       }
       if (type == 1) {
         final n = p['name'];
-        return n is String && n.isNotEmpty ? 'waterLabel' : null;
+        return n is String && n.isNotEmpty ? 'wlabel' : null;
       }
       return null;
     case 'landuse':
@@ -296,14 +298,16 @@ class StreetGroup {
   StreetGroup(this.cls, this.st, this.mz, this.poly, this.pts, this.parts);
   final String cls;
   final int st;
-  final double mz;
+  final double? mz;
   final bool poly;
   final Float32List pts;
   final Uint32List parts;
 }
 
 class StreetLabelSource {
-  StreetLabelSource(this.name, this.rank, this.point, this.pts);
+  StreetLabelSource(this.name, this.rank, this.point, this.pts, this.cls, this.mz);
+  final String cls;
+  final double? mz;
   final String name;
   final int rank;
   final bool point;
@@ -330,7 +334,7 @@ class _GroupBuilder {
   _GroupBuilder(this.cls, this.st, this.mz, this.poly);
   final String cls;
   final int st;
-  final double mz;
+  final double? mz;
   final bool poly;
   final List<double> pts = [];
   final List<int> parts = [];
@@ -369,11 +373,11 @@ StreetTile buildStreetTile(Uint8List raw, int z, int x, int y) {
       final cls = classifyStreet(l.name, f.props, f.type);
       if (cls == null) continue;
       final parts = mvtParts(f.cmds);
-      if (cls == 'waterLabel') {
+      if (cls == 'wlabel') {
         for (final r in parts) {
           if (r.length < 2) continue;
           labels.add(StreetLabelSource(
-              '${f.props['name']}', 6, true, local(r.sublist(0, 2), ext)));
+              '${f.props['name']}', 6, true, local(r.sublist(0, 2), ext), cls, null));
         }
         continue;
       }
@@ -384,7 +388,7 @@ StreetTile buildStreetTile(Uint8List raw, int z, int x, int y) {
               : (f.props['is_bridge'] == true ? 2 : 0))
           : 0;
       final mzv = f.props['min_zoom'];
-      final mz = road && mzv is num ? mzv.toDouble() : 0.0;
+      final mz = road && mzv is num ? mzv.toDouble() : null;
       final poly = f.type == 3;
       final g = groups.putIfAbsent(
           '$cls|$st|$mz', () => _GroupBuilder(cls, st, mz, poly));
@@ -392,20 +396,12 @@ StreetTile buildStreetTile(Uint8List raw, int z, int x, int y) {
           ? [for (final p in mvtPolygons(parts)) ...p]
           : [for (final r in parts) if (r.length >= 4) r];
       final rank = kStreetLabelRank[cls];
+      final name = poly || rank == null ? null : streetLabelText(cls, f.props);
       for (final r in use) {
         g.parts.add(g.pts.length ~/ 2);
         final loc = local(r, ext);
         g.pts.addAll(loc);
-        if (!poly && rank != null) {
-          final nm = f.props['name'];
-          final ref = f.props['ref'];
-          final name = nm is String && nm.isNotEmpty
-              ? nm
-              : (cls == 'hw' && ref is String ? ref : '');
-          if (name.isNotEmpty && (road || nm is String)) {
-            labels.add(StreetLabelSource(name, rank, false, loc));
-          }
-        }
+        if (name != null) labels.add(StreetLabelSource(name, rank!, false, loc, cls, mz));
       }
     }
   }

@@ -1076,7 +1076,7 @@ class BotChatController extends StateNotifier<BotChatState> {
                 if (threadRoot != null) ['nymthread', threadRoot],
                 ..._ref
                     .read(liveCustomEmojiProvider.notifier)
-                    .emojiTagsForContent(content),
+                    .emojiTagsForContent(content, anon: anonSender != null),
               ],
               nowMs: nowMs,
             );

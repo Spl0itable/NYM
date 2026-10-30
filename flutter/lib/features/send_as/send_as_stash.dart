@@ -22,7 +22,7 @@ class StashKeyValueStore extends KeyValueStore {
   @override
   String? getString(String key) {
     try {
-      return _inner.getString(_k(key));
+      return KeyValueStore.heldValue(_k(key)) ?? _inner.getString(_k(key));
     } catch (_) {
       return null;
     }

@@ -4734,7 +4734,7 @@ function initWallpaperUI() {
 }
 
 const NYMCHAT_VERSION = 'v3.75.545';
-const NYMCHAT_BUILD = 815;
+const NYMCHAT_BUILD = 835;
 
 function nymUiArgs(template, args) {
     if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);
@@ -7286,6 +7286,7 @@ async function applyNostrSettings(s, opts) {
     if (Array.isArray(s.emojiPackFavorites)) {
         nym._emojiPackFavorites = s.emojiPackFavorites.filter(k => typeof k === 'string');
         lsSave('nym_emoji_pack_favorites', JSON.stringify(nym._emojiPackFavorites));
+        if (typeof nym._scheduleEmojiCoordFetch === 'function') nym._scheduleEmojiCoordFetch();
     }
 
     // Merge so an empty or stale remote list can't wipe local picks.
@@ -8212,15 +8213,16 @@ function toggleLowDataModeFromStats(e) {
 
 window.toggleLowDataModeFromStats = toggleLowDataModeFromStats;
 
-async function toggleRelayTransportFromStats() {
+async function toggleRelayTransportFromStats(which) {
     if (typeof nym === 'undefined' || typeof nym.requestRelayTransportToggle !== 'function') return;
-    const pending = nym.requestRelayTransportToggle();
+    const pending = nym.requestRelayTransportToggle(typeof which === 'string' ? which : undefined);
     renderRelayTransportButton();
     try { await pending; } catch (_) { }
     renderRelayStats();
 }
 
 window.toggleRelayTransportFromStats = toggleRelayTransportFromStats;
+window.useDirectRelaysFromStats = () => toggleRelayTransportFromStats('direct');
 
 function renderRelayTransportButton() {
     const btn = document.getElementById('rsTransportBtn');
@@ -8246,9 +8248,36 @@ function renderRelayTransportButton() {
     btn.hidden = false;
     if (btn.textContent !== label) btn.textContent = label;
     if (btn.title !== tip) btn.title = tip;
-    if (btn.getAttribute('aria-label') !== tip) btn.setAttribute('aria-label', tip);
+    if (btn.getAttribute('aria-label') !== label) btn.setAttribute('aria-label', label);
     btn.dataset.transport = action;
-    btn.disabled = typeof nym.relayTransportBusy === 'function' && nym.relayTransportBusy();
+    const switching = !!nym._relayTransportSwitching;
+    btn.disabled = switching;
+    const actions = typeof nym.relayTransportActions === 'function' ? nym.relayTransportActions() : [action];
+    const directBtn = document.getElementById('rsTransportDirectBtn');
+    if (directBtn) {
+        const show = action === 'retry' && actions.includes('direct');
+        directBtn.hidden = !show;
+        if (show) {
+            const dLabel = ui('Use direct');
+            const dTip = ui('Stay on direct connections');
+            if (directBtn.textContent !== dLabel) directBtn.textContent = dLabel;
+            if (directBtn.title !== dTip) directBtn.title = dTip;
+            if (directBtn.getAttribute('aria-label') !== dLabel) directBtn.setAttribute('aria-label', dLabel);
+            directBtn.disabled = switching;
+        }
+    }
+    const noteEl = document.getElementById('rsTransportNote');
+    if (noteEl) {
+        const note = typeof nym.relayTransportNote === 'function' ? nym.relayTransportNote() : '';
+        let text = '';
+        if (note === 'switching') text = ui('Switching...');
+        else if (note === 'proxyUnreachable') text = ui("Couldn't reach the proxy. Staying on direct connections; the app keeps retrying.");
+        else if (note === 'offline') text = ui('No network right now. Try again when you are back online.');
+        else if (note === 'failed') text = ui("Couldn't switch. Try again.");
+        noteEl.hidden = !text;
+        noteEl.dataset.note = note;
+        if (noteEl.textContent !== text) noteEl.textContent = text;
+    }
 }
 
 function closeRelayStatsModal() {
@@ -8393,6 +8422,7 @@ function renderRelayStats() {
     if (elDataOut) elDataOut.textContent = formatBytes(s.bytesSent || 0);
 
     drawThroughputGraph(s.throughputHistory);
+    renderConnectionChanges();
 
     // Shard fan-in summary: worker count and relays connected to each.
     const listEl = document.getElementById('rsRelayList');
@@ -8419,6 +8449,50 @@ function renderRelayStats() {
 
     renderRelayList(pool, s);
 }
+
+const CONNECTION_CHANGE_TEXT = {
+    proxyDown: 'Direct: the proxy was unreachable',
+    proxyBack: 'Proxy: reachable again',
+    chosenDirect: 'Direct: chosen by you',
+    chosenProxy: 'Proxy: chosen by you'
+};
+
+function connectionChangeTime(at) {
+    const t = new Date(at);
+    const two = (n) => String(n).padStart(2, '0');
+    return `${t.getFullYear()}-${two(t.getMonth() + 1)}-${two(t.getDate())} ${two(t.getHours())}:${two(t.getMinutes())}:${two(t.getSeconds())}`;
+}
+
+function renderConnectionChanges() {
+    const box = document.getElementById('rsConnectionChanges');
+    if (!box || typeof nym === 'undefined' || !nym || typeof nym.connectionChanges !== 'function') return;
+    const ui = (s) => (typeof nym.uiText === 'function' ? nym.uiText(s) : s);
+    const items = nym.connectionChanges();
+    box.textContent = '';
+    if (items.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'relay-stats-change-empty';
+        empty.textContent = ui('No connection changes yet');
+        box.appendChild(empty);
+        return;
+    }
+    for (const e of items) {
+        const row = document.createElement('div');
+        row.className = 'relay-stats-change';
+        row.dataset.reason = e.reason;
+        const when = document.createElement('time');
+        when.className = 'relay-stats-change-time';
+        when.setAttribute('translate', 'no');
+        when.dateTime = new Date(e.at).toISOString();
+        when.textContent = connectionChangeTime(e.at);
+        const what = document.createElement('span');
+        what.className = 'relay-stats-change-text';
+        what.textContent = ui(CONNECTION_CHANGE_TEXT[e.reason] || e.reason);
+        row.append(when, what);
+        box.appendChild(row);
+    }
+}
+window.renderConnectionChanges = renderConnectionChanges;
 
 function drawThroughputGraph(history) {
     const canvas = document.getElementById('rsThroughputCanvas');

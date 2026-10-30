@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -206,15 +209,17 @@ class ReactorsModal extends ConsumerWidget {
 }
 
 /// Shows the popup just above [anchorRect], clamped to the viewport and dismissed on outside tap.
-void showReactorsModal(
+ReactorsModalHandle showReactorsModal(
   BuildContext context, {
   required Rect anchorRect,
   required String emoji,
   required List<ReactorEntry> reactors,
   void Function(ReactorEntry)? onTapReactor,
   String? title,
+  ValueChanged<bool>? onPointerInside,
 }) {
   final overlay = Overlay.of(context, rootOverlay: true);
+  final hover = ValueNotifier<bool>(false);
   late OverlayEntry entry;
 
   void close() {
@@ -225,27 +230,151 @@ void showReactorsModal(
     builder: (ctx) => Stack(
       children: [
         Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: close,
+          child: ValueListenableBuilder<bool>(
+            valueListenable: hover,
+            builder: (_, hovered, _) => hovered
+                ? Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerDown: (e) {
+                      if (!anchorRect.contains(e.position)) close();
+                    },
+                  )
+                : GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: close,
+                  ),
           ),
         ),
         AnchoredPopup(
           anchor: anchorRect,
-          child: ReactorsModal(
-            emoji: emoji,
-            reactors: reactors,
-            title: title,
-            onTapReactor: onTapReactor == null
-                ? null
-                : (r) {
-                    close();
-                    onTapReactor(r);
-                  },
+          child: MouseRegion(
+            onEnter: (_) => onPointerInside?.call(true),
+            onExit: (_) => onPointerInside?.call(false),
+            child: ReactorsModal(
+              emoji: emoji,
+              reactors: reactors,
+              title: title,
+              onTapReactor: onTapReactor == null
+                  ? null
+                  : (r) {
+                      close();
+                      onTapReactor(r);
+                    },
+            ),
           ),
         ),
       ],
     ),
   );
   overlay.insert(entry);
+  return ReactorsModalHandle._(close, () => entry.mounted, hover);
+}
+
+class ReactorsModalHandle {
+  ReactorsModalHandle._(this._close, this._mounted, this._hover);
+
+  final VoidCallback _close;
+  final bool Function() _mounted;
+  final ValueNotifier<bool> _hover;
+
+  bool get hover => _hover.value;
+  set hover(bool value) => _hover.value = value;
+
+  bool get isOpen => _mounted();
+
+  void close() => _close();
+}
+
+class HoverOpenRegion extends StatefulWidget {
+  const HoverOpenRegion({super.key, required this.open, required this.child});
+
+  static const Duration delay = Duration(milliseconds: 400);
+  static const Duration grace = Duration(milliseconds: 300);
+
+  final ReactorsModalHandle? Function(ValueChanged<bool> onPointerInside) open;
+  final Widget child;
+
+  @override
+  State<HoverOpenRegion> createState() => HoverOpenRegionState();
+}
+
+class HoverOpenRegionState extends State<HoverOpenRegion> {
+  Timer? _openTimer;
+  Timer? _closeTimer;
+  ReactorsModalHandle? _handle;
+  bool _overAnchor = false;
+  bool _overModal = false;
+
+  static bool _pointer(PointerEvent e) =>
+      e.kind == PointerDeviceKind.mouse || e.kind == PointerDeviceKind.trackpad;
+
+  bool get _hoverOpen => (_handle?.isOpen ?? false) && _handle!.hover;
+
+  bool pinIfOpen() {
+    if (!_hoverOpen) return false;
+    _handle!.hover = false;
+    _closeTimer?.cancel();
+    return true;
+  }
+
+  void closeHover() {
+    _openTimer?.cancel();
+    if (_hoverOpen) _handle!.close();
+  }
+
+  void _enter(PointerEnterEvent e) {
+    if (!_pointer(e)) return;
+    _overAnchor = true;
+    _closeTimer?.cancel();
+    if (_handle?.isOpen ?? false) return;
+    _openTimer?.cancel();
+    _openTimer = Timer(HoverOpenRegion.delay, _fire);
+  }
+
+  void _exit(PointerExitEvent e) {
+    if (!_pointer(e)) return;
+    _overAnchor = false;
+    _openTimer?.cancel();
+    _scheduleClose();
+  }
+
+  void _fire() {
+    if (!mounted || !_overAnchor) return;
+    _overModal = false;
+    final h = widget.open(_onModal);
+    if (h == null) return;
+    h.hover = true;
+    _handle = h;
+  }
+
+  void _onModal(bool inside) {
+    _overModal = inside;
+    if (inside) {
+      _closeTimer?.cancel();
+    } else {
+      _scheduleClose();
+    }
+  }
+
+  void _scheduleClose() {
+    _closeTimer?.cancel();
+    if (!_hoverOpen) return;
+    _closeTimer = Timer(HoverOpenRegion.grace, () {
+      if (_overAnchor || _overModal || !_hoverOpen) return;
+      _handle!.close();
+      _handle = null;
+    });
+  }
+
+  @override
+  void dispose() {
+    _openTimer?.cancel();
+    _closeTimer?.cancel();
+    if (_hoverOpen) _handle!.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      MouseRegion(onEnter: _enter, onExit: _exit, child: widget.child);
 }

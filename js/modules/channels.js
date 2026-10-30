@@ -2569,21 +2569,48 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
+    _UNREAD_STATE_MAX: 1000,
+    _UNREAD_STATE_MAX_AGE: 90 * 24 * 60 * 60 * 1000,
+
+    _unreadOpenKeys() {
+        const open = new Set();
+        if (this.channels) {
+            for (const [k, c] of this.channels) {
+                open.add(k);
+                if (c && c.channel) open.add(c.channel);
+                if (c && c.geohash) open.add('#' + c.geohash);
+            }
+        }
+        if (this.pmConversations) for (const k of this.pmConversations.keys()) open.add(k);
+        if (this.groupConversations) for (const k of this.groupConversations.keys()) open.add(k);
+        if (this.currentChannel) open.add(this.currentChannel);
+        if (this.currentGeohash) open.add('#' + this.currentGeohash);
+        return open;
+    },
+
+    _unreadBounded(map, open, now) {
+        const out = {};
+        const rest = [];
+        for (const [k, v] of map) {
+            if (!(v > 0)) continue;
+            if (open.has(k)) out[k] = v;
+            else if (now - (v < 1e12 ? v * 1000 : v) <= this._UNREAD_STATE_MAX_AGE) rest.push([k, v]);
+        }
+        rest.sort((a, b) => b[1] - a[1]);
+        for (const [k, v] of rest.slice(0, this._UNREAD_STATE_MAX)) out[k] = v;
+        return out;
+    },
+
     _writeUnreadCountsToLocalStorage() {
+        if (this._panicking || this._deletingAccount) return;
         try {
+            const now = Date.now();
+            const open = this._unreadOpenKeys();
+            const activity = this._unreadBounded(this.channelLastActivity, open, now);
+            const lastRead = this.channelLastRead ? this._unreadBounded(this.channelLastRead, open, now) : {};
             const unread = {};
             for (const [k, v] of this.unreadCounts) {
-                if (v > 0) unread[k] = v;
-            }
-            const activity = {};
-            for (const [k, v] of this.channelLastActivity) {
-                if (v > 0) activity[k] = v;
-            }
-            const lastRead = {};
-            if (this.channelLastRead) {
-                for (const [k, v] of this.channelLastRead) {
-                    if (v > 0) lastRead[k] = v;
-                }
+                if (v > 0 && (open.has(k) || k in activity || k in lastRead)) unread[k] = v;
             }
             // The lastRead each stored count was computed against, to tell a thin cache from a stale count.
             const basis = {};

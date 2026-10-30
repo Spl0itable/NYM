@@ -755,12 +755,12 @@ class ChatNavRowBadges extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(chatNavRevisionProvider);
     final alias = chatNavAlias(storageKey);
-    ref.watch(appStateProvider.select((s) => (
-          s.viewRevOf(storageKey),
-          s.viewRevOf(alias),
-          s.unreadCounts[storageKey],
-          s.unreadCounts[alias],
-        )));
+    ref.watch(appStateProvider.select((s) {
+      final a = s.unreadCounts[storageKey] ?? 0;
+      final b = s.unreadCounts[alias] ?? 0;
+      if (a <= 0 && b <= 0) return null;
+      return (s.viewRevOf(storageKey), s.viewRevOf(alias), a, b);
+    }));
     final nav = ref.read(chatNavProvider);
     final pinned = nav.pinIndexOfChat(storageKey) >= 0;
     final mention = nav.hasUnreadMention(storageKey, aliases: [alias]);

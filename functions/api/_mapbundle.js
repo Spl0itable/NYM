@@ -62,7 +62,7 @@ function keepFeature(layer, type, props) {
 const te = new TextEncoder();
 const td = new TextDecoder();
 
-class Reader {
+export class Reader {
   constructor(b) { this.b = b; this.i = 0; this.dv = new DataView(b.buffer, b.byteOffset, b.byteLength); }
   varint() {
     const b = this.b;
@@ -91,7 +91,7 @@ class Reader {
   }
 }
 
-function readValue(r, end) {
+export function readValue(r, end) {
   let v = null;
   while (r.i < end) {
     const k = r.varint(), f = k >> 3, wt = k & 7;
@@ -111,13 +111,13 @@ function readValue(r, end) {
   return v;
 }
 
-function vlen(v) {
+export function vlen(v) {
   let n = 1;
   while (v >= 128) { v = Math.floor(v / 128); n++; }
   return n;
 }
 
-class Writer {
+export class Writer {
   constructor(n) { this.b = new Uint8Array(n || 4096); this.n = 0; }
   room(k) {
     if (this.n + k <= this.b.length) return;
@@ -137,7 +137,7 @@ class Writer {
   out() { return this.b.slice(0, this.n); }
 }
 
-function encodeValue(v) {
+export function encodeValue(v) {
   const w = new Writer(16);
   if (typeof v === 'string') w.field(1, te.encode(v));
   else if (typeof v === 'boolean') { w.varint(7 << 3); w.varint(v ? 1 : 0); }

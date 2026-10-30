@@ -341,7 +341,6 @@
             font: (cs.getPropertyValue('--font-sans') || '').trim() || 'system-ui, sans-serif',
             primary,
             warning,
-            joined: '#28e07a',
             ocean: isLight ? '#d6e8f1' : '#0a131e',
             land: isLight ? '#eef2f4' : '#1c2a39',
             border: isLight ? '#9aaeba' : '#2c4357',
@@ -452,7 +451,6 @@ Object.assign(NYM.prototype, {
     </div>
     <div class="gx-legend" role="list" aria-label="${esc(L('Legend'))}">
         <div class="geohash-legend-item" role="listitem"><div class="geohash-legend-dot nm-geo-1" aria-hidden="true"></div><span>${esc(L('Active'))}</span></div>
-        <div class="geohash-legend-item" role="listitem"><div class="geohash-legend-dot gx-dot-joined" aria-hidden="true"></div><span>${esc(L('Joined'))}</span></div>
         <div class="geohash-legend-item" role="listitem"><div class="geohash-legend-dot gx-dot-saved" aria-hidden="true"></div><span>${esc(L('Saved'))}</span></div>
         ${showYourLocation ? `<div class="geohash-legend-item" role="listitem"><div class="geohash-legend-dot nm-geo-2" aria-hidden="true"></div><span>${esc(L('Your Location'))}</span></div>` : ''}
         <div class="geohash-legend-item gx-legend-cluster" role="listitem"><span class="gx-swatch gx-swatch-cluster" aria-hidden="true">3</span><span>${esc(L('Number = channels grouped together'))}</span></div>
@@ -1301,11 +1299,9 @@ Object.assign(NYM.prototype, {
                 if (!inView(p, 12)) continue;
                 const isHover = hoveredChannel && hoveredChannel.geohash === ch.geohash;
                 const r = isHover ? baseR + 2 : baseR;
-                const color = ch.isJoined ? styles.joined : styles.primary;
-
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-                ctx.fillStyle = color;
+                ctx.fillStyle = styles.primary;
                 ctx.fill();
                 ctx.strokeStyle = 'rgba(0,0,0,0.55)';
                 ctx.lineWidth = 1;

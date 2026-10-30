@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:collection';
 import 'dart:ui' as ui;
 
@@ -10,7 +11,6 @@ import '../../core/theme/nym_theme.dart';
 import '../identity/panic_wipe.dart';
 import 'geo_explore.dart';
 import 'geo_projection.dart';
-import 'street_bundle.dart';
 import 'street_cache.dart';
 import 'street_fetch.dart';
 import 'street_labels.dart';
@@ -25,8 +25,6 @@ const String kStreetOdblUrl = 'https://opendatacommons.org/licenses/odbl/1-0/';
 const String kStreetPrefKey = 'nym_street_detail';
 
 const int kStreetBlockBytes = 50331648;
-const int kStreetDecodedTiles = 64;
-const int kStreetMemoryBundles = 12;
 const double kStreetBlockPx = 256;
 
 typedef StreetDecoder = Future<List<StreetTile?>> Function(List<StreetTileJob> jobs);
@@ -54,6 +52,7 @@ class StreetPalette {
     required this.casing,
     required this.road,
     required this.waterLabel,
+    this.lowRoad = const {},
   });
 
   final Color land;
@@ -65,6 +64,7 @@ class StreetPalette {
   final Color casing;
   final Map<String, Color> road;
   final Color waterLabel;
+  final Map<String, Color> lowRoad;
 
   static const StreetPalette light = StreetPalette(
     land: Color(0xFFEEF2F4),
@@ -83,6 +83,7 @@ class StreetPalette {
       'rail': Color(0xFFA6B1BB),
     },
     waterLabel: Color.fromRGBO(60, 110, 150, 0.9),
+    lowRoad: {'hw': Color(0xFFE8C58A), 'major': Color(0xFFF0D9A8)},
   );
 
   static const StreetPalette dark = StreetPalette(
@@ -105,39 +106,33 @@ class StreetPalette {
   );
 }
 
-const Map<String, List<double>> _widths = {
-  'hw': [2, 5, 10],
-  'major': [1.6, 4, 8],
-  'minor': [0.8, 2.6, 5],
-  'service': [0.5, 1.4, 3],
-  'path': [0.5, 1, 1.5],
-  'rail': [0.8, 1.2, 1.5],
-  'river': [1, 2.5, 4],
-  'stream': [0.5, 1, 1.5],
-};
-
 const List<String> _fillOrder = ['path', 'rail', 'service', 'minor', 'major', 'hw'];
 const List<String> _cased = ['minor', 'major', 'hw'];
-const Set<String> _areas = {'land', 'water', 'green', 'landuse', 'bld', 'river', 'stream'};
-
-double streetWidthAt(String cls, double zv) {
-  final t = _widths[cls];
-  if (t == null) return 1;
-  if (zv <= 14) return t[0];
-  if (zv <= 16) return t[0] + (t[1] - t[0]) * (zv - 14) / 2;
-  if (zv <= 18) return t[1] + (t[2] - t[1]) * (zv - 16) / 2;
-  return t[2];
-}
 
 class _Block {
-  _Block(this.image, this.e, this.lngW, this.latN, this.deg, this.light, this.bytes);
+  _Block(this.image, this.e, this.light, this.bytes, this.want);
   final ui.Image image;
   final int e;
+  final bool light;
+  final int bytes;
+  final _Want want;
+  double get lngW => want.lngW;
+  double get latN => want.latN;
+  double get deg => want.deg;
+}
+
+class _Want {
+  _Want(this.key, this.e, this.tz, this.lngW, this.latN, this.deg, this.items, this.pending,
+      this.fallback);
+  final String key;
+  final int e;
+  final int tz;
   final double lngW;
   final double latN;
   final double deg;
-  final bool light;
-  final int bytes;
+  final List<(String, StreetTileId, StreetTileId)> items;
+  final Set<String> pending;
+  final bool fallback;
 }
 
 class _PlacedLabel {
@@ -159,6 +154,28 @@ class StreetStats {
   int pathUs = 0;
 }
 
+StreetTileId? _idOf(String key) {
+  final p = key.split('/');
+  if (p.length != 3) return null;
+  final z = int.tryParse(p[0]), x = int.tryParse(p[1]), y = int.tryParse(p[2]);
+  if (z == null || x == null || y == null) return null;
+  return (z: z, x: x, y: y);
+}
+
+bool _validGz(Uint8List b) =>
+    b.isEmpty || (b.length <= kStreet.maxBodyBytes && b.length > 2 && b[0] == 0x1f && b[1] == 0x8b);
+
+int? _metaBuild(Uint8List? b) {
+  if (b == null) return null;
+  try {
+    final j = jsonDecode(utf8.decode(b));
+    if (j is Map && j['v'] == 2 && j['build'] is int && (j['build'] as int) > 0) {
+      return j['build'] as int;
+    }
+  } catch (_) {}
+  return null;
+}
+
 class StreetLayer extends ChangeNotifier {
   StreetLayer({
     StreetFetcher? fetcher,
@@ -169,6 +186,7 @@ class StreetLayer extends ChangeNotifier {
         _store = store ?? StreetFileCache(),
         _now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
         _decoder = decoder ?? decodeStreetTiles {
+    StreetHalt.add(_halt);
     unawaited(_store.sweep().catchError((_) {}));
   }
 
@@ -182,6 +200,7 @@ class StreetLayer extends ChangeNotifier {
   bool _enabled = true;
   bool _paused = false;
   bool _disposed = false;
+  bool _halted = false;
   bool _settled = false;
   int _gen = 0;
   StreetPlan plan = StreetPlan.none;
@@ -191,7 +210,14 @@ class StreetLayer extends ChangeNotifier {
   Timer? _idleTimer;
   bool _moving = false;
 
-  final LinkedHashMap<String, StreetBundle> _bundles = LinkedHashMap();
+  int? _build;
+  int _metaAt = 0;
+  bool _metaRead = false;
+  bool _metaLoading = false;
+  bool _metaSettled = false;
+
+  final LinkedHashMap<String, Uint8List> _gz = LinkedHashMap();
+  int _gzBytes = 0;
   final Set<String> _checked = {};
   final Set<String> _reading = {};
   final Set<String> _inflight = {};
@@ -201,7 +227,7 @@ class StreetLayer extends ChangeNotifier {
   final Set<String> _decoding = {};
   final LinkedHashMap<String, _Block> _blocks = LinkedHashMap();
   int _blockBytes = 0;
-  final List<(String, int, double, double, double)> _want = [];
+  final List<_Want> _want = [];
   bool _rasterQueued = false;
   final Expando<ui.Path> _paths = Expando<ui.Path>();
 
@@ -213,9 +239,11 @@ class StreetLayer extends ChangeNotifier {
   List<StreetBox> _labelBoxes = const [];
   final StreetStats stats = StreetStats();
 
-  List<String> get loadedCells => _bundles.keys.toList()..sort();
+  int? get build => _build;
+  List<String> get loadedTiles => _gz.keys.toList()..sort();
   bool get enabled => _enabled;
   int get blockCount => _blocks.length;
+  int get provisionalBlocks => _blocks.values.where((b) => b.want.fallback).length;
   int get decodedTiles => _tiles.length;
   int get labelCount => _labels.length;
   bool get drew => _drewLast;
@@ -229,6 +257,7 @@ class StreetLayer extends ChangeNotifier {
       _stop();
       plan = StreetPlan.none;
       _labels = const [];
+      _drewLast = false;
       _setAttribution(false);
     }
     notifyListeners();
@@ -245,6 +274,30 @@ class StreetLayer extends ChangeNotifier {
     if (plan.draw) {
       _settleTimer = Timer(Duration(milliseconds: kStreet.settleMs), _onSettle);
     }
+  }
+
+  void _halt() {
+    if (_halted) return;
+    _halted = true;
+    _stop();
+    _store.close();
+    _gz.clear();
+    _gzBytes = 0;
+    _tiles.clear();
+    _checked.clear();
+    _reading.clear();
+    _neg.clear();
+    for (final k in [..._blocks.keys]) {
+      _removeBlock(k);
+    }
+    _want.clear();
+    _labels = const [];
+    _needPlace = false;
+    plan = StreetPlan.none;
+    _drewLast = false;
+    if (_disposed) return;
+    attribution.value = false;
+    notifyListeners();
   }
 
   void _stop() {
@@ -264,7 +317,7 @@ class StreetLayer extends ChangeNotifier {
     required double width,
     required double height,
   }) {
-    if (_disposed) return;
+    if (_disposed || _halted) return;
     final v = (cx, cy, pxPerDeg, width, height);
     if (v == _lastView) return;
     _lastView = v;
@@ -275,7 +328,7 @@ class StreetLayer extends ChangeNotifier {
       _moving = false;
       if (_want.isNotEmpty && !_disposed) notifyListeners();
     });
-    plan = planStreetCells(
+    plan = planStreetTiles(
         cx: cx,
         cy: cy,
         pxPerDeg: pxPerDeg,
@@ -283,66 +336,164 @@ class StreetLayer extends ChangeNotifier {
         height: height,
         on: _enabled);
     _settleTimer?.cancel();
-    if (!plan.draw) return;
-    for (final c in plan.cells) {
-      if (!_bundles.containsKey(c)) _read(c);
-    }
+    if (!plan.draw && _inflight.isEmpty) return;
     _settleTimer = Timer(Duration(milliseconds: kStreet.settleMs), _onSettle);
   }
 
   void _onSettle() {
-    if (_disposed) return;
+    if (_disposed || _halted) return;
     _settled = true;
     _needPlace = true;
-    _pump();
+    _syncWanted();
     notifyListeners();
   }
 
-  Future<void> _read(String cell) async {
-    if (_checked.contains(cell) || !_reading.add(cell)) return;
+  void _syncWanted() {
+    if (_disposed || _halted || !_enabled || _paused || !_settled) return;
+    if (PanicWipe.inProgress) {
+      _stop();
+      return;
+    }
+    final b = _build;
+    if (b != null && _inflight.isNotEmpty) {
+      final wanted = [for (final t in plan.tiles) streetCacheKey(b, t.z, t.x, t.y)];
+      for (final k in streetCancelSet([for (final i in _inflight) '$b/$i'], wanted)) {
+        _inflight.remove(k.substring(k.indexOf('/') + 1));
+        _fetcher.cancel(k);
+      }
+    }
+    if (!plan.draw) return;
+    for (final t in plan.tiles) {
+      final k = streetTileKey(t);
+      final g = _gz.remove(k);
+      if (g != null) _gz[k] = g;
+    }
+    if (!_metaOk()) {
+      unawaited(_loadMeta());
+      return;
+    }
+    for (final t in plan.tiles) {
+      final k = streetTileKey(t);
+      if (!_gz.containsKey(k) && !_checked.contains(k)) unawaited(_read(k));
+    }
+    _pump();
+  }
+
+  bool _metaOk() =>
+      _build != null && (_metaSettled || _now() - _metaAt < kStreet.metaTtlMs);
+
+  Future<void> _loadMeta() async {
+    if (_metaLoading) return;
+    _metaLoading = true;
+    try {
+      await _metaStep();
+    } catch (_) {
+    } finally {
+      _metaLoading = false;
+    }
+    if (_disposed || _halted) return;
+    if (_metaOk()) {
+      _syncWanted();
+    } else {
+      _pump();
+    }
+  }
+
+  Future<void> _metaStep() async {
+    if (!_metaRead) {
+      _metaRead = true;
+      StreetMeta? m;
+      try {
+        m = await _store.readMeta();
+      } catch (_) {}
+      if (m != null && _build == null) {
+        _build = m.build;
+        _metaAt = m.fetchedAt;
+      }
+    }
+    if (_disposed || _halted || PanicWipe.inProgress || _metaOk()) return;
+    final now = _now();
+    if (StreetSession.stopped || now < StreetSession.pausedUntil) {
+      if (_build != null) _metaSettled = true;
+      return;
+    }
+    final r = await _fetcher.fetchMeta();
+    if (_disposed || _halted || r.aborted || PanicWipe.inProgress) return;
+    final nb = r.status == 200 ? _metaBuild(r.bytes) : null;
+    if (nb != null) {
+      _adoptBuild(nb);
+    } else if (_build != null) {
+      _metaSettled = true;
+    } else if (streetStatusAction(r.status == 200 ? 503 : r.status).kind == StreetAction.stop) {
+      StreetSession.stopped = true;
+    } else {
+      StreetSession.pausedUntil = _now() + kStreet.unavailableRetryMs;
+    }
+  }
+
+  void _adoptBuild(int nb) {
+    _metaAt = _now();
+    _metaSettled = true;
+    unawaited(_store.writeMeta(nb, _metaAt).catchError((_) {}));
+    if (_build == nb) return;
+    final had = _build != null;
+    _build = nb;
+    if (_inflight.isNotEmpty) {
+      _gen++;
+      _inflight.clear();
+      _fetcher.abort();
+    }
+    _gz.clear();
+    _gzBytes = 0;
+    _tiles.clear();
+    _checked.clear();
+    _neg.clear();
+    if (had) {
+      for (final k in [..._blocks.keys]) {
+        _removeBlock(k);
+      }
+    }
+    unawaited(_store.dropOtherBuilds(nb).catchError((_) {}));
+  }
+
+  Future<void> _read(String key) async {
+    final b = _build;
+    if (b == null || _checked.contains(key) || !_reading.add(key)) return;
     Uint8List? bytes;
     int? neg;
     try {
-      neg = await _store.negativeUntil(cell);
-      if (neg == null) bytes = await _store.read(cell);
+      neg = await _store.negativeUntil('$b/$key');
+      if (neg == null) bytes = await _store.read('$b/$key');
     } catch (_) {}
-    _reading.remove(cell);
-    if (_disposed) return;
-    if (neg != null) _neg[cell] = neg;
-    if (bytes != null) {
-      try {
-        _addBundle(parseStreetBundle(bytes, expectCell: cell));
-      } catch (_) {}
-    }
-    _checked.add(cell);
-    _pump();
+    _reading.remove(key);
+    if (_disposed || _halted || b != _build) return;
+    if (neg != null) _neg[key] = neg;
+    if (bytes != null && _validGz(bytes)) _addTile(key, bytes);
+    _checked.add(key);
+    if (_reading.isEmpty) _pump();
   }
 
-  void _addBundle(StreetBundle b) {
-    _bundles.remove(b.cell);
-    _bundles[b.cell] = b;
-    while (_bundles.length > kStreetMemoryBundles) {
-      final old = _bundles.keys.firstWhere((k) => !plan.cells.contains(k),
-          orElse: () => _bundles.keys.first);
-      _bundles.remove(old);
-      _dropBlocksFor(old);
+  void _addTile(String key, Uint8List bytes) {
+    final old = _gz.remove(key);
+    if (old != null) _gzBytes -= old.length;
+    _gz[key] = bytes;
+    _gzBytes += bytes.length;
+    _tiles.remove(key);
+    if (_gzBytes > kStreet.memGzipBytes) {
+      final keep = {for (final t in plan.tiles) streetTileKey(t)};
+      for (final k in [..._gz.keys]) {
+        if (_gzBytes <= kStreet.memGzipBytes || _gz.length <= 1) break;
+        if (keep.contains(k) || k == key) continue;
+        _gzBytes -= _gz.remove(k)!.length;
+        _tiles.remove(k);
+        _checked.remove(k);
+      }
     }
-    _dropBlocksFor(b.cell);
+    for (final e in [..._blocks.entries]) {
+      if (e.value.want.pending.contains(key)) _removeBlock(e.key);
+    }
     _needPlace = true;
     notifyListeners();
-  }
-
-  void _dropBlocksFor(String cell) {
-    final c = streetCellBounds(cell);
-    final drop = <String>[];
-    _blocks.forEach((k, b) {
-      if (b.lngW < c.e && b.lngW + b.deg > c.w && b.latN > c.s && b.latN - b.deg < c.n) {
-        drop.add(k);
-      }
-    });
-    for (final k in drop) {
-      _removeBlock(k);
-    }
   }
 
   void _removeBlock(String k) {
@@ -353,7 +504,7 @@ class StreetLayer extends ChangeNotifier {
   }
 
   void _pump() {
-    if (_disposed || !_enabled || _paused || !_settled || !plan.fetch) return;
+    if (_disposed || _halted || !_enabled || _paused || !_settled || !plan.draw) return;
     if (StreetSession.stopped) return;
     if (PanicWipe.inProgress) {
       _stop();
@@ -365,20 +516,27 @@ class StreetLayer extends ChangeNotifier {
       _waitTimer = Timer(Duration(milliseconds: StreetSession.pausedUntil - now), _pump);
       return;
     }
-    StreetSession.sent.removeWhere((t) => now - t >= 60000);
-    final missing = [
-      for (final c in plan.cells)
-        if (_checked.contains(c) &&
-            !_bundles.containsKey(c) &&
-            !_inflight.contains(c) &&
-            (_neg[c] ?? 0) <= now)
-          c
-    ];
-    if (missing.isEmpty) return;
-    final r = nextStreetFetches(
-        sent: StreetSession.sent, inflight: _inflight.length, missing: missing, now: now);
-    for (final c in r.start) {
-      _fetch(c);
+    if (!_metaOk()) {
+      unawaited(_loadMeta());
+      return;
+    }
+    final b = _build!;
+    StreetSession.sent.removeWhere((t) => now - t >= kStreet.windowMs);
+    final queue = <String>[];
+    for (final t in plan.tiles) {
+      final k = streetTileKey(t);
+      if (_checked.contains(k) &&
+          !_gz.containsKey(k) &&
+          !_inflight.contains(k) &&
+          (_neg[k] ?? 0) <= now) {
+        queue.add(k);
+      }
+    }
+    if (queue.isEmpty) return;
+    final r = nextStreetTileFetches(
+        queue: queue, inflight: _inflight.length, sent: StreetSession.sent, now: now);
+    for (final k in r.start) {
+      _fetch(b, k);
     }
     if (r.waitMs > 0) {
       _waitTimer?.cancel();
@@ -386,45 +544,48 @@ class StreetLayer extends ChangeNotifier {
     }
   }
 
-  void _fetch(String cell) {
+  void _fetch(int b, String key) {
+    final id = _idOf(key);
+    if (id == null) return;
     final gen = _gen;
-    _inflight.add(cell);
+    _inflight.add(key);
     StreetSession.sent.add(_now());
-    _fetcher.fetch(cell).then((r) => _onResult(cell, r, gen),
-        onError: (_) => _onResult(cell, const StreetFetchResult(0, null), gen));
+    _fetcher.fetchTile(b, id).then((r) => _onResult(b, key, r, gen),
+        onError: (_) => _onResult(b, key, const StreetFetchResult(0, null), gen));
   }
 
-  void _negative(String cell, int ms) {
+  void _negative(int b, String key, int ms) {
     final until = _now() + ms;
-    _neg[cell] = until;
-    unawaited(_store.putNegative(cell, until).catchError((_) {}));
+    _neg[key] = until;
+    unawaited(_store.putNegative('$b/$key', until).catchError((_) {}));
   }
 
-  void _onResult(String cell, StreetFetchResult r, int gen) {
-    if (_disposed || gen != _gen || r.aborted) return;
+  void _onResult(int b, String key, StreetFetchResult r, int gen) {
+    if (_disposed || _halted || gen != _gen || r.aborted || b != _build) return;
     if (PanicWipe.inProgress) {
       _stop();
       return;
     }
-    _inflight.remove(cell);
-    final a = streetStatusAction(r.status);
+    if (!_inflight.remove(key)) return;
+    final body = r.status == 404 && r.bytes != null
+        ? utf8.decode(r.bytes!, allowMalformed: true)
+        : null;
+    final a = streetStatusAction(r.status, body);
     switch (a.kind) {
       case StreetAction.ok:
-        final bytes = r.bytes;
-        StreetBundle? b;
-        if (bytes != null) {
-          try {
-            b = parseStreetBundle(bytes, expectCell: cell);
-          } catch (_) {}
-        }
-        if (b == null || bytes == null) {
-          _negative(cell, kStreet.tooLargeRetryMs);
+        final bytes = r.bytes ?? Uint8List(0);
+        if (!_validGz(bytes)) {
+          _negative(b, key, kStreet.malformedRetryMs);
         } else {
-          _addBundle(b);
-          unawaited(_store.write(cell, bytes).catchError((_) {}));
+          _addTile(key, bytes);
+          unawaited(_store.write('$b/$key', bytes).catchError((_) {}));
         }
+      case StreetAction.rebuild:
+        _adoptBuild(a.build!);
+        _syncWanted();
+        return;
       case StreetAction.negative:
-        _negative(cell, a.ms);
+        _negative(b, key, a.ms);
       case StreetAction.pause:
         StreetSession.pausedUntil = _now() + a.ms;
       case StreetAction.stop:
@@ -433,58 +594,60 @@ class StreetLayer extends ChangeNotifier {
     _pump();
   }
 
-  List<StreetBundle> _planBundles() => [
-        for (final c in plan.cells)
-          if (_bundles[c] != null) _bundles[c]!
-      ];
+  bool _has(StreetTileId t) => _gz.containsKey(streetTileKey(t));
 
-  final Expando<List<(StreetBundleEntry, double, double, double, double)>> _bounds =
-      Expando();
-
-  List<(StreetBundleEntry, double, double, double, double)> _boundsOf(StreetBundle b) =>
-      _bounds[b] ??= [
-        for (final t in b.tiles)
-          (
-            t,
-            t.x / (1 << t.z) * 360 - 180,
-            (t.x + 1) / (1 << t.z) * 360 - 180,
-            streetTileLat(t.y.toDouble(), t.z),
-            streetTileLat(t.y + 1.0, t.z),
-          )
-      ];
-
-  Map<String, (StreetBundle, StreetBundleEntry)> _tilesIn(
-      double w, double n, double e, double s, double bucketZv) {
-    final out = <String, (StreetBundle, StreetBundleEntry)>{};
-    for (final b in _planBundles()) {
-      final tz = streetTileZoomFor(bucketZv, b.availableZooms);
-      if (tz == null) continue;
-      for (final (t, tw, te, tn, ts) in _boundsOf(b)) {
-        if (t.z != tz || t.missing) continue;
-        if (te <= w || tw >= e || tn <= s || ts >= n) continue;
-        final prev = out[t.key];
-        if (prev == null || prev.$1.level > b.level) out[t.key] = (b, t);
+  _Want? _blockWant(String key, int e, int tz, double lngW, double latN, double deg) {
+    final r = streetTileRange(lngW, lngW + deg, latN - deg, latN, tz);
+    if (r == null) return null;
+    final items = <(String, StreetTileId, StreetTileId)>[];
+    final pending = <String>{};
+    var fallback = false;
+    for (var y = r.y0; y <= r.y1; y++) {
+      for (var x = r.x0; x <= r.x1; x++) {
+        final want = (z: tz, x: x, y: y);
+        final wk = streetTileKey(want);
+        if (!_gz.containsKey(wk)) pending.add(wk);
+        for (final f in streetFallbackFor(want, _has)) {
+          items.add((streetTileKey(f), f, want));
+          if (f.z != tz) fallback = true;
+        }
       }
     }
-    return out;
+    if (items.isEmpty) return null;
+    return _Want(key, e, tz, lngW, latN, deg, items, pending, fallback);
+  }
+
+  List<StreetTile> _labelTiles() {
+    final out = <String, StreetTile>{};
+    for (final t in plan.tiles) {
+      for (final f in streetFallbackFor(t, _has)) {
+        final k = streetTileKey(f);
+        final d = _tiles[k];
+        if (d != null) out[k] = d;
+      }
+    }
+    return out.values.toList();
   }
 
   bool paint(Canvas canvas, Size size, GeoView view,
       {required bool light, required double dpr}) {
-    if (!_enabled || !plan.draw || _bundles.isEmpty || size.isEmpty) {
+    final s = size.isEmpty ? 0.0 : view.scale(size);
+    final e = s > 0 ? streetBucketExp(s) : 0;
+    final tz = !_enabled || !plan.draw || s <= 0
+        ? null
+        : (plan.bucketExp == e ? plan.tz : streetTileZoomOfBucket(e));
+    if (tz == null || _gz.isEmpty) {
+      _drewLast = false;
       _setAttribution(false);
       return false;
     }
     final clock = Stopwatch()..start();
-    final s = view.scale(size);
-    final e = streetBucketExp(s);
     final bs = streetBucketScaleOf(e);
     final deg = kStreetBlockPx / bs;
     final w = view.cx - size.width / 2 / s, east = view.cx + size.width / 2 / s;
     final n = view.cy + size.height / 2 / s, south = view.cy - size.height / 2 / s;
     final bx0 = ((w + 180) / deg).floor(), bx1 = ((east + 180) / deg).floor();
     final by0 = ((90 - n) / deg).floor(), by1 = ((90 - south) / deg).floor();
-    final bucketZv = streetZvOf(bs);
     final p = Paint()
       ..filterQuality = FilterQuality.low
       ..isAntiAlias = false;
@@ -500,19 +663,38 @@ class StreetLayer extends ChangeNotifier {
       drew = true;
     }
 
-    for (final b in _blocks.values) {
-      if (b.light != light || (b.e - e).abs() != 1) continue;
-      if (b.lngW >= east || b.lngW + b.deg <= w || b.latN <= south || b.latN - b.deg >= n) {
-        continue;
+    var absent = false;
+    for (var by = by0; by <= by1 && !absent; by++) {
+      for (var bx = bx0; bx <= bx1; bx++) {
+        if (!_blocks.containsKey('${light ? 'l' : 'd'}|$e|$tz|$bx|$by')) {
+          absent = true;
+          break;
+        }
       }
-      blit(b);
+    }
+    var standIn = 0;
+    void drawAlt(int alt) {
+      for (final b in _blocks.values) {
+        if (b.light != light || b.e != alt) continue;
+        if (b.lngW >= east || b.lngW + b.deg <= w || b.latN <= south || b.latN - b.deg >= n) {
+          continue;
+        }
+        blit(b);
+        standIn++;
+      }
+    }
+
+    for (final alt in absent ? [e - 2, e + 2, e - 1, e + 1] : [e - 1, e + 1]) {
+      drawAlt(alt);
+    }
+    for (var alt = e - 3; absent && standIn == 0 && alt >= e - 12; alt--) {
+      drawAlt(alt);
     }
     _want.clear();
-    final used = <String>[];
+    final used = <String>{};
     for (var by = by0; by <= by1; by++) {
       for (var bx = bx0; bx <= bx1; bx++) {
-        final lngW = -180 + bx * deg, latN = 90 - by * deg;
-        final key = '${light ? 'l' : 'd'}|$e|$bx|$by';
+        final key = '${light ? 'l' : 'd'}|$e|$tz|$bx|$by';
         final b = _blocks.remove(key);
         if (b != null) {
           _blocks[key] = b;
@@ -520,11 +702,11 @@ class StreetLayer extends ChangeNotifier {
           blit(b);
           continue;
         }
-        if (_tilesIn(lngW, latN, lngW + deg, latN - deg, bucketZv).isEmpty) continue;
-        _want.add((key, e, lngW, latN, deg));
+        final want = _blockWant(key, e, tz, -180 + bx * deg, 90 - by * deg, deg);
+        if (want != null) _want.add(want);
       }
     }
-    _trimBlocks(used.toSet());
+    _trimBlocks(used);
     _drewLast = drew;
     final us = clock.elapsedMicroseconds;
     stats
@@ -561,38 +743,45 @@ class StreetLayer extends ChangeNotifier {
     });
   }
 
+  Rect _clipOf(StreetTileId t, double lngW, double latN, double k) {
+    final side = (1 << t.z).toDouble();
+    final tw = t.x / side * 360 - 180, te = (t.x + 1) / side * 360 - 180;
+    final tn = streetTileLatOf(t.y.toDouble(), t.z), ts = streetTileLatOf(t.y + 1.0, t.z);
+    return Rect.fromLTRB((tw - lngW) * k, (latN - tn) * k, (te - lngW) * k, (latN - ts) * k);
+  }
+
   void _rasterize(bool light, double dpr, int maxBlocks, int budgetUs) {
     final clock = Stopwatch()..start();
     var made = 0;
     final jobs = <String, StreetTileJob>{};
-    for (final (key, e, lngW, latN, deg) in [..._want]) {
+    for (final q in [..._want]) {
       if (made >= maxBlocks || clock.elapsedMicroseconds > budgetUs) break;
-      if (_blocks.containsKey(key)) continue;
-      final bs = streetBucketScaleOf(e);
-      final tiles = _tilesIn(lngW, latN, lngW + deg, latN - deg, streetZvOf(bs));
-      final ready = <StreetTile>[];
+      if (_blocks.containsKey(q.key)) continue;
+      final w = _blockWant(q.key, q.e, q.tz, q.lngW, q.latN, q.deg);
+      if (w == null) continue;
+      final bs = streetBucketScaleOf(w.e);
+      final ready = <(StreetTile, Rect?)>[];
       var waiting = false;
-      for (final entry in tiles.entries) {
-        if (_tiles.containsKey(entry.key)) {
-          final t = _tiles.remove(entry.key);
-          _tiles[entry.key] = t;
-          if (t != null) ready.add(t);
-        } else {
-          waiting = true;
-          final (b, te) = entry.value;
-          if (!_decoding.contains(entry.key)) {
-            jobs[entry.key] = StreetTileJob(z: te.z, x: te.x, y: te.y, gz: b.tileBytes(te));
-          }
+      for (final (k, f, want) in w.items) {
+        if (_tiles.containsKey(k)) {
+          final t = _tiles.remove(k);
+          _tiles[k] = t;
+          if (t != null) ready.add((t, f.z < want.z ? _clipOf(want, w.lngW, w.latN, bs) : null));
+          continue;
         }
+        final gz = _gz[k];
+        if (gz == null) continue;
+        waiting = true;
+        if (!_decoding.contains(k)) jobs[k] = StreetTileJob(z: f.z, x: f.x, y: f.y, gz: gz);
       }
       if (waiting) continue;
       final t0 = clock.elapsedMicroseconds;
-      final img = _rasterBlock(ready, lngW, latN, bs, dpr, light, streetZvOf(bs));
+      final img = _rasterBlock(ready, w.lngW, w.latN, bs, dpr, light, streetBucketZvOf(w.e));
       stats
         ..rasterUs += clock.elapsedMicroseconds - t0
         ..rasterBlocks += 1;
       final bytes = img.width * img.height * 4;
-      _blocks[key] = _Block(img, e, lngW, latN, deg, light, bytes);
+      _blocks[w.key] = _Block(img, w.e, light, bytes, w);
       _blockBytes += bytes;
       made++;
     }
@@ -603,14 +792,22 @@ class StreetLayer extends ChangeNotifier {
   void _decode(Map<String, StreetTileJob> jobs) {
     _decoding.addAll(jobs.keys);
     final gen = _gen;
+    final b = _build;
     _decoder(jobs.values.toList()).then((out) {
       _decoding.removeAll(jobs.keys);
-      if (_disposed || gen != _gen) return;
+      if (_disposed || _halted || gen != _gen || b != _build) return;
       var i = 0;
-      for (final k in jobs.keys) {
-        _tiles[k] = out[i++];
+      for (final e in jobs.entries) {
+        final t = out[i++];
+        if (t == null && e.value.gz.isNotEmpty && b != null) {
+          final g = _gz.remove(e.key);
+          if (g != null) _gzBytes -= g.length;
+          _negative(b, e.key, kStreet.malformedRetryMs);
+          continue;
+        }
+        if (_gz.containsKey(e.key)) _tiles[e.key] = t;
       }
-      while (_tiles.length > kStreetDecodedTiles) {
+      while (_tiles.length > kStreet.memDecodedTiles) {
         _tiles.remove(_tiles.keys.first);
       }
       _needPlace = true;
@@ -640,14 +837,14 @@ class StreetLayer extends ChangeNotifier {
     return path;
   }
 
-  ui.Image _rasterBlock(List<StreetTile> tiles, double lngW, double latN, double k,
-      double dpr, bool light, double zv) {
+  ui.Image _rasterBlock(List<(StreetTile, Rect?)> tiles, double lngW, double latN, double k,
+      double dpr, bool light, double bucketZv) {
     final px = (kStreetBlockPx * dpr).round();
     final rec = ui.PictureRecorder();
     final c = Canvas(rec);
     c.clipRect(Rect.fromLTWH(0, 0, px.toDouble(), px.toDouble()));
     c.scale(dpr);
-    paintStreetTiles(c, tiles, lngW, latN, k, light, zv, _path);
+    paintStreetTiles(c, tiles, lngW, latN, k, light, bucketZv, _path);
     final pic = rec.endRecording();
     final img = pic.toImageSync(px, px);
     pic.dispose();
@@ -720,17 +917,16 @@ class StreetLayer extends ChangeNotifier {
     final clock = Stopwatch()..start();
     final s = view.scale(size);
     final zv = streetZvOf(s);
+    final bz = streetBucketZvOf(streetBucketExp(s));
     final fs = zv >= 16 ? 12.0 : 11.0;
     final waterFill = (light ? StreetPalette.light : StreetPalette.dark).waterLabel;
     final w = view.cx - size.width / 2 / s, e = view.cx + size.width / 2 / s;
     final n = view.cy + size.height / 2 / s, so = view.cy - size.height / 2 / s;
-    final tiles = _tilesIn(w, n, e, so, zv);
     final cands = <(int, double, StreetLabelCandidate, double, TextPainter, bool)>[];
-    for (final k in tiles.keys) {
-      final t = _tiles[k];
-      if (t == null) continue;
+    for (final t in _labelTiles()) {
       final x0 = w - t.lngW, x1 = e - t.lngW, y0 = t.latN - n, y1 = t.latN - so;
       for (final src in t.labels) {
+        if (!streetLabelAllowed(src.cls, bz) || !streetRoadDrawn(src.mz, bz)) continue;
         final pp = src.pts;
         var minX = double.infinity, maxX = -double.infinity;
         var minY = double.infinity, maxY = -double.infinity;
@@ -783,7 +979,8 @@ class StreetLayer extends ChangeNotifier {
       final r = a.$1.compareTo(b.$1);
       return r != 0 ? r : a.$2.compareTo(b.$2);
     });
-    final idx = placeLineLabels([for (final c in cands) c.$3], blocked);
+    final idx = placeLineLabels([for (final c in cands) c.$3], blocked,
+        maxLabels: streetMaxLabels(bz));
     _labels = [
       for (final i in idx)
         () {
@@ -801,6 +998,7 @@ class StreetLayer extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    StreetHalt.remove(_halt);
     _stop();
     for (final b in _blocks.values) {
       b.image.dispose();
@@ -811,19 +1009,19 @@ class StreetLayer extends ChangeNotifier {
   }
 }
 
-void paintStreetTiles(Canvas c, List<StreetTile> tiles, double lngW, double latN,
+void paintStreetTiles(Canvas c, List<(StreetTile, Rect?)> tiles, double lngW, double latN,
     double k, bool light, double zv, ui.Path Function(StreetGroup g) pathOf) {
   final pal = light ? StreetPalette.light : StreetPalette.dark;
   final river = light ? const Color(0xB35A96BE) : const Color(0x8C4678A0);
   final unit = 1 / k;
-  bool keep(StreetGroup g) => _areas.contains(g.cls) || zv >= 15 || g.mz <= zv + 1;
   void each(void Function(StreetGroup g) fn) {
-    for (final t in tiles) {
+    for (final (t, clip) in tiles) {
       c.save();
+      if (clip != null) c.clipRect(clip);
       c.translate((t.lngW - lngW) * k, (latN - t.latN) * k);
       c.scale(k);
       for (final g in t.groups) {
-        if (keep(g)) fn(g);
+        if (streetRoadDrawn(g.mz, zv)) fn(g);
       }
       c.restore();
     }
@@ -867,9 +1065,10 @@ void paintStreetTiles(Canvas c, List<StreetTile> tiles, double lngW, double latN
       if (g.cls == 'bld') c.drawPath(pathOf(g), stroke);
     });
   }
+  final low = zv < 12.99;
   void roads(int st, bool casing, double alpha) {
     for (final cls in casing ? _cased : _fillOrder) {
-      final base = casing ? pal.casing : pal.road[cls]!;
+      final base = casing ? pal.casing : (low ? pal.lowRoad[cls] : null) ?? pal.road[cls]!;
       stroke
         ..color = base.withValues(alpha: base.a * alpha)
         ..strokeWidth = (streetWidthAt(cls, zv) + (casing ? 1.5 : 0)) * unit;

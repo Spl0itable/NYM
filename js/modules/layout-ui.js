@@ -1438,6 +1438,13 @@
         return Math.round(row.getBoundingClientRect().width - used - count * (parseFloat(getComputedStyle(row).columnGap) || 0));
     }
 
+    function hiddenInfo(mid) {
+        var row = mid && mid.querySelector('.uh-title-row');
+        var info = row && row.querySelector('.uh-info');
+        if (!info || !mid.classList.contains('uh-clickable') || shownEl(info)) return 0;
+        return (parseFloat(info.getAttribute('width')) || 0) + (parseFloat(getComputedStyle(info).marginLeft) || 0) + (parseFloat(getComputedStyle(row).columnGap) || 0);
+    }
+
     function markHeaderEnds(head, gap, mid) {
         var t = mid && shownEl(mid) ? mid.getBoundingClientRect() : null;
         var list = Array.prototype.filter.call(head.querySelectorAll('.uh-phone-menu, .uh-left .channel-nav-btn, .uh-actions > button, .header-icon-btn, .mobile-header-actions > button'), shownEl)
@@ -1489,7 +1496,7 @@
         var backOff = backWas;
         if (room !== null) {
             var was = live.filter(function (b) { return b.classList.contains('uh-over'); }).length;
-            var base = room - was * step + (phone && head.classList.contains('uh-more-on') ? step : 0) + (backWanted && !backWas ? step : 0);
+            var base = room - hiddenInfo(mid) - was * step + (phone && head.classList.contains('uh-more-on') ? step : 0) + (backWanted && !backWas ? step : 0);
             var kind = mesh ? 'mesh' : (M.HEADER_KINDS[headerKind(n)] || 'channel');
             var opts = { kind: kind, actions: live.map(function (b) { return HEADER_IDS[b.id] || b.id; }).concat('bell'), base: base, step: step, more: !phone };
             var plan = backWanted && typeof M.headerBackPlan === 'function' ? M.headerBackPlan(opts) : M.headerOverflow(opts);

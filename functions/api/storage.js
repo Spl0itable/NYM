@@ -1909,6 +1909,151 @@ function emojiPacksCachePut(context, packs) {
   } catch (e) { }
 }
 
+var EMOJI_PAGE_ROWS = 100;
+var EMOJI_PAGE_BYTES = 512 * 1024;
+var EMOJI_COORDS_MAX = 24;
+var EMOJI_COORDS_BYTES = 1024 * 1024;
+var EMOJI_COORD_RX = /^30030:[0-9a-f]{64}:[^\u0000-\u001f\u007f]{0,1024}$/;
+var EMOJI_CURSOR_COORD_RX = /^30030:[0-9a-f]{64}:/;
+var EMOJI_CURSOR_COORD_MAX = 2048;
+var EMOJI_REGISTRY_INDEX = "CREATE INDEX IF NOT EXISTS emoji_packs_kind_created_coord ON emoji_packs (kind, created_at DESC, coord DESC)";
+var emojiRegistryIndexReady = false;
+
+async function ensureEmojiRegistryIndex(db) {
+  if (emojiRegistryIndexReady) return;
+  try { await db.prepare(EMOJI_REGISTRY_INDEX).run(); emojiRegistryIndexReady = true; } catch (e) { }
+}
+
+function emojiCursorEncode(createdAt, coord) {
+  var c = String(coord);
+  if (c.length > EMOJI_CURSOR_COORD_MAX) {
+    c = c.slice(0, EMOJI_CURSOR_COORD_MAX);
+    if (/[\ud800-\udbff]$/.test(c)) c = c.slice(0, -1);
+  }
+  var bytes = new TextEncoder().encode(JSON.stringify([createdAt, c]));
+  var bin = "";
+  for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function emojiCursorDecode(text) {
+  if (typeof text !== "string" || !text || text.length > 12000 || !/^[A-Za-z0-9_-]+$/.test(text)) return null;
+  try {
+    var bin = atob(text.replace(/-/g, "+").replace(/_/g, "/"));
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    var v = JSON.parse(new TextDecoder().decode(bytes));
+    if (!Array.isArray(v) || v.length !== 2 || !Number.isSafeInteger(v[0]) || v[0] < 0) return null;
+    if (typeof v[1] !== "string" || v[1].length > EMOJI_CURSOR_COORD_MAX || !EMOJI_CURSOR_COORD_RX.test(v[1])) return null;
+    return { createdAt: v[0], coord: v[1] };
+  } catch (e) { return null; }
+}
+
+async function emojiCachedRead(context, path, load) {
+  var req = readCacheRequest(path);
+  try {
+    var hit = await caches.default.match(req);
+    if (hit) {
+      var text = await hit.text();
+      var tag = hit.headers.get("X-Etag");
+      return { body: text, etag: tag && /^[0-9a-f]{32}$/.test(tag) ? tag : emojiEtag(text), next: hit.headers.get("X-Next") || "" };
+    }
+  } catch (e) { }
+  var fresh = await load();
+  fresh.etag = emojiEtag(fresh.body);
+  try {
+    var headers = new Headers();
+    headers.set("Content-Type", "application/x-ndjson");
+    headers.set("Cache-Control", "public, max-age=" + EMOJI_READ_TTL);
+    headers.set("X-Etag", fresh.etag);
+    if (fresh.next) headers.set("X-Next", fresh.next);
+    var op = caches.default.put(req, new Response(fresh.body, { headers: headers }));
+    if (context && context.waitUntil) context.waitUntil(op);
+  } catch (e) { }
+  return fresh;
+}
+
+function emojiNdjsonResponse(result, clientEtag, extra) {
+  var headers = { "Content-Type": "application/x-ndjson", "X-Etag": result.etag, "Access-Control-Expose-Headers": "X-Etag, X-Same, X-Next", ...CLIENT_CORS_HEADERS };
+  if (result.next) headers["X-Next"] = result.next;
+  var same = typeof clientEtag === "string" && clientEtag.length <= 64 && clientEtag === result.etag;
+  if (same) headers["X-Same"] = "1";
+  return new Response((same ? "" : (result.body || "")) + (extra || ""), { status: 200, headers: headers });
+}
+
+async function emojiUserLine(env, body) {
+  var userPk = (typeof body.pubkey === "string" && /^[0-9a-f]{64}$/i.test(body.pubkey)) ? body.pubkey.toLowerCase() : null;
+  if (!userPk) return "";
+  try {
+    var urow = await replica(env.DB_CHANNELS).prepare(
+      "SELECT json FROM emoji_packs WHERE coord = ?"
+    ).bind("10030:" + userPk + ":").first();
+    return urow && urow.json ? urow.json + "\n" : "";
+  } catch (e) { return ""; }
+}
+
+async function emojiPageRead(context, body) {
+  var env = context.env;
+  var cursor = null;
+  if (body.cursor !== undefined && body.cursor !== null && body.cursor !== "") {
+    cursor = emojiCursorDecode(body.cursor);
+    if (!cursor) return null;
+  }
+  var path = "/emoji-page/" + (cursor ? emojiEtag(body.cursor) : "head");
+  return await emojiCachedRead(context, path, async function () {
+    await ensureEmojiRegistryIndex(env.DB_CHANNELS);
+    var rows = [];
+    try {
+      var stmt = cursor
+        ? replica(env.DB_CHANNELS).prepare(
+          "SELECT coord, created_at, json FROM emoji_packs WHERE kind = 30030 AND (created_at, coord) < (?, ?) ORDER BY created_at DESC, coord DESC LIMIT ?"
+        ).bind(cursor.createdAt, cursor.coord, EMOJI_PAGE_ROWS + 1)
+        : replica(env.DB_CHANNELS).prepare(
+          "SELECT coord, created_at, json FROM emoji_packs WHERE kind = 30030 ORDER BY created_at DESC, coord DESC LIMIT ?"
+        ).bind(EMOJI_PAGE_ROWS + 1);
+      rows = (await stmt.all()).results || [];
+    } catch (e) { rows = []; }
+    var out = "";
+    var last = null;
+    var more = false;
+    for (var i = 0; i < rows.length; i++) {
+      var line = rows[i].json + "\n";
+      if (i >= EMOJI_PAGE_ROWS || (last && out.length + line.length > EMOJI_PAGE_BYTES)) { more = true; break; }
+      out += line;
+      last = rows[i];
+    }
+    return { body: out, next: more && last ? emojiCursorEncode(Number(last.created_at) || 0, last.coord) : "" };
+  });
+}
+
+async function emojiCoordsRead(context, body) {
+  var env = context.env;
+  if (!Array.isArray(body.coords) || body.coords.length === 0 || body.coords.length > EMOJI_COORDS_MAX) return null;
+  var seen = new Set();
+  for (var i = 0; i < body.coords.length; i++) {
+    var c = body.coords[i];
+    if (typeof c === "string" && EMOJI_COORD_RX.test(c)) seen.add(c);
+  }
+  if (seen.size === 0) return null;
+  var coords = Array.from(seen).sort();
+  return await emojiCachedRead(context, "/emoji-coords/" + emojiEtag(JSON.stringify(coords)), async function () {
+    var rows = [];
+    try {
+      rows = (await replica(env.DB_CHANNELS).prepare(
+        "SELECT coord, json FROM emoji_packs WHERE coord IN (" + coords.map(function () { return "?"; }).join(", ") + ")"
+      ).bind(...coords).all()).results || [];
+    } catch (e) { rows = []; }
+    rows.sort(function (a, b) { return a.coord < b.coord ? -1 : (a.coord > b.coord ? 1 : 0); });
+    var out = "";
+    for (var j = 0; j < rows.length; j++) {
+      var line = rows[j].json + "\n";
+      if (out && out.length + line.length > EMOJI_COORDS_BYTES) break;
+      out += line;
+    }
+    return { body: out, next: "" };
+  });
+}
+
 // Serves the deduped NIP-30 emoji set (kind 30030 packs).
 async function handleEmojiAction(context, body) {
   var env = context.env;
@@ -1951,6 +2096,19 @@ async function handleEmojiAction(context, body) {
     var same = typeof body.etag === "string" && body.etag.length <= 64 && body.etag === packs.etag;
     if (same) ndjsonHeaders["X-Same"] = "1";
     return new Response((same ? "" : (packs.body || "")) + userLine, { status: 200, headers: ndjsonHeaders });
+  }
+
+  if (body.action === "emoji-page") {
+    var page = await emojiPageRead(context, body);
+    if (!page) return json({ error: "Invalid cursor" }, 400);
+    var own = (body.cursor === undefined || body.cursor === null || body.cursor === "") ? await emojiUserLine(env, body) : "";
+    return emojiNdjsonResponse(page, body.etag, own);
+  }
+
+  if (body.action === "emoji-coords") {
+    var found = await emojiCoordsRead(context, body);
+    if (!found) return json({ error: "Invalid coords" }, 400);
+    return emojiNdjsonResponse(found, body.etag, "");
   }
 
   return json({ error: "Unknown action" }, 400);

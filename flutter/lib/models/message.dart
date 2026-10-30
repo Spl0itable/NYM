@@ -73,6 +73,7 @@ class Message {
     this.pqEncrypted = false,
     this.pqRoot = false,
     this.pqPending = false,
+    this.anonLane = false,
     this.pqCoverage,
     this.bitchatMessageId,
     this.nymMessageId,
@@ -156,6 +157,8 @@ class Message {
   bool pqRoot;
 
   bool pqPending;
+
+  bool anonLane;
 
   /// PQ wraps out of total members for a group message we sent; overrides [pqEncrypted].
   ({int pq, int total})? pqCoverage;
@@ -256,6 +259,7 @@ class Message {
         'pqEncrypted': pqEncrypted,
         'pqRoot': pqRoot,
         if (pqPending) 'pqPending': true,
+        if (anonLane) 'anonLane': true,
         if (pqCoverage != null) 'pqCoverPq': pqCoverage!.pq,
         if (pqCoverage != null) 'pqCoverTotal': pqCoverage!.total,
         'bitchatMessageId': bitchatMessageId,
@@ -349,6 +353,7 @@ class Message {
       pqEncrypted: j['pqEncrypted'] is bool ? j['pqEncrypted'] as bool : false,
       pqRoot: j['pqRoot'] is bool ? j['pqRoot'] as bool : false,
       pqPending: j['pqPending'] == true,
+      anonLane: j['anonLane'] == true,
       pqCoverage: (j['pqCoverPq'] is int && j['pqCoverTotal'] is int)
           ? (pq: j['pqCoverPq'] as int, total: j['pqCoverTotal'] as int)
           : null,

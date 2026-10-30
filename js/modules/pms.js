@@ -1214,7 +1214,7 @@ Object.assign(NYM.prototype, {
                 pm: true, id: typeof rumor.id === 'string' ? rumor.id : '', quoted: typeof this._quotedFromTags === 'function' ? this._quotedFromTags(rumor.tags) : []
             }));
             if (!rumorHidden) {
-                this.ingestEmojiTags(rumor.tags);
+                this.ingestEmojiTags(rumor.tags, { anon: anonCandidates.length > 0 });
                 if (typeof this.ingestImetaTags === 'function') this.ingestImetaTags(rumor.tags);
             }
 
