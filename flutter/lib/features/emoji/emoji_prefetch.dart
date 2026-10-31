@@ -11,6 +11,7 @@ import '../../state/settings_provider.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/inline_network_image.dart';
 import 'custom_emoji.dart';
+import 'emoji_block.dart';
 import 'emoji_data.dart';
 
 final RegExp _rxWholeToken = RegExp(r'^:([a-zA-Z0-9_]+):$');
@@ -47,10 +48,11 @@ void scheduleCustomEmojiPrefetch(ProviderContainer container) {
   });
 }
 
-/// Warms recents, then favorited/own/subscribed pack emojis, sequentially so downloads don't storm the cache DB.
-Future<void> _runEmojiPrefetch(ProviderContainer container) async {
-  final custom = container.read(liveCustomEmojiProvider);
-  if (custom.codeToUrl.isEmpty) return;
+@visibleForTesting
+Future<List<String>> customEmojiPrefetchUrls(
+    ProviderContainer container) async {
+  final custom = container.read(visibleCustomEmojiProvider);
+  if (custom.codeToUrl.isEmpty) return const [];
 
   final urls = <String>[];
 
@@ -82,8 +84,14 @@ Future<void> _runEmojiPrefetch(ProviderContainer container) async {
     }
   } catch (_) {
     // Prefs unavailable; prefetch is best-effort.
-    return;
+    return const [];
   }
+  return urls;
+}
+
+/// Warms recents, then favorited/own/subscribed pack emojis, sequentially so downloads don't storm the cache DB.
+Future<void> _runEmojiPrefetch(ProviderContainer container) async {
+  final urls = await customEmojiPrefetchUrls(container);
 
   // At most 60 new urls per run, deduped across runs on the raw url.
   var budget = 60;

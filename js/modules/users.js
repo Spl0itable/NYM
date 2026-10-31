@@ -535,37 +535,95 @@ Object.assign(NYM.prototype, {
             }, (err) => { noteDown(err); throw err; });
     },
 
-    _evictAvatarBlobIfFull() {
-        const MAX = 200;
-        if (this.avatarBlobCache.size <= MAX) return;
-        const it = this.avatarBlobCache.keys();
-        while (this.avatarBlobCache.size > MAX) {
-            const k = it.next().value;
-            if (k === undefined) break;
-            if (k === this.pubkey) continue;
-            const url = this.avatarBlobCache.get(k);
-            this.avatarBlobCache.delete(k);
-            if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+    _avatarCachePut(pubkey, objectUrl, bytes) {
+        const cache = this.avatarBlobCache;
+        const prev = cache.get(pubkey);
+        if (prev === objectUrl) {
+            cache.delete(pubkey);
+            cache.set(pubkey, objectUrl);
+            return true;
         }
+        if (prev) this._avatarCacheDrop(pubkey);
+        if (!this._avatarFitsCache(bytes)) return false;
+        if (!this._avatarBytes) this._avatarBytes = new Map();
+        const size = Math.max(0, Number(bytes) || 0);
+        this._avatarBytes.set(pubkey, size);
+        this._avatarCacheBytes = (this._avatarCacheBytes || 0) + size;
+        cache.set(pubkey, objectUrl);
+        this._evictAvatarBlobIfFull(pubkey);
+        return true;
+    },
+
+    _avatarFitsCache(bytes) {
+        return Math.max(0, Number(bytes) || 0) <= 4 * 1024 * 1024;
+    },
+
+    _noteAvatarTooBig(pubkey, url) {
+        if (!this._avatarTooBig) this._avatarTooBig = new Map();
+        const big = this._avatarTooBig;
+        big.delete(pubkey);
+        big.set(pubkey, url);
+        if (big.size > 4000) big.delete(big.keys().next().value);
+    },
+
+    _avatarCacheDrop(pubkey) {
+        const cache = this.avatarBlobCache;
+        if (!cache) return;
+        const url = cache.get(pubkey);
+        cache.delete(pubkey);
+        if (this._avatarBytes && this._avatarBytes.has(pubkey)) {
+            this._avatarCacheBytes = Math.max(0, (this._avatarCacheBytes || 0) - this._avatarBytes.get(pubkey));
+            this._avatarBytes.delete(pubkey);
+        }
+        if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+    },
+
+    _evictAvatarBlobIfFull(keep) {
+        const BUDGET_BYTES = 32 * 1024 * 1024;
+        const MAX_ENTRIES = 5000;
+        const cache = this.avatarBlobCache;
+        const over = () => (this._avatarCacheBytes || 0) > BUDGET_BYTES || cache.size > MAX_ENTRIES;
+        if (!over()) return;
+        for (const k of cache.keys()) {
+            if (!over()) break;
+            if (k === this.pubkey || k === keep) continue;
+            this._avatarCacheDrop(k);
+        }
+    },
+
+    _avatarRetryMs(failures) {
+        const n = Math.max(1, Number(failures) || 1);
+        return Math.min(10 * 60 * 1000 * Math.pow(3, n - 1), 6 * 60 * 60 * 1000);
+    },
+
+    _noteAvatarFailure(pubkey, url, prev) {
+        const failed = this._avatarFetchFailed;
+        const n = prev && prev.url === url ? (prev.n || 1) + 1 : 1;
+        failed.delete(pubkey);
+        failed.set(pubkey, { url, at: Date.now(), n });
+        if (failed.size > 4000) failed.delete(failed.keys().next().value);
     },
 
     cacheAvatarImage(pubkey, url) {
         if (this.isVerifiedBot(pubkey)) return Promise.resolve();
         if (this.avatarBlobCache.has(pubkey)) return Promise.resolve();
+        if (this._avatarTooBig && this._avatarTooBig.get(pubkey) === url) return Promise.resolve();
         if (this.avatarBlobInflight.has(pubkey)) return this.avatarBlobInflight.get(pubkey);
-        // Negative cache: don't re-fetch a failed URL on every redelivery (causes identicon flicker).
         if (!this._avatarFetchFailed) this._avatarFetchFailed = new Map();
         const failed = this._avatarFetchFailed.get(pubkey);
-        const recentlyFailed = failed && failed.url === url && (Date.now() - failed.at) < 10 * 60 * 1000;
-        if (recentlyFailed) return Promise.resolve();
+        const repeatFailure = !!failed && failed.url === url;
+        if (repeatFailure && (Date.now() - failed.at) < this._avatarRetryMs(failed.n)) return Promise.resolve();
         const p = this._fetchProfileMedia(url)
             .then(blob => {
                 this._avatarFetchFailed.delete(pubkey);
-                const old = this.avatarBlobCache.get(pubkey);
-                if (old) URL.revokeObjectURL(old);
+                if (!this._avatarFitsCache(blob.size)) {
+                    this._noteAvatarTooBig(pubkey, url);
+                    this.updateRenderedAvatars(pubkey, url);
+                    return;
+                }
+                if (this._avatarTooBig) this._avatarTooBig.delete(pubkey);
                 const objectUrl = URL.createObjectURL(blob);
-                this.avatarBlobCache.set(pubkey, objectUrl);
-                this._evictAvatarBlobIfFull();
+                this._avatarCachePut(pubkey, objectUrl, blob.size);
                 this.updateRenderedAvatars(pubkey, objectUrl);
                 if (typeof this.persistAvatarBlob === 'function') {
                     const ts = (this._kind0Ts && this._kind0Ts.get(pubkey)) || null;
@@ -573,8 +631,7 @@ Object.assign(NYM.prototype, {
                 }
             })
             .catch(() => {
-                const repeatFailure = failed && failed.url === url;
-                this._avatarFetchFailed.set(pubkey, { url, at: Date.now() });
+                this._noteAvatarFailure(pubkey, url, failed);
                 if (!repeatFailure) this.updateRenderedAvatars(pubkey, url);
             })
             .finally(() => { this.avatarBlobInflight.delete(pubkey); });
@@ -947,6 +1004,16 @@ Object.assign(NYM.prototype, {
         return stored || 'nym';
     },
 
+    _nameSourceWins(pubkey, src, ts) {
+        const rec = this._nameSources && this._nameSources.get(pubkey);
+        return !rec || rec.src === src || (ts || 0) > rec.ts;
+    },
+
+    _noteNameSource(pubkey, src, ts) {
+        if (!this._nameSources) this._nameSources = new Map();
+        this._nameSources.set(pubkey, { src, ts: ts || 0 });
+    },
+
     _propagateNymChange(pubkey, nym, prevBase) {
         const nextBase = this.parseNymFromDisplay(nym);
         if (!nextBase || nextBase === prevBase || nextBase.toLowerCase() === 'nym') return;
@@ -975,6 +1042,7 @@ Object.assign(NYM.prototype, {
                     const was = judge ? this.isContentHidden(m) : false;
                     m.author = display;
                     touched = true;
+                    if (typeof this._unreadStale === 'function') this._unreadStale();
                     if (!judge) continue;
                     const now = this.isContentHidden(m);
                     if (now === was) continue;
@@ -1072,9 +1140,7 @@ Object.assign(NYM.prototype, {
 
             const { url, server } = await this._uploadWithFallback(file, hashHex);
 
-            const oldBlob = this.avatarBlobCache.get(this.pubkey);
-            if (oldBlob) URL.revokeObjectURL(oldBlob);
-            this.avatarBlobCache.delete(this.pubkey);
+            this._avatarCacheDrop(this.pubkey);
 
             this.userAvatars.set(this.pubkey, url);
             this.cacheAvatarImage(this.pubkey, url);
@@ -1093,8 +1159,7 @@ Object.assign(NYM.prototype, {
     },
 
     removeAvatar() {
-        const oldBlob = this.avatarBlobCache.get(this.pubkey);
-        if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(this.pubkey); }
+        this._avatarCacheDrop(this.pubkey);
         this.userAvatars.delete(this.pubkey);
         if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(this.pubkey);
         localStorage.removeItem('nym_avatar_url');
@@ -1532,9 +1597,7 @@ Object.assign(NYM.prototype, {
             const newAvatarUrl = avatarUpdateTag[1];
             const prevUrl = this.userAvatars.get(pubkey);
             const clearCachedAvatar = () => {
-                const oldBlob = this.avatarBlobCache.get(pubkey);
-                if (oldBlob) URL.revokeObjectURL(oldBlob);
-                this.avatarBlobCache.delete(pubkey);
+                this._avatarCacheDrop(pubkey);
                 if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(pubkey);
             };
 
@@ -1577,20 +1640,25 @@ Object.assign(NYM.prototype, {
         }
 
         const known = this.users.has(pubkey);
+        const nameWins = !!nym && this._nameSourceWins(pubkey, 'presence', eventTime);
         const L = (typeof self !== 'undefined' && self.NymLastSeen) || null;
         const activeMs = L ? L.presenceActivityMs(status, eventTime * 1000) : 0;
         if (activeMs > 0) {
             this.recordUserActivity(pubkey, activeMs);
-            if (!known && nym && this.users.has(pubkey)) this.users.get(pubkey).nym = nym;
+            if (!known && nameWins && this.users.has(pubkey)) {
+                this.users.get(pubkey).nym = nym;
+                this._noteNameSource(pubkey, 'presence', eventTime);
+            }
         }
 
         if (known) {
             const user = this.users.get(pubkey);
             // Visibility is tracked in statusHiddenUsers so the user stays listed, just without a status dot.
             if (status !== 'hidden') user.status = status;
-            if (nym) {
+            if (nameWins) {
                 const prevBase = this.parseNymFromDisplay(user.nym);
                 user.nym = nym;
+                this._noteNameSource(pubkey, 'presence', eventTime);
                 this._propagateNymChange(pubkey, nym, prevBase);
             }
             this.updateUserList();
@@ -1786,10 +1854,8 @@ Object.assign(NYM.prototype, {
 
     _dropUser(pk, user) {
         this.users.delete(pk);
+        if (this._nameSources) this._nameSources.delete(pk);
         if (this.userColors) this.userColors.delete(pk);
-        const blobUrl = this.avatarBlobCache && this.avatarBlobCache.get(pk);
-        if (blobUrl && blobUrl.startsWith('blob:')) URL.revokeObjectURL(blobUrl);
-        if (this.avatarBlobCache) this.avatarBlobCache.delete(pk);
         if (!this.channelUsers) return;
         if (user && user.channels) {
             user.channels.forEach((ch) => {
@@ -2001,7 +2067,7 @@ Object.assign(NYM.prototype, {
             existing.set(itemEls[i].dataset.pubkey, itemEls[i]);
         }
 
-        const fragment = document.createDocumentFragment();
+        const rows = [];
         for (let i = 0; i < displayUsers.length; i++) {
             const { user, pubkey, effectiveStatus, statusHidden } = displayUsers[i];
             const safePk = this._safePubkey(pubkey);
@@ -2027,12 +2093,12 @@ Object.assign(NYM.prototype, {
                 el = this._createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot, statusHidden });
                 el._fp = fp;
             }
-            fragment.appendChild(el);
+            rows.push(el);
         }
 
         existing.forEach(el => el.remove());
-        container.textContent = '';
-        container.appendChild(fragment);
+        container.querySelectorAll(':scope > .sidebar-skeleton').forEach(el => el.remove());
+        this._placeUserRows(container, rows);
 
         if (!container._delegated) {
             container._delegated = true;
@@ -2049,6 +2115,18 @@ Object.assign(NYM.prototype, {
             };
             container.addEventListener('click', handler);
             container.addEventListener('contextmenu', handler);
+        }
+    },
+
+    _placeUserRows(container, rows) {
+        const want = new Map();
+        for (let i = 0; i < rows.length; i++) want.set(rows[i], i);
+        let ref = container.firstChild;
+        for (let i = 0; i < rows.length; i++) {
+            const el = rows[i];
+            if (ref === el) { ref = el.nextSibling; continue; }
+            if (ref && ref.nextSibling === el && want.get(ref) > i) { ref = el.nextSibling; continue; }
+            container.insertBefore(el, ref);
         }
     },
 

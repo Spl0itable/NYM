@@ -62,15 +62,29 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
+    _standaloneNymbotSettled() {
+        if (!(this._snSettled instanceof Map)) this._snSettled = new Map();
+        const me = String(this.pubkey || '');
+        if (!this._snSettled.has(me)) this._snSettled.set(me, new Set());
+        return this._snSettled.get(me);
+    },
+
+    _standaloneNymbotSettle(pk) {
+        if (!BOT_RUN_HEX64.test(String(pk || ''))) return;
+        this._standaloneNymbotSettled().add(pk);
+        if (this._snLeft instanceof Set) this._snLeft.delete(pk);
+    },
+
     _standaloneNymbotCandidates() {
         const out = [];
         if (!this.pmMessages) return out;
+        const settled = this._standaloneNymbotSettled();
         for (const [key, list] of this.pmMessages) {
             if (!Array.isArray(list) || !list.length || list.some((m) => !m || m.isOwn)) continue;
             const peer = list[0].conversationPubkey || list[0].pubkey;
             if (!BOT_RUN_HEX64.test(String(peer || '')) || peer === this.pubkey) continue;
             if (this.verifiedBot && peer === this.verifiedBot.pubkey) continue;
-            if (key !== this.getPMConversationKey(peer)) continue;
+            if (key !== this.getPMConversationKey(peer) || settled.has(peer)) continue;
             if (list.some((m) => (m.created_at || 0) >= BOT_RUN_STANDALONE_SINCE)) out.push(peer);
         }
         return out;
@@ -101,6 +115,7 @@ Object.assign(NYM.prototype, {
                 for (const w of wraps) {
                     if (!w || typeof w.id !== 'string' || seen.has(w.id)) continue;
                     seen.add(w.id);
+                    if (this._decryptedWrapIds instanceof Set && this._decryptedWrapIds.has(w.id)) continue;
                     const before = this.pmMessages ? this.pmMessages.size : 0;
                     try { await this.handleGiftWrapDM(w, { fromD1: true, probe }); } catch (_) { }
                     if (this.pmMessages && this.pmMessages.size < before) dropped += before - this.pmMessages.size;

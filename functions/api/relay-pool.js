@@ -4,7 +4,7 @@ import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake, sha256 }
 import { isNymchatClient, clientOriginAllowed } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport, packHit } from './_filters.js';
-import { spamEngine, ioReserve, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor } from './_spam.js';
+import { spamEngine, ioReserve, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor, nymbotPubkeys } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
 function bytesHex(b) {
@@ -1472,6 +1472,7 @@ export async function onRequest(context) {
   }
 
   function checkCampaign(content, pubkey, createdAtMs, now) {
+    if (pubkey && nymbotPubkeys(env).has(pubkey)) return { flood: false, mute: false, copies: 0 };
     const tokens = campaignTokens(content);
     const text = tokens.join(' ');
     if (text.length < CAMPAIGN_MIN_LENGTH) return { flood: false, mute: false, copies: 0 };
@@ -2119,6 +2120,7 @@ export async function onRequest(context) {
   function outboundBadgeRefused(ev) {
     if (poolBadgeMode === 'off' || !poolBadgeAuthority) return false;
     if (!ev || typeof ev !== 'object' || !BADGE_GATED_KINDS.has(ev.kind)) return false;
+    if (nymbotPubkeys(env).has(ev.pubkey) && verifySignedEvent(ev)) return false;
     const tags = Array.isArray(ev.tags) ? ev.tags : [];
     const tag = tags.find((t) => Array.isArray(t) && t[0] === 'nymattest' && typeof t[1] === 'string');
     const verified = tag ? verifyBadge(tag[1], ev.pubkey, poolBadgeAuthority, Date.now()) : null;

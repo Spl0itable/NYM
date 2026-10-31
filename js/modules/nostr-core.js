@@ -218,7 +218,9 @@ Object.assign(NYM.prototype, {
             }
 
             const jittered = this.randomNow();
-            const minTs = (this._lastKind0Ts || 0) + 1;
+            let minTs = (this._lastKind0Ts || 0) + 1;
+            const stamp = this._presenceStamp;
+            if (stamp && stamp.pk === this.pubkey && stamp.nym !== this.nym) minTs = Math.max(minTs, stamp.at + 1);
             const profileTs = Math.max(jittered, minTs);
             this._lastKind0Ts = profileTs;
 
@@ -798,8 +800,7 @@ Object.assign(NYM.prototype, {
                 if (pictureUrl) {
                     const prevUrl = this.userAvatars.get(pubkey);
                     if (prevUrl !== pictureUrl) {
-                        const oldBlob = this.avatarBlobCache.get(pubkey);
-                        if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(pubkey); }
+                        this._avatarCacheDrop(pubkey);
                         if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(pubkey);
                         this.userAvatars.set(pubkey, pictureUrl);
                         this.cacheAvatarImage(pubkey, pictureUrl);
@@ -809,8 +810,7 @@ Object.assign(NYM.prototype, {
                         this.cacheAvatarImage(pubkey, pictureUrl);
                     }
                 } else if (pubkey !== this.pubkey && this.userAvatars.has(pubkey)) {
-                    const oldBlob = this.avatarBlobCache.get(pubkey);
-                    if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(pubkey); }
+                    this._avatarCacheDrop(pubkey);
                     if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(pubkey);
                     this.userAvatars.delete(pubkey);
                     this.updateRenderedAvatars(pubkey, this.getAvatarUrl(pubkey));
@@ -848,9 +848,11 @@ Object.assign(NYM.prototype, {
 
                 const profileName = [profile.name, profile.username, profile.display_name]
                     .find(v => typeof v === 'string' && v.length > 0);
-                if (profileName) {
+                const kind0NameWins = !this.users.has(pubkey) || this._nameSourceWins(pubkey, 'kind0', eventTs);
+                if (profileName && kind0NameWins) {
                     const truncatedName = this._kind0Nym(profileName, pubkey);
                     const existingUser = this.users.get(pubkey);
+                    this._noteNameSource(pubkey, 'kind0', eventTs);
                     // The kind 0 event is authoritative for display names.
                     if (!existingUser) {
                         this.users.set(pubkey, {
@@ -2415,6 +2417,7 @@ Object.assign(NYM.prototype, {
                 const idx = msgs.findIndex(m => m.id === messageId);
                 if (idx !== -1) {
                     msgs.splice(idx, 1);
+                    if (this._msgIndex) this._msgIndex.delete(msgs);
                     this.persistChannelMessages(channel);
                 }
             });
@@ -2424,6 +2427,7 @@ Object.assign(NYM.prototype, {
                 for (let i = msgs.length - 1; i >= 0; i--) {
                     if (msgs[i].id === messageId || msgs[i].nymMessageId === messageId) {
                         msgs.splice(i, 1);
+                        if (this._msgIndex) this._msgIndex.delete(msgs);
                         removed = true;
                     }
                 }
@@ -2556,6 +2560,7 @@ Object.assign(NYM.prototype, {
             const idx = msgs.findIndex(channelMatch);
             if (idx !== -1) {
                 msgs.splice(idx, 1);
+                if (this._msgIndex) this._msgIndex.delete(msgs);
                 this.persistChannelMessages(channel);
                 // Re-derive rather than bump: updateUnreadCount would add one for a removed message.
                 if (typeof this.refreshUnreadCount === 'function') {
@@ -2569,6 +2574,7 @@ Object.assign(NYM.prototype, {
             for (let i = msgs.length - 1; i >= 0; i--) {
                 if (pmMatch(msgs[i])) {
                     msgs.splice(i, 1);
+                    if (this._msgIndex) this._msgIndex.delete(msgs);
                     removed = true;
                 }
             }
@@ -2831,8 +2837,7 @@ Object.assign(NYM.prototype, {
                         if (pictureUrl) {
                             const prevUrl = this.userAvatars.get(event.pubkey);
                             if (prevUrl !== pictureUrl) {
-                                const oldBlob = this.avatarBlobCache.get(event.pubkey);
-                                if (oldBlob) { URL.revokeObjectURL(oldBlob); this.avatarBlobCache.delete(event.pubkey); }
+                                this._avatarCacheDrop(event.pubkey);
                                 if (typeof this.deleteCachedAvatar === 'function') this.deleteCachedAvatar(event.pubkey);
                                 this.userAvatars.set(event.pubkey, pictureUrl);
                                 this.cacheAvatarImage(event.pubkey, pictureUrl);
@@ -3393,7 +3398,7 @@ Object.assign(NYM.prototype, {
 
             let event = {
                 kind: 30078,
-                created_at: Math.floor(Date.now() / 1000),
+                created_at: this._presenceStampSec(),
                 tags: tags,
                 content: '',
                 pubkey: this.pubkey
@@ -3768,6 +3773,14 @@ Object.assign(NYM.prototype, {
         return this.publishPresence(away ? 'away' : 'online', awayMsg);
     },
 
+    _presenceStampSec() {
+        const now = Math.floor(Date.now() / 1000);
+        const prev = this._presenceStamp;
+        const at = prev && prev.pk === this.pubkey ? Math.max(now, prev.at + 1) : now;
+        this._presenceStamp = { pk: this.pubkey, at, nym: this.nym };
+        return at;
+    },
+
     _presenceStatusTags() {
         if (this._statusMode() !== 'enabled') return [['status', 'hidden']];
         if (typeof this._awayEnsureRestored === 'function') this._awayEnsureRestored();
@@ -3789,7 +3802,7 @@ Object.assign(NYM.prototype, {
 
             let event = {
                 kind: 30078,
-                created_at: Math.floor(Date.now() / 1000),
+                created_at: this._presenceStampSec(),
                 tags: tags,
                 content: '',
                 pubkey: this.pubkey
@@ -3816,7 +3829,7 @@ Object.assign(NYM.prototype, {
 
             let event = {
                 kind: 30078,
-                created_at: Math.floor(Date.now() / 1000),
+                created_at: this._presenceStampSec(),
                 tags: tags,
                 content: '',
                 pubkey: this.pubkey

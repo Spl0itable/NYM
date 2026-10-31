@@ -82,7 +82,7 @@ class _UserListItemState extends ConsumerState<UserListItem> {
               borderRadius: NymRadius.rxs,
               child: Container(
                 key: const ValueKey('sidebarRowBox'),
-                constraints: const BoxConstraints(minHeight: kSidebarRowMinH),
+                constraints: BoxConstraints(minHeight: sidebarRowMinH()),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(

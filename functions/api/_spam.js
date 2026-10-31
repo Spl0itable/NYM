@@ -76,11 +76,25 @@ export const DEFAULT_SPAM_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
 const NO_THINK_SUFFIX = "\n\n/no_think";
 
 export const BUILTIN_EXEMPT_PUBKEYS = [
-  "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
-  "fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2"
+  "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df"
 ];
 
 const HEX64 = /^[0-9a-f]{64}$/;
+export const DEFAULT_NYMBOT_PUBKEY = "fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2";
+let nymbotKeyCache = { raw: null, keys: null };
+
+export function nymbotPubkeys(env) {
+  const raw = env && typeof env.NYMBOT_PUBKEY === "string" ? env.NYMBOT_PUBKEY : "";
+  if (nymbotKeyCache.keys && nymbotKeyCache.raw === raw) return nymbotKeyCache.keys;
+  const keys = new Set();
+  if (!raw.trim()) keys.add(DEFAULT_NYMBOT_PUBKEY);
+  else for (const part of raw.split(",")) {
+    const v = part.trim().toLowerCase();
+    if (HEX64.test(v)) keys.add(v);
+  }
+  nymbotKeyCache = { raw, keys };
+  return keys;
+}
 const SETTINGS_REFRESH_MS = 60000;
 const SIMILAR_WINDOW_MS = 48 * 3600000;
 const EXACT_CACHE_MS = 6 * 3600000;
@@ -237,10 +251,11 @@ export function normalizeSpamSettings(input, base) {
   return out;
 }
 
-export function isExemptPubkey(settings, pubkey) {
+export function isExemptPubkey(settings, pubkey, env) {
   if (typeof pubkey !== "string") return false;
   const pk = pubkey.toLowerCase();
   if (BUILTIN_EXEMPT_PUBKEYS.includes(pk)) return true;
+  if (nymbotPubkeys(env).has(pk)) return true;
   return !!(settings && Array.isArray(settings.exemptPubkeys) && settings.exemptPubkeys.includes(pk));
 }
 
@@ -842,14 +857,14 @@ export function badgeTierFor(env, pubkey, tag, nowMs) {
 
 const CHANNEL_KIND_RE = /"kind":\s*(20000|23333)\b/;
 
-export function frameBadgeRefused(env, engine, data) {
+export function frameBadgeRefused(env, engine, data, verify) {
   if (typeof data !== "string" || !data.startsWith("[\"EVENT\"") || !CHANNEL_KIND_RE.test(data)) return false;
   const mode = engine.badgeGate();
   if (mode === "off") return false;
   let ev = null;
   try { const arr = JSON.parse(data); ev = Array.isArray(arr) ? arr[2] : null; } catch (_) { return false; }
   if (!ev || (ev.kind !== 20000 && ev.kind !== 23333) || typeof ev.pubkey !== "string") return false;
-  if (engine.isExempt(ev.pubkey)) return false;
+  if (engine.isExempt(ev.pubkey) && (typeof verify !== "function" || verify(ev))) return false;
   const tag = Array.isArray(ev.tags) ? ev.tags.find((t) => Array.isArray(t) && t[0] === "nymattest" && typeof t[1] === "string") : null;
   if (!badgeGateRefuses(mode, badgeTierFor(env, ev.pubkey, tag ? tag[1] : ""))) return false;
   engine.noteUnbadged();
@@ -4370,7 +4385,7 @@ async function enforceDeveloperReport(env, settings, r) {
   if (!targetPubkey && rows.length && typeof rows[0].pubkey === "string") targetPubkey = rows[0].pubkey.toLowerCase();
   if (!targetPubkey) return { skipped: "nothing archived" };
   if (targetPubkey === r.reporter) return { skipped: "self report" };
-  if (isExemptPubkey(settings, targetPubkey)) return { skipped: "exempt" };
+  if (isExemptPubkey(settings, targetPubkey, env)) return { skipped: "exempt" };
   const reason = "spam engine: reported by the developer";
   const hidden = [];
   for (const row of rows) {
@@ -4475,7 +4490,7 @@ export async function reviewSpamReport(env, ev, opts) {
   if (!settings || !settings.enabled) return { skipped: "disabled" };
   if (targetPubkey) {
     if (targetPubkey === reporter) return { skipped: "self report" };
-    if (isExemptPubkey(settings, targetPubkey)) return { skipped: "exempt" };
+    if (isExemptPubkey(settings, targetPubkey, env)) return { skipped: "exempt" };
     if (isSpamMuted(targetPubkey, now)) return { skipped: "already muted" };
   }
   const reports = replica(env.DB_REPORT);
@@ -4499,7 +4514,7 @@ export async function reviewSpamReport(env, ev, opts) {
   if (!rows.length) return { skipped: "nothing archived" };
   if (!targetPubkey && typeof rows[0].pubkey === "string") targetPubkey = rows[0].pubkey.toLowerCase();
   if (targetPubkey === reporter) return { skipped: "self report" };
-  if (isExemptPubkey(settings, targetPubkey)) return { skipped: "exempt" };
+  if (isExemptPubkey(settings, targetPubkey, env)) return { skipped: "exempt" };
   if (isSpamMuted(targetPubkey, now)) return { skipped: "already muted" };
   if (!(await reporterEstablished(env, ev, reporter, now))) return { skipped: "reporter not established" };
   let reporters = 1;
@@ -4523,7 +4538,7 @@ export async function reviewSpamReport(env, ev, opts) {
     if (prior && prior.source === "report" && now - Number(prior.seen_at) < REPORT_REVIEW_COOLDOWN_MS) { results.push({ id: row.id, skipped: "reviewed recently" }); continue; }
     const job = jobFromArchivedRow(row, { seenAt: now, settings, report: { reporters, onSender: !targetEvent } });
     if (!job) { results.push({ id: row.id, skipped: "unreadable" }); continue; }
-    if (isExemptPubkey(settings, job.pubkey)) { results.push({ id: row.id, skipped: "exempt" }); continue; }
+    if (isExemptPubkey(settings, job.pubkey, env)) { results.push({ id: row.id, skipped: "exempt" }); continue; }
     try {
       const res = await withAuditSlot(env, context, () => auditNow(env, job));
       if (res && res.skipped) { results.push({ id: row.id, skipped: res.skipped }); continue; }
@@ -4575,7 +4590,7 @@ export function spamEngine(env, context) {
       return s && (s.requireBadge === "challenged" || s.requireBadge === "attested") ? s.requireBadge : "off";
     },
     isExempt(pubkey) {
-      return typeof pubkey === "string" && isExemptPubkey(state.settings || defaultSpamSettings(env), pubkey.toLowerCase());
+      return typeof pubkey === "string" && isExemptPubkey(state.settings || defaultSpamSettings(env), pubkey.toLowerCase(), env);
     },
     noteUnbadged() {
       state.counters.unbadged++;
@@ -4601,7 +4616,7 @@ export function spamEngine(env, context) {
       const s = state.settings;
       if (!usable || typeof pubkey !== "string" || !s || !s.enabled) return false;
       const pk = pubkey.toLowerCase();
-      if (isExemptPubkey(s, pk)) return false;
+      if (isExemptPubkey(s, pk, env)) return false;
       const e = state.engineMutes.get(pk);
       const now = Date.now();
       if (e && (e.busy || (e.origin && e.origin !== "engine" && now - e.originAt < ORIGIN_TTL_MS))) return false;
@@ -4613,7 +4628,7 @@ export function spamEngine(env, context) {
       if (!usable || !s || !s.enabled || !job || job.verified !== true || typeof job.pubkey !== "string" || !job.id) return false;
       const pubkey = job.pubkey.toLowerCase();
       const now = Date.now();
-      if (isExemptPubkey(s, pubkey)) return false;
+      if (isExemptPubkey(s, pubkey, env)) return false;
       let muted = isSpamMuted(pubkey, now) || recordMuted(pubkey, now);
       if (!muted) { try { muted = filterSetSync().p.has(pubkey); } catch (_) { muted = false; } }
       if (!muted) return false;
@@ -4626,7 +4641,7 @@ export function spamEngine(env, context) {
       const pubkey = job.pubkey.toLowerCase();
       const now = Date.now();
       state.counters.inspected++;
-      if (isExemptPubkey(s, pubkey)) return "pass";
+      if (isExemptPubkey(s, pubkey, env)) return "pass";
       if (state.restored.has(job.id)) return "pass";
       watchdog(now);
       if (isSpamMuted(pubkey, now) || recordMuted(pubkey, now)) {

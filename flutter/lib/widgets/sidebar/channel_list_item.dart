@@ -122,7 +122,7 @@ class ChannelListItem extends ConsumerWidget {
             children: [
               Container(
                 key: const ValueKey('sidebarRowBox'),
-                constraints: const BoxConstraints(minHeight: kSidebarRowMinH),
+                constraints: BoxConstraints(minHeight: sidebarRowMinH()),
                 padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 6, 12, 6),
                 decoration: BoxDecoration(
                   color: fill,

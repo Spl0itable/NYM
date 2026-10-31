@@ -19,9 +19,6 @@ import 'street_plan.dart';
 
 const String kStreetAttribution = '© OpenStreetMap contributors';
 const String kStreetCopyrightUrl = 'https://www.openstreetmap.org/copyright';
-const String kStreetOdbl =
-    'Street detail uses OpenStreetMap data, available under the ODbL 1.0; the extracts this app downloads are available under the same license.';
-const String kStreetOdblUrl = 'https://opendatacommons.org/licenses/odbl/1-0/';
 const String kStreetPrefKey = 'nym_street_detail';
 
 const int kStreetBlockBytes = 50331648;

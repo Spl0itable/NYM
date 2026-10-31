@@ -70,7 +70,7 @@ final List<ShareAction> kCoreShareActions = [
     id: 'scan',
     order: kShareOrderScan,
     label: 'Scan a code',
-    icon: NymIcons.radar,
+    icon: NymIcons.qrScan,
     isAvailable: (ref, t) => ref.watch(qrScannerAvailableProvider),
     run: (context, ref, t) => openShareScanner(context),
   ),

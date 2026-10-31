@@ -879,7 +879,7 @@
 }
 
 .pubkey-slideout.open {
-    max-height: 300px;
+    max-height: 480px;
     margin-top: 8px;
     padding: 10px;
     border-color: var(--glass-border);

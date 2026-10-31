@@ -45,6 +45,20 @@ class NymIcons {
       '<path d="M12 12 L18.36 5.64"/>'
       '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>';
 
+  static const String qrScan =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<path d="M3 8V5a2 2 0 0 1 2-2h3"/>'
+      '<path d="M16 3h3a2 2 0 0 1 2 2v3"/>'
+      '<path d="M21 16v3a2 2 0 0 1-2 2h-3"/>'
+      '<path d="M8 21H5a2 2 0 0 1-2-2v-3"/>'
+      '<rect x="7" y="7" width="3" height="3" rx="0.5"/>'
+      '<rect x="14" y="7" width="3" height="3" rx="0.5"/>'
+      '<rect x="7" y="14" width="3" height="3" rx="0.5"/>'
+      '<path d="M14 14h.01"/>'
+      '<path d="M17 14h.01"/>'
+      '<path d="M17 17h.01"/></svg>';
+
   static const String phone =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
       'stroke-linecap="round" stroke-linejoin="round">'

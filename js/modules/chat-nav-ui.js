@@ -88,6 +88,7 @@
             const mark = N().markMax(this._cnStoredMark(key), N().markFloor(lastRead));
             const entry = { key, lastRead, openedAt, openedMs: Date.now(), info: null, placed: false, landed: false, landing: false, scrolled: false, mark, base: mark.at };
             map.set(key, entry);
+            if (this._cnClosedBase) this._cnClosedBase.delete(key);
             this._cnScanMentionsOnOpen(entry);
             return entry;
         },
@@ -97,6 +98,7 @@
             const entry = this._cnEntries().get(key);
             if (entry) this._cnSaveMark(key, entry.mark);
             this._cnEntries().delete(key);
+            if (this._cnClosedBase) this._cnClosedBase.delete(key);
             if (typeof document === 'undefined') return;
             const containers = [document.getElementById('messagesContainer')];
             const col = this._cvActive && typeof this._cvColumnForKey === 'function' ? this._cvColumnForKey(key) : null;
@@ -596,11 +598,15 @@
             if (!ids.length || typeof this.isContentHidden !== 'function') return [];
             const store = this._cnIsConv(key) ? this.pmMessages : this.messages;
             const list = (store && store.get(key)) || [];
-            const byId = new Map();
-            for (const m of list) {
-                if (!m) continue;
-                if (m.id) byId.set(m.id, m);
-                if (m.nymMessageId) byId.set(m.nymMessageId, m);
+            const idx = typeof this._msgIndexOf === 'function' ? this._msgIndexOf(list) : null;
+            let byId = idx && !idx.clash ? idx.map : null;
+            if (!byId) {
+                byId = new Map();
+                for (const m of list) {
+                    if (!m) continue;
+                    if (m.id) byId.set(m.id, m);
+                    if (m.nymMessageId) byId.set(m.nymMessageId, m);
+                }
             }
             return ids.map((e) => e.id).filter((id) => byId.has(id) && this.isContentHidden(byId.get(id)));
         },
@@ -623,31 +629,81 @@
             return N().mentionCount(this._cnShownMentions(key), key);
         },
 
+        _cnMentionRows(key, floor, before) {
+            const f = Number(floor) || 0;
+            const b = Number(before) || 0;
+            const tail = [];
+            for (const x of this._cnRaw(key)) {
+                if (!x) continue;
+                const at = this._cnAt(x);
+                if (at > f && !(b > 0 && at > b)) tail.push(x);
+            }
+            return this._cnMentionRowsOf(key, tail);
+        },
+
+        _cnMentionRowsOf(key, tail) {
+            if (!tail.length) return [];
+            let shown;
+            if (this._cnIsConv(key)) shown = typeof this.getFilteredPMMessages === 'function' ? this.getFilteredPMMessages(key, tail) : tail;
+            else shown = typeof this.getFilteredMessages === 'function' ? this.getFilteredMessages(key, tail) : tail;
+            return shown.map((m) => Object.assign(this._cnRow(m), { mention: this._cnIsMention(m) }));
+        },
+
         _cnScanMentionsOnOpen(entry) {
-            const list = this._cnStoreList(entry.key).map((m) => Object.assign(this._cnRow(m), { mention: this._cnIsMention(m) }));
+            const list = this._cnMentionRows(entry.key, entry.lastRead, entry.openedAt);
             const items = N().mentionScan(list, entry.lastRead, entry.openedAt);
             if (items.length) this._cnSetMentions(N().mentionAdd(this._cnMentions(), entry.key, items, Date.now()), [entry.key]);
         },
 
+        _cnArrived(key, message, fn) {
+            const prev = this._cnArrival;
+            this._cnArrival = { key, message };
+            try { return fn(); } finally { this._cnArrival = prev; }
+        },
+
         _cnScanClosed(key) {
             if (!key) return;
-            if (!this._cnScanQueue) this._cnScanQueue = new Set();
-            this._cnScanQueue.add(key);
+            if (!this._cnScanQueue) this._cnScanQueue = new Map();
+            let q = this._cnScanQueue.get(key);
+            if (!q) { q = { full: false, msgs: [] }; this._cnScanQueue.set(key, q); }
+            const arrival = this._cnArrival;
+            if (arrival && arrival.key === key && arrival.message) q.msgs.push(arrival.message);
+            else q.full = true;
             if (this._cnScanTimer) return;
             this._cnScanTimer = setTimeout(() => {
                 this._cnScanTimer = null;
-                const keys = [...this._cnScanQueue];
-                this._cnScanQueue.clear();
+                const queue = this._cnScanQueue;
+                this._cnScanQueue = new Map();
+                if (!this._cnClosedBase) this._cnClosedBase = new Map();
+                const who = (this.pubkey || '') + '|' + (this.nym || '');
+                const epoch = (this._cnFilterEpoch || 0) + ':' + (this._cfVersion || 0);
                 let state = this._cnMentions();
                 const changed = [];
-                for (const k of keys) {
-                    if (this._cnContextFor(k)) continue;
+                for (const [k, q] of queue) {
+                    if (this._cnContextFor(k)) { this._cnClosedBase.delete(k); continue; }
                     const floor = (this.channelLastRead && this.channelLastRead.get(k)) || 0;
-                    const list = this._cnStoreList(k).map((m) => Object.assign(this._cnRow(m), { mention: this._cnIsMention(m) }));
+                    const base = this._cnClosedBase.get(k);
+                    const chat = (state.chats || {})[k];
+                    const incremental = !q.full && !!base && base.who === who && base.epoch === epoch && floor >= base.floor
+                        && base.ids === (chat ? chat.ids.length : 0) && base.seen === (chat ? chat.seen.length : 0);
+                    let list;
+                    if (incremental) {
+                        const raw = this._cnRaw(k);
+                        const tail = [];
+                        for (const m of q.msgs) {
+                            if (m && this._cnAt(m) > floor && !tail.includes(m) && raw.lastIndexOf(m) >= 0) tail.push(m);
+                        }
+                        list = this._cnMentionRowsOf(k, tail);
+                    } else {
+                        list = this._cnMentionRows(k, floor, 0);
+                    }
                     const items = N().mentionScan(list, floor, 0);
-                    if (!items.length) continue;
-                    const next = N().mentionAdd(state, k, items, Date.now());
-                    if (next !== state) { state = next; changed.push(k); }
+                    if (items.length) {
+                        const next = N().mentionAdd(state, k, items, Date.now());
+                        if (next !== state) { state = next; changed.push(k); }
+                    }
+                    const after = (state.chats || {})[k];
+                    this._cnClosedBase.set(k, { who, epoch, floor, ids: after ? after.ids.length : 0, seen: after ? after.seen.length : 0 });
                 }
                 if (changed.length) this._cnSetMentions(state, changed);
             }, 200);
@@ -682,7 +738,7 @@
                         for (const k of keys) {
                             const e = this._cnEntries().get(k);
                             if (e && !e.info && !e.landed) {
-                                const m = this._cnStoreList(k).map((x) => Object.assign(this._cnRow(x), { mention: this._cnIsMention(x) }));
+                                const m = this._cnMentionRows(k, e.lastRead, e.openedAt);
                                 const items = N().mentionScan(m, e.lastRead, e.openedAt);
                                 if (items.length) this._cnSetMentions(N().mentionAdd(this._cnMentions(), k, items, Date.now()), [k]);
                                 this._cnPlaceDivider(k);
@@ -1821,6 +1877,18 @@
     wrap('displayMessage', function (args) { this._cnOnDisplayed(args[0]); });
     wrap('hideMessagesFromBlockedUser', function () { for (const k of this._cnOpenKeys()) this._cnSchedule(k); });
     wrap('handleDeletionEvent', function () { for (const k of this._cnOpenKeys()) this._cnSchedule(k); });
+    const bumpFilters = function () { this._cnFilterEpoch = (this._cnFilterEpoch || 0) + 1; };
+    wrap('showMessagesFromUnblockedUser', bumpFilters);
+    wrap('hideMessagesFromBlockedUser', bumpFilters);
+    wrap('_noteEdit', bumpFilters);
+    wrap('applyThreadsEnabled', bumpFilters);
+    const arrived = NYM.prototype._countArrivedUnread;
+    if (typeof arrived === 'function') {
+        NYM.prototype._countArrivedUnread = function (key, message, exists) {
+            this._cnArrival = exists ? null : { key, message };
+            try { return arrived.apply(this, arguments); } finally { this._cnArrival = null; }
+        };
+    }
     wrap('updateUnreadCount', function (args) { this._cnScanClosed(args[0]); });
     wrap('refreshUnreadCount', function (args) { this._cnScanClosed(args[0]); });
     wrap('_renderUnreadBadge', function (args) { this._cnRenderMentionBadge(args[0]); });

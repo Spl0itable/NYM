@@ -6,11 +6,13 @@ import '../i18n/i18n.dart';
 import 'explorer_lists.dart';
 import 'geo_explore.dart';
 import 'geo_places.dart';
+import '../../widgets/chat/message_row.dart'
+    show HoverBarFocus, hoverBarFill, hoverBarLit, hoverBarLitFill;
 import '../../widgets/common/nym_tooltip.dart';
 
 const double kGeoTouch = 44;
 
-class GeoControlButton extends StatelessWidget {
+class GeoControlButton extends StatefulWidget {
   const GeoControlButton({
     super.key,
     required this.icon,
@@ -35,17 +37,35 @@ class GeoControlButton extends StatelessWidget {
   final bool? expanded;
 
   @override
+  State<GeoControlButton> createState() => _GeoControlButtonState();
+}
+
+class _GeoControlButtonState extends State<GeoControlButton> {
+  final _states = WidgetStatesController();
+  late final _lit = Listenable.merge([_states, HoverBarFocus.instance]);
+
+  @override
+  void dispose() {
+    _states.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final nym = context.nym;
     final radius = BorderRadius.circular(12);
-    final hasLabel = label != null && label!.isNotEmpty;
-    final hasBadge = badge != null && badge!.isNotEmpty;
+    final label = widget.label;
+    final badge = widget.badge;
+    final active = widget.active;
+    final expanded = widget.expanded;
+    final hasLabel = label != null && label.isNotEmpty;
+    final hasBadge = badge != null && badge.isNotEmpty;
     return Semantics(
       button: true,
       toggled: expanded == null && active ? true : null,
       expanded: expanded,
-      label: tooltip,
-      onTap: onTap,
+      label: widget.tooltip,
+      onTap: widget.onTap,
       excludeSemantics: true,
       child: Stack(
         clipBehavior: Clip.none,
@@ -57,7 +77,7 @@ class GeoControlButton extends StatelessWidget {
               right: -5,
               child: IgnorePointer(
                 child: Container(
-                  key: badgeKey,
+                  key: widget.badgeKey,
                   constraints:
                       const BoxConstraints(minWidth: 18, minHeight: 18),
                   padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -67,7 +87,7 @@ class GeoControlButton extends StatelessWidget {
                     borderRadius: BorderRadius.circular(9),
                   ),
                   child: Text(
-                    badge!,
+                    badge,
                     style: TextStyle(
                       fontSize: 11,
                       height: 1,
@@ -85,21 +105,45 @@ class GeoControlButton extends StatelessWidget {
 
   Widget _body(
       BuildContext context, NymColors nym, BorderRadius radius, bool hasLabel) {
+    final active = widget.active;
+    final label = widget.label;
     return NymTooltip(
-      message: tooltip,
-      child: Material(
-        color: active
-            ? nym.primaryA(0.22)
-            : (nym.isLight ? const Color(0xF2FFFFFF) : const Color(0xD9000000)),
-        shape: RoundedRectangleBorder(
-          borderRadius: radius,
-          side: BorderSide(
-              color: active ? nym.primaryA(0.6) : nym.glassBorder),
-        ),
+      message: widget.tooltip,
+      child: ListenableBuilder(
+        listenable: _lit,
+        builder: (context, child) {
+          final lit = hoverBarLit(_states.value);
+          final Color fill;
+          if (lit) {
+            fill = active
+                ? Color.alphaBlend(nym.primaryA(0.22), hoverBarFill(nym))
+                : hoverBarLitFill(nym);
+          } else {
+            fill = active
+                ? nym.primaryA(0.22)
+                : (nym.isLight
+                    ? const Color(0xF2FFFFFF)
+                    : const Color(0xD9000000));
+          }
+          final side = active
+              ? nym.primaryA(0.6)
+              : (lit ? nym.primaryA(0.3) : nym.glassBorder);
+          return Material(
+            color: fill,
+            shape: RoundedRectangleBorder(
+              borderRadius: radius,
+              side: BorderSide(color: side),
+            ),
+            child: child,
+          );
+        },
         child: InkWell(
           borderRadius: radius,
-          onTap: onTap,
-          focusNode: focusNode,
+          onTap: widget.onTap,
+          focusNode: widget.focusNode,
+          statesController: _states,
+          hoverColor: Colors.transparent,
+          focusColor: Colors.transparent,
           child: ConstrainedBox(
             constraints: const BoxConstraints(
                 minWidth: kGeoTouch, minHeight: kGeoTouch),
@@ -109,7 +153,7 @@ class GeoControlButton extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(icon,
+                  Icon(widget.icon,
                       size: 20, color: active ? nym.primary : nym.text),
                   if (hasLabel) ...[
                     const SizedBox(width: 6),

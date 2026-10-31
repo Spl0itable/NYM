@@ -712,8 +712,12 @@
                             this._cacheDelete('avatars', a.pubkey);
                             continue;
                         }
-                        const objectUrl = URL.createObjectURL(a.blob);
-                        this.avatarBlobCache.set(a.pubkey, objectUrl);
+                        if (this.avatarBlobCache.has(a.pubkey)) continue;
+                        if (!this._avatarFitsCache(a.blob.size)) {
+                            this._cacheDelete('avatars', a.pubkey);
+                            continue;
+                        }
+                        this._avatarCachePut(a.pubkey, URL.createObjectURL(a.blob), a.blob.size);
                     } catch (_) { }
                 }
 
@@ -761,6 +765,7 @@
                         const ts = (m.created_at || 0) * 1000;
                         if (ts > lastTs) lastTs = ts;
                     }
+                    if (typeof this._unreadStale === 'function') this._unreadStale();
                     if (lastTs > 0) this.channelLastActivity.set(key, lastTs);
                 }
 

@@ -8,26 +8,22 @@ class SidebarSkeletonRow extends StatelessWidget {
   const SidebarSkeletonRow.channel({super.key, required this.barWidthFactor})
       : avatarSize = 0,
         gap = 0,
-        vPad = 6,
-        minHeight = kSidebarRowMinH;
+        vPad = 6;
 
   const SidebarSkeletonRow.pm({super.key, required this.barWidthFactor})
       : avatarSize = kSidebarIcon,
         gap = kSidebarGap,
-        vPad = 6,
-        minHeight = kSidebarRowMinH;
+        vPad = 6;
 
   const SidebarSkeletonRow.nym({super.key, required this.barWidthFactor})
       : avatarSize = kSidebarIcon,
         gap = kSidebarGap,
-        vPad = 6,
-        minHeight = kSidebarRowMinH;
+        vPad = 6;
 
   final double barWidthFactor;
   final double avatarSize;
   final double gap;
   final double vPad;
-  final double minHeight;
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +32,7 @@ class SidebarSkeletonRow extends StatelessWidget {
         child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: Container(
-        constraints: BoxConstraints(minHeight: minHeight),
+        constraints: BoxConstraints(minHeight: sidebarRowMinH()),
         padding: EdgeInsets.symmetric(horizontal: 12, vertical: vPad),
         alignment: Alignment.centerLeft,
         child: LayoutBuilder(

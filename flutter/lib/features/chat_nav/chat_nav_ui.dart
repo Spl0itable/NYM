@@ -12,6 +12,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../models/message.dart';
 import '../../state/app_state.dart';
+import '../../widgets/chat/message_row.dart' show HoverBarFocus, hoverBarLit, hoverBarLitFill;
 import '../../widgets/chat/messages_list.dart';
 import '../../widgets/nym_icons.dart';
 import '../../widgets/sidebar/pm_context_menu.dart';
@@ -643,13 +644,8 @@ class _JumpPill extends StatelessWidget {
       child: Semantics(
         button: true,
         label: label,
-        child: Material(
-          color: c.glassBg,
-          shape: StadiumBorder(side: BorderSide(color: c.glassBorder)),
-          elevation: 4,
-          child: InkWell(
-            key: const ValueKey('chat-nav-jump'),
-            customBorder: const StadiumBorder(),
+        child: _NavPill(
+            inkKey: const ValueKey('chat-nav-jump'),
             onTap: onTap,
             child: Container(
               height: 32,
@@ -681,7 +677,6 @@ class _JumpPill extends StatelessWidget {
                 ],
               ),
             ),
-          ),
         ),
       ),
     );
@@ -703,13 +698,8 @@ class _MentionFab extends StatelessWidget {
       child: Semantics(
         button: true,
         label: label,
-        child: Material(
-          color: c.glassBg,
-          shape: StadiumBorder(side: BorderSide(color: c.glassBorder)),
-          elevation: 4,
-          child: InkWell(
-            key: const ValueKey('chat-nav-mention'),
-            customBorder: const StadiumBorder(),
+        child: _NavPill(
+            inkKey: const ValueKey('chat-nav-mention'),
             onTap: onTap,
             child: Container(
               height: 32,
@@ -739,8 +729,57 @@ class _MentionFab extends StatelessWidget {
                 ],
               ),
             ),
-          ),
         ),
+      ),
+    );
+  }
+}
+
+class _NavPill extends StatefulWidget {
+  const _NavPill(
+      {required this.inkKey, required this.onTap, required this.child});
+
+  final Key inkKey;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  State<_NavPill> createState() => _NavPillState();
+}
+
+class _NavPillState extends State<_NavPill> {
+  final _states = WidgetStatesController();
+  late final _lit = Listenable.merge([_states, HoverBarFocus.instance]);
+
+  @override
+  void dispose() {
+    _states.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return ListenableBuilder(
+      listenable: _lit,
+      builder: (context, child) {
+        final lit = hoverBarLit(_states.value);
+        return Material(
+          color: lit ? hoverBarLitFill(c) : c.glassBg,
+          shape: StadiumBorder(
+              side: BorderSide(color: lit ? c.primaryA(0.3) : c.glassBorder)),
+          elevation: 4,
+          child: child,
+        );
+      },
+      child: InkWell(
+        key: widget.inkKey,
+        customBorder: const StadiumBorder(),
+        onTap: widget.onTap,
+        statesController: _states,
+        hoverColor: Colors.transparent,
+        focusColor: Colors.transparent,
+        child: widget.child,
       ),
     );
   }

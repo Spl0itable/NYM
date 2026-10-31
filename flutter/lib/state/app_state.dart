@@ -16,6 +16,8 @@ import '../features/sync/sync_merge.dart'
 import '../features/channels/channel_manager.dart';
 import '../features/chat_tools/chat_tools.dart'
     show ChatToolsLimits, EditCandidate, editVerdict;
+import '../features/chat_nav/chat_nav_service.dart'
+    show chatNavNoteEdit, chatNavNoteTrim;
 import '../features/chat_tools/chat_tools_service.dart' show chatToolsHidden;
 import '../features/emoji/custom_emoji.dart'
     show
@@ -1588,6 +1590,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Switches to a live, identity-backed empty state once an identity boots.
   void goLive(String pubkey, String nym) {
     _seenIds.clear();
+    _nameSources.clear();
     _seenCopyKeys.clear();
     _seenNymMessageIds.clear();
     _pendingEdits.clear();
@@ -1956,6 +1959,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         ..clear()
         ..addAll(pinned)
         ..addAll(keep);
+      chatNavNoteEdit(list);
     }
     if (dropped.isNotEmpty) _scheduleEmit();
     return dropped;
@@ -1985,9 +1989,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
         _unindexMessage(m);
       }
     }
+    final dropped = list.length - kept.length;
     list
       ..clear()
       ..addAll(kept);
+    chatNavNoteTrim(list, dropped);
   }
 
   // Message id index: event id and nymMessageId → message; stale entries only cost memory, never a wrong match.
@@ -2058,6 +2064,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
           ex.content == content) {
         _unindexMessage(ex);
         list.removeAt(i);
+        chatNavNoteEdit(list);
         removed = true;
       }
     }
@@ -2099,13 +2106,27 @@ class AppStateNotifier extends StateNotifier<AppState> {
       _unindexMessage(list[i]);
       list.removeAt(i);
     }
+    chatNavNoteEdit(list);
+  }
+
+  void _sortNoted(List<Message> list) {
+    var ordered = true;
+    for (var i = 1; i < list.length; i++) {
+      if (compareMessages(list[i - 1], list[i]) >= 0) {
+        ordered = false;
+        break;
+      }
+    }
+    list.sort(compareMessages);
+    if (!ordered) chatNavNoteEdit(list);
   }
 
   /// Sorts lists touched out of order during a batch, then re-caps overgrown channels.
   void _flushDirtySorts() {
     if (_dirtySortKeys.isNotEmpty) {
       for (final key in _dirtySortKeys) {
-        state.messages[key]?.sort(compareMessages);
+        final list = state.messages[key];
+        if (list != null) _sortNoted(list);
       }
       _dirtySortKeys.clear();
     }
@@ -2249,6 +2270,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       _unindexMessage(ex);
       final placeholderId = ex.id;
       ex.id = m.id;
+      chatNavNoteEdit(list);
       ex.optimistic = false;
       ex.deliveryStatus = DeliveryStatus.sent;
       final shifted = ex.createdAt != m.createdAt;
@@ -2272,7 +2294,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         if (_batchDepth > 0) {
           _dirtySortKeys.add(key);
         } else {
-          list.sort(compareMessages);
+          _sortNoted(list);
         }
       }
       // The early return below skips the normal activity bookkeeping; own messages never count toward unread.
@@ -2407,6 +2429,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
     return changed;
   }
 
+  final Map<String, (bool, int)> _nameSources = {};
+
+  bool _nameSourceWins(String pubkey, bool fromPresence, int ts) {
+    final rec = _nameSources[pubkey];
+    return rec == null || rec.$1 == fromPresence || ts > rec.$2;
+  }
+
   void _ingestProfile(NostrEvent e) {
     final mapped = EventMapper.profile(e);
     if (mapped == null) return;
@@ -2430,10 +2459,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
             prev.lud16 != p.lud16 ||
             prev.lud06 != p.lud06) {
           existing.profile = p;
-          if (resolvedName != null) {
+          if (resolvedName != null &&
+              _nameSourceWins(e.pubkey, false, p.kind0Ts)) {
             final next = getNymFromPubkey(resolvedName, e.pubkey);
             _noteNym(e.pubkey, existing.nym, next);
             existing.nym = next;
+            _nameSources[e.pubkey] = (false, p.kind0Ts);
           }
           changed = true;
         }
@@ -2445,6 +2476,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         nym: getNymFromPubkey(resolvedName ?? 'nym', e.pubkey),
         profile: p,
       );
+      if (resolvedName != null) _nameSources[e.pubkey] = (false, p.kind0Ts);
       changed = true;
     }
     // Keep the PM row's nym in sync with the kind-0 name.
@@ -2812,6 +2844,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
           for (final p in pieces) {
             if (identical(p, host)) continue;
             list.remove(p);
+            chatNavNoteEdit(list);
             _unindexMessage(p);
             absorbed.add(p.id);
             if (_pmUnreadCounted.remove(p.id)) {
@@ -2836,6 +2869,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
           nymId != null &&
           nymId.isNotEmpty) {
         dup.nymMessageId = nymId;
+        chatNavNoteEdit(list);
         _seenNymMessageIds.add(nymId);
         // Index the adopted nymMessageId so receipts can find it.
         _indexMessage(key, dup);
@@ -3857,6 +3891,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     bool stampLastSeen = true,
     String? avatarUrl,
     bool hasAvatarTag = false,
+    int? nameTs,
   }) {
     // Snapshot row-visible fields to tell a row repaint from an ambient presence change.
     final existingUser = state.users[pubkey];
@@ -3867,10 +3902,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
       () => User(pubkey: pubkey, nym: nym ?? getNymFromPubkey('nym', pubkey)),
     );
     u.status = status;
-    if (nym != null && nym.isNotEmpty) {
+    if (nym != null &&
+        nym.isNotEmpty &&
+        (nameTs == null || _nameSourceWins(pubkey, true, nameTs))) {
       final next = getNymFromPubkey(nym, pubkey);
       _noteNym(pubkey, u.nym, next);
       u.nym = next;
+      if (nameTs != null) _nameSources[pubkey] = (true, nameTs);
       _rewriteStoredAuthors(pubkey);
       _syncPmConversationNym(pubkey);
     }
@@ -3976,6 +4014,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       }
       _presenceOnly.remove(pk);
       state.users.remove(pk);
+      _nameSources.remove(pk);
       removed = true;
     }
     if (removed) _markGeoPresenceDirty();
@@ -4846,7 +4885,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
         if (hit) _unindexMessage(m);
         return hit;
       });
-      if (list.length != before) touched.add(key);
+      if (list.length != before) {
+        chatNavNoteEdit(list);
+        touched.add(key);
+      }
     });
     if (touched.isNotEmpty) {
       _visibilityChanged();
@@ -4873,6 +4915,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         return hit;
       });
       if (list.length == before) return false;
+      chatNavNoteEdit(list);
       _visibilityChanged();
       return true;
     }
@@ -5249,6 +5292,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
     if (drop.isEmpty) return 0;
     list.removeWhere(drop.contains);
+    chatNavNoteEdit(list);
     return drop.length;
   }
 
@@ -5607,6 +5651,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       if (alreadySeen && landed.isNotEmpty) {
         _unindexMessage(m);
         list.removeAt(idx);
+        chatNavNoteEdit(list);
         // Also collapse any stale failed twin, keeping the row that landed.
         _dropFailedOptimisticTwins(list, m.content, landed.first);
         _scheduleEmit();
@@ -5617,6 +5662,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       _unindexMessage(m);
       final placeholderId = m.id;
       m.id = realId;
+      chatNavNoteEdit(list);
       if (realCreatedAt != null && realCreatedAt > 0) {
         m.createdAt = realCreatedAt;
         m.timestamp = realCreatedAt * 1000;
@@ -5675,6 +5721,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       final idx = list.indexWhere((m) => m.id == placeholderId);
       if (idx < 0) continue;
       list.removeAt(idx);
+      chatNavNoteEdit(list);
       _scheduleEmit();
       return;
     }
@@ -5910,6 +5957,19 @@ bool _canFilter(AppState s) =>
 bool plainlyVisible(AppState s, Message m) {
   if (m.expiresAt != null || m.threadRoot != null) return false;
   return !_canFilter(s) || !s.isMessageFiltered(m);
+}
+
+bool replyVisibleAlone(AppState s, Message m, bool rootLocal) {
+  if (_canFilter(s) && s.isMessageFiltered(m)) return false;
+  final root = m.threadRoot;
+  if (root == null || root.isEmpty) return true;
+  if (appThreadsEnabled && rootLocal) return false;
+  final peer = m.conversationPubkey;
+  final bot = m.isPM &&
+      !m.isGroup &&
+      peer != null &&
+      peer.toLowerCase() == kNymbotPubkey;
+  return !bot || rootLocal;
 }
 
 /// The id a thread reply points at: nymMessageId for PM/group, event id for channels.
@@ -7708,8 +7768,10 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
   List<String> wantedCoords() {
     final out = <String>[];
     final seen = <String>{};
+    final global = _globalCoords();
     void add(String coord) {
       if (!kEmojiPackCoordRx.hasMatch(coord) || !seen.add(coord)) return;
+      if (global.contains(coord)) return;
       if (_packsByKey.containsKey(coord.substring(6))) return;
       if (_coordsTried.contains(coord)) return;
       out.add(coord);
@@ -7733,6 +7795,7 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
 
   void requestPack(String coord) {
     if (!kEmojiPackCoordRx.hasMatch(coord)) return;
+    if (_globalCoords().contains(coord)) return;
     if (_packsByKey.containsKey(coord.substring(6))) return;
     if (_wanted.length >= 500) return;
     _wanted.add(coord);
@@ -7849,11 +7912,9 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     try {
       final prefs = await _ref.read(emojiPrefsProvider.future);
       _prefs = prefs;
-      final blocked = _blockedCoords();
+      final blocked = _blockedTest();
       final cached = loadCustomEmojiState(prefs,
-          skipPack: blocked.isEmpty
-              ? null
-              : (k) => blocked.contains('30030:$k'));
+          skipPack: blocked == null ? null : (k) => blocked('30030:$k'));
       try {
         final used = jsonDecode(prefs.getString(kEmojiPacksUsedKey) ?? '[]');
         if (used is List) {
@@ -7867,7 +7928,7 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
       }
       if (mounted && (_codeToUrl.isNotEmpty || _packsByKey.isNotEmpty)) {
         _publish();
-        if (blocked.isNotEmpty) _repointBlocked();
+        if (blocked != null) _repointBlocked();
         _schedulePrefetch();
       }
     } catch (_) {
@@ -7956,7 +8017,7 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     final existing = _packsByKey[pack.key];
     if (existing != null && existing.createdAt >= pack.createdAt) return;
     _packsByKey[pack.key] = pack;
-    final packBlocked = _blockedCoords().contains(EmojiBlock.packCoord(pack));
+    final packBlocked = _isBlockedCoord(EmojiBlock.packCoord(pack));
     if (!packBlocked) {
       for (final e in pack.emojis) {
         registerEmojiQuiet(e.shortcode, e.url);
@@ -8014,7 +8075,7 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     return out;
   }
 
-  Set<String> _blockedCoords() {
+  Set<String> _userBlockedCoords() {
     try {
       return _ref.read(blockedEmojiPacksProvider.notifier).coords;
     } catch (_) {
@@ -8022,11 +8083,34 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     }
   }
 
+  GlobalEmojiBlocks _global() {
+    try {
+      return _ref.read(globalEmojiBlocksProvider);
+    } catch (_) {
+      return GlobalEmojiBlocks.none;
+    }
+  }
+
+  Set<String> _globalCoords() => _global().coordSet;
+
+  bool Function(String)? _blockedTest() {
+    final user = _userBlockedCoords();
+    final global = _globalCoords();
+    if (user.isEmpty && global.isEmpty) return null;
+    if (user.isEmpty) return global.contains;
+    if (global.isEmpty) return user.contains;
+    return (c) => user.contains(c) || global.contains(c);
+  }
+
+  bool _isBlockedCoord(String coord) => _blockedTest()?.call(coord) ?? false;
+
   EmojiBlockSt _blockSt() {
     try {
       final list = _ref.read(blockedEmojiPacksProvider);
-      if (list.isEmpty) return EmojiBlockSt.empty;
-      final st = EmojiBlock.state(list, _packsByKey.values);
+      final global = _global();
+      if (list.isEmpty && global.isEmpty) return EmojiBlockSt.empty;
+      final st = EmojiBlock.state(list, _packsByKey.values,
+          global: global.coords, globalUrls: global.urls);
       EmojiBlock.learnTags(
           _ref.read(emojiTagCoordsProvider.notifier).asTags(), st);
       return st;
@@ -8040,7 +8124,7 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
   void _noteTagCoords(List<List<String>> tags) {
     if (!tags.any((t) => t.length >= 4 && t[0] == 'emoji')) return;
     try {
-      _ref.read(emojiTagCoordsProvider.notifier).note(tags, _blockedCoords());
+      _ref.read(emojiTagCoordsProvider.notifier).note(tags, _blockedTest());
     } catch (_) {}
   }
 
@@ -8068,7 +8152,7 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
 
   void blocksChanged() {
     _repointBlocked();
-    for (final c in _blockedCoords()) {
+    for (final c in _userBlockedCoords()) {
       if (!_packsByKey.containsKey(c.substring(6))) requestPack(c);
     }
   }
@@ -8076,7 +8160,14 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
   void unblocked(String coord) {
     if (!EmojiBlock.validCoord(coord)) return;
     final pack = _packsByKey[coord.substring(6)];
-    if (pack == null) return;
+    if (pack == null || _isBlockedCoord(coord)) return;
+    try {
+      final app = _ref.read(appStateProvider);
+      if (pack.pubkey != app.selfPubkey &&
+          app.blockedUsers.contains(pack.pubkey)) {
+        return;
+      }
+    } catch (_) {}
     var changed = false;
     for (final e in pack.emojis) {
       if (!_codeToUrl.containsKey(e.shortcode) &&
@@ -8087,6 +8178,22 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     if (changed) {
       _publish();
       _persist();
+    }
+  }
+
+  bool applyGlobalBlocks(Object? ep, Object? epu) {
+    try {
+      final g = _ref.read(globalEmojiBlocksProvider.notifier);
+      final before = _globalCoords();
+      if (!g.apply(ep, epu)) return false;
+      _repointBlocked();
+      final kept = _globalCoords();
+      for (final c in before) {
+        if (!kept.contains(c)) unblocked(c);
+      }
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 

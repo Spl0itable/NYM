@@ -3121,7 +3121,7 @@ class _ScrollBottomButtonState extends State<_ScrollBottomButton> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final fill = _hover ? c.primaryA(0.15) : c.glassBg;
+    final fill = _hover ? hoverBarLitFill(c) : c.glassBg;
     final border = _hover ? c.primaryA(0.30) : c.glassBorder;
     final shadow = BoxShadow(
       color: Colors.black.withValues(alpha: c.isLight ? 0.1 : 0.4),
@@ -3135,7 +3135,7 @@ class _ScrollBottomButtonState extends State<_ScrollBottomButton> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedScale(
-          scale: _hover ? 1.1 : 1.0,
+          scale: _hover && !MediaQuery.disableAnimationsOf(context) ? 1.1 : 1.0,
           duration: NymMotion.transition,
           curve: NymMotion.curve,
           child: Container(

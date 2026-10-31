@@ -435,6 +435,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       svg: NymIcons.shareNodes,
       label: tr('Share group'),
       color: c.text,
+      touchMin: true,
       onTap: () => _shareGroup(group),
     ));
 
@@ -962,12 +963,14 @@ class _ActionRow extends StatefulWidget {
     required this.color,
     required this.onTap,
     this.trailing,
+    this.touchMin = false,
   });
   final String svg;
   final String label;
   final Color color;
   final VoidCallback onTap;
   final String? trailing;
+  final bool touchMin;
 
   @override
   State<_ActionRow> createState() => _ActionRowState();
@@ -990,7 +993,7 @@ class _ActionRowState extends State<_ActionRow> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: Container(
-          constraints: context.largeTouchTargets
+          constraints: context.largeTouchTargets || (widget.touchMin && nymTouchPlatform())
               ? const BoxConstraints(minHeight: kMinTouchTarget)
               : null,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),

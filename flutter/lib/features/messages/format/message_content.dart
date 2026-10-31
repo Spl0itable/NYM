@@ -23,6 +23,7 @@ import '../../../services/platform/deep_links.dart';
 import '../../../state/app_state.dart';
 import '../../../state/nostr_controller.dart';
 import '../../../state/settings_provider.dart';
+import '../../../widgets/chat/message_row.dart' show hoverBarLitFill;
 import '../../../widgets/chat/row_tap.dart';
 import '../../../widgets/chat/eased.dart';
 import '../../../widgets/chat/messages_list.dart'
@@ -4164,19 +4165,77 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
       excludeSemantics: label != null,
       child: RowTap(
         onTap: onTap,
-        child: Container(
-          width: side,
-          height: side,
+        child: _ViewerChipFace(
+          side: side,
           padding: padding,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: const Color(0xCC141423),
-            shape: BoxShape.circle,
-            border: Border.all(color: c.glassBorder),
-          ),
+          onTap: onTap,
           child: Text(
             glyph,
             style: TextStyle(color: c.text, fontSize: fontSize, height: 1),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ViewerChipFace extends StatefulWidget {
+  const _ViewerChipFace(
+      {required this.side,
+      required this.padding,
+      required this.onTap,
+      required this.child});
+
+  final double side;
+  final EdgeInsets padding;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  State<_ViewerChipFace> createState() => _ViewerChipFaceState();
+}
+
+class _ViewerChipFaceState extends State<_ViewerChipFace> {
+  bool _hover = false;
+  bool _pressed = false;
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final lit = _hover || _pressed || _focused;
+    return FocusableActionDetector(
+      onShowFocusHighlight: (v) => setState(() => _focused = v),
+      actions: <Type, Action<Intent>>{
+        ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) {
+          widget.onTap();
+          return null;
+        }),
+        ButtonActivateIntent:
+            CallbackAction<ButtonActivateIntent>(onInvoke: (_) {
+          widget.onTap();
+          return null;
+        }),
+      },
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: Listener(
+          onPointerDown: (_) => setState(() => _pressed = true),
+          onPointerUp: (_) => setState(() => _pressed = false),
+          onPointerCancel: (_) => setState(() => _pressed = false),
+          child: Container(
+            width: widget.side,
+            height: widget.side,
+            padding: widget.padding,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: lit ? hoverBarLitFill(c) : const Color(0xCC141423),
+              shape: BoxShape.circle,
+              border: Border.all(color: lit ? c.primaryA(0.3) : c.glassBorder),
+            ),
+            child: widget.child,
           ),
         ),
       ),

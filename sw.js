@@ -75,6 +75,22 @@ async function storeMedia(cache, req, resp) {
 }
 
 let mediaStartupPruned = false;
+let wiped = false;
+
+self.addEventListener('message', (e) => {
+    const d = e.data;
+    if (!d || d.type !== 'nym-wipe') return;
+    wiped = true;
+    const port = e.ports && e.ports[0];
+    const done = (async () => {
+        try {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((k) => caches.delete(k)));
+        } catch (_) { }
+        if (port) port.postMessage({ type: 'nym-wiped' });
+    })();
+    if (e.waitUntil) e.waitUntil(done);
+});
 
 self.addEventListener('install', (e) => {
     e.waitUntil((async () => {
@@ -103,6 +119,7 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
+    if (wiped) return;
     const req = e.request;
     if (req.method !== 'GET') return;
     const url = new URL(req.url);

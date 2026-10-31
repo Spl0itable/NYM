@@ -3350,8 +3350,7 @@ async function handleSetupAvatarSelect(event) {
 function removeSetupAvatar() {
     setupAvatarUrl = null;
     if (setupKeypair) {
-        const oldBlob = nym.avatarBlobCache.get(nym.pubkey);
-        if (oldBlob) { URL.revokeObjectURL(oldBlob); nym.avatarBlobCache.delete(nym.pubkey); }
+        nym._avatarCacheDrop(nym.pubkey);
         nym.userAvatars.delete(nym.pubkey);
         localStorage.removeItem('nym_avatar_url');
     }
@@ -4736,7 +4735,7 @@ function initWallpaperUI() {
 }
 
 const NYMCHAT_VERSION = 'v3.75.545';
-const NYMCHAT_BUILD = 839;
+const NYMCHAT_BUILD = 858;
 
 function nymUiArgs(template, args) {
     if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);

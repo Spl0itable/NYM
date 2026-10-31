@@ -3512,6 +3512,78 @@ class _RowFocusTracker {
 Color hoverBarFill(NymColors c) =>
     Color.alphaBlend(c.bgSecondary, c.bg.withValues(alpha: 1));
 
+Color hoverBarLitFill(NymColors c) =>
+    Color.alphaBlend(c.text.withValues(alpha: 0.08), hoverBarFill(c));
+
+bool hoverBarLit(Set<WidgetState> s) =>
+    s.contains(WidgetState.hovered) ||
+    s.contains(WidgetState.pressed) ||
+    (s.contains(WidgetState.focused) && HoverBarFocus.instance.visible);
+
+final class HoverBarFocus extends ChangeNotifier {
+  HoverBarFocus._();
+
+  static final HoverBarFocus instance = HoverBarFocus._();
+
+  FocusManager? _manager;
+  bool _hooked = false;
+  bool _mouse = false;
+
+  bool get visible =>
+      !_mouse &&
+      FocusManager.instance.highlightMode == FocusHighlightMode.traditional;
+
+  @override
+  void addListener(VoidCallback listener) {
+    super.addListener(listener);
+    _hook();
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    if (!hasListeners) _unhook();
+  }
+
+  void _hook() {
+    if (_hooked) return;
+    _hooked = true;
+    final fm = FocusManager.instance;
+    if (!identical(fm, _manager)) {
+      _manager = fm;
+      _mouse = false;
+    }
+    fm.addHighlightModeListener(_onMode);
+    HardwareKeyboard.instance.addHandler(_onKey);
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_onPointer);
+  }
+
+  void _unhook() {
+    if (!_hooked) return;
+    _hooked = false;
+    _manager?.removeHighlightModeListener(_onMode);
+    HardwareKeyboard.instance.removeHandler(_onKey);
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_onPointer);
+  }
+
+  void _onMode(FocusHighlightMode _) => notifyListeners();
+
+  bool _onKey(KeyEvent e) {
+    if (e is KeyDownEvent && _mouse) {
+      _mouse = false;
+      notifyListeners();
+    }
+    return false;
+  }
+
+  void _onPointer(PointerEvent e) {
+    if (e is PointerDownEvent && e.kind == PointerDeviceKind.mouse && !_mouse) {
+      _mouse = true;
+      notifyListeners();
+    }
+  }
+}
+
 class _MsgHoverButtons extends StatelessWidget {
   const _MsgHoverButtons({
     required this.buttons,

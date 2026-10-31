@@ -35,6 +35,7 @@
     }
 
     function iconOnly(el) {
+        if (!(el.textContent || '').replace(/[\s\u200b]+/g, '')) return true;
         var text = (el.innerText != null ? el.innerText : el.textContent || '').replace(/[\s\u200b]+/g, '');
         if (!text) return true;
         if (/^[0-9+·•]+$/.test(text) && el.querySelector('svg, img, .icon, i')) return true;

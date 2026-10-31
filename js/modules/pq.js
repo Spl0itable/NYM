@@ -95,7 +95,7 @@
             try {
                 if (localStorage.getItem('nym_pq_upgrade_seen')) return;
                 localStorage.setItem('nym_pq_upgrade_seen', '1');
-                if (localStorage.getItem('nym_last_online_ts')) {
+                if (localStorage.getItem('nym_last_online_ts') && !this.pqRootRevealPending()) {
                     localStorage.setItem('nym_pq_upgrade_notice', 'pending');
                 }
             } catch (_) { }
@@ -1277,7 +1277,10 @@
             this.dismissPqUpgradeNotice();
             const linkNeeded = this.pqRootLinkNeeded();
             if (linkNeeded) this.dismissPqRootLinkPrompt();
-            else if (revealPending) this.dismissPqRootReveal();
+            else {
+                if (revealPending) this.dismissPqRootReveal();
+                try { localStorage.setItem('nym_pq_upgrade_seen', '1'); } catch (_) { }
+            }
             this._pqNoticeOpen = true;
             const body = linkNeeded
                 ? 'This account already has a post-quantum recovery code, and this '
@@ -1329,6 +1332,11 @@
                 });
             } catch (_) { /* dialog unavailable; the notice is not load-bearing */ }
             finally { this._pqNoticeOpen = false; }
+            if (!this.pqRootRevealPending() || !this.pqHasRoot()) return;
+            const now = this.pqRootCode ? this.pqRootCode() : null;
+            if (code && now === code) { this.dismissPqRootReveal(); return; }
+            this._pqNoticeAfterHold = false;
+            return this.maybeShowPqUpgradeNotice();
         },
 
         _pqComposerBusy() {

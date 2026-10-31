@@ -3,6 +3,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../common/hit_slop.dart';
+
 final chatHeaderExtentProvider = StateProvider<double?>((ref) => null);
 
 final composerRestExtentProvider = StateProvider<double?>((ref) => null);
@@ -51,6 +53,8 @@ const double kSidebarIcon = 20;
 const double kSidebarGap = 8;
 
 const double kSidebarRowMinH = 36;
+
+double sidebarRowMinH() => touchPlatform() ? kMinTouchTarget : kSidebarRowMinH;
 
 const double kSidebarMenuInset = 1;
 

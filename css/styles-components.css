@@ -1982,8 +1982,10 @@ body.light-mode {
     line-height: 1;
 }
 
-.verified-badge:hover {
-    transform: scale(1.15);
+@media (hover: hover) {
+    .verified-badge:hover {
+        transform: scale(1.15);
+    }
 }
 
 .crypto-verified-badge {
@@ -3649,7 +3651,6 @@ body.light-mode .gx-controls {
     background: rgba(255, 255, 255, 0.6);
 }
 
-body.light-mode .gx-ctl:hover,
 body.light-mode .gx-icon-btn:hover {
     background: rgba(0, 0, 0, 0.06);
 }
@@ -5215,6 +5216,32 @@ body.light-mode input.form-range[type="range"] {
     body.a11y-targets .sidebar-footer .mesh-status-row {
         flex: 0 1 auto;
         min-height: 44px;
+    }
+}
+
+@media (pointer: coarse) {
+    .channel-item,
+    .pm-item,
+    .user-item,
+    .ssk-channel,
+    .ssk-pm,
+    .ssk-nym {
+        min-height: 44px;
+    }
+
+    .pm-scan-btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    #groupContextMenu .context-menu-avatar-header > .context-menu-copy-pubkey {
+        box-sizing: border-box;
+        min-height: 44px;
+        justify-content: center;
+    }
+
+    .pubkey-slideout-buttons {
+        row-gap: 20px;
     }
 }
 

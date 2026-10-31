@@ -2338,15 +2338,117 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             messages = this.messages && this.messages.get(channel);
         }
         if (!Array.isArray(messages) || messages.length === 0) return 0;
+        const idx = typeof this._msgIndexOf === 'function' ? this._msgIndexOf(messages) : null;
+        if (!idx) return this._unreadTally(messages, 0, messages.length, lastRead);
+        if (!this._unreadMemo) this._unreadMemo = new WeakMap();
+        const state = this._unreadState(lastRead);
+        const memo = this._unreadMemo.get(messages);
+        const n = messages.length;
+        if (memo && memo.idx === idx && this._unreadSame(memo, state) && Date.now() < memo.until
+            && n >= memo.n && messages[0] === memo.first && messages[memo.n - 1] === memo.last) {
+            let count = memo.count;
+            for (const m of memo.pending) count += this._unreadTally([m], 0, 1, lastRead);
+            count += this._unreadTally(messages, memo.n, n, lastRead);
+            memo.count = count;
+            memo.n = n;
+            memo.last = messages[n - 1];
+            memo.pending.clear();
+            return count;
+        }
+        const count = this._unreadTally(messages, 0, n, lastRead);
+        this._unreadMemo.set(messages, { idx, lastRead, sig: state.sig, refs: state.refs, until: this._unreadMuteUntil(), n, first: messages[0], last: messages[n - 1], pending: new Set(), count });
+        return count;
+    },
+
+    _unreadTally(messages, from, to, lastRead) {
         const filtered = typeof this.isContentHidden === 'function';
+        const held = this._pmPieceHolds;
         let count = 0;
-        for (const m of messages) {
+        for (let i = from; i < to; i++) {
+            const m = messages[i];
             if (!m || m.isOwn || m.slowHeld || m._spamGated) continue;
+            if (held && held.has(m)) continue;
             if ((m.created_at || 0) <= lastRead) continue;
             if (filtered ? this.isContentHidden(m) : (this.blockedUsers && m.pubkey && this.blockedUsers.has(m.pubkey))) continue;
             count++;
         }
         return count;
+    },
+
+    _unreadState(lastRead) {
+        const size = (v) => (v && typeof v.size === 'number' ? v.size : (Array.isArray(v) ? v.length : 0));
+        const gates = typeof this._clientGatesActive === 'function' && this._clientGatesActive() ? 1 : 0;
+        const sig = [lastRead, this.pubkey || '', this.nym || '', this._cfVersion || 0, this._cfEditEpoch || 0, this._cnFilterEpoch || 0,
+            this._unreadEpoch || 0, size(this.blockedUsers), size(this.blockedKeywords), size(this.deletedEventIds), size(this._quiet),
+            size(this.autoMutedPubkeys), size(this.friends), size(this.blockedChannels), size(this.hiddenChannels),
+            this.spamFilterEnabled === false ? 0 : 1, this.spamFilterAggressive === false ? 0 : 1, this.notifyFriendsOnly ? 1 : 0, gates,
+            typeof this.isContentHidden === 'function' ? 1 : 0, typeof window !== 'undefined' && window.NymContentFilter ? 1 : 0].join('|');
+        const refs = [this.blockedUsers, this.blockedKeywords, this.deletedEventIds, this._quiet, this.autoMutedPubkeys, this.friends, this._pmPieceHolds, this.channelLastRead];
+        return { sig, refs };
+    },
+
+    _unreadSame(memo, state) {
+        if (memo.sig !== state.sig) return false;
+        for (let i = 0; i < state.refs.length; i++) if (memo.refs[i] !== state.refs[i]) return false;
+        return true;
+    },
+
+    _unreadMuteUntil() {
+        const muted = this.autoMutedPubkeys;
+        if (!muted || typeof muted.values !== 'function' || !muted.size) return Infinity;
+        let until = Infinity;
+        for (const v of muted.values()) if (typeof v === 'number' && v < until) until = v;
+        return until;
+    },
+
+    _unreadStale() {
+        this._unreadEpoch = (this._unreadEpoch || 0) + 1;
+    },
+
+    _unreadDrop(arr) {
+        if (this._unreadMemo && arr) this._unreadMemo.delete(arr);
+    },
+
+    _unreadNoteAdd(arr, msg, idx, fresh) {
+        const memo = this._unreadMemo ? this._unreadMemo.get(arr) : null;
+        if (!memo) return;
+        if (!idx || !fresh || idx.clash || memo.idx !== idx) { this._unreadMemo.delete(arr); return; }
+        const end = memo.n;
+        if (arr[end - 1] === memo.last && arr[0] === memo.first) return;
+        if (arr[end] === memo.last && (arr[0] === memo.first || (arr[0] === msg && arr[1] === memo.first))) {
+            memo.n = end + 1;
+            memo.first = arr[0];
+            memo.pending.add(msg);
+            return;
+        }
+        this._unreadMemo.delete(arr);
+    },
+
+    _unreadCarry(from, to, dropped) {
+        const memo = this._unreadMemo ? this._unreadMemo.get(from) : null;
+        if (!memo) return;
+        this._unreadMemo.delete(from);
+        if (from === to || !Array.isArray(dropped) || to.length + dropped.length !== from.length || !to.length) return;
+        const end = memo.n;
+        if (from[0] !== memo.first || from[end - 1] !== memo.last || !(Date.now() < memo.until)) return;
+        const lastRead = memo.lastRead;
+        if (!this._unreadSame(memo, this._unreadState(lastRead))) return;
+        let count = memo.count;
+        let gone = 0;
+        for (const i of dropped) {
+            if (!(i >= 0 && i < end)) continue;
+            const m = from[i];
+            if (m === memo.last) return;
+            gone++;
+            if (memo.pending.has(m)) memo.pending.delete(m);
+            else count -= this._unreadTally(from, i, i + 1, lastRead);
+        }
+        const n = end - gone;
+        if (n <= 0 || to[n - 1] !== memo.last) return;
+        memo.count = count;
+        memo.n = n;
+        memo.first = to[0];
+        this._unreadMemo.set(to, memo);
     },
 
     _markChannelRead(channel, ts) {

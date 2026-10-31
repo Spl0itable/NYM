@@ -13,7 +13,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/chat/message_row.dart'
-    show MessageGroup, MessageGroupEntry;
+    show MessageGroup, MessageGroupEntry, hoverBarLitFill;
 import '../../widgets/chat/message_selection.dart';
 import '../../widgets/chat/typing_indicator.dart';
 import '../../widgets/context_menu/interaction_hooks.dart';
@@ -429,7 +429,7 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
     final c = context.nym;
     final light = c.isLight;
     final fill = _hover
-        ? c.primaryA(0.15)
+        ? hoverBarLitFill(c)
         : (light ? const Color(0xD9FFFFFF) : c.glassBg);
     final border =
         _hover ? c.primaryA(0.30) : (light ? c.primaryA(0.20) : c.glassBorder);
@@ -451,7 +451,7 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedScale(
-          scale: _hover ? 1.1 : 1.0,
+          scale: _hover && !MediaQuery.disableAnimationsOf(context) ? 1.1 : 1.0,
           duration: NymMotion.transition,
           curve: NymMotion.curve,
           child: Container(

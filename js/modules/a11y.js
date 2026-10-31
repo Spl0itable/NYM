@@ -104,7 +104,9 @@
         var opener = a && a !== document.body && !modal.contains(a) ? a : lastOutside;
         open.push({ modal: modal, opener: opener });
         setTimeout(function () {
-            if (shown(modal) && !modal.classList.contains('is-sheet')) focusInto(modal);
+            var now = document.activeElement;
+            if (now && now.closest && now.closest(SKIP)) return;
+            if (top() === modal && !modal.classList.contains('is-sheet')) focusInto(modal);
         }, 30);
     }
 

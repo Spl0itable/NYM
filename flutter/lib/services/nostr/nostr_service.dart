@@ -12,6 +12,7 @@ import '../../core/constants/relays.dart';
 import '../../core/crypto/bitchat.dart' as bitchat;
 import '../../core/crypto/crypto_worker.dart';
 import '../../core/crypto/gift_wrap.dart' as giftwrap;
+import '../../core/utils/nym_utils.dart';
 import '../../core/crypto/isolate_verifier.dart';
 import '../../core/crypto/keys.dart' as keys;
 import '../../core/crypto/nym_sync_builder.dart';
@@ -224,6 +225,7 @@ class NostrHandlers {
     this.onEventRetracted,
     this.onShardLost,
     this.onShardReconnected,
+    this.onGlobalEmojiBlocks,
   });
 
   /// Every inbound event, already signature-checked by the pool.
@@ -237,6 +239,8 @@ class NostrHandlers {
   final void Function(int lastLiveAtMs)? onShardLost;
 
   final void Function()? onShardReconnected;
+
+  final void Function(Object? ep, Object? epu)? onGlobalEmojiBlocks;
 }
 
 /// Owns the relay pool and wires it to the crypto and identity layers.
@@ -599,6 +603,7 @@ class NostrService {
         _quiet = next;
         ServerQuiet.keys = next;
         _quietHeld = next.contains(identity.pubkey);
+        _handlers?.onGlobalEmojiBlocks?.call(d['ep'], d['epu']);
       } catch (_) {}
     }
 
@@ -2319,7 +2324,15 @@ class NostrService {
   Future<NostrEvent?> publishProfile(String content) async {
     final sig = signer;
     if (sig == null) return null;
-    final createdAt = max(giftwrap.randomNow(), _lastKind0Ts + 1);
+    var floor = _lastKind0Ts + 1;
+    final renamedTo = _kind0Name(content);
+    if (renamedTo != null &&
+        _presenceStampPk == identity.pubkey &&
+        _presenceStampNym != null &&
+        stripPubkeySuffix(_presenceStampNym!) != renamedTo) {
+      floor = max(floor, _presenceStampAt + 1);
+    }
+    final createdAt = max(giftwrap.randomNow(), floor);
     _lastKind0Ts = createdAt;
     final signed = await sig.sign(
       UnsignedEvent(
@@ -2812,6 +2825,31 @@ class NostrService {
     return signed;
   }
 
+  String? _presenceStampPk;
+  int _presenceStampAt = 0;
+  String? _presenceStampNym;
+
+  static String? _kind0Name(String content) {
+    try {
+      final m = jsonDecode(content);
+      final n = m is Map ? m['name'] : null;
+      return n is String && n.isNotEmpty ? stripPubkeySuffix(n) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  int _presenceStampSec() {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final pk = identity.pubkey;
+    final at = _presenceStampPk == pk && _presenceStampAt >= now
+        ? _presenceStampAt + 1
+        : now;
+    _presenceStampPk = pk;
+    _presenceStampAt = at;
+    return at;
+  }
+
   /// Publishes kind-30078 presence; [mode] decides whether the real [status] or `hidden` goes public.
   Future<NostrEvent?> publishPresence({
     required String status, // 'online' | 'away' | 'hidden'
@@ -2823,7 +2861,8 @@ class NostrService {
   }) async {
     final sig = signer;
     if (sig == null) return null;
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final nowSec = _presenceStampSec();
+    _presenceStampNym = nym;
     final tags = PresencePayload(
       nym: nym,
       status: status,

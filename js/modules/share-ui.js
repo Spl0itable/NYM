@@ -6,6 +6,7 @@
         upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
         composerImage: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
         radar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.75"/><path d="M12 12 L18.36 5.64"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>',
+        qrScan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><rect x="7" y="7" width="3" height="3" rx="0.5"/><rect x="14" y="7" width="3" height="3" rx="0.5"/><rect x="7" y="14" width="3" height="3" rx="0.5"/><path d="M14 14h.01"/><path d="M17 14h.01"/><path d="M17 17h.01"/></svg>',
     });
     const ACTIONS = Object.freeze([
         { id: 'share', order: 10, label: 'Share...', icon: 'shareNodes' },
@@ -13,7 +14,7 @@
         { id: 'tap', order: 30, label: 'Tap to share', icon: 'phone', platforms: ['android'] },
         { id: 'sticker', order: 40, label: 'Write to NFC sticker', icon: 'upload' },
         { id: 'save', order: 50, label: 'Save QR image', icon: 'composerImage' },
-        { id: 'scan', order: 60, label: 'Scan a code', icon: 'radar' },
+        { id: 'scan', order: 60, label: 'Scan a code', icon: 'qrScan' },
         { id: 'app', order: 70, label: 'Share Nymchat app', icon: 'shareNodes' },
     ]);
     const APP_LINK_LABELS = Object.freeze({

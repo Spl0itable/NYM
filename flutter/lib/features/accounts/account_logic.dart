@@ -247,6 +247,8 @@ class AccountLogic {
     'nym_sidebar_section_order',
     'nym_sidebar_section_collapsed',
     'nym_settings_sections_collapsed',
+    'nym_global_emoji_blocks',
+    'nym_global_emoji_block_urls',
   };
 
   static const List<String> devicePrefixes = ['nym_ui_i18n_', 'nym_cmd_i18n_'];

@@ -1864,7 +1864,7 @@ Object.assign(NYM.prototype, {
         if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
         let list = this.pmMessages.get(groupConvKey);
 
-        if (list.some(m => m.id === event.id)) return;
+        if (typeof this._msgListHas === 'function' ? this._msgListHas(list, event.id) : list.some(m => m.id === event.id)) return;
 
         const messageContent = rumor.content;
         const nowSec = Math.floor(Date.now() / 1000);
@@ -1967,11 +1967,13 @@ Object.assign(NYM.prototype, {
         this._recordMsgVerification(nymMsgId, senderVerified);
 
         if (typeof this._gtAbsorbLive === 'function' && this._gtAbsorbLive(msg, list)) return;
-        if (!inviteForKnownGroup) list.push(msg);
-        list.sort((a, b) => {
-            return this._compareMessages(a, b);
-        });
-        if (list.length > this.pmStorageLimit || (blockedMember && this._blockedOverCap(list))) list = this._storeTrim(list, this.pmStorageLimit);
+        if (inviteForKnownGroup) {
+            list.sort((a, b) => this._compareMessages(a, b));
+            if (typeof this._unreadStale === 'function') this._unreadStale();
+        }
+        else if (typeof this._msgListAdd === 'function') this._msgListAdd(list, msg);
+        else { list.push(msg); list.sort((a, b) => this._compareMessages(a, b)); }
+        if (list.length > this.pmStorageLimit || (blockedMember && this._blockedOverCap(list))) list = this._storeTrim(list, this.pmStorageLimit, undefined, true);
         this.pmMessages.set(groupConvKey, list);
         if (typeof this._gtSlowmodeIngest === 'function') this._gtSlowmodeIngest(groupId, list, senderPubkey);
         this.persistPMMessages(groupConvKey);
@@ -2054,10 +2056,14 @@ Object.assign(NYM.prototype, {
                 this._addNotificationToHistory(`${shownGroupName()}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
             }
         };
+        const groupArrivedUnread = () => {
+            const bump = () => this.updateUnreadCount(groupConvKey, msg.created_at);
+            return typeof this._cnArrived === 'function' ? this._cnArrived(groupConvKey, msg, bump) : bump();
+        };
         if (this.inPMMode && this.currentGroup === groupId && document.hidden) {
             this.displayMessage(msg);
             if (!isOwn && !senderBlocked && !gapStale) {
-                this.updateUnreadCount(groupConvKey, msg.created_at);
+                groupArrivedUnread();
                 notifyForGroup();
             }
         } else if (this.inPMMode && this.currentGroup === groupId) {
@@ -2079,7 +2085,7 @@ Object.assign(NYM.prototype, {
             const cvShown = this._cvActive && this._cvListForKey(groupConvKey);
             if (cvShown) this.displayMessage(msg);
             if (!isOwn && !senderBlocked && !gapStale) {
-                if (!(cvShown && this._cvMarkColumnRead(groupConvKey))) this.updateUnreadCount(groupConvKey, msg.created_at);
+                if (!(cvShown && this._cvMarkColumnRead(groupConvKey))) groupArrivedUnread();
                 notifyForGroup();
             }
         }
@@ -3016,11 +3022,9 @@ Object.assign(NYM.prototype, {
         };
 
         const groupList = this.pmMessages.get(groupConvKey);
-        groupList.push(msg);
-        groupList.sort((a, b) => {
-            return this._compareMessages(a, b);
-        });
-        if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, this._storeTrim(groupList, this.pmStorageLimit));
+        if (typeof this._msgListAdd === 'function') this._msgListAdd(groupList, msg);
+        else { groupList.push(msg); groupList.sort((a, b) => this._compareMessages(a, b)); }
+        if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, this._storeTrim(groupList, this.pmStorageLimit, undefined, true));
         this.channelDOMCache.delete(groupConvKey);
         this.persistPMMessages(groupConvKey);
         this.moveGroupToTop(groupId);
@@ -3220,8 +3224,8 @@ Object.assign(NYM.prototype, {
             content: n.content, author: '', pubkey: '', created_at: sec, timestamp: new Date(sec * 1000),
             isPM: true, isGroup: true, groupId, conversationKey: convKey, isOwn: false, isHistorical: !!n.historical
         };
-        list.push(msg);
-        list.sort((a, b) => this._compareMessages(a, b));
+        if (typeof this._msgListAdd === 'function') this._msgListAdd(list, msg);
+        else { list.push(msg); list.sort((a, b) => this._compareMessages(a, b)); }
         this.pmMessages.set(convKey, list);
         this.persistPMMessages(convKey);
         if (!n.quiet && this.inPMMode && this.currentGroup === groupId) this.displayMessage(msg);
@@ -3845,6 +3849,7 @@ Object.assign(NYM.prototype, {
         if (idx === -1) return null;
         const msg = list[idx];
         list.splice(idx, 1);
+        if (this._msgIndex) this._msgIndex.delete(list);
         const grp = this.groupConversations.get(groupId);
         if (grp) {
             if (!Array.isArray(grp.modDeletedIds)) grp.modDeletedIds = [];

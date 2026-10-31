@@ -884,12 +884,18 @@ Map<String, dynamic> addSaved(
 
 Map<String, dynamic> removeSaved(dynamic state, String id, int nowMs) {
   final s = normalizeSaved(state);
-  s['items'] = (s['items'] as List<Map<String, dynamic>>)
-      .where((e) => e['id'] != id)
-      .toList();
+  final items = s['items'] as List<Map<String, dynamic>>;
+  num held = 0;
+  for (final e in items) {
+    final sv = e['sv'];
+    if (e['id'] == id && sv is num && sv > held) held = sv;
+  }
+  s['items'] = items.where((e) => e['id'] != id).toList();
   final removed = s['removed'] as Map<String, num>;
   final cur = removed[id] ?? 0;
-  removed[id] = nowMs > cur ? nowMs : cur;
+  num at = nowMs > cur ? nowMs : cur;
+  if (held > at) at = held;
+  removed[id] = at;
   return _finishSaved(s, nowMs);
 }
 

@@ -1139,14 +1139,11 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final light = c.isLight;
-    // Light hover changes only the fill (CSS specificity); solid-ui pins the fill to `--glass-bg` through hover.
-    final fill = c.solidUi
-        ? c.glassBg
-        : _hover
-            ? (light ? c.primaryA(0.10) : c.primaryA(0.15))
-            : (light ? const Color(0xD9FFFFFF) : c.glassBg);
+    final fill = _hover
+        ? hoverBarLitFill(c)
+        : (light && !c.solidUi ? const Color(0xD9FFFFFF) : c.glassBg);
     final border =
-        light ? c.primaryA(0.20) : (_hover ? c.primaryA(0.30) : c.glassBorder);
+        _hover ? c.primaryA(0.30) : (light ? c.primaryA(0.20) : c.glassBorder);
     final shadow = light
         ? const BoxShadow(
             color: Color(0x26000000),
@@ -1177,7 +1174,7 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedScale(
-          scale: _hover ? 1.1 : 1.0,
+          scale: _hover && !MediaQuery.disableAnimationsOf(context) ? 1.1 : 1.0,
           duration: NymMotion.transition,
           curve: NymMotion.curve,
           child: Container(

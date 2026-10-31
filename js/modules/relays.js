@@ -1750,9 +1750,9 @@ Object.assign(NYM.prototype, {
         // Storage key uses a # prefix for every channel with a g-tag.
         const storageKey = `#${channelKey}`;
         const currentMessages = this.messages.get(storageKey) || [];
-        const shown = typeof this._visibleCount === 'function' ? this._visibleCount(currentMessages) : currentMessages.length;
+        const enough = typeof this._visibleAtLeast === 'function' ? this._visibleAtLeast(currentMessages, 50) : currentMessages.length >= 50;
 
-        if (shown < 50) {
+        if (!enough) {
             this._queueChannelSubscription(channelKey, channelType);
         } else {
             this.channelLoadedFromRelays.add(channelKey);

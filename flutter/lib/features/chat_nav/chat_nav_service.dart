@@ -91,6 +91,8 @@ class ChatNavHooks {
     this.storeRaw,
     this.plainlyVisible,
     this.messageHidden,
+    this.scanEpoch,
+    this.replyVisible,
   });
 
   static bool _never() => false;
@@ -107,6 +109,8 @@ class ChatNavHooks {
   final List<Message> Function(String key)? storeRaw;
   final bool Function(Message m)? plainlyVisible;
   final bool Function(Message m)? messageHidden;
+  final Object? Function()? scanEpoch;
+  final bool Function(Message m, bool rootLocal)? replyVisible;
   final int Function(String key)? lastRead;
   final int Function(String key)? badge;
   final bool Function(Message m)? isMention;
@@ -126,6 +130,182 @@ class ChatNavHooks {
   final void Function()? onChanged;
   final int Function()? now;
   final Random? random;
+}
+
+String _threadKey(Message m) =>
+    (m.isPM || m.isGroup) ? (m.nymMessageId ?? m.id) : m.id;
+
+class _IdEntry {
+  _IdEntry(this.m)
+      : id = m.id,
+        nid = m.nymMessageId,
+        root = m.threadRoot == null ? _threadKey(m) : null,
+        replyTo = m.threadRoot;
+
+  final Message m;
+  final String id;
+  final String? nid;
+  final String? root;
+  final String? replyTo;
+}
+
+class _IdIndex {
+  _IdIndex(this.list) : edits = _chatNavEdits[list] ?? 0 {
+    _chatNavTrims[list] = null;
+    for (final m in list) {
+      _put(m);
+    }
+  }
+
+  static const int _reach = 256;
+
+  final List<Message> list;
+  final List<_IdEntry> seq = [];
+  final Map<String, Message> byId = {};
+  final Map<String, int> roots = {};
+  final Map<String, int> replies = {};
+  final int edits;
+  int orphans = 0;
+  bool clash = false;
+
+  bool hasRoot(String root) => (roots[root] ?? 0) > 0;
+
+  bool hasReplies(String root) => (replies[root] ?? 0) > 0;
+
+  void _key(String k, Message m) {
+    if (k.isEmpty) return;
+    final had = byId[k];
+    if (had != null && !identical(had, m)) clash = true;
+    byId[k] = m;
+  }
+
+  void _put(Message m) {
+    final e = _IdEntry(m);
+    _key(e.id, m);
+    final nid = e.nid;
+    if (nid != null) _key(nid, m);
+    final root = e.root;
+    if (root != null && root.isNotEmpty) roots[root] = (roots[root] ?? 0) + 1;
+    final to = e.replyTo;
+    if (to != null) replies[to] = (replies[to] ?? 0) + 1;
+    seq.add(e);
+  }
+
+  void _count(Map<String, int> map, String k) {
+    final n = (map[k] ?? 0) - 1;
+    if (n > 0) {
+      map[k] = n;
+    } else {
+      map.remove(k);
+    }
+  }
+
+  void _drop(_IdEntry e) {
+    if (identical(byId[e.id], e.m)) byId.remove(e.id);
+    final nid = e.nid;
+    if (nid != null && identical(byId[nid], e.m)) byId.remove(nid);
+    final root = e.root;
+    if (root != null && root.isNotEmpty) _count(roots, root);
+    final to = e.replyTo;
+    if (to != null) _count(replies, to);
+  }
+
+  bool sync(List<Message> raw) {
+    final trimmed = _chatNavTrims[raw];
+    _chatNavTrims[raw] = null;
+    if (!identical(raw, list) || clash) return false;
+    if ((_chatNavEdits[raw] ?? 0) != edits) return false;
+    final n = seq.length;
+    if (n == 0) {
+      if (raw.isEmpty) return true;
+      return false;
+    }
+    final last = seq[n - 1];
+    var p = -1;
+    for (var i = raw.length - 1; i >= 0 && i >= raw.length - _reach; i--) {
+      if (identical(raw[i], last.m)) {
+        p = i;
+        break;
+      }
+    }
+    if (p < 0 || raw[p].id != last.id) return false;
+    final d = n - 1 - p;
+    if (d < 0 || d > _reach) return false;
+    if (trimmed != null && trimmed != d) return false;
+    final gone = <int>[];
+    var i = 0;
+    var j = 0;
+    while (gone.length < d) {
+      if (j >= n || j > _reach) return false;
+      final e = seq[j];
+      if (i <= p && identical(raw[i], e.m)) {
+        if (raw[i].id != e.id) return false;
+        i++;
+      } else {
+        gone.add(j);
+      }
+      j++;
+    }
+    if (i <= p && (!identical(raw[i], seq[j].m) || raw[i].id != seq[j].id)) {
+      return false;
+    }
+    final lost = [for (final k in gone) seq[k]];
+    for (var k = gone.length - 1; k >= 0; k--) {
+      _drop(seq[gone[k]]);
+      seq.removeAt(gone[k]);
+    }
+    for (final e in lost) {
+      final root = e.root;
+      if (root != null && root.isNotEmpty && hasReplies(root) && !hasRoot(root)) {
+        orphans++;
+      }
+    }
+    for (var i = p + 1; i < raw.length; i++) {
+      _put(raw[i]);
+    }
+    return !clash;
+  }
+}
+
+final Expando<int> _chatNavTrims = Expando<int>('chatNavTrims');
+final Expando<int> _chatNavDrops = Expando<int>('chatNavDrops');
+final Expando<int> _chatNavEdits = Expando<int>('chatNavEdits');
+
+void chatNavNoteTrim(List<Message> list, int dropped) {
+  if (dropped <= 0) return;
+  _chatNavTrims[list] = (_chatNavTrims[list] ?? 0) + dropped;
+  _chatNavDrops[list] = (_chatNavDrops[list] ?? 0) + dropped;
+}
+
+void chatNavNoteEdit(List<Message> list) {
+  _chatNavEdits[list] = (_chatNavEdits[list] ?? 0) + 1;
+}
+
+class _ClosedScan {
+  _ClosedScan(this.epoch, this.floor, List<Message> raw, this.value,
+      {this.hit, this.idx})
+      : list = raw,
+        len = raw.length,
+        last = raw.isEmpty ? null : raw.last,
+        lastId = raw.isEmpty ? null : raw.last.id,
+        lastAt = raw.isEmpty ? 0 : raw.last.createdAt,
+        edits = _chatNavEdits[raw] ?? 0,
+        drops = _chatNavDrops[raw] ?? 0,
+        orphans = idx?.orphans ?? 0;
+
+  final Object? epoch;
+  final int floor;
+  final List<Message> list;
+  final int len;
+  final Message? last;
+  final String? lastId;
+  final int lastAt;
+  final bool value;
+  final Message? hit;
+  final _IdIndex? idx;
+  final int edits;
+  final int drops;
+  final int orphans;
 }
 
 String chatNavFill(String s, Map<String, Object?> vars) {
@@ -473,6 +653,16 @@ class ChatNavService {
     return [for (final e in c['ids'] as List) (e as Map)['id'] as String];
   }
 
+  final Map<String, _IdIndex> _idIndexes = {};
+
+  _IdIndex _idIndexOf(String key, List<Message> raw) {
+    final had = _idIndexes[key];
+    if (had != null && had.sync(raw)) return had;
+    final next = _IdIndex(raw);
+    _idIndexes[key] = next;
+    return next;
+  }
+
   Map<String, dynamic> _shownMentions(String key) {
     final s = mentions();
     final hidden = hooks.messageHidden;
@@ -480,11 +670,16 @@ class ChatNavService {
     if (hidden == null || raw == null) return s;
     final ids = _queuedIds(s, key);
     if (ids.isEmpty) return s;
-    final byId = <String, Message>{};
-    for (final m in raw(key)) {
-      byId[m.id] = m;
-      final n = m.nymMessageId;
-      if (n != null && n.isNotEmpty) byId[n] = m;
+    final list = raw(key);
+    final idx = _idIndexOf(key, list);
+    var byId = idx.byId;
+    if (idx.clash) {
+      byId = <String, Message>{};
+      for (final m in list) {
+        byId[m.id] = m;
+        final n = m.nymMessageId;
+        if (n != null && n.isNotEmpty) byId[n] = m;
+      }
     }
     final gone = [
       for (final id in ids)
@@ -493,10 +688,15 @@ class ChatNavService {
     return gone.isEmpty ? s : mentionDrop(s, key, gone);
   }
 
+  final Map<String, _ClosedScan> _closedScans = {};
+  Message? _scanHit;
+
   bool hasUnreadMention(String key, {List<String> aliases = const []}) {
     if (mentionCountFor(key) > 0) return true;
-    if (_entries.containsKey(key)) return false;
-    if (hooks.isOpen?.call(key) ?? false) return false;
+    if (_entries.containsKey(key) || (hooks.isOpen?.call(key) ?? false)) {
+      _closedScans.remove(key);
+      return false;
+    }
     var unread = hooks.badge?.call(key) ?? 0;
     for (final a in aliases) {
       final n = hooks.badge?.call(a) ?? 0;
@@ -504,15 +704,90 @@ class ChatNavService {
     }
     if (unread <= 0) return false;
     final floor = hooks.lastRead?.call(key) ?? 0;
+    final epoch = hooks.scanEpoch?.call();
+    final raw = epoch == null ? null : hooks.storeRaw?.call(key);
+    if (raw != null) {
+      final hit = _closedScanStep(key, raw, floor, epoch);
+      if (hit != null) return hit;
+    }
+    _scanHit = null;
+    final (value, keep) = _closedFullScan(key, floor);
+    if (raw != null) {
+      if (keep) {
+        _closedScans[key] = _ClosedScan(epoch, floor, raw, value,
+            hit: value ? _scanHit : null, idx: _idIndexOf(key, raw));
+      } else {
+        _closedScans.remove(key);
+      }
+    }
+    return value;
+  }
+
+  bool? _closedScanStep(String key, List<Message> raw, int floor, Object? epoch) {
+    final b = _closedScans[key];
+    if (b == null || b.epoch != epoch || b.floor != floor) return null;
+    if (!identical(b.list, raw) || (_chatNavEdits[raw] ?? 0) != b.edits) {
+      return null;
+    }
+    final dropped = (_chatNavDrops[raw] ?? 0) - b.drops;
+    final p = b.len - dropped;
+    if (dropped < 0 || p < 0 || raw.length < p) return null;
+    if (b.len > 0) {
+      if (p == 0) return null;
+      final tail = raw[p - 1];
+      if (!identical(tail, b.last) || tail.id != b.lastId) return null;
+    }
+    if (raw.length == p && dropped == 0) return b.value;
+    var value = b.value;
+    var hit = b.hit;
+    final idx = hooks.replyVisible == null && dropped == 0
+        ? null
+        : _idIndexOf(key, raw);
+    if (dropped > 0) {
+      if (idx == null || idx.clash || !identical(idx, b.idx)) return null;
+      if (idx.orphans != b.orphans) return null;
+      if (value && (hit == null || !identical(idx.byId[hit.id], hit))) {
+        return null;
+      }
+    }
+    if (idx != null) {
+      for (var i = p; i < raw.length; i++) {
+        final m = raw[i];
+        if (m.threadRoot == null && idx.hasReplies(_threadKey(m))) return null;
+      }
+    }
+    if (!value) {
+      final plain = hooks.plainlyVisible;
+      if (plain == null) return null;
+      var at = b.lastAt;
+      for (var i = p; i < raw.length; i++) {
+        final m = raw[i];
+        if (m.createdAt < at) return null;
+        at = m.createdAt;
+        if (m.createdAt <= floor || !_isMention(m)) continue;
+        final shown = plain(m) ? true : _replyShown(idx, m);
+        if (shown == null) return null;
+        if (!shown) continue;
+        value = true;
+        hit = m;
+        break;
+      }
+    }
+    _closedScans[key] = _ClosedScan(epoch, floor, raw, value,
+        hit: value ? hit : null, idx: idx ?? b.idx);
+    return value;
+  }
+
+  (bool, bool) _closedFullScan(String key, int floor) {
     final fast = _rawMentionScan(key, floor);
-    if (fast != null) return fast;
+    if (fast != null) return (fast, true);
     final list = _store(key);
     for (var i = list.length - 1; i >= 0; i--) {
       final m = list[i];
       if (m.createdAt <= floor) break;
-      if (_isMention(m)) return true;
+      if (_isMention(m)) return (true, false);
     }
-    return false;
+    return (false, true);
   }
 
   bool? _rawMentionScan(String key, int floor) {
@@ -526,9 +801,28 @@ class ChatNavService {
         if (plain(m)) return false;
         return null;
       }
-      if (_isMention(m)) return plain(m) ? true : null;
+      if (_isMention(m)) {
+        final shown = plain(m) ? true : _replyShown(_replyIndex(key, list), m);
+        if (shown == null) return null;
+        if (shown) {
+          _scanHit = m;
+          return true;
+        }
+      }
     }
     return false;
+  }
+
+  _IdIndex? _replyIndex(String key, List<Message> raw) =>
+      hooks.replyVisible == null ? null : _idIndexOf(key, raw);
+
+  bool? _replyShown(_IdIndex? idx, Message m) {
+    final reply = hooks.replyVisible;
+    final root = m.threadRoot;
+    if (idx == null || reply == null || root == null || m.expiresAt != null) {
+      return null;
+    }
+    return reply(m, idx.hasRoot(root));
   }
 
   void noteLive(String key, Message m, {required bool away}) {

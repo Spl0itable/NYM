@@ -16,6 +16,7 @@ import '../../services/api/api_client.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../../widgets/chat/message_row.dart' show hoverBarFill;
 import '../../widgets/nym_icons.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../channels/channel_share.dart';
@@ -1900,45 +1901,68 @@ class _ModalCloseButton extends StatefulWidget {
 
 class _ModalCloseButtonState extends State<_ModalCloseButton> {
   bool _hovered = false;
+  bool _pressed = false;
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
     final nym = widget.nym;
+    final lit = _hovered || _pressed || _focused;
     return Semantics(
       button: true,
       label: tr('Close'),
       excludeSemantics: true,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: GestureDetector(
-          key: const ValueKey('geo-modal-close'),
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onTap,
-          child: SizedBox(
-            width: kGeoTouch,
-            height: kGeoTouch,
-            child: Center(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                curve: const Cubic(0.4, 0, 0.2, 1),
-                width: 32,
-                height: 32,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _hovered
-                      ? const Color(0x1FFF4444)
-                      : const Color(0x0DFFFFFF),
-                  border: Border.all(
-                    color: _hovered ? const Color(0x4DFF4444) : nym.glassBorder,
+      child: FocusableActionDetector(
+        onShowFocusHighlight: (v) => setState(() => _focused = v),
+        actions: <Type, Action<Intent>>{
+          ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) {
+            widget.onTap();
+            return null;
+          }),
+          ButtonActivateIntent:
+              CallbackAction<ButtonActivateIntent>(onInvoke: (_) {
+            widget.onTap();
+            return null;
+          }),
+        },
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hovered = true),
+          onExit: (_) => setState(() => _hovered = false),
+          child: Listener(
+            onPointerDown: (_) => setState(() => _pressed = true),
+            onPointerUp: (_) => setState(() => _pressed = false),
+            onPointerCancel: (_) => setState(() => _pressed = false),
+            child: GestureDetector(
+              key: const ValueKey('geo-modal-close'),
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onTap,
+              child: SizedBox(
+                width: kGeoTouch,
+                height: kGeoTouch,
+                child: Center(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    curve: const Cubic(0.4, 0, 0.2, 1),
+                    width: 32,
+                    height: 32,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: lit
+                          ? Color.alphaBlend(
+                              const Color(0x1FFF4444), hoverBarFill(nym))
+                          : const Color(0x0DFFFFFF),
+                      border: Border.all(
+                        color: lit ? const Color(0x4DFF4444) : nym.glassBorder,
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.close,
+                      size: 18,
+                      color: lit ? nym.danger : nym.textDim,
+                    ),
                   ),
-                ),
-                child: Icon(
-                  Icons.close,
-                  size: 18,
-                  color: _hovered ? nym.danger : nym.textDim,
                 ),
               ),
             ),

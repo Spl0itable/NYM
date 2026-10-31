@@ -4,6 +4,7 @@ import { isNymchatClient } from './_client.js';
 import { ipv6Blocked } from './_shared.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
 import { reviewSpamReport, spamEngine, frameBadgeRefused } from './_spam.js';
+import { verifySignedEvent } from './relay-pool.js';
 
 const APP_RELAY = 'wss://relay.nymchat.app';
 
@@ -141,7 +142,7 @@ export async function onRequest(context) {
   upstream.addEventListener('message', (event) => {
     try {
       if (typeof event.data === 'string' && event.data.startsWith('["EVENT"') && frameHit(gate, event.data)) return;
-      if (frameBadgeRefused(env, spam, event.data)) return;
+      if (frameBadgeRefused(env, spam, event.data, verifySignedEvent)) return;
       if (server.readyState === 1) {
         server.send(event.data);
       }

@@ -543,8 +543,9 @@
 
     function removeSaved(state, id, nowMs) {
         const s = normalizeSaved(state);
+        const held = s.items.reduce((m, e) => (e.id === id && e.sv > m ? e.sv : m), 0);
         s.items = s.items.filter((e) => e.id !== id);
-        s.removed[id] = Math.max(Number(nowMs) || 0, s.removed[id] || 0);
+        s.removed[id] = Math.max(Number(nowMs) || 0, s.removed[id] || 0, held);
         return finishSaved(s, nowMs);
     }
 

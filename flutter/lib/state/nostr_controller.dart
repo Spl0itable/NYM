@@ -995,6 +995,7 @@ class NostrController {
           onEventRetracted: _onEventRetracted,
           onShardLost: _onShardLost,
           onShardReconnected: _onShardReconnected,
+          onGlobalEmojiBlocks: _onGlobalEmojiBlocks,
         ),
         channelMode: !_ref.read(settingsProvider).groupChatPMOnlyMode,
         vouchAuthors: bootState.nymchatPubkeys,
@@ -3694,6 +3695,7 @@ class NostrController {
           stampLastSeen: activeMs > 0,
           avatarUrl: avatar,
           hasAvatarTag: avatar != null,
+          nameTs: e.createdAt,
         );
 
     // Resolve the user's D1 profile so their avatar shows without a message; guarded on picture.
@@ -3967,10 +3969,12 @@ class NostrController {
             isVerifiedBot(sender ?? ''))) {
       return;
     }
+    _standaloneCheckedWrap(u.wrapId);
     if (_standaloneNymbotWrap(u, self)) {
       _dropStandaloneNymbotThread(sender!);
       return;
     }
+    _settleStandaloneSender(u, self);
     if (sender != null && sender.isNotEmpty && sender != self) {
       if (u.isBitchat) {
         // With its timestamp, so older evidence can't win against the peer's announcement.
@@ -7892,9 +7896,9 @@ class NostrController {
     if (held == null || !_sameBytes(held, root)) {
       if (!await _persistPqRoot(root)) return;
     }
+    if (existing == null) await _armPqRootBackupNotice();
     // Best-effort; publishRecord recovers a failure.
     await sync.pqRootRecordSet(PqRootRecord.forRoot(root));
-    if (existing == null) await _armPqRootBackupNotice();
     _pushPqKeysToPeers();
     await publishPqAnnouncement(force: true);
   }
@@ -14458,6 +14462,27 @@ class NostrController {
 
   List<String> standaloneSweepCandidatesForTest() => _standaloneSweepCandidates();
 
+  final Set<String> _standaloneCheckedWraps = <String>{};
+  final Map<String, Set<String>> _standaloneSettled = <String, Set<String>>{};
+
+  void _standaloneCheckedWrap(String id) {
+    if (id.isEmpty) return;
+    _standaloneCheckedWraps.add(id);
+    while (_standaloneCheckedWraps.length > 100000) {
+      _standaloneCheckedWraps.remove(_standaloneCheckedWraps.first);
+    }
+  }
+
+  void _settleStandaloneSender(GiftWrapUnwrapped u, String self) {
+    if (!u.senderVerified || (u.rumorKind != 14 && u.rumorKind != 15)) return;
+    final sender = u.rumor['pubkey'];
+    if (sender is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(sender)) return;
+    final me = self.isNotEmpty ? self : _ref.read(appStateProvider).selfPubkey;
+    if (me.isEmpty) return;
+    (_standaloneSettled[me] ??= <String>{}).add(sender);
+    _standaloneSweepLeft?.remove(sender);
+  }
+
   List<String> _standaloneSweepCandidates() {
     final st = _ref.read(appStateProvider);
     final self = _service?.selfPubkey ?? st.selfPubkey;
@@ -14472,8 +14497,11 @@ class NostrController {
         for (final m in msgs) (own: m.isOwn, createdAt: m.createdAt),
       ]));
     });
+    final settled = _standaloneSettled[self] ?? const <String>{};
     return standaloneSweepCandidates(threads,
-        self: self, botPubkey: standaloneBotPubkey);
+            self: self, botPubkey: standaloneBotPubkey)
+        .where((p) => !settled.contains(p))
+        .toList();
   }
 
   bool _standaloneSweeping = false;
@@ -14512,16 +14540,19 @@ class NostrController {
         for (final w in wraps) {
           final id = w['id'];
           if (id is! String || !seen.add(id)) continue;
+          if (_standaloneCheckedWraps.contains(id)) continue;
           GiftWrapUnwrapped? u;
           try {
             u = await probe(w);
           } catch (_) {
             u = null;
           }
-          if (u != null &&
-              _standaloneNymbotWrap(u, pk) &&
-              _dropStandaloneNymbotThread(u.rumor['pubkey'] as String)) {
-            dropped++;
+          if (u != null && _standaloneNymbotWrap(u, pk)) {
+            if (_dropStandaloneNymbotThread(u.rumor['pubkey'] as String)) {
+              dropped++;
+            }
+          } else if (u != null) {
+            _settleStandaloneSender(u, pk);
           }
           if (left.isEmpty) {
             await kv.setString(flag, '1');
@@ -16897,6 +16928,12 @@ class NostrController {
       _emitSystemMessage(tr('Failed to submit report'));
       return false;
     }
+  }
+
+  void _onGlobalEmojiBlocks(Object? ep, Object? epu) {
+    try {
+      _ref.read(liveCustomEmojiProvider.notifier).applyGlobalBlocks(ep, epu);
+    } catch (_) {}
   }
 
   Future<bool> submitEmojiPackReport({

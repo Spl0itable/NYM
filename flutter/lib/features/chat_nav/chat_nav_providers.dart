@@ -65,7 +65,19 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
       storeRaw: (key) =>
           ref.read(appStateProvider).messages[key] ?? const <Message>[],
       plainlyVisible: (m) => plainlyVisible(ref.read(appStateProvider), m),
+      replyVisible: (m, rootLocal) =>
+          replyVisibleAlone(ref.read(appStateProvider), m, rootLocal),
       messageHidden: (m) => ref.read(appStateProvider).isMessageFiltered(m),
+      scanEpoch: () {
+        final s = ref.read(appStateProvider);
+        return (
+          s.globalRev,
+          s.selfPubkey,
+          s.selfNym,
+          appThreadsEnabled,
+          DateTime.now().millisecondsSinceEpoch ~/ 60000,
+        );
+      },
       lastRead: (key) =>
           ref.read(appStateProvider.notifier).channelLastRead[key] ?? 0,
       badge: (key) {

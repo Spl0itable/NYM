@@ -89,6 +89,20 @@ Object.assign(NYM.prototype, {
         return (a._seq || 0) - (b._seq || 0);
     },
 
+    _rowTimeFormat(kind, at) {
+        const h12 = this.settings.timeFormat === '12hr';
+        const key = kind + (h12 ? ':12:' : ':24:') + (at && typeof at.getTimezoneOffset === 'function' ? at.getTimezoneOffset() : new Date().getTimezoneOffset());
+        if (!this._rowTimeFormats) this._rowTimeFormats = new Map();
+        let f = this._rowTimeFormats.get(key);
+        if (!f) {
+            f = new Intl.DateTimeFormat('en-US', kind === 'full'
+                ? { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: h12 }
+                : { hour: '2-digit', minute: '2-digit', hour12: h12 });
+            this._rowTimeFormats.set(key, f);
+        }
+        return f;
+    },
+
     _orderAt(m) {
         if (m && Number.isFinite(m._anchorAt)) return m._anchorAt;
         return (m && m.created_at) || 0;
@@ -111,8 +125,117 @@ Object.assign(NYM.prototype, {
             if (this._compareMessages(arr[mid], msg) <= 0) lo = mid + 1;
             else hi = mid;
         }
+        const idx = this._msgIndex ? this._msgIndex.get(arr) : null;
+        const fresh = !!idx && !idx.clash && this._msgIndexFresh(idx, arr);
         arr.splice(lo, 0, msg);
+        this._msgIndexAdded(idx, fresh, arr, msg);
         return lo;
+    },
+
+    _msgListAdd(arr, msg) {
+        const idx = this._msgIndex ? this._msgIndex.get(arr) : null;
+        const fresh = !!idx && !idx.clash && this._msgIndexFresh(idx, arr);
+        arr.push(msg);
+        arr.sort((a, b) => this._compareMessages(a, b));
+        this._msgIndexAdded(idx, fresh, arr, msg);
+    },
+
+    _msgIndexAdded(idx, fresh, arr, msg) {
+        if (typeof this._unreadNoteAdd === 'function') this._unreadNoteAdd(arr, msg, idx, fresh);
+        this._trimNoteAdd(arr, msg);
+        if (!idx) return;
+        if (fresh) {
+            this._msgIndexPut(idx, msg);
+            this._msgIndexMark(idx, arr);
+        }
+        if (!fresh || idx.clash) this._msgIndex.delete(arr);
+    },
+
+    _msgIndexFresh(idx, arr) {
+        const n = arr.length;
+        return idx.n === n && idx.first === arr[0] && idx.last === arr[n - 1];
+    },
+
+    _msgIndexMark(idx, arr) {
+        idx.n = arr.length;
+        idx.first = arr[0];
+        idx.last = arr[arr.length - 1];
+    },
+
+    _msgIndexKey(idx, k, m) {
+        if (!k) return;
+        const had = idx.map.get(k);
+        if (had && had !== m) idx.clash = true;
+        idx.map.set(k, m);
+    },
+
+    _msgIndexPut(idx, m) {
+        if (!m) return;
+        this._msgIndexKey(idx, m.id, m);
+        this._msgIndexKey(idx, m.nymMessageId, m);
+        const root = m.threadRoot;
+        if (root && idx.replies) idx.replies.set(root, (idx.replies.get(root) || 0) + 1);
+    },
+
+    _msgIndexRekey(arr, m) {
+        const idx = this._msgIndex ? this._msgIndex.get(arr) : null;
+        if (typeof this._unreadDrop === 'function') this._unreadDrop(arr);
+        if (!idx || !m) return;
+        if (!idx.clash && this._msgIndexFresh(idx, arr)) this._msgIndexKey(idx, m.nymMessageId, m);
+        else this._msgIndex.delete(arr);
+    },
+
+    _msgIndexOf(arr) {
+        if (!Array.isArray(arr)) return null;
+        if (!this._msgIndex) this._msgIndex = new WeakMap();
+        const had = this._msgIndex.get(arr);
+        if (had && this._msgIndexFresh(had, arr)) return had;
+        const idx = { n: 0, first: undefined, last: undefined, map: new Map(), replies: new Map(), clash: false };
+        for (const m of arr) this._msgIndexPut(idx, m);
+        this._msgIndexMark(idx, arr);
+        this._msgIndex.set(arr, idx);
+        return idx;
+    },
+
+    _msgIndexCarry(from, to, dropped) {
+        if (!this._msgIndex || from === to) return;
+        const idx = this._msgIndex.get(from);
+        this._msgIndex.delete(from);
+        if (!idx || idx.clash || !this._msgIndexFresh(idx, from)) return;
+        if (!Array.isArray(dropped) || to.length + dropped.length !== from.length) return;
+        for (const i of dropped) {
+            const m = from[i];
+            if (!m) continue;
+            if (m.id && idx.map.get(m.id) === m) idx.map.delete(m.id);
+            if (m.nymMessageId && idx.map.get(m.nymMessageId) === m) idx.map.delete(m.nymMessageId);
+            const root = m.threadRoot;
+            if (root && idx.replies) {
+                const c = (idx.replies.get(root) || 0) - 1;
+                if (c > 0) idx.replies.set(root, c);
+                else idx.replies.delete(root);
+            }
+        }
+        this._msgIndexMark(idx, to);
+        this._msgIndex.set(to, idx);
+    },
+
+    _msgListHas(arr, id) {
+        const idx = id ? this._msgIndexOf(arr) : null;
+        if (!idx || idx.clash) return Array.isArray(arr) && arr.some(m => m.id === id);
+        const m = idx.map.get(id);
+        return !!m && m.id === id;
+    },
+
+    _hasLocalThreadRoot(arr, id, byNymId) {
+        const idx = this._msgIndexOf(arr);
+        if (!idx || !id) return false;
+        const keyOf = (m) => (byNymId ? (m.nymMessageId || m.id) : m.id);
+        if (idx.clash) {
+            for (const m of arr) if (m && !m.threadRoot && keyOf(m) === id) return true;
+            return false;
+        }
+        const m = idx.map.get(id);
+        return !!m && !m.threadRoot && keyOf(m) === id;
     },
 
     hasBlockedKeyword(text, nickname, pubkey) {
@@ -166,24 +289,167 @@ Object.assign(NYM.prototype, {
         return typeof this.generateAvatarSvg === 'function' ? this.generateAvatarSvg(pubkey) : '';
     },
 
-    _storeTrim(list, limit, keyOf) {
+    _storeTrim(list, limit, keyOf, carry) {
         if (!Array.isArray(list)) return list;
         const max = Number(limit) || 0;
         const F = window.NymContentFilter;
         let kept;
+        let dropped;
+        let general = false;
         if (!F || typeof F.storeOverflow !== 'function') {
             if (!(max > 0) || list.length <= max) return list;
             kept = list.slice(-max);
+            dropped = Array.from({ length: list.length - kept.length }, (_, i) => i);
+        } else if (this._noBlockedUsers()) {
+            if (list.length <= max) return list;
+            const cut = list.length - max;
+            kept = list.slice(cut);
+            dropped = Array.from({ length: cut }, (_, i) => i);
         } else {
+            const quick = carry ? this._trimBlockedQuick(list, max, F) : null;
+            if (quick && quick.same) return list;
+            if (quick) {
+                let k2 = list.slice(0, quick.at).concat(list.slice(quick.at + 1));
+                let d2 = [quick.at];
+                if (typeof keyOf === 'function' && typeof this._withPinnedThreadRoots === 'function') {
+                    const pin = this._trimQuickPin(list, quick.at, keyOf);
+                    if (pin === null) {
+                        const t = k2;
+                        k2 = this._withPinnedThreadRoots(list, k2, keyOf);
+                        if (k2 !== t) d2 = [];
+                    } else if (pin) {
+                        k2 = [list[quick.at], ...k2];
+                        d2 = [];
+                    }
+                }
+                if (typeof this._unreadCarry === 'function') this._unreadCarry(list, k2, d2);
+                this._msgIndexCarry(list, k2, d2);
+                if (d2.length) this._trimMemoSet(k2, max, F, quick.at, max);
+                return k2;
+            }
             const drop = F.storeOverflow(this._cfCtx(), list.map((m) => ({ pubkey: m ? m.pubkey : '', own: !!(m && m.isOwn) })), max, F.BLOCKED_KEEP);
-            if (!drop.length) return list;
+            if (!drop.length) {
+                if (carry) this._trimMemoSet(list, max, F, 0);
+                return list;
+            }
+            general = true;
             const gone = new Set(drop);
             kept = list.filter((_, i) => !gone.has(i));
+            dropped = [...gone];
         }
         if (typeof keyOf === 'function' && typeof this._withPinnedThreadRoots === 'function') {
-            kept = this._withPinnedThreadRoots(list, kept, keyOf);
+            const trimmed = kept;
+            const fast = carry && this._prefixPinnedRoots(list, kept, keyOf);
+            kept = fast || this._withPinnedThreadRoots(list, kept, keyOf);
+            if (kept !== trimmed) {
+                general = false;
+                const back = new Set(kept.slice(0, kept.length - trimmed.length));
+                dropped = dropped.filter((i) => !back.has(list[i]));
+            }
+        }
+        if (carry) {
+            if (typeof this._unreadCarry === 'function') this._unreadCarry(list, kept, dropped);
+            this._msgIndexCarry(list, kept, dropped);
+            if (general) this._trimMemoSet(kept, max, F, 0);
         }
         return kept;
+    },
+
+    _trimSig() {
+        const b = this.blockedUsers;
+        return (this.pubkey || '') + '|' + (b && typeof b.size === 'number' ? b.size : (Array.isArray(b) ? b.length : 0)) + '|' + (this._cnFilterEpoch || 0) + '|' + (this._cfVersion || 0);
+    },
+
+    _trimIsBlocked(m, ctx, F) {
+        const pk = m && typeof m.pubkey === 'string' ? m.pubkey : '';
+        return !!pk && !(m && m.isOwn) && !(this.pubkey && pk === this.pubkey) && F.userBlocked(ctx, pk);
+    },
+
+    _trimMemoSet(arr, max, F, from, shown) {
+        if (!this._trimMemo) this._trimMemo = new WeakMap();
+        const idx = this._msgIndex ? this._msgIndex.get(arr) : null;
+        if (!idx || idx.clash || !this._msgIndexFresh(idx, arr)) { this._trimMemo.delete(arr); return; }
+        const ctx = this._cfCtx();
+        let at = from;
+        while (at < arr.length && this._trimIsBlocked(arr[at], ctx, F)) at++;
+        let count = shown;
+        if (count === undefined) {
+            count = 0;
+            for (let i = at; i < arr.length; i++) if (!this._trimIsBlocked(arr[i], ctx, F)) count++;
+        }
+        this._trimMemo.set(arr, { idx, max, sig: this._trimSig(), refs: this.blockedUsers, n: arr.length, at, oldest: arr[at] || null, shown: count, added: null, multi: false });
+    },
+
+    _trimNoteAdd(arr, msg) {
+        const memo = this._trimMemo ? this._trimMemo.get(arr) : null;
+        if (!memo) return;
+        if (memo.added) memo.multi = true;
+        else memo.added = msg;
+    },
+
+    _trimBlockedQuick(list, max, F) {
+        const memo = this._trimMemo ? this._trimMemo.get(list) : null;
+        if (!memo) return null;
+        this._trimMemo.delete(list);
+        const idx = this._msgIndex ? this._msgIndex.get(list) : null;
+        if (!idx || idx !== memo.idx || idx.clash || !this._msgIndexFresh(idx, list) || memo.max !== max || memo.multi || !memo.added) return null;
+        if (memo.sig !== this._trimSig() || memo.refs !== this.blockedUsers || list.length !== memo.n + 1 || !memo.oldest) return null;
+        const ctx = this._cfCtx();
+        if (this._trimIsBlocked(memo.added, ctx, F) || list[memo.at] !== memo.oldest) return null;
+        const shown = memo.shown + 1;
+        if (shown <= max) {
+            this._trimMemo.set(list, Object.assign(memo, { n: list.length, shown, added: null }));
+            return { same: true };
+        }
+        return { at: memo.at };
+    },
+
+    _trimQuickPin(list, at, keyOf) {
+        const idx = this._msgIndex ? this._msgIndex.get(list) : null;
+        if (!idx || idx.clash || !idx.replies || !this._msgIndexFresh(idx, list)) return null;
+        const d = list[at];
+        const k = d ? keyOf(d) : '';
+        if (!k) return null;
+        const replies = (idx.replies.get(k) || 0) - (d.threadRoot === k ? 1 : 0);
+        if (replies <= 0) return false;
+        const c = idx.map.get(k);
+        if (c && c !== d && keyOf(c) === k) return false;
+        return c === d || !c ? true : null;
+    },
+
+    _noBlockedUsers() {
+        const b = this.blockedUsers;
+        return !b || (b instanceof Set ? b.size === 0 : (Array.isArray(b) && b.length === 0));
+    },
+
+    _prefixPinnedRoots(list, kept, keyOf) {
+        const cut = list.length - kept.length;
+        if (cut <= 0 || kept[0] !== list[cut] || kept[kept.length - 1] !== list[list.length - 1]) return null;
+        const idx = this._msgIndex ? this._msgIndex.get(list) : null;
+        if (!idx || idx.clash || !idx.replies || !this._msgIndexFresh(idx, list)) return null;
+        const gone = new Set();
+        const lost = new Map();
+        for (let i = 0; i < cut; i++) {
+            const m = list[i];
+            if (!m) continue;
+            gone.add(m);
+            const root = m.threadRoot;
+            if (root) lost.set(root, (lost.get(root) || 0) + 1);
+        }
+        const pinned = [];
+        const seen = new Set();
+        for (let i = 0; i < cut; i++) {
+            const m = list[i];
+            if (!m) continue;
+            const k = keyOf(m);
+            if (!k || seen.has(k)) continue;
+            seen.add(k);
+            if ((idx.replies.get(k) || 0) - (lost.get(k) || 0) <= 0) continue;
+            const c = idx.map.get(k);
+            if (c && !gone.has(c) && keyOf(c) === k) continue;
+            pinned.push(m);
+        }
+        return pinned.length ? [...pinned, ...kept] : kept;
     },
 
     _cfDeleted(m) {
@@ -355,6 +621,19 @@ Object.assign(NYM.prototype, {
         return n;
     },
 
+    _visibleAtLeast(list, n) {
+        if (!Array.isArray(list)) return !(n > 0);
+        const F = window.NymContentFilter;
+        if (!F || list.length < n) return list.length >= n;
+        const ctx = this._cfCtx();
+        let k = 0;
+        for (let i = list.length - 1; i >= 0 && k < n; i--) {
+            const m = list[i];
+            if (m && !F.hidden(ctx, this._cfView(m), m)) k++;
+        }
+        return k >= n;
+    },
+
     _blockedOverCap(list) {
         const F = window.NymContentFilter;
         const cap = F && F.BLOCKED_KEEP ? F.BLOCKED_KEEP : 200;
@@ -494,6 +773,7 @@ Object.assign(NYM.prototype, {
         if (!isPM && typeof this._claimChannelCopy === 'function') this._claimChannelCopy(signedEvent);
         const oldCreated = msg.created_at || 0;
         msg.id = signedEvent.id;
+        if (this._msgIndex) this._msgIndex.delete(arr);
         msg.created_at = signedEvent.created_at;
         msg.timestamp = new Date(signedEvent.created_at * 1000);
         delete msg._optimistic;
@@ -950,6 +1230,7 @@ Object.assign(NYM.prototype, {
                 }
             }
             if (!hadGated) return;
+            if (typeof this._unreadStale === 'function') this._unreadStale();
             if (maxTime > (this.channelLastActivity.get(key) || 0)) {
                 this.channelLastActivity.set(key, maxTime);
             }
@@ -1130,7 +1411,7 @@ Object.assign(NYM.prototype, {
                 this.messages.set(storageKey, []);
             }
 
-            const exists = this.messages.get(storageKey).some(m => m.id === message.id);
+            const exists = this._msgListHas(this.messages.get(storageKey), message.id);
             if (!exists) {
                 const msgTime = (message.created_at || 0) * 1000;
                 const prevActivity = this.channelLastActivity.get(storageKey) || 0;
@@ -1150,7 +1431,7 @@ Object.assign(NYM.prototype, {
                 const messages = this.messages.get(storageKey);
                 const blockedArrival = !message.isOwn && this.blockedUsers && this.blockedUsers.has(message.pubkey);
                 if (messages && (messages.length > this.channelMessageLimit || (blockedArrival && this._blockedOverCap(messages)))) {
-                    this.messages.set(storageKey, this._storeTrim(messages, this.channelMessageLimit, m => m.id));
+                    this.messages.set(storageKey, this._storeTrim(messages, this.channelMessageLimit, m => m.id, true));
                 }
 
                 if (typeof this._maybeRefreshZapNotif === 'function') {
@@ -1204,7 +1485,7 @@ Object.assign(NYM.prototype, {
                 }
 
                 // Public read receipts (kind 24421) only for messages the user can actually see.
-                const canBeSeen = !document.hidden && !this.userScrolledUp && !this._bulkContainer;
+                const canBeSeen = !document.hidden && !this.userScrolledUp && (!this._bulkContainer || this._bulkFill);
                 if (canBeSeen && !message.isOwn && !message.isHistorical && message.geohash &&
                     message.id && /^[0-9a-f]{64}$/i.test(message.id) && this._channelReceiptOk(message) &&
                     typeof this.sendChannelReadReceipt === 'function') {
@@ -1277,11 +1558,7 @@ Object.assign(NYM.prototype, {
             ? message.timestamp : new Date(_clampedMs);
 
         const time = this.settings.showTimestamps ?
-            displayTimestamp.toLocaleTimeString('en-US', {
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: this.settings.timeFormat === '12hr'
-            }) : '';
+            this._rowTimeFormat('time', displayTimestamp).format(displayTimestamp) : '';
 
         const userShopItems = this.getUserShopItems(message.pubkey);
         const flairHtml = this.getFlairForUser(message.pubkey);
@@ -1477,15 +1754,7 @@ Object.assign(NYM.prototype, {
             const escapedAuthorBase = this.escapeHtml(baseNym);
             const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
 
-            const fullTimestamp = displayTimestamp.toLocaleString('en-US', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: this.settings.timeFormat === '12hr'
-            });
+            const fullTimestamp = this._rowTimeFormat('full', displayTimestamp).format(displayTimestamp);
 
             let deliveryCheckmark = '';
             if (message.isOwn && !message.isPM && message.geohash &&
@@ -1589,7 +1858,7 @@ Object.assign(NYM.prototype, {
             const emojiOnlyClass = !message.isFileOffer &&
                 (this.isEmojiOnly(message.content) || this.isCustomEmojiOnly(message.content)) ? ' emoji-only' : '';
 
-            const bubbleTime = time || displayTimestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: this.settings.timeFormat === '12hr' });
+            const bubbleTime = time || this._rowTimeFormat('time', displayTimestamp).format(displayTimestamp);
             const isBubbleLayout = document.body.classList.contains('chat-bubbles');
             const bubbleTimeText = isBubbleLayout ? this._formatRelativeTime(displayTimestamp.getTime()) : bubbleTime;
 
@@ -3750,6 +4019,7 @@ Object.assign(NYM.prototype, {
         for (let i = 0; i < domMsgs.length; i++) {
             const el = domMsgs[i];
             if (el.classList && el.classList.contains('poll-message')) continue;
+            if (el.parentElement && el.parentElement.closest('[data-message-id]')) continue;
             const id = el.dataset.messageId;
             if (id) renderedIds.push(id);
         }
@@ -4057,7 +4327,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        this.renderMessagesWithVirtualScroll(container, storageKey, true);
+        this.renderMessagesWithVirtualScroll(container, storageKey, true, false, filteredMessages);
         this._applyDirectHistoryNote(container);
 
         this.renderChannelPolls();
@@ -4141,13 +4411,6 @@ Object.assign(NYM.prototype, {
 
         // Hide thread replies from the flat view only when the root is present locally.
         const _threadsOn = typeof this.threadsEnabled === 'function' && this.threadsEnabled();
-        let _threadRoots = null;
-        if (_threadsOn) {
-            _threadRoots = new Set();
-            for (const m of messages) {
-                if (m && !m.threadRoot && m.id) _threadRoots.add(m.id);
-            }
-        }
 
         const clientGates = this._clientGatesActive();
         return (Array.isArray(subset) ? subset : messages).filter(msg => {
@@ -4158,7 +4421,7 @@ Object.assign(NYM.prototype, {
                 return false;
             }
             if (this.isContentHidden(msg)) return false;
-            if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;
+            if (_threadsOn && msg.threadRoot && this._hasLocalThreadRoot(messages, msg.threadRoot)) return false;
             return true;
         }).sort((a, b) => this._compareMessages(a, b));
     },
@@ -4299,8 +4562,8 @@ Object.assign(NYM.prototype, {
     },
 
     // isPM: uses pmMessages with conversationKey instead of messages with storageKey.
-    renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false) {
-        const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
+    renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false, filtered = null) {
+        const messages = Array.isArray(filtered) ? filtered : (isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey));
         if (!isPM && this.channelWindowEnd) this.channelWindowEnd.delete(storageKey);
 
         container.dataset.virtualScrollKey = storageKey;
@@ -4329,6 +4592,14 @@ Object.assign(NYM.prototype, {
             this.channelRenderedStart.set(storageKey, 0);
         }
 
+        const firstRows = scrollToBottom ? this._entryFirstRows(container, isPM, storageKey, renderMessages) : 0;
+        let deferredRows = 0;
+        if (firstRows > 0 && renderMessages.length > firstRows) {
+            deferredRows = renderMessages.length - firstRows;
+            renderMessages = renderMessages.slice(deferredRows);
+            (isPM ? this.pmRenderedStart : this.channelRenderedStart).set(storageKey, messages.length - firstRows);
+        }
+
         this.virtualScroll.suppressAutoScroll = true;
 
 
@@ -4336,10 +4607,16 @@ Object.assign(NYM.prototype, {
         // Suppress notification sounds during bulk rendering of stored messages.
         this._suppressSound = true;
         this._suppressBubbleRewrap = true;
+        const prevDomIds = this._bulkDomIds;
+        this._bulkDomIds = container.isConnected ? this._bulkDomIdSet() : null;
         this._bulkAppending = true;
 
-        for (let i = 0; i < renderMessages.length; i++) {
-            this.displayMessage(renderMessages[i]);
+        try {
+            for (let i = 0; i < renderMessages.length; i++) {
+                this.displayMessage(renderMessages[i]);
+            }
+        } finally {
+            this._bulkDomIds = prevDomIds;
         }
 
         this._bulkAppending = false;
@@ -4363,6 +4640,90 @@ Object.assign(NYM.prototype, {
                 });
             }
         }
+
+        if (deferredRows > 0) this._scheduleEntryFill(container, storageKey, messages, deferredRows, isPM);
+    },
+
+    _entryFirstRows(container, isPM, key, list) {
+        if (this._cvActive || !container || container.id !== 'messagesContainer') return 0;
+        const h = (typeof window !== 'undefined' && window.innerHeight) || 800;
+        const n = Math.min((isPM ? this.pmPageSize : this.channelPageSize) || 50, Math.max(12, Math.ceil(h / 32)));
+        const entry = key && typeof this._cnEntries === 'function' ? this._cnEntries().get(key) : null;
+        if (entry && !entry.landed && entry.mark && entry.mark.at > 0 && Array.isArray(list) && list.length > n
+            && this._orderAt(list[list.length - n]) >= entry.mark.at) return 0;
+        return n;
+    },
+
+    _scheduleEntryFill(container, key, list, count, isPM) {
+        const store = isPM ? this.pmMessages : this.messages;
+        const starts = isPM ? this.pmRenderedStart : this.channelRenderedStart;
+        const raw = store.get(key);
+        const len = raw ? raw.length : 0;
+        const sig = this._cfListSig(raw || []);
+        const to = starts.get(key);
+        const rowId = (m) => (m && m.isPM && m.nymMessageId) ? m.nymMessageId : (m && m.id);
+        const headId = rowId(list[Math.max(0, to - count)]);
+        const firstIds = new Set();
+        for (let i = to; i < list.length; i++) firstIds.add(rowId(list[i]));
+        const run = () => {
+            if (!container.isConnected || container.dataset.virtualScrollKey !== key || !this.inPMMode !== !isPM || this._cvActive || this.activeThread) return;
+            if (starts.get(key) !== to || (!isPM && this._chWinDetached(key))) return;
+            const cur = store.get(key);
+            const fresh = cur === raw && cur && cur.length === len && this._cfListSig(cur) === sig ? list
+                : (isPM ? this.getFilteredPMMessages(key) : this.getFilteredMessages(key));
+            let at = -1;
+            const early = [];
+            for (const el of container.querySelectorAll('.message[data-message-id], .group-notice[data-message-id]')) {
+                const id = el.dataset.messageId;
+                if (firstIds.has(id)) {
+                    at = this._chWinIndex(fresh, id);
+                    break;
+                }
+                if (this._chWinIndex(fresh, id) >= 0) early.push(el);
+            }
+            if (at < 0) return;
+            for (const el of early) {
+                this._revokeNodeBlobs(el);
+                el.remove();
+            }
+            const head = this._chWinIndex(fresh, headId);
+            this._chPrependRows(key, container, fresh, head >= 0 && head <= at ? head : Math.max(0, at - count), at, isPM);
+        };
+        requestAnimationFrame(() => setTimeout(run, 0));
+    },
+
+    _chPrependRows(key, container, messages, from, to, isPM) {
+        const scroller = this._getMessagesScroller();
+        if (!scroller || from >= to) return false;
+        const rows = messages.slice(from, to);
+        (isPM ? this.pmRenderedStart : this.channelRenderedStart).set(key, from);
+        const anchor = this._chWinAnchor(container, scroller);
+        this._chWinHold(scroller);
+        this.virtualScroll.suppressAutoScroll = true;
+        this._suppressSound = true;
+        this._suppressBubbleRewrap = true;
+        const frag = document.createDocumentFragment();
+        this._bulkContainer = frag;
+        this._bulkFill = true;
+        this._bulkDomIds = this._bulkDomIdSet();
+        this._bulkAppending = true;
+        try {
+            for (let i = 0; i < rows.length; i++) this.displayMessage(rows[i]);
+        } finally {
+            this._bulkAppending = false;
+            this._bulkDomIds = null;
+            this._bulkFill = false;
+            this._bulkContainer = null;
+            this._suppressSound = false;
+            this._suppressBubbleRewrap = false;
+            this.virtualScroll.suppressAutoScroll = false;
+        }
+        const note = container.querySelector(':scope > .msg-history-note');
+        container.insertBefore(frag, note ? note.nextSibling : container.firstChild);
+        this._recomputeAllBubbleGrouping(container);
+        this._chWinRestore(scroller, anchor);
+        requestAnimationFrame(() => this._chWinRestore(scroller, anchor));
+        return true;
     },
 
     _olderPageStart(messages, currentStart, size, targetId) {

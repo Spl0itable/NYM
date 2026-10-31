@@ -274,6 +274,7 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
       );
       return;
     }
+    final shownCode = ctrl.pqRootCode;
     await showAppAlert(
       context,
       tr('Your private messages and group chats with other Nymchat '
@@ -292,6 +293,13 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
       copiedMessage: tr('Post-quantum recovery code copied'),
       secret: true,
     );
+    if (!mounted || !ctrl.pqRootBackupPending || !ctrl.pqRootHeld) return;
+    if (shownCode != null && ctrl.pqRootCode == shownCode) {
+      await ctrl.dismissPqRootBackupNotice();
+      return;
+    }
+    _pqNoticeShown = false;
+    await _maybeShowPqNotice();
   }
 
   /// Offers identity encryption once when [IdentityVault.shouldPromptEncryptAtRest]; declining persists.

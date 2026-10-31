@@ -693,10 +693,6 @@ body.light-mode .scroll-to-bottom-btn {
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
 }
 
-body.light-mode .scroll-to-bottom-btn:hover {
-    background: rgb(from var(--primary) r g b / 0.1);
-}
-
 body.light-mode .send-btn {
     background: rgb(from var(--primary) r g b / 0.1);
     color: var(--primary);
@@ -2019,6 +2015,35 @@ body.solid-ui .edit-preview {
 body.solid-ui.light-mode .quote-preview,
 body.solid-ui.light-mode .edit-preview {
     background: #ececea;
+}
+
+body .scroll-to-bottom-btn:is(:hover, :active, :focus-visible),
+body.light-mode .scroll-to-bottom-btn:is(:hover, :active, :focus-visible),
+body .cv-scroll-bottom:is(:hover, :active, :focus-visible),
+body .cn-jump:is(:hover, :active, :focus-visible),
+body .cn-mention-fab:is(:hover, :active, :focus-visible),
+body .gx-ctl:is(:hover, :active, :focus-visible),
+body .image-modal-close:is(:hover, :active, :focus-visible),
+body .image-modal-download:is(:hover, :active, :focus-visible),
+body .image-modal-nav:is(:hover, :active, :focus-visible) {
+    background: linear-gradient(rgb(from var(--text) r g b / 0.08), rgb(from var(--text) r g b / 0.08)), linear-gradient(var(--bg-secondary), var(--bg-secondary)) var(--bg);
+    border-color: rgb(from var(--primary) r g b / 0.3);
+}
+
+body .gx-ctl:is(.active, [data-on="1"]):is(:hover, :active, :focus-visible) {
+    background: linear-gradient(rgb(from var(--primary) r g b / 0.22), rgb(from var(--primary) r g b / 0.22)), linear-gradient(var(--bg-secondary), var(--bg-secondary)) var(--bg);
+    border-color: rgb(from var(--primary) r g b / 0.6);
+}
+
+body #geohashExplorerModal .geohash-explorer-content > .modal-close:is(:hover, :active, :focus-visible) {
+    background: linear-gradient(rgba(255, 68, 68, 0.12), rgba(255, 68, 68, 0.12)), linear-gradient(var(--bg-secondary), var(--bg-secondary)) var(--bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body .scroll-to-bottom-btn:hover,
+    body .cv-scroll-bottom:hover {
+        transform: none;
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {

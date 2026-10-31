@@ -420,15 +420,25 @@ Object.assign(NYM.prototype, {
 
     try { ui.setStatus('Purging caches…'); } catch (e) {}
     try {
-      if (window.caches && caches.keys) {
-        const ks = await caches.keys();
-        await Promise.all(ks.map((k) => caches.delete(k)));
+      const sw = navigator.serviceWorker;
+      if (sw) {
+        const regs = sw.getRegistrations ? (await sw.getRegistrations()) || [] : [];
+        const workers = new Set([sw.controller].concat(...regs.map((r) => [r.active, r.waiting, r.installing])).filter(Boolean));
+        await Promise.all([...workers].map((w) => new Promise((resolve) => {
+          const t = setTimeout(resolve, 1000);
+          try {
+            const ch = new MessageChannel();
+            ch.port1.onmessage = () => { clearTimeout(t); resolve(); };
+            w.postMessage({ type: 'nym-wipe' }, [ch.port2]);
+          } catch (e) { clearTimeout(t); resolve(); }
+        })));
+        await Promise.all(regs.map((r) => r.unregister().catch(() => false)));
       }
     } catch (e) {}
     try {
-      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map((r) => r.unregister()));
+      if (window.caches && caches.keys) {
+        const ks = await caches.keys();
+        await Promise.all(ks.map((k) => caches.delete(k)));
       }
     } catch (e) {}
 

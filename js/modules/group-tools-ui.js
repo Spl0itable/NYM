@@ -132,6 +132,7 @@
                     m.slowHeld = h || undefined;
                 }
             }
+            if (flipped) if (typeof this._unreadStale === 'function') this._unreadStale();
             if (flipped && this.inPMMode && this.currentGroup === groupId && this.channelDOMCache) {
                 this.channelDOMCache.delete(this.getGroupConversationKey(groupId));
             }
@@ -922,6 +923,7 @@
             const cur = T().parseLocation(first.content);
             if (T().liveSupersedes(cur, loc)) {
                 first.content = msg.content;
+                if (typeof this._unreadStale === 'function') this._unreadStale();
                 if (first.conversationKey && typeof this.persistPMMessages === 'function') this.persistPMMessages(first.conversationKey);
                 this._gtRefreshLocationCard(first);
             }
@@ -1570,6 +1572,7 @@
                 if (list && this._gtAbsorbLive(message, list)) {
                     const i = list.indexOf(message);
                     if (i >= 0) list.splice(i, 1);
+                    if (this._msgIndex) this._msgIndex.delete(list);
                     message.gtAbsorbed = true;
                     if (typeof this.persistPMMessages === 'function') this.persistPMMessages(message.conversationKey);
                     return;

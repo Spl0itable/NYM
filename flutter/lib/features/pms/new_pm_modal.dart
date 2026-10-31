@@ -364,7 +364,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                             key: const ValueKey('pm-scan-code'),
                             tooltip: tr('Scan a code'),
                             onPressed: () => openShareScanner(context),
-                            icon: NymSvgIcon(NymIcons.radar, size: 20, color: c.primary),
+                            icon: NymSvgIcon(NymIcons.qrScan, size: 20, color: c.primary),
                           ),
                       ],
                     ),

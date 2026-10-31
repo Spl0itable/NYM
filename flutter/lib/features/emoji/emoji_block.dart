@@ -61,6 +61,12 @@ abstract final class EmojiBlock {
   static const int maxName = 64;
   static const int maxUrl = 1024;
   static const int maxLearned = 4000;
+  static const String globalKey = 'nym_global_emoji_blocks';
+  static const String globalField = 'ep';
+  static const int maxGlobal = 5000;
+  static const String globalUrlKey = 'nym_global_emoji_block_urls';
+  static const String globalUrlField = 'epu';
+  static const int maxGlobalUrls = 3000;
 
   static final RegExp _code = RegExp(r'^[a-zA-Z0-9_]{1,64}$');
   static final RegExp _url = RegExp(r'^https?://', caseSensitive: false);
@@ -201,14 +207,42 @@ abstract final class EmojiBlock {
           List<BlockedEmojiPack> list, String coord) =>
       _renormalize(list).where((x) => x.coord != coord).toList();
 
+  static List<String>? globalList(Object? v) {
+    if (v is! List) return null;
+    final out = <String>{
+      for (final c in v)
+        if (validCoord(c)) c as String,
+    }.toList()
+      ..sort();
+    return out.length > maxGlobal ? out.sublist(0, maxGlobal) : out;
+  }
+
+  static List<String>? globalUrls(Object? v) {
+    if (v is! List) return null;
+    final out = <String>{
+      for (final u in v)
+        if (u is String && _url.hasMatch(u) && u.length <= maxUrl) u,
+    }.toList()
+      ..sort();
+    return out.length > maxGlobalUrls ? out.sublist(0, maxGlobalUrls) : out;
+  }
+
   static EmojiBlockSt state(
-      List<BlockedEmojiPack> list, Iterable<CustomEmojiPack> packs) {
+      List<BlockedEmojiPack> list, Iterable<CustomEmojiPack> packs,
+      {Iterable<String> global = const [],
+      Iterable<String> globalUrls = const []}) {
     final coords = {for (final e in list) e.coord};
+    for (final c in global) {
+      if (validCoord(c)) coords.add(c);
+    }
     final urls = <String>{};
     for (final e in list) {
       for (final s in e.sample) {
         urls.add(s.url);
       }
+    }
+    for (final u in globalUrls) {
+      if (u.isNotEmpty) urls.add(u);
     }
     for (final p in packs) {
       if (!coords.contains(packCoord(p))) continue;
@@ -393,7 +427,7 @@ class EmojiTagCoordsNotifier extends StateNotifier<int> {
 
   final LinkedHashSet<String> _pairs = LinkedHashSet<String>();
 
-  void note(List<List<String>> tags, Set<String> blocked) {
+  void note(List<List<String>> tags, bool Function(String)? blocked) {
     var changed = false;
     for (final t in tags) {
       if (t.length < 4 || t[0] != 'emoji' || t[2].isEmpty) continue;
@@ -402,7 +436,7 @@ class EmojiTagCoordsNotifier extends StateNotifier<int> {
       if (_pairs.contains(k)) continue;
       if (_pairs.length >= EmojiBlock.maxLearned) _pairs.remove(_pairs.first);
       _pairs.add(k);
-      if (blocked.contains(t[3])) changed = true;
+      if (blocked != null && blocked(t[3])) changed = true;
     }
     if (changed && mounted) state = state + 1;
   }
@@ -422,12 +456,90 @@ final emojiTagCoordsProvider =
     StateNotifierProvider<EmojiTagCoordsNotifier, int>(
         (ref) => EmojiTagCoordsNotifier());
 
+class GlobalEmojiBlocks {
+  GlobalEmojiBlocks(this.coords, this.urls) : coordSet = {...coords};
+
+  final List<String> coords;
+  final List<String> urls;
+  final Set<String> coordSet;
+
+  static final GlobalEmojiBlocks none = GlobalEmojiBlocks(const [], const []);
+
+  bool get isEmpty => coords.isEmpty && urls.isEmpty;
+}
+
+class GlobalEmojiBlocksNotifier extends StateNotifier<GlobalEmojiBlocks> {
+  GlobalEmojiBlocksNotifier(this._kv) : super(_load(_kv));
+
+  final KeyValueStore? _kv;
+
+  static List<String>? _read(KeyValueStore kv, String key,
+      List<String>? Function(Object?) parse) {
+    try {
+      final raw = kv.getString(key);
+      if (raw == null || raw.isEmpty) return null;
+      return parse(jsonDecode(raw));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static GlobalEmojiBlocks _load(KeyValueStore? kv) {
+    if (kv == null) return GlobalEmojiBlocks.none;
+    final coords =
+        _read(kv, EmojiBlock.globalKey, EmojiBlock.globalList) ?? const [];
+    final urls =
+        _read(kv, EmojiBlock.globalUrlKey, EmojiBlock.globalUrls) ?? const [];
+    if (coords.isEmpty && urls.isEmpty) return GlobalEmojiBlocks.none;
+    return GlobalEmojiBlocks(
+        List.unmodifiable(coords), List.unmodifiable(urls));
+  }
+
+  static bool _same(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  bool apply(Object? ep, Object? epu) {
+    final next = EmojiBlock.globalList(ep);
+    if (next == null) return false;
+    final nextUrls = next.isEmpty
+        ? const <String>[]
+        : (EmojiBlock.globalUrls(epu) ?? state.urls);
+    if (_same(next, state.coords) && _same(nextUrls, state.urls)) return false;
+    state = GlobalEmojiBlocks(
+        List.unmodifiable(next), List.unmodifiable(nextUrls));
+    final kv = _kv;
+    if (kv != null) {
+      try {
+        kv.setString(EmojiBlock.globalKey, jsonEncode(next));
+        kv.setString(EmojiBlock.globalUrlKey, jsonEncode(nextUrls));
+      } catch (_) {}
+    }
+    return true;
+  }
+}
+
+final globalEmojiBlocksProvider =
+    StateNotifierProvider<GlobalEmojiBlocksNotifier, GlobalEmojiBlocks>((ref) {
+  KeyValueStore? kv;
+  try {
+    kv = ref.watch(keyValueStoreProvider);
+  } catch (_) {}
+  return GlobalEmojiBlocksNotifier(kv);
+});
+
 final emojiBlockStateProvider = Provider<EmojiBlockSt>((ref) {
   final list = ref.watch(blockedEmojiPacksProvider);
-  if (list.isEmpty) return EmojiBlockSt.empty;
+  final global = ref.watch(globalEmojiBlocksProvider);
+  if (list.isEmpty && global.isEmpty) return EmojiBlockSt.empty;
   final packs = ref.watch(liveCustomEmojiProvider.select((s) => s.packs));
   ref.watch(emojiTagCoordsProvider);
-  final st = EmojiBlock.state(list, packs);
+  final st = EmojiBlock.state(list, packs,
+      global: global.coords, globalUrls: global.urls);
   EmojiBlock.learnTags(
       ref.read(emojiTagCoordsProvider.notifier).asTags(), st);
   return st;

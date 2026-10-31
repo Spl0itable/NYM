@@ -210,6 +210,7 @@ Object.assign(NYM.prototype, {
         const recipient = msg.conversationPubkey || this.currentPM;
 
         msgs.splice(idx, 1);
+        if (this._msgIndex) this._msgIndex.delete(msgs);
         this.channelDOMCache.delete(conversationKey);
         this.persistPMMessages(conversationKey);
         const msgEl = this.findMessageElementAnywhere(msg.nymMessageId || msg.id);
@@ -1118,6 +1119,7 @@ Object.assign(NYM.prototype, {
                 this._standaloneNymbotDrop(rumor.pubkey);
                 return;
             }
+            if (senderVerified && (rumor.kind === 14 || rumor.kind === 15) && typeof this._standaloneNymbotSettle === 'function') this._standaloneNymbotSettle(rumor.pubkey);
             if (probe) { probe(rumor, senderVerified); return; }
             const gap = typeof this._gapWrapVerdict === 'function' ? this._gapWrapVerdict(event.id, rumor) : null;
             const gapStale = !!(gap && gap.stale);
@@ -1479,7 +1481,7 @@ Object.assign(NYM.prototype, {
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
 
             let list = this.pmMessages.get(conversationKey);
-            if (list.some(m => m.id === event.id)) return;
+            if (typeof this._msgListHas === 'function' ? this._msgListHas(list, event.id) : list.some(m => m.id === event.id)) return;
 
             const nowSec = Math.floor(Date.now() / 1000);
             const originalTsSec = Math.floor(rumor.created_at) || nowSec;
@@ -1554,6 +1556,7 @@ Object.assign(NYM.prototype, {
                     // Reactions follow the message to its nymMessageId, the ID the DOM renders with.
                     this._migrateReactionKey(dupMsg.id, nymMsgIdFromRumor);
                     dupMsg.nymMessageId = nymMsgIdFromRumor;
+                    if (typeof this._msgIndexRekey === 'function') this._msgIndexRekey(list, dupMsg);
                     if (typeof this._notifRekey === 'function') {
                         if (absorbed) this._notifRekey([dupMsg.id].concat(absorbed.ids), nymMsgIdFromRumor, messageContent, this._quotedFromTags(rumor.tags));
                         else this._notifRekey(dupMsg.id, nymMsgIdFromRumor);
@@ -1568,6 +1571,7 @@ Object.assign(NYM.prototype, {
                 // Prefer longer content; an older sender may have truncated the bitchat copy.
                 if (dupMayRewrite && messageContent && messageContent.length > (dupMsg.content || '').length) {
                     dupMsg.content = messageContent;
+                    if (typeof this._unreadStale === 'function') this._unreadStale();
                     needsRerender = true;
                 }
                 // Never for our own sent message.
@@ -1686,11 +1690,9 @@ Object.assign(NYM.prototype, {
                 return;
             }
             if (typeof this._gtAbsorbLive === 'function' && this._gtAbsorbLive(msg, list)) return;
-            list.push(msg);
-            list.sort((a, b) => {
-                return this._compareMessages(a, b);
-            });
-            if (list.length > this.pmStorageLimit || (blockedSender && this._blockedOverCap(list))) list = this._storeTrim(list, this.pmStorageLimit);
+            if (typeof this._msgListAdd === 'function') this._msgListAdd(list, msg);
+            else { list.push(msg); list.sort((a, b) => this._compareMessages(a, b)); }
+            if (list.length > this.pmStorageLimit || (blockedSender && this._blockedOverCap(list))) list = this._storeTrim(list, this.pmStorageLimit, undefined, true);
             this.pmMessages.set(conversationKey, list);
             this._adoptBotThreadOrphans(msg, conversationKey);
             this.persistPMMessages(conversationKey);
@@ -1761,6 +1763,10 @@ Object.assign(NYM.prototype, {
                 notifyForPM();
             };
             const pmHold = !isOwn && !gapStale && this._pmHoldsPiece(msg, list);
+            const pmArrivedUnread = () => {
+                const bump = () => this.updateUnreadCount(conversationKey, pmUnreadTs(), pmLive());
+                return typeof this._cnArrived === 'function' ? this._cnArrived(conversationKey, msg, bump) : bump();
+            };
             const pmAlertFor = (bumpUnread) => {
                 if (pmHold) this._pmHoldPiece(msg, () => pmAlertNow(bumpUnread));
                 else pmAlertNow(bumpUnread);
@@ -1768,7 +1774,7 @@ Object.assign(NYM.prototype, {
             if (this.inPMMode && this.currentPM === peerPubkey && document.hidden) {
                 this.displayMessage(msg);
                 if (!isOwn && !gapStale) {
-                    pmAlertFor(() => this.updateUnreadCount(conversationKey, pmUnreadTs(), pmLive()));
+                    pmAlertFor(pmArrivedUnread);
                 }
             } else if (this.inPMMode && this.currentPM === peerPubkey) {
                 this.displayMessage(msg);
@@ -1799,7 +1805,7 @@ Object.assign(NYM.prototype, {
                 if (!isOwn && !gapStale) {
                     pmAlertFor(() => {
                         const cvNow = this._cvActive && this._cvListForKey(conversationKey);
-                        if (!(cvNow && this._cvMarkColumnRead(conversationKey))) this.updateUnreadCount(conversationKey, pmUnreadTs(), pmLive());
+                        if (!(cvNow && this._cvMarkColumnRead(conversationKey))) pmArrivedUnread();
                     });
                 }
             }
@@ -1829,6 +1835,7 @@ Object.assign(NYM.prototype, {
         const NV = window.NymNotifyView;
         const t = setTimeout(() => this._pmReleasePiece(msg), (NV && NV.PIECE_HOLD_MS) || 3000);
         this._pmPieceHolds.set(msg, { t, run });
+        if (typeof this._unreadDrop === 'function' && this.pmMessages) this._unreadDrop(this.pmMessages.get(msg.conversationKey));
     },
 
     _pmReleasePiece(msg, drop) {
@@ -1837,6 +1844,7 @@ Object.assign(NYM.prototype, {
         if (!h) return false;
         clearTimeout(h.t);
         holds.delete(msg);
+        if (typeof this._unreadDrop === 'function' && this.pmMessages) this._unreadDrop(this.pmMessages.get(msg.conversationKey));
         const list = this.pmMessages && this.pmMessages.get(msg.conversationKey);
         if (!drop && list && list.indexOf(msg) >= 0) h.run();
         return true;
@@ -1851,6 +1859,7 @@ Object.assign(NYM.prototype, {
             this._pmReleasePiece(p, true);
             const i = list.indexOf(p);
             if (i >= 0) list.splice(i, 1);
+            if (this._msgIndex) this._msgIndex.delete(list);
             ids.push(p.id);
             if (p._pmUnreadBump) bumps++;
             const el = typeof this.findMessageElementAnywhere === 'function' ? this.findMessageElementAnywhere(p.id) : null;
@@ -2893,6 +2902,7 @@ Object.assign(NYM.prototype, {
             senderVerified: true
         };
         list.push(msg);
+        if (this._msgIndex) this._msgIndex.delete(list);
         this.pmMessages.set(conversationKey, list);
         this.persistPMMessages(conversationKey);
         this.addPMConversation(botNym, bot.pubkey, nowSec * 1000);
@@ -4491,7 +4501,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             return;
         }
 
-        this.renderMessagesWithVirtualScroll(container, conversationKey, true, true);
+        this.renderMessagesWithVirtualScroll(container, conversationKey, true, true, filteredMessages);
     },
 
     openUserPM(nym, pubkey) {
@@ -5139,18 +5149,9 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 
         // With threads enabled, replies are hidden from the flat view when the root exists locally.
         const _threadsOn = typeof this.threadsEnabled === 'function' && this.threadsEnabled();
-        let _threadRoots = null;
-        if (_threadsOn) {
-            _threadRoots = new Set();
-            for (const m of pmMessages) {
-                if (!m || m.threadRoot) continue;
-                const k = m.nymMessageId || m.id;
-                if (k) _threadRoots.add(k);
-            }
-        }
 
         return (Array.isArray(subset) ? subset : pmMessages).filter(msg => {
-            if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;
+            if (_threadsOn && msg.threadRoot && this._hasLocalThreadRoot(pmMessages, msg.threadRoot, true)) return false;
             if (this._botThreadForeign(msg, pmMessages)) return false;
             if (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(msg)) return false;
             if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;

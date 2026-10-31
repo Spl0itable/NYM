@@ -61,7 +61,10 @@ Object.assign(NYM.prototype, {
         const held = list || this._threadListForMessage(msg);
         if (!held) return true;
         const rootId = msg.threadRoot;
-        return !held.some(m => m && m !== msg && this.threadKeyForMessage(m) === rootId);
+        const idx = typeof this._msgIndexOf === 'function' ? this._msgIndexOf(held) : null;
+        if (!idx || idx.clash) return !held.some(m => m && m !== msg && this.threadKeyForMessage(m) === rootId);
+        const m = idx.map.get(rootId);
+        return !(m && m !== msg && this.threadKeyForMessage(m) === rootId);
     },
 
     _holdBotThreadOrphan(msg) {
