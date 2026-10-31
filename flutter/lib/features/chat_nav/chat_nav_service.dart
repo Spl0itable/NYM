@@ -681,9 +681,15 @@ class ChatNavService {
         if (n != null && n.isNotEmpty) byId[n] = m;
       }
     }
+    final reply = hooks.replyVisible;
+    bool off(Message m) {
+      if (hidden(m)) return true;
+      final root = m.threadRoot;
+      return reply != null && root != null && !reply(m, idx.hasRoot(root));
+    }
     final gone = [
       for (final id in ids)
-        if (byId[id] != null && hidden(byId[id]!)) id,
+        if (byId[id] != null && off(byId[id]!)) id,
     ];
     return gone.isEmpty ? s : mentionDrop(s, key, gone);
   }

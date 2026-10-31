@@ -674,6 +674,11 @@
                     if (profileCount++ >= STORE_LIMITS.profiles) break;
                     if (!this.users.has(p.pubkey)) {
                         this.users.set(p.pubkey, p.profile || p);
+                        const restoredTs = p.profile && p.profile.kind0Ts;
+                        if (typeof restoredTs === 'number' && restoredTs > 0 && typeof this._noteNameSource === 'function'
+                            && !(this._nameSources && this._nameSources.has(p.pubkey))) {
+                            this._noteNameSource(p.pubkey, 'kind0', restoredTs);
+                        }
                     }
                     // Restore the kind 0 source URL so getAvatarUrl can return it before the blob hydrates.
                     if (p.profile) {

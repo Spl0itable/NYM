@@ -289,6 +289,22 @@ Object.assign(NYM.prototype, {
         return typeof this.generateAvatarSvg === 'function' ? this.generateAvatarSvg(pubkey) : '';
     },
 
+    _trimClosedLists() {
+        const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+        this.messages.forEach((messages, channel) => {
+            if (channel === currentKey || messages.length <= this.channelMessageLimit) return;
+            const kept = this._storeTrim(messages, this.channelMessageLimit, (m) => m.id, true);
+            if (kept !== messages) this.messages.set(channel, kept);
+        });
+        const pmKey = this.currentPM ? this.getPMConversationKey(this.currentPM) : null;
+        const groupKey = this.currentGroup ? this.getGroupConversationKey(this.currentGroup) : null;
+        this.pmMessages.forEach((messages, convKey) => {
+            if (convKey === pmKey || convKey === groupKey || messages.length <= this.pmStorageLimit) return;
+            const kept = this._storeTrim(messages, this.pmStorageLimit, undefined, true);
+            if (kept !== messages) this.pmMessages.set(convKey, kept);
+        });
+    },
+
     _storeTrim(list, limit, keyOf, carry) {
         if (!Array.isArray(list)) return list;
         const max = Number(limit) || 0;

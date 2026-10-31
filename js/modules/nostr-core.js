@@ -221,6 +221,8 @@ Object.assign(NYM.prototype, {
             let minTs = (this._lastKind0Ts || 0) + 1;
             const stamp = this._presenceStamp;
             if (stamp && stamp.pk === this.pubkey && stamp.nym !== this.nym) minTs = Math.max(minTs, stamp.at + 1);
+            const sent = this._nameSentStamp;
+            if (sent && sent.pk === this.pubkey && sent.nym !== this.nym) minTs = Math.max(minTs, sent.at + 1);
             const profileTs = Math.max(jittered, minTs);
             this._lastKind0Ts = profileTs;
 
@@ -651,7 +653,7 @@ Object.assign(NYM.prototype, {
                 }
                 this.displayMessage(message);
                 if (!message._spamGated && !(message.pubkey !== this.pubkey && this.isContentHidden(message))) {
-                    this.updateUserPresence(nym, event.pubkey, message.channel, geohash, event.created_at);
+                    this.updateUserPresence(nym, event.pubkey, message.channel, geohash, event.created_at, !!rawNym);
                 }
 
                 const _notifStorageKey = geohash ? `#${geohash}` : message.channel;
@@ -849,6 +851,7 @@ Object.assign(NYM.prototype, {
                 const profileName = [profile.name, profile.username, profile.display_name]
                     .find(v => typeof v === 'string' && v.length > 0);
                 const kind0NameWins = !this.users.has(pubkey) || this._nameSourceWins(pubkey, 'kind0', eventTs);
+                if (profileName && !kind0NameWins) this.persistProfile(pubkey);
                 if (profileName && kind0NameWins) {
                     const truncatedName = this._kind0Nym(profileName, pubkey);
                     const existingUser = this.users.get(pubkey);
@@ -2848,7 +2851,9 @@ Object.assign(NYM.prototype, {
                             }
                         }
 
-                        if (event.pubkey !== this.pubkey && (profile.name || profile.username || profile.display_name)) {
+                        if (event.pubkey !== this.pubkey && (profile.name || profile.username || profile.display_name)
+                            && (!this.users.has(event.pubkey) || this._nameSourceWins(event.pubkey, 'kind0', eventTs))) {
+                            this._noteNameSource(event.pubkey, 'kind0', eventTs);
                             const profileName = this._kind0Nym(profile.name || profile.username || profile.display_name, event.pubkey);
                             // Always accept the newer kind 0 as authoritative.
                             const existingUser = this.users.get(event.pubkey);
@@ -2995,6 +3000,11 @@ Object.assign(NYM.prototype, {
             content: wireContent,
             pubkey: sender.pubkey
         };
+        if (sender.pubkey && sender.pubkey === this.pubkey) {
+            const prev = this._nameSentStamp;
+            const at = prev && prev.pk === sender.pubkey && prev.nym === sender.nym ? Math.max(prev.at, now) : now;
+            this._nameSentStamp = { pk: sender.pubkey, at, nym: sender.nym };
+        }
         return { event, wire, channelKey, nowMs, now, threadRoot };
     },
 

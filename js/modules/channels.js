@@ -2345,22 +2345,23 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const memo = this._unreadMemo.get(messages);
         const n = messages.length;
         if (memo && memo.idx === idx && this._unreadSame(memo, state) && Date.now() < memo.until
-            && n >= memo.n && messages[0] === memo.first && messages[memo.n - 1] === memo.last) {
+            && n >= memo.n && messages[0] === memo.first && messages[memo.n - 1] === memo.last && this._unreadPeopleSame(memo)) {
             let count = memo.count;
-            for (const m of memo.pending) count += this._unreadTally([m], 0, 1, lastRead);
-            count += this._unreadTally(messages, memo.n, n, lastRead);
+            for (const m of memo.pending) count += this._unreadTally([m], 0, 1, lastRead, memo.people);
+            count += this._unreadTally(messages, memo.n, n, lastRead, memo.people);
             memo.count = count;
             memo.n = n;
             memo.last = messages[n - 1];
             memo.pending.clear();
             return count;
         }
-        const count = this._unreadTally(messages, 0, n, lastRead);
-        this._unreadMemo.set(messages, { idx, lastRead, sig: state.sig, refs: state.refs, until: this._unreadMuteUntil(), n, first: messages[0], last: messages[n - 1], pending: new Set(), count });
+        const people = this._unreadNymsMatter() ? new Map() : null;
+        const count = this._unreadTally(messages, 0, n, lastRead, people);
+        this._unreadMemo.set(messages, { idx, lastRead, sig: state.sig, refs: state.refs, until: this._unreadMuteUntil(), n, first: messages[0], last: messages[n - 1], pending: new Set(), count, people });
         return count;
     },
 
-    _unreadTally(messages, from, to, lastRead) {
+    _unreadTally(messages, from, to, lastRead, people) {
         const filtered = typeof this.isContentHidden === 'function';
         const held = this._pmPieceHolds;
         let count = 0;
@@ -2369,10 +2370,33 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (!m || m.isOwn || m.slowHeld || m._spamGated) continue;
             if (held && held.has(m)) continue;
             if ((m.created_at || 0) <= lastRead) continue;
+            if (people && filtered && Array.isArray(m.people) && m.people.length) this._unreadNotePeople(people, m.people);
             if (filtered ? this.isContentHidden(m) : (this.blockedUsers && m.pubkey && this.blockedUsers.has(m.pubkey))) continue;
             count++;
         }
         return count;
+    },
+
+    _unreadNymOf(pk) {
+        const ctx = typeof this._cfCtx === 'function' ? this._cfCtx() : null;
+        return ctx && typeof ctx.nymOf === 'function' ? String(ctx.nymOf(pk) || '') : '';
+    },
+
+    _unreadNotePeople(people, list) {
+        for (const pk of list) {
+            if (typeof pk === 'string' && pk && !people.has(pk)) people.set(pk, this._unreadNymOf(pk));
+        }
+    },
+
+    _unreadNymsMatter() {
+        if (this.blockedKeywords && this.blockedKeywords.size) return true;
+        return typeof this.activeFilterPacks === 'function' && this.activeFilterPacks().length > 0;
+    },
+
+    _unreadPeopleSame(memo) {
+        if (!memo.people) return true;
+        for (const [pk, nym] of memo.people) if (this._unreadNymOf(pk) !== nym) return false;
+        return true;
     },
 
     _unreadState(lastRead) {

@@ -1590,7 +1590,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Switches to a live, identity-backed empty state once an identity boots.
   void goLive(String pubkey, String nym) {
     _seenIds.clear();
-    _nameSources.clear();
+    _nameTimes.clear();
     _seenCopyKeys.clear();
     _seenNymMessageIds.clear();
     _pendingEdits.clear();
@@ -2320,8 +2320,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
       () => User(pubkey: e.pubkey, nym: m.author),
     );
     if (!isPlaceholderNym(m.author)) {
-      _noteNym(e.pubkey, u.nym, m.author, skip: m);
-      u.nym = m.author;
+      if (_messageCarriesName(m) && _nameWins(e.pubkey, e.createdAt)) {
+        final shown = u.nym;
+        _noteNym(e.pubkey, shown, m.author, skip: m);
+        u.nym = m.author;
+        _noteNameTime(e.pubkey, e.createdAt);
+        if (shown != m.author) _syncPmConversationNym(e.pubkey);
+      }
     } else {
       _seedAuthorFromStore(m);
     }
@@ -2429,12 +2434,23 @@ class AppStateNotifier extends StateNotifier<AppState> {
     return changed;
   }
 
-  final Map<String, (bool, int)> _nameSources = {};
+  final Map<String, int> _nameTimes = {};
 
-  bool _nameSourceWins(String pubkey, bool fromPresence, int ts) {
-    final rec = _nameSources[pubkey];
-    return rec == null || rec.$1 == fromPresence || ts > rec.$2;
+  bool _nameInFuture(int ts) =>
+      ts > DateTime.now().millisecondsSinceEpoch ~/ 1000 + 600;
+
+  bool _nameWins(String pubkey, int ts) {
+    if (_nameInFuture(ts)) return false;
+    final rec = _nameTimes[pubkey];
+    return rec == null || ts > rec;
   }
+
+  void _noteNameTime(String pubkey, int ts) {
+    if (!_nameInFuture(ts)) _nameTimes[pubkey] = ts;
+  }
+
+  bool _messageCarriesName(Message m) =>
+      !ContentFilter.hidden(state._cf, AppState.cfItem(m), m);
 
   void _ingestProfile(NostrEvent e) {
     final mapped = EventMapper.profile(e);
@@ -2460,11 +2476,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
             prev.lud06 != p.lud06) {
           existing.profile = p;
           if (resolvedName != null &&
-              _nameSourceWins(e.pubkey, false, p.kind0Ts)) {
+              _nameWins(e.pubkey, p.kind0Ts)) {
             final next = getNymFromPubkey(resolvedName, e.pubkey);
             _noteNym(e.pubkey, existing.nym, next);
             existing.nym = next;
-            _nameSources[e.pubkey] = (false, p.kind0Ts);
+            _noteNameTime(e.pubkey, p.kind0Ts);
           }
           changed = true;
         }
@@ -2476,7 +2492,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         nym: getNymFromPubkey(resolvedName ?? 'nym', e.pubkey),
         profile: p,
       );
-      if (resolvedName != null) _nameSources[e.pubkey] = (false, p.kind0Ts);
+      if (resolvedName != null) _noteNameTime(e.pubkey, p.kind0Ts);
       changed = true;
     }
     // Keep the PM row's nym in sync with the kind-0 name.
@@ -3105,8 +3121,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
         () => User(pubkey: m.pubkey, nym: m.author),
       );
       if (!isPlaceholderNym(m.author)) {
-        _noteNym(m.pubkey, u.nym, m.author, skip: m);
-        u.nym = m.author;
+        if (_messageCarriesName(m) && _nameWins(m.pubkey, m.createdAt)) {
+          final shown = u.nym;
+          _noteNym(m.pubkey, shown, m.author, skip: m);
+          u.nym = m.author;
+          _noteNameTime(m.pubkey, m.createdAt);
+          if (shown != m.author) _syncPmConversationNym(m.pubkey);
+        }
       } else {
         _seedAuthorFromStore(m);
       }
@@ -3904,11 +3925,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
     u.status = status;
     if (nym != null &&
         nym.isNotEmpty &&
-        (nameTs == null || _nameSourceWins(pubkey, true, nameTs))) {
+        (nameTs == null || _nameWins(pubkey, nameTs))) {
       final next = getNymFromPubkey(nym, pubkey);
       _noteNym(pubkey, u.nym, next);
       u.nym = next;
-      if (nameTs != null) _nameSources[pubkey] = (true, nameTs);
+      if (nameTs != null) _noteNameTime(pubkey, nameTs);
       _rewriteStoredAuthors(pubkey);
       _syncPmConversationNym(pubkey);
     }
@@ -4014,7 +4035,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       }
       _presenceOnly.remove(pk);
       state.users.remove(pk);
-      _nameSources.remove(pk);
+      _nameTimes.remove(pk);
       removed = true;
     }
     if (removed) _markGeoPresenceDirty();
@@ -4066,12 +4087,19 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (pubkey.isEmpty || nym.isEmpty) return;
     var changed = false;
     final u = state.users[pubkey];
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final placeholder = isPlaceholderNym(nym);
     if (u == null) {
       state.users[pubkey] = User(pubkey: pubkey, nym: nym);
+      if (!placeholder) _noteNameTime(pubkey, nowSec);
       changed = true;
-    } else if (u.nym != nym) {
+    } else if (u.nym != nym &&
+        (placeholder
+            ? !_nameTimes.containsKey(pubkey)
+            : _nameWins(pubkey, nowSec))) {
       _noteNym(pubkey, u.nym, nym);
       u.nym = nym;
+      if (!placeholder) _noteNameTime(pubkey, nowSec);
       changed = true;
     }
     for (final c in state.pmConversations) {
@@ -5308,10 +5336,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
         if (existing.profile == null ||
             p.kind0Ts >= existing.profile!.kind0Ts) {
           existing.profile = p;
-          if (resolvedName != null) {
+          if (resolvedName != null &&
+              _nameWins(pubkey, p.kind0Ts)) {
             final next = getNymFromPubkey(resolvedName, pubkey);
             _noteNym(pubkey, existing.nym, next);
             existing.nym = next;
+            _noteNameTime(pubkey, p.kind0Ts);
           }
         }
       } else {
@@ -5321,6 +5351,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
           nym: getNymFromPubkey(resolvedName ?? 'nym', pubkey),
           profile: p,
         );
+        if (resolvedName != null) _noteNameTime(pubkey, p.kind0Ts);
       }
     });
     for (final pubkey in touched) {

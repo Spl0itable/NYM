@@ -2134,6 +2134,13 @@ class NostrService {
       extraTags: extraTags,
     );
     eventProvenance.recordLocal(signed, 'THIS CLIENT');
+    if (signerOverride == null && signed.pubkey == identity.pubkey) {
+      final same = _sentStampPk == signed.pubkey && _sentStampNym == nym;
+      _sentStampAt =
+          same ? max(_sentStampAt, signed.createdAt) : signed.createdAt;
+      _sentStampPk = signed.pubkey;
+      _sentStampNym = nym;
+    }
     if (buildOnly) return signed;
 
     if (queuedKey != null) QueuedSends.instance.register(signed.id, queuedKey);
@@ -2331,6 +2338,12 @@ class NostrService {
         _presenceStampNym != null &&
         stripPubkeySuffix(_presenceStampNym!) != renamedTo) {
       floor = max(floor, _presenceStampAt + 1);
+    }
+    if (renamedTo != null &&
+        _sentStampPk == identity.pubkey &&
+        _sentStampNym != null &&
+        stripPubkeySuffix(_sentStampNym!) != renamedTo) {
+      floor = max(floor, _sentStampAt + 1);
     }
     final createdAt = max(giftwrap.randomNow(), floor);
     _lastKind0Ts = createdAt;
@@ -2826,6 +2839,9 @@ class NostrService {
   }
 
   String? _presenceStampPk;
+  String? _sentStampPk;
+  int _sentStampAt = 0;
+  String? _sentStampNym;
   int _presenceStampAt = 0;
   String? _presenceStampNym;
 

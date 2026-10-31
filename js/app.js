@@ -4735,7 +4735,7 @@ function initWallpaperUI() {
 }
 
 const NYMCHAT_VERSION = 'v3.75.545';
-const NYMCHAT_BUILD = 858;
+const NYMCHAT_BUILD = 862;
 
 function nymUiArgs(template, args) {
     if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);
@@ -7848,23 +7848,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     nym._setManagedInterval('messageCleanup', () => {
-        const currentKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
-
-        nym.messages.forEach((messages, channel) => {
-            if (channel === currentKey) return;
-            if (messages.length > nym.channelMessageLimit) {
-                nym.messages.set(channel, messages.slice(-nym.channelMessageLimit));
-            }
-        });
-
-        const currentPMKey = nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null;
-        const currentGroupKey = nym.currentGroup ? nym.getGroupConversationKey(nym.currentGroup) : null;
-        nym.pmMessages.forEach((messages, convKey) => {
-            if (convKey === currentPMKey || convKey === currentGroupKey) return;
-            if (messages.length > nym.pmStorageLimit) {
-                nym.pmMessages.set(convKey, messages.slice(-nym.pmStorageLimit));
-            }
-        });
+        nym._trimClosedLists();
 
         if (nym.eventDeduplication.size > 10000) {
             const entriesToDelete = nym.eventDeduplication.size - 7500;

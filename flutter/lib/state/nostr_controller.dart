@@ -4319,6 +4319,7 @@ class NostrController {
       awayMessage: status == 'away' ? away : null,
       lastSeenMs: activeMs,
       stampLastSeen: activeMs > 0,
+      nameTs: (rumor['created_at'] as num?)?.toInt() ?? 0,
     );
     // Resolve the friend's profile so their avatar loads.
     _maybeBackfillProfiles(pubkey);
@@ -14588,6 +14589,10 @@ class NostrController {
 
   @visibleForTesting
   void onEventForTest(NostrEvent event) => _onEvent(event);
+
+  @visibleForTesting
+  void onFriendPresenceForTest(Map<String, dynamic> rumor) =>
+      _onFriendPresence(rumor, _ref.read(appStateProvider.notifier));
 
   @visibleForTesting
   void deliverLiveForTest(List<NostrEvent> events) {

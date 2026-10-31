@@ -596,6 +596,35 @@
         _cnHiddenMentionIds(state, key) {
             const ids = (((state && state.chats) || {})[key] || {}).ids || [];
             if (!ids.length || typeof this.isContentHidden !== 'function') return [];
+            const { byId } = this._cnMentionMsgs(key);
+            return ids.map((e) => e.id).filter((id) => byId.has(id) && this.isContentHidden(byId.get(id)));
+        },
+
+        _cnThreadedMentionIds(state, key) {
+            const ids = (((state && state.chats) || {})[key] || {}).ids || [];
+            if (!ids.length || typeof this._hasLocalThreadRoot !== 'function') return [];
+            if (!(typeof this.threadsEnabled === 'function' && this.threadsEnabled())) return [];
+            const { list, byId } = this._cnMentionMsgs(key);
+            const byNym = this._cnIsConv(key);
+            return ids.map((e) => e.id).filter((id) => {
+                const m = byId.get(id);
+                return !!m && !!m.threadRoot && this._hasLocalThreadRoot(list, m.threadRoot, byNym);
+            });
+        },
+
+        _cnRejudgeMentions(key) {
+            if (!key) return;
+            const state = this._cnMentions();
+            const gone = this._cnThreadedMentionIds(state, key);
+            if (gone.length) this._cnSetMentions(N().mentionDrop(state, key, gone), [key]);
+        },
+
+        _cnKeyOf(message) {
+            if (!message) return null;
+            return message.isPM ? message.conversationKey : (message.geohash ? `#${message.geohash}` : message.channel);
+        },
+
+        _cnMentionMsgs(key) {
             const store = this._cnIsConv(key) ? this.pmMessages : this.messages;
             const list = (store && store.get(key)) || [];
             const idx = typeof this._msgIndexOf === 'function' ? this._msgIndexOf(list) : null;
@@ -608,12 +637,14 @@
                     if (m.nymMessageId) byId.set(m.nymMessageId, m);
                 }
             }
-            return ids.map((e) => e.id).filter((id) => byId.has(id) && this.isContentHidden(byId.get(id)));
+            return { list, byId };
         },
 
         _cnShownMentions(key) {
             const state = this._cnMentions();
-            const gone = this._cnHiddenMentionIds(state, key);
+            const hidden = this._cnHiddenMentionIds(state, key);
+            const threaded = this._cnThreadedMentionIds(state, key).filter((id) => !hidden.includes(id));
+            const gone = threaded.length ? hidden.concat(threaded) : hidden;
             return gone.length ? N().mentionDrop(state, key, gone) : state;
         },
 
@@ -702,6 +733,11 @@
                         const next = N().mentionAdd(state, k, items, Date.now());
                         if (next !== state) { state = next; changed.push(k); }
                     }
+                    const threaded = this._cnThreadedMentionIds(state, k);
+                    if (threaded.length) {
+                        state = N().mentionDrop(state, k, threaded);
+                        if (!changed.includes(k)) changed.push(k);
+                    }
                     const after = (state.chats || {})[k];
                     this._cnClosedBase.set(k, { who, epoch, floor, ids: after ? after.ids.length : 0, seen: after ? after.seen.length : 0 });
                 }
@@ -711,7 +747,7 @@
 
         _cnOnDisplayed(message) {
             if (!message || message._threadRender) return;
-            const key = message.isPM ? message.conversationKey : (message.geohash ? `#${message.geohash}` : message.channel);
+            const key = this._cnKeyOf(message);
             if (!key) return;
             const ctx = this._cnContextFor(key);
             if (!ctx) return;
@@ -1875,6 +1911,7 @@
         if (c) c.querySelectorAll('.cn-divider').forEach((d) => d.remove());
     });
     wrap('displayMessage', function (args) { this._cnOnDisplayed(args[0]); });
+    wrap('_msgIndexRekey', function (args) { this._cnRejudgeMentions(this._cnKeyOf(args[1])); });
     wrap('hideMessagesFromBlockedUser', function () { for (const k of this._cnOpenKeys()) this._cnSchedule(k); });
     wrap('handleDeletionEvent', function () { for (const k of this._cnOpenKeys()) this._cnSchedule(k); });
     const bumpFilters = function () { this._cnFilterEpoch = (this._cnFilterEpoch || 0) + 1; };

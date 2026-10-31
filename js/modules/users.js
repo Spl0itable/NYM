@@ -1004,12 +1004,18 @@ Object.assign(NYM.prototype, {
         return stored || 'nym';
     },
 
+    _nameInFuture(ts) {
+        return (ts || 0) > Math.floor(Date.now() / 1000) + 600;
+    },
+
     _nameSourceWins(pubkey, src, ts) {
+        if (this._nameInFuture(ts)) return false;
         const rec = this._nameSources && this._nameSources.get(pubkey);
-        return !rec || rec.src === src || (ts || 0) > rec.ts;
+        return !rec || (ts || 0) > rec.ts;
     },
 
     _noteNameSource(pubkey, src, ts) {
+        if (this._nameInFuture(ts)) return;
         if (!this._nameSources) this._nameSources = new Map();
         this._nameSources.set(pubkey, { src, ts: ts || 0 });
     },
@@ -1549,12 +1555,19 @@ Object.assign(NYM.prototype, {
         const now = Date.now();
         const L = (typeof self !== 'undefined' && self.NymLastSeen) || null;
         const seenFrom = (prev) => L ? L.mergePresence(prev, status, (rumor.created_at || 0) * 1000, now) : Math.min(prev, now);
+        const nymTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'n' && t[1]);
+        const rumorSec = Math.floor(rumor.created_at || 0);
         if (this.users.has(pubkey)) {
             const user = this.users.get(pubkey);
             user.status = status;
             user.lastSeen = seenFrom(user.lastSeen || 0);
+            if (nymTag && this._nameSourceWins(pubkey, 'presence', rumorSec)) {
+                const prevBase = this.parseNymFromDisplay(user.nym);
+                user.nym = this.stripPubkeySuffix(nymTag[1]);
+                this._noteNameSource(pubkey, 'presence', rumorSec);
+                this._propagateNymChange(pubkey, user.nym, prevBase);
+            }
         } else {
-            const nymTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'n');
             this.users.set(pubkey, {
                 nym: nymTag ? this.stripPubkeySuffix(nymTag[1]) : this.getNymFromPubkey(pubkey),
                 pubkey,
@@ -1562,6 +1575,7 @@ Object.assign(NYM.prototype, {
                 status,
                 channels: new Set()
             });
+            if (nymTag) this._noteNameSource(pubkey, 'presence', rumorSec);
         }
         this.updateUserList();
         if (this.inPMMode && this.currentPM === pubkey && typeof this.refreshPMHeaderStatus === 'function') {
@@ -1668,8 +1682,9 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    updateUserPresence(nym, pubkey, channel, geohash, createdAt) {
+    updateUserPresence(nym, pubkey, channel, geohash, createdAt, named = true) {
         const channelKey = geohash || channel;
+        const nameSec = createdAt ? Math.floor(createdAt) : Math.floor(Date.now() / 1000);
 
         // Use created_at so historical messages don't falsely mark users as online.
         const eventTime = createdAt ? createdAt * 1000 : Date.now();
@@ -1693,15 +1708,19 @@ Object.assign(NYM.prototype, {
                 channels: new Set([channelKey]),
                 postedIn: new Set([String(channelKey).toLowerCase()])
             });
+            if (named) this._noteNameSource(pubkey, 'message', nameSec);
         } else {
             const user = this.users.get(pubkey);
             if (eventTime > user.lastSeen) {
                 user.lastSeen = eventTime;
                 user.status = baseStatus;
             }
-            const prevBase = this.parseNymFromDisplay(user.nym);
-            user.nym = nym;
-            this._propagateNymChange(pubkey, nym, prevBase);
+            if (named && this._nameSourceWins(pubkey, 'message', nameSec)) {
+                const prevBase = this.parseNymFromDisplay(user.nym);
+                user.nym = nym;
+                this._noteNameSource(pubkey, 'message', nameSec);
+                this._propagateNymChange(pubkey, nym, prevBase);
+            }
             if (!user.channels) user.channels = new Set();
             user.channels.add(channelKey);
             if (!user.postedIn) user.postedIn = new Set();
@@ -2550,10 +2569,12 @@ Object.assign(NYM.prototype, {
 
         if (this.friends.has(targetPubkey)) {
             this.friends.delete(targetPubkey);
+            if (typeof this._unreadStale === 'function') this._unreadStale();
             this.saveFriends();
             this.displaySystemMessage(`Removed <span data-no-i18n>${nymHtml}</span> from friends`, 'system', { html: true });
         } else {
             this.friends.add(targetPubkey);
+            if (typeof this._unreadStale === 'function') this._unreadStale();
             this.saveFriends();
             this.displaySystemMessage(`Added <span data-no-i18n>${nymHtml}</span> as a friend`, 'system', { html: true });
         }
@@ -2568,6 +2589,7 @@ Object.assign(NYM.prototype, {
 
     removeFriendByPubkey(pubkey) {
         this.friends.delete(pubkey);
+        if (typeof this._unreadStale === 'function') this._unreadStale();
         this.saveFriends();
 
         this.displaySystemMessage(`Removed <span data-no-i18n>${this.getNymHtmlFromPubkey(pubkey)}</span> from friends`, 'system', { html: true });
