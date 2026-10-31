@@ -271,6 +271,7 @@ const List<String> kSettingsResetKeys = [
   'nym_hide_non_pinned',
   'nym_blocked',
   'nym_blocked_channels',
+  'nym_blocked_emoji_packs',
   'nym_blocked_keywords',
   'nym_image_blur',
   'nym_group_notify_mentions_only',

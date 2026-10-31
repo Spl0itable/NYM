@@ -4198,6 +4198,7 @@ async function showSettings() {
     nym.updateFriendsList();
     nym.updateKeywordList();
     nym.updateBlockedChannelsList();
+    if (typeof nym.updateBlockedEmojiPacksList === 'function') nym.updateBlockedEmojiPacksList();
     nym.updateBlockedRelaysList();
 
     const acceptPMsSel = document.getElementById('acceptPMsSelect');
@@ -4538,7 +4539,7 @@ async function resetSettings() {
         'nym_pow_difficulty',
         'nym_pinned_channels', 'nym_pinned_landing_channel',
         'nym_hidden_channels', 'nym_hide_non_pinned',
-        'nym_blocked', 'nym_blocked_channels', 'nym_blocked_keywords',
+        'nym_blocked', 'nym_blocked_channels', 'nym_blocked_keywords', 'nym_blocked_emoji_packs',
         'nym_image_blur',
         'nym_group_notify_mentions_only',
         'nym_recent_emojis',
@@ -4567,6 +4568,7 @@ async function resetSettings() {
     nym.blockedUsers = new Set();
     nym.blockedChannels = new Set();
     nym.blockedKeywords = new Set();
+    if (typeof nym._setBlockedEmojiPacks === 'function') nym._setBlockedEmojiPacks([], { remote: true });
     nym.settings = nym.loadSettings();
 
     nym.applyColorMode();
@@ -4734,7 +4736,7 @@ function initWallpaperUI() {
 }
 
 const NYMCHAT_VERSION = 'v3.75.545';
-const NYMCHAT_BUILD = 835;
+const NYMCHAT_BUILD = 839;
 
 function nymUiArgs(template, args) {
     if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);
@@ -7175,6 +7177,11 @@ async function applyNostrSettings(s, opts) {
         nym.blockedChannels = new Set(s.blockedChannels);
         lsSave('nym_blocked_channels', JSON.stringify(s.blockedChannels));
         if (typeof nym._applySyncedChannelBlocks === 'function') nym._applySyncedChannelBlocks(blockedBefore);
+        filtersSynced = true;
+    }
+
+    if (Array.isArray(s.blockedEmojiPacks) && typeof nym._applySyncedEmojiBlocks === 'function') {
+        nym._applySyncedEmojiBlocks(s.blockedEmojiPacks);
         filtersSynced = true;
     }
 

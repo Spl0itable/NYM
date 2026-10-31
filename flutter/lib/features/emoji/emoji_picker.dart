@@ -15,6 +15,8 @@ import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/inline_network_image.dart';
 import 'custom_emoji.dart';
+import 'emoji_block.dart';
+import 'emoji_block_ui.dart';
 import 'emoji_data.dart';
 import 'modal_close_chip.dart';
 import '../../widgets/common/nym_field.dart';
@@ -157,7 +159,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
   Widget build(BuildContext context) {
     final c = context.nym;
     // The live NIP-30 store, hydrated from cache and updated as packs arrive.
-    final custom = ref.watch(liveCustomEmojiProvider);
+    final custom = ref.watch(visibleCustomEmojiProvider);
     final transparency =
         ref.watch(settingsProvider.select((s) => s.transparencyEnabled));
     final width = MediaQuery.sizeOf(context).width;
@@ -238,6 +240,9 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
         isFavorite: packFavSet.contains(pack.key),
         onToggleFavorite:
             _packFavStore == null ? null : () => _togglePackFavorite(pack.key),
+        onBlock: isOwn(pack)
+            ? null
+            : () => confirmBlockEmojiPack(context, ref, pack),
       ));
     }
 
@@ -427,12 +432,14 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
       required List<Widget> children,
       bool isFavorite = false,
       bool owned = false,
-      VoidCallback? onToggleFavorite}) {
+      VoidCallback? onToggleFavorite,
+      VoidCallback? onBlock}) {
     return _Section(
       title: title,
       cells: children,
       isFavorite: isFavorite,
       onToggleFavorite: onToggleFavorite,
+      onBlock: onBlock,
       owned: owned,
     );
   }
@@ -510,6 +517,8 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
                   active: section.isFavorite,
                   onTap: section.onToggleFavorite!,
                 ),
+              if (section.onBlock != null)
+                EmojiPackBlockButton(onTap: section.onBlock!),
             ],
           ),
         ),
@@ -540,7 +549,9 @@ class _Section {
     this.isFavorite = false,
     this.onToggleFavorite,
     this.owned = false,
+    this.onBlock,
   });
+  final VoidCallback? onBlock;
   final String title;
   final List<Widget> cells;
   final bool isFavorite;

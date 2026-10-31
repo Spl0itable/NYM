@@ -17,9 +17,12 @@ class ReportModal extends StatefulWidget {
     required this.targetNym,
     this.hasMessage = false,
     this.onSubmit,
+    this.pack,
   });
 
   final String targetNym;
+
+  final ({String name, String author})? pack;
 
   final bool hasMessage;
 
@@ -41,6 +44,7 @@ class ReportModal extends StatefulWidget {
     required String targetNym,
     bool hasMessage = false,
     void Function(String type, String details, bool reportMessage)? onSubmit,
+    ({String name, String author})? pack,
   }) {
     return showNymSheet<bool>(
       context,
@@ -48,6 +52,7 @@ class ReportModal extends StatefulWidget {
         targetNym: targetNym,
         hasMessage: hasMessage,
         onSubmit: onSubmit,
+        pack: pack,
       ),
       barrierColor: const Color(0xB3000000),
     );
@@ -60,7 +65,7 @@ class ReportModal extends StatefulWidget {
 class _ReportModalState extends State<ReportModal> {
   String _type = ReportModal.types.first.$1;
   final _details = TextEditingController();
-  late bool _reportMessage = widget.hasMessage;
+  late bool _reportMessage = widget.pack == null && widget.hasMessage;
 
   @override
   void dispose() {
@@ -98,12 +103,17 @@ class _ReportModalState extends State<ReportModal> {
                   TextSpan(
                       text: tr('Reporting: '),
                       style: TextStyle(color: c.textDim, fontSize: 15)),
-                  TextSpan(
-                      children: nymLabelSpans(
-                          context,
-                          splitNymLabel(widget.targetNym).base,
-                          splitNymLabel(widget.targetNym).suffix,
-                          TextStyle(color: c.primary, fontSize: 15))),
+                  if (widget.pack case final pack?)
+                    TextSpan(
+                        text: '${tr('Emoji pack')}: ${pack.name} · ${pack.author}',
+                        style: TextStyle(color: c.primary, fontSize: 15))
+                  else
+                    TextSpan(
+                        children: nymLabelSpans(
+                            context,
+                            splitNymLabel(widget.targetNym).base,
+                            splitNymLabel(widget.targetNym).suffix,
+                            TextStyle(color: c.primary, fontSize: 15))),
                 ])),
                 const SizedBox(height: 15),
                 Text(tr('Report Type:'),
@@ -155,6 +165,7 @@ class _ReportModalState extends State<ReportModal> {
                 ),
                 const SizedBox(
                     height: 15),
+                if (widget.pack == null)
                 InkWell(
                   onTap: widget.hasMessage
                       ? () =>

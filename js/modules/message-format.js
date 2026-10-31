@@ -808,6 +808,7 @@
             if (tag) return tag;
             const emoji = ctx.emojiMap ? ctx.emojiMap[code.toLowerCase()] : null;
             if (emoji) return emoji;
+            if (ctx.blockedEmoji && ctx.blockedEmoji[code]) return '';
             if (ctx.customEmojis && ctx.customEmojis[code]) {
                 return renderCustomEmojiImg(code, ctx) || match;
             }

@@ -43,6 +43,7 @@ import '../storage/key_value_store.dart';
 import 'api_client.dart';
 import 'api_config.dart';
 import 'd1_cursor.dart';
+import '../../features/emoji/emoji_block.dart';
 
 const int kPmDepositRetryBaseMs = 2000;
 
@@ -191,6 +192,7 @@ class StorageSync {
       'friends',
       'blockedKeywords',
       'blockedChannels',
+      'blockedEmojiPacks',
       'blockedRelays',
       'addedRelays',
       'hiddenChannels',
@@ -382,6 +384,7 @@ class StorageSync {
       flat['friends'] = _kvJsonList(kv, StorageKeys.friends);
       flat['blockedKeywords'] = _kvJsonList(kv, StorageKeys.blockedKeywords);
       flat['blockedChannels'] = _kvJsonList(kv, StorageKeys.blockedChannels);
+      flat[EmojiBlock.syncField] = _blockedEmojiPacksForSync(kv);
       flat['blockedRelays'] = _blockedRelaysForSync(kv);
       flat['addedRelays'] = _addedRelaysForSync(kv);
       flat['hiddenChannels'] = _kvJsonList(kv, StorageKeys.hiddenChannels);
@@ -554,6 +557,16 @@ class StorageSync {
   }
 
   /// Decodes a KV JSON object; anything else is empty.
+  static List<Map<String, Object>> _blockedEmojiPacksForSync(KeyValueStore kv) {
+    try {
+      final raw = kv.getString(EmojiBlock.settingsKey);
+      if (raw == null || raw.isEmpty) return const [];
+      return [for (final e in EmojiBlock.normalize(jsonDecode(raw))) e.toJson()];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   static Map<String, dynamic> _kvJsonMap(KeyValueStore kv, String key) {
     final raw = kv.getString(key);
     if (raw == null || raw.isEmpty) return <String, dynamic>{};

@@ -549,8 +549,9 @@ class StreetLayer extends ChangeNotifier {
     if (id == null) return;
     final gen = _gen;
     _inflight.add(key);
+    final pending = _fetcher.fetchTile(b, id);
     StreetSession.sent.add(_now());
-    _fetcher.fetchTile(b, id).then((r) => _onResult(b, key, r, gen),
+    pending.then((r) => _onResult(b, key, r, gen),
         onError: (_) => _onResult(b, key, const StreetFetchResult(0, null), gen));
   }
 

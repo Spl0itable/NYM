@@ -232,7 +232,7 @@
                 (preview.thumb ? `<img class="msg-sheet-thumb" alt="" src="${esc(typeof this.getProxiedMediaUrl === 'function' ? this.getProxiedMediaUrl(preview.thumb) : preview.thumb)}">` : '') +
                 '</div>' +
                 '<div class="msg-sheet-react">' +
-                emojis.map((e) => `<button type="button" class="msg-sheet-emoji" data-emoji="${esc(e)}">${this._msgSheetEmojiHtml(e)}</button>`).join('') +
+                emojis.filter((e) => !(typeof this._emojiStringBlocked === 'function' && this._emojiStringBlocked(e))).map((e) => `<button type="button" class="msg-sheet-emoji" data-emoji="${esc(e)}">${this._msgSheetEmojiHtml(e)}</button>`).join('') +
                 `<button type="button" class="msg-sheet-more" aria-label="${esc(tr('More reactions'))}">${ICONS.more}</button>` +
                 '</div>' +
                 '<div class="msg-sheet-actions">' +

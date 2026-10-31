@@ -93,6 +93,7 @@ import 'composer.dart' show ComposerDrafts, composerOverhangProvider;
 import '../common/nym_tooltip.dart';
 import '../common/nym_label.dart';
 import '../../core/theme/nym_a11y.dart';
+import '../../features/emoji/emoji_block.dart';
 
 String formatTime(DateTime t, String timeFormat) {
   final h24 = t.hour;
@@ -669,7 +670,14 @@ class _MessageRowState extends ConsumerState<MessageRow>
 
   Message get message => widget.message;
   Settings get settings => widget.settings;
-  List<MessageReaction> get reactions => widget.reactions;
+  List<MessageReaction> get reactions {
+    final hidden = ref.read(hiddenEmojiProvider);
+    if (hidden.codes.isEmpty) return widget.reactions;
+    return [
+      for (final r in widget.reactions)
+        if (!hidden.token(r.emoji)) r,
+    ];
+  }
 
   /// Null gives the identicon fallback.
   String? get _authorPicture => message.localOnlyRow
@@ -1058,6 +1066,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(hiddenEmojiProvider.select((h) => h));
     if (message.isSystemRow) return _buildSystemMessage(context);
     if (message.isMeAction) return _buildActionMessage(context);
     Widget row =
@@ -2426,7 +2435,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
   void _onMessageLongPress(BuildContext context, Offset at) {
     Haptics.selection();
     final rect = Rect.fromCenter(center: at, width: 0, height: 0);
-    final recents = ref.read(recentEmojisProvider);
+    final recents = ref.read(visibleRecentEmojisProvider);
     final emojis = quickReactEmojis(recents);
     final items = _sheetItems(context);
     final picker = widget.onReactionPicker;
@@ -2489,6 +2498,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
         RegExp(r'^:([a-zA-Z0-9_]+):$').firstMatch(settings.swipeReactEmoji);
     if (m == null) return null;
     final code = m.group(1)!;
+    if (ref.watch(hiddenEmojiProvider.select((h) => h.code(code)))) return null;
     return ref.watch(liveCustomEmojiProvider.select((s) => s.codeToUrl[code]));
   }
 

@@ -255,7 +255,7 @@ async function run() {
     'js/modules/persistence.js', 'js/modules/key-vault.js', 'js/modules/panic.js',
     'js/modules/remote-panic.js', 'js/modules/remote-panic-ui.js',
     'js/modules/ai-consent.js',
-    'js/modules/attest.js', 'js/modules/filter-packs.js', 'js/modules/content-filter.js', 'js/modules/event-details.js',
+    'js/modules/attest.js', 'js/modules/filter-packs.js', 'js/modules/content-filter.js', 'js/modules/emoji-block.js', 'js/modules/event-details.js',
     'js/modules/wrap-outbox.js', 'js/modules/d1-cursor.js', 'js/modules/relay-add.js', 'js/modules/relay-block.js',
     'js/modules/relays.js', 'js/modules/nostr-core.js', 'js/modules/nym-suffix.js', 'js/modules/users.js',
     'js/modules/channels.js', 'js/modules/syntax-highlight.js', 'js/modules/messages.js',

@@ -49,6 +49,7 @@ import '../../services/relay/queued_sends.dart';
 import '../../features/dm_polls/dm_polls_providers.dart';
 import '../../features/dm_polls/dm_polls_service.dart' show DmPollsService;
 import '../../features/emoji/custom_emoji.dart';
+import '../../features/emoji/emoji_block.dart';
 import '../../features/emoji/emoji_data.dart';
 import '../../features/emoji/emoji_picker.dart';
 import '../../features/emoji/gif_picker.dart';
@@ -1186,7 +1187,7 @@ class _ComposerState extends ConsumerState<Composer>
       case TriggerKind.emoji:
         final results = queryEmoji(
           search: trigger.query,
-          recents: _recents,
+          recents: ref.read(hiddenEmojiProvider).visible(_recents),
           custom: _customEmojis,
         );
         return AutocompleteView.emoji(results);
@@ -1865,7 +1866,7 @@ class _ComposerState extends ConsumerState<Composer>
         ) ||
         ref.read(nostrControllerProvider).isLive;
 
-    _customEmojis = ref.watch(liveCustomEmojiProvider);
+    _customEmojis = ref.watch(visibleCustomEmojiProvider);
     // Lets the controller resolve sentinel chars to emoji images and recognize real `:code:`s.
     _controller.codeToUrl = _customEmojis.codeToUrl;
 

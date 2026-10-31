@@ -41,6 +41,7 @@ Object.assign(NYM.prototype, {
     },
 
     _notifPreviewText(text) {
+        if (typeof text === 'string' && typeof this.stripBlockedEmoji === 'function') text = this.stripBlockedEmoji(text);
         const MN = window.NymMediaNotes;
         if (MN && typeof text === 'string' && text.indexOf('#nym:') !== -1) {
             text = MN.previewText(text, (s) => (typeof this.uiText === 'function' ? this.uiText(s) : s));

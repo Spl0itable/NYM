@@ -3,7 +3,7 @@
 import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake, sha256 } from './_shared.js';
 import { isNymchatClient, clientOriginAllowed } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
-import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
+import { filterSet, frameHit, eventHit, noteReport, packHit } from './_filters.js';
 import { spamEngine, ioReserve, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
@@ -1142,6 +1142,7 @@ export async function onRequest(context) {
   function emojiRowFrom(buffered, nowSec) {
     const ev = verifiedEventJson(buffered.json);
     if (!ev || !isArchivableEmojiKind(ev.kind) || ev.created_at > nowSec + ARCHIVE_FUTURE_SKEW_S) return null;
+    if (packHit(gate, ev)) return null;
     const dTag = evTagReader(ev)('d');
     const coord = emojiCoord(ev.kind, ev.pubkey, dTag);
     if (!coord || coord !== buffered.coord) return null;

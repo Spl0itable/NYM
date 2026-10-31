@@ -29,6 +29,7 @@ import '../features/emoji/custom_emoji.dart'
         kEmojiPackCoordRx,
         kEmojiPacksUsedKey,
         loadCustomEmojiState;
+import '../features/emoji/emoji_block.dart';
 import '../features/emoji/emoji_data.dart';
 import '../features/emoji/emoji_prefetch.dart' show scheduleCustomEmojiPrefetch;
 import '../features/groups/group_logic.dart';
@@ -7848,7 +7849,11 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     try {
       final prefs = await _ref.read(emojiPrefsProvider.future);
       _prefs = prefs;
-      final cached = loadCustomEmojiState(prefs);
+      final blocked = _blockedCoords();
+      final cached = loadCustomEmojiState(prefs,
+          skipPack: blocked.isEmpty
+              ? null
+              : (k) => blocked.contains('30030:$k'));
       try {
         final used = jsonDecode(prefs.getString(kEmojiPacksUsedKey) ?? '[]');
         if (used is List) {
@@ -7862,6 +7867,7 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
       }
       if (mounted && (_codeToUrl.isNotEmpty || _packsByKey.isNotEmpty)) {
         _publish();
+        if (blocked.isNotEmpty) _repointBlocked();
         _schedulePrefetch();
       }
     } catch (_) {
@@ -7906,6 +7912,7 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
 
   /// Ingests `['emoji', shortcode, url]` tags from any inbound event.
   void ingestEmojiTags(List<List<String>> tags) {
+    _noteTagCoords(tags);
     var changed = false;
     var marked = false;
     for (final t in tags) {
@@ -7949,10 +7956,14 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
     final existing = _packsByKey[pack.key];
     if (existing != null && existing.createdAt >= pack.createdAt) return;
     _packsByKey[pack.key] = pack;
-    for (final e in pack.emojis) {
-      registerEmojiQuiet(e.shortcode, e.url);
+    final packBlocked = _blockedCoords().contains(EmojiBlock.packCoord(pack));
+    if (!packBlocked) {
+      for (final e in pack.emojis) {
+        registerEmojiQuiet(e.shortcode, e.url);
+      }
     }
     _publish();
+    if (packBlocked) _repointBlocked();
     _persist();
     _schedulePrefetch();
   }
@@ -7982,13 +7993,14 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
   /// NIP-30 emoji tags for known custom shortcodes in [content].
   List<List<String>> emojiTagsForContent(String content, {bool anon = false}) {
     if (content.isEmpty || _codeToUrl.isEmpty) return const [];
+    final hidden = _hiddenUrls();
     final out = <List<String>>[];
     final added = <String>{};
     for (final m in RegExp(r':([a-zA-Z0-9_]+):').allMatches(content)) {
       final code = m.group(1)!;
       if (added.contains(code)) continue;
       final url = _codeToUrl[code];
-      if (url != null) {
+      if (url != null && !hidden.contains(url)) {
         added.add(code);
         final packKey = anon ? '' : packKeyFor(code, url);
         if (packKey.isNotEmpty) {
@@ -8000,6 +8012,82 @@ class LiveCustomEmojiNotifier extends StateNotifier<CustomEmojiState> {
       }
     }
     return out;
+  }
+
+  Set<String> _blockedCoords() {
+    try {
+      return _ref.read(blockedEmojiPacksProvider.notifier).coords;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  EmojiBlockSt _blockSt() {
+    try {
+      final list = _ref.read(blockedEmojiPacksProvider);
+      if (list.isEmpty) return EmojiBlockSt.empty;
+      final st = EmojiBlock.state(list, _packsByKey.values);
+      EmojiBlock.learnTags(
+          _ref.read(emojiTagCoordsProvider.notifier).asTags(), st);
+      return st;
+    } catch (_) {
+      return EmojiBlockSt.empty;
+    }
+  }
+
+  Set<String> _hiddenUrls() => _blockSt().urls;
+
+  void _noteTagCoords(List<List<String>> tags) {
+    if (!tags.any((t) => t.length >= 4 && t[0] == 'emoji')) return;
+    try {
+      _ref.read(emojiTagCoordsProvider.notifier).note(tags, _blockedCoords());
+    } catch (_) {}
+  }
+
+  void _repointBlocked() {
+    final st = _blockSt();
+    if (st.urls.isEmpty) return;
+    var changed = false;
+    for (final p in _packsByKey.values) {
+      if (st.coords.contains(EmojiBlock.packCoord(p))) continue;
+      for (final e in p.emojis) {
+        if (st.urls.contains(e.url)) continue;
+        final cur = _codeToUrl[e.shortcode];
+        if (cur != null &&
+            st.urls.contains(cur) &&
+            registerEmojiQuiet(e.shortcode, e.url)) {
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      _publish();
+      _persist();
+    }
+  }
+
+  void blocksChanged() {
+    _repointBlocked();
+    for (final c in _blockedCoords()) {
+      if (!_packsByKey.containsKey(c.substring(6))) requestPack(c);
+    }
+  }
+
+  void unblocked(String coord) {
+    if (!EmojiBlock.validCoord(coord)) return;
+    final pack = _packsByKey[coord.substring(6)];
+    if (pack == null) return;
+    var changed = false;
+    for (final e in pack.emojis) {
+      if (!_codeToUrl.containsKey(e.shortcode) &&
+          registerEmojiQuiet(e.shortcode, e.url)) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      _publish();
+      _persist();
+    }
   }
 
   void clearAll() {

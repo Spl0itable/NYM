@@ -5,6 +5,13 @@ const REFRESH_MS = 60000;
 const NOPE_CACHE_KEY = "nope";
 const HEX64 = /^[0-9a-f]{64}$/;
 const REPORT_TARGET_JSON_MAX = 16384;
+const EMOJI_PACK_COORD = /^30030:[0-9a-f]{64}:[^\u0000-\u001f\u007f]{0,1024}$/;
+const EMOJI_CODE = /^[a-zA-Z0-9_]{1,64}$/;
+const EMOJI_URL = /^https?:\/\//i;
+const PACK_URL_MAX = 500;
+const PACK_URLS_MAX = 3000;
+const PACK_URL_CHUNK = 50;
+const PACK_URLS_TTL_S = 600;
 
 export const NOPE_DDL = [
   "CREATE TABLE IF NOT EXISTS nope (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, value TEXT NOT NULL, " +
@@ -21,11 +28,12 @@ const REPORT_DDL = [
   "group_key TEXT, raw TEXT)",
   "CREATE INDEX IF NOT EXISTS reports_status ON reports (status, received_at)",
   "CREATE INDEX IF NOT EXISTS reports_target ON reports (target_pubkey)",
-  "CREATE INDEX IF NOT EXISTS reports_reporter ON reports (reporter, received_at)"
+  "CREATE INDEX IF NOT EXISTS reports_reporter ON reports (reporter, received_at)",
+  "ALTER TABLE reports ADD COLUMN target_coord TEXT"
 ];
 
 function emptySet() {
-  return { p: new Map(), e: new Map(), m: [], d: [], t: [], n: 0, at: 0 };
+  return { p: new Map(), e: new Map(), m: [], d: [], t: [], k: new Set(), kp: new Set(), n: 0, at: 0 };
 }
 
 let cache = emptySet();
@@ -72,6 +80,11 @@ async function readSet(env) {
   const now = Date.now();
   for (const r of rows) {
     if (r.expires_at && r.expires_at > 0 && r.expires_at < now) continue;
+    if (r.kind === "emoji_pack") {
+      const c = packValue(r.value);
+      if (c) { out.k.add(c); out.kp.add(c.slice(6, 70)); }
+      continue;
+    }
     const v = String(r.value || "").trim().toLowerCase();
     if (!v) continue;
     const mode = r.mode === "reject" ? "reject" : "shadow";
@@ -81,8 +94,42 @@ async function readSet(env) {
     else if (r.kind === "domain") out.d.push(v.replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, ""));
     else if (r.kind === "term" && v.length >= 3) out.t.push(v);
   }
-  out.n = out.p.size + out.e.size + out.m.length + out.d.length + out.t.length;
+  out.n = out.p.size + out.e.size + out.m.length + out.d.length + out.t.length + out.k.size;
   return out;
+}
+
+function packValue(value) {
+  let c = String(value || "");
+  if (/^30030:[0-9a-fA-F]{64}:/.test(c)) c = "30030:" + c.slice(6, 70).toLowerCase() + c.slice(70);
+  return EMOJI_PACK_COORD.test(c) ? c : "";
+}
+
+export function packCoordOf(ev) {
+  if (!ev || typeof ev !== "object" || ev.kind !== 30030 || typeof ev.pubkey !== "string") return "";
+  let d = "";
+  if (Array.isArray(ev.tags)) {
+    for (const t of ev.tags) if (Array.isArray(t) && t[0] === "d") { d = typeof t[1] === "string" ? t[1] : ""; break; }
+  }
+  const c = "30030:" + ev.pubkey.toLowerCase() + ":" + d;
+  return EMOJI_PACK_COORD.test(c) ? c : "";
+}
+
+export function packHit(set, ev) {
+  if (!set || !set.k || !set.k.size || !ev || ev.kind !== 30030) return false;
+  const c = packCoordOf(ev);
+  return !!c && set.k.has(c);
+}
+
+export function packJsonHit(set, json) {
+  if (!set || !set.k || !set.k.size || typeof json !== "string") return false;
+  const pk = rawField(json, "pubkey", 80);
+  if (!pk || !(set.kp ? set.kp.has(pk.toLowerCase()) : true)) return false;
+  const b = afterBrace(json);
+  const end = json.lastIndexOf("}");
+  if (b === -1 || end < b) return false;
+  let ev;
+  try { ev = JSON.parse(json.slice(b, end + 1)); } catch (e) { return false; }
+  return packHit(set, ev);
 }
 
 export function filterSet(env, reserve) {
@@ -202,6 +249,7 @@ export function frameHit(set, raw) {
     const id = rawField(raw, "id", 80);
     if (id && set.e.has(id.toLowerCase())) return true;
   }
+  if (set.k && set.k.size && rawKind(raw) === 30030 && packJsonHit(set, raw)) return true;
   if (set.m.length || set.d.length || set.t.length) {
     const k = rawKind(raw);
     if (k === 1059 || k === 1060 || k === 13) return false;
@@ -216,6 +264,7 @@ export function eventHit(set, ev) {
   if (pk && set.p.has(pk)) return set.p.get(pk);
   const id = typeof ev.id === "string" ? ev.id.toLowerCase() : "";
   if (id && set.e.has(id)) return set.e.get(id);
+  if (ev.kind === 30030 && packHit(set, ev)) return "shadow";
   if (ev.kind !== 1059 && ev.kind !== 1060 && ev.kind !== 13 && typeof ev.content === "string" && textHit(set, ev.content)) return "shadow";
   return null;
 }
@@ -235,8 +284,67 @@ export function rowHit(set, row) {
   return false;
 }
 
+function coordSetKey(list) {
+  let h = 0x811c9dc5;
+  for (const c of list) {
+    for (let i = 0; i < c.length; i++) { h ^= c.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    h ^= 10; h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return "nope-epu-" + h.toString(16) + "-" + list.length;
+}
+
+function packEmojiUrls(json, coord) {
+  let ev;
+  try { ev = JSON.parse(json); } catch (e) { return []; }
+  if (packCoordOf(ev) !== coord || !Array.isArray(ev.tags)) return [];
+  const out = [];
+  for (const t of ev.tags) {
+    if (out.length >= PACK_URL_MAX) break;
+    if (!Array.isArray(t) || t[0] !== "emoji" || typeof t[1] !== "string" || !EMOJI_CODE.test(t[1])) continue;
+    if (typeof t[2] !== "string" || !EMOJI_URL.test(t[2]) || t[2].length > 1024) continue;
+    out.push(t[2]);
+  }
+  return out;
+}
+
+async function readPackUrls(env, coords) {
+  const db = env && env.DB_CHANNELS;
+  if (!coords.length || !hasD1(db)) return [];
+  const key = coordSetKey(coords);
+  const hit = await edgeCacheGet(key);
+  if (Array.isArray(hit)) return hit;
+  const rows = new Map();
+  for (let i = 0; i < coords.length; i += PACK_URL_CHUNK) {
+    const part = coords.slice(i, i + PACK_URL_CHUNK);
+    const rs = await replica(db).prepare("SELECT coord, json FROM emoji_packs WHERE coord IN (" + part.map(() => "?").join(", ") + ")").bind(...part).all();
+    for (const r of (rs && rs.results) || []) if (r && typeof r.json === "string") rows.set(r.coord, r.json);
+  }
+  const seen = new Set();
+  for (const c of coords) {
+    if (seen.size >= PACK_URLS_MAX) break;
+    const json = rows.get(c);
+    if (!json) continue;
+    for (const u of packEmojiUrls(json, c)) {
+      if (seen.size >= PACK_URLS_MAX) break;
+      seen.add(u);
+    }
+  }
+  const out = Array.from(seen).sort();
+  await edgeCachePut(key, out, PACK_URLS_TTL_S);
+  return out;
+}
+
+export function packUrls(env, set) {
+  if (!set || !set.k || !set.k.size) return Promise.resolve([]);
+  if (!set.urls) {
+    const p = withTimeout(readPackUrls(env, Array.from(set.k).sort()), LOAD_TIMEOUT_MS).catch(() => { if (set.urls === p) set.urls = null; return null; });
+    set.urls = p;
+  }
+  return set.urls;
+}
+
 export function listPayload(set) {
-  return { p: Array.from(set.p.keys()), e: Array.from(set.e.keys()), at: set.at };
+  return { p: Array.from(set.p.keys()), e: Array.from(set.e.keys()), ep: set.k ? Array.from(set.k).sort() : [], at: set.at };
 }
 
 function tagVals(tags, name) {
@@ -263,10 +371,18 @@ export async function noteReport(env, ev, source) {
     const reporter = ev.pubkey.toLowerCase();
     const ps = tagVals(ev.tags, "p");
     const es = tagVals(ev.tags, "e");
-    const targetPubkey = ps.length && HEX64.test(ps[0][1].toLowerCase()) ? ps[0][1].toLowerCase() : null;
-    const targetEvent = es.length && HEX64.test(es[0][1].toLowerCase()) ? es[0][1].toLowerCase() : null;
+    const packTags = tagVals(ev.tags, "a").filter((t) => t[1].startsWith("30030:"));
+    let targetCoord = null;
+    if (packTags.length) {
+      targetCoord = packTags[0][1];
+      if (!EMOJI_PACK_COORD.test(targetCoord)) return false;
+      if (ps.length && ps[0][1].toLowerCase() !== targetCoord.slice(6, 70)) return false;
+    }
+    const targetPubkey = targetCoord ? targetCoord.slice(6, 70)
+      : (ps.length && HEX64.test(ps[0][1].toLowerCase()) ? ps[0][1].toLowerCase() : null);
+    const targetEvent = !targetCoord && es.length && HEX64.test(es[0][1].toLowerCase()) ? es[0][1].toLowerCase() : null;
     if (!targetPubkey && !targetEvent) return false;
-    const type = String((es[0] && es[0][2]) || (ps[0] && ps[0][2]) || "other").slice(0, 32);
+    const type = String((targetCoord && packTags[0][2]) || (es[0] && es[0][2]) || (ps[0] && ps[0][2]) || "other").slice(0, 32);
     const content = typeof ev.content === "string" ? ev.content.slice(0, 4000) : "";
     const now = Date.now();
     await ensureReports(db);
@@ -287,14 +403,23 @@ export async function noteReport(env, ev, source) {
         }
       } catch (_) { }
     }
-    const groupKey = targetEvent ? "e:" + targetEvent : "p:" + resolvedPubkey;
+    if (targetCoord) {
+      targetKind = 30030;
+      if (hasD1(env.DB_CHANNELS)) {
+        try {
+          const row = await replica(env.DB_CHANNELS).prepare("SELECT json FROM emoji_packs WHERE coord = ?").bind(targetCoord).first();
+          if (row && typeof row.json === "string" && row.json.length <= REPORT_TARGET_JSON_MAX) targetJson = row.json;
+        } catch (_) { }
+      }
+    }
+    const groupKey = targetCoord ? "a:" + targetCoord : (targetEvent ? "e:" + targetEvent : "p:" + resolvedPubkey);
     let raw = null;
     try { raw = JSON.stringify(ev); if (raw.length > 16384) raw = null; } catch (_) { raw = null; }
     const res = await db.prepare(
       "INSERT OR IGNORE INTO reports (id, reporter, target_pubkey, target_event, report_type, content, created_at, received_at, source, " +
-      "channel, target_kind, target_json, status, group_key, raw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)"
+      "channel, target_kind, target_json, status, group_key, raw, target_coord) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)"
     ).bind(ev.id.toLowerCase(), reporter, resolvedPubkey, targetEvent, type, content, ev.created_at || 0, now, source || null,
-      channel, targetKind, targetJson, groupKey, raw).run();
+      channel, targetKind, targetJson, groupKey, raw, targetCoord).run();
     const changes = res && res.meta && typeof res.meta.changes === "number" ? res.meta.changes : 1;
     return changes > 0;
   } catch (e) {

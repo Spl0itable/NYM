@@ -3333,6 +3333,7 @@ Object.assign(NYM.prototype, {
     async sendMessage() {
         const input = document.getElementById('messageInput');
         let content = input.value.trim();
+        if (typeof this.stripBlockedEmoji === 'function') content = this.stripBlockedEmoji(content).trim();
 
         // Attachment URLs are appended from their tiles; unfinished or failed uploads contribute nothing.
         if (typeof this.composerHasPendingUploads === 'function'
@@ -5266,6 +5267,10 @@ Object.assign(NYM.prototype, {
             currentChannel,
             currentGeohash,
             customEmojis: (this.customEmojis && this.customEmojis.size) ? Object.fromEntries(this.customEmojis) : null,
+            blockedEmoji: (() => {
+                const codes = typeof this._blockedEmojiCodes === 'function' ? this._blockedEmojiCodes() : null;
+                return codes && codes.size ? Object.fromEntries(Array.from(codes, (c) => [c, 1])) : null;
+            })(),
             mediaFallbacks: (this.mediaFallbacks && this.mediaFallbacks.size) ? Object.fromEntries(this.mediaFallbacks) : null,
             locale,
             spoilerLabel,

@@ -56,7 +56,7 @@ import {
 } from "./_shared.js";
 import { isNymchatClient } from "./_client.js";
 import { isPrivateUrl, ssrfSafeFetch, readBounded } from "./proxy.js";
-import { filterSet, rowHit, pubkeyHit, listPayload } from "./_filters.js";
+import { filterSet, rowHit, pubkeyHit, listPayload, packJsonHit, packUrls } from "./_filters.js";
 import { hiddenAmong, hiddenSenders, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
 import { handleScheduleAction } from "./_schedule.js";
 
@@ -1973,6 +1973,21 @@ async function emojiCachedRead(context, path, load) {
   return fresh;
 }
 
+function emojiWithoutBlocked(result, gate) {
+  if (!result || !result.body || !gate || !gate.k || !gate.k.size) return result;
+  var lines = result.body.split("\n");
+  var kept = [];
+  var cut = false;
+  for (var i = 0; i < lines.length; i++) {
+    if (!lines[i]) continue;
+    if (packJsonHit(gate, lines[i])) { cut = true; continue; }
+    kept.push(lines[i]);
+  }
+  if (!cut) return result;
+  var body = kept.length ? kept.join("\n") + "\n" : "";
+  return { body: body, etag: emojiEtag(body), next: result.next || "" };
+}
+
 function emojiNdjsonResponse(result, clientEtag, extra) {
   var headers = { "Content-Type": "application/x-ndjson", "X-Etag": result.etag, "Access-Control-Expose-Headers": "X-Etag, X-Same, X-Next", ...CLIENT_CORS_HEADERS };
   if (result.next) headers["X-Next"] = result.next;
@@ -2064,6 +2079,8 @@ async function handleEmojiAction(context, body) {
     });
   };
   if (!hasD1(env.DB_CHANNELS)) return json({ error: "Emoji storage is not configured (missing DB_CHANNELS binding)." }, 503);
+  var gate = null;
+  try { gate = await filterSet(env); } catch (e) { gate = null; }
 
   if (body.action === "emoji-get") {
     var userPk = (typeof body.pubkey === "string" && /^[0-9a-f]{64}$/i.test(body.pubkey)) ? body.pubkey.toLowerCase() : null;
@@ -2081,6 +2098,7 @@ async function handleEmojiAction(context, body) {
       packs = { body: packsText, etag: emojiEtag(packsText) };
       emojiPacksCachePut(context, packs);
     }
+    packs = emojiWithoutBlocked(packs, gate);
 
     var userLine = "";
     if (userPk) {
@@ -2099,14 +2117,14 @@ async function handleEmojiAction(context, body) {
   }
 
   if (body.action === "emoji-page") {
-    var page = await emojiPageRead(context, body);
+    var page = emojiWithoutBlocked(await emojiPageRead(context, body), gate);
     if (!page) return json({ error: "Invalid cursor" }, 400);
     var own = (body.cursor === undefined || body.cursor === null || body.cursor === "") ? await emojiUserLine(env, body) : "";
     return emojiNdjsonResponse(page, body.etag, own);
   }
 
   if (body.action === "emoji-coords") {
-    var found = await emojiCoordsRead(context, body);
+    var found = emojiWithoutBlocked(await emojiCoordsRead(context, body), gate);
     if (!found) return json({ error: "Invalid coords" }, 400);
     return emojiNdjsonResponse(found, body.etag, "");
   }
@@ -2605,7 +2623,10 @@ async function routeStorageAction(context, body) {
 
   if (body && body.action === "filter-get") {
     var fs = await filterSet(context.env);
-    return new Response(JSON.stringify(listPayload(fs)), {
+    var payload = listPayload(fs);
+    var epu = await packUrls(context.env, fs);
+    if (Array.isArray(epu)) payload.epu = epu;
+    return new Response(JSON.stringify(payload), {
       status: 200, headers: { "Content-Type": "application/json", "Cache-Control": "max-age=60", ...CLIENT_CORS_HEADERS }
     });
   }

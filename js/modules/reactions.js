@@ -209,7 +209,7 @@ Object.assign(NYM.prototype, {
             if (typeof e !== 'string') return true;
             const m = e.match(/^:([a-zA-Z0-9_]+):$/);
             if (!m) return true;
-            return this.customEmojis && this.customEmojis.has(m[1]);
+            return this.customEmojis && this.customEmojis.has(m[1]) && !this.isCustomEmojiBlocked(m[1]);
         }).slice(0, limit);
     },
 
@@ -372,7 +372,8 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        if (pTag && pTag[1] === this.pubkey && event.pubkey !== this.pubkey) {
+        const reactionBlocked = typeof this._emojiStringBlocked === 'function' && this._emojiStringBlocked(reactionContent);
+        if (pTag && pTag[1] === this.pubkey && event.pubkey !== this.pubkey && !reactionBlocked) {
             const messageAge = Date.now() - (event.created_at * 1000);
             const isHistorical = messageAge > 10000;
             const channelInfo = {
@@ -475,6 +476,7 @@ Object.assign(NYM.prototype, {
         if (!all || typeof this.isPersonHidden !== 'function') return all;
         const out = new Map();
         all.forEach((reactors, emoji) => {
+            if (typeof this._emojiStringBlocked === 'function' && this._emojiStringBlocked(emoji)) return;
             const kept = new Map();
             reactors.forEach((nym, pk) => { if (!this.isPersonHidden(pk, nym)) kept.set(pk, nym); });
             if (kept.size) out.set(emoji, kept);
@@ -1084,6 +1086,7 @@ ${this._emojiSectionsHtml()}`;
     },
 
     async sendReaction(messageId, emoji) {
+        if (typeof this._emojiStringBlocked === 'function' && this._emojiStringBlocked(emoji)) return;
         try {
             if (!this._checkReactionRateLimit(messageId, emoji)) return;
 

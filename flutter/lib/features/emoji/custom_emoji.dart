@@ -64,10 +64,12 @@ class CustomEmojiState {
 }
 
 /// Loads cached emoji, requiring a valid shortcode and http(s) url and never shadowing built-in shortcodes.
-CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) =>
-    loadCustomEmojiStateWith(prefs.getString);
+CustomEmojiState loadCustomEmojiState(SharedPreferences prefs,
+        {bool Function(String key)? skipPack}) =>
+    loadCustomEmojiStateWith(prefs.getString, skipPack: skipPack);
 
-CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read) {
+CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read,
+    {bool Function(String key)? skipPack}) {
   final codeToUrl = <String, String>{};
   final tagged = <String>{};
 
@@ -115,6 +117,7 @@ CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read) {
           final identifier = (p['identifier'] as String?) ?? '';
           final key = '$pubkey:$identifier';
           if (seenPackKeys.contains(key)) continue;
+          final skip = skipPack?.call(key) ?? false;
           final emojis = <({String shortcode, String url})>[];
           for (final e in rawEmojis) {
             if (e is! Map) continue;
@@ -123,7 +126,7 @@ CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read) {
             if (sc == null || url == null) continue;
             if (!_rxShortcode.hasMatch(sc) || !_rxUrl.hasMatch(url)) continue;
             emojis.add((shortcode: sc, url: url));
-            register(sc, url);
+            if (!skip) register(sc, url);
           }
           if (emojis.isEmpty) continue;
           seenPackKeys.add(key);

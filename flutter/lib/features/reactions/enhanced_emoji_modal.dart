@@ -9,6 +9,8 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../widgets/nym_icons.dart';
 import '../emoji/custom_emoji.dart';
+import '../emoji/emoji_block.dart';
+import '../emoji/emoji_block_ui.dart';
 import '../emoji/emoji_data.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
@@ -141,7 +143,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final custom = ref.watch(liveCustomEmojiProvider);
+    final custom = ref.watch(visibleCustomEmojiProvider);
     final screenWidth = MediaQuery.sizeOf(context).width;
     final columns = screenWidth <= _kFiveColMaxWidth ? 5 : 6;
 
@@ -212,6 +214,9 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
         isFavorite: packFavSet.contains(pack.key),
         onToggleFavorite:
             _packFavStore == null ? null : () => _togglePackFavorite(pack.key),
+        onBlock: isOwn(pack)
+            ? null
+            : () => confirmBlockEmojiPack(context, ref, pack),
       ));
     }
 
@@ -394,6 +399,8 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
                   active: section.isFavorite,
                   onTap: section.onToggleFavorite!,
                 ),
+              if (section.onBlock != null)
+                EmojiPackBlockButton(onTap: section.onBlock!),
             ],
           ),
         ),
@@ -423,7 +430,9 @@ class _Section {
     this.isFavorite = false,
     this.onToggleFavorite,
     this.owned = false,
+    this.onBlock,
   });
+  final VoidCallback? onBlock;
   final String title;
   final List<Widget> cells;
   final bool isFavorite;

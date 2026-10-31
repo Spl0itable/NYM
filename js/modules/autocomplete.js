@@ -78,6 +78,8 @@ Object.assign(NYM.prototype, {
                 .slice(0, 8);
         }
 
+        if (typeof this._emojiStringBlocked === 'function') matches = matches.filter((m) => !this._emojiStringBlocked(m.emoji));
+
         if (matches.length > 0) {
             this._renderEmojiAutocompleteItems(dropdown, matches);
             dropdown.classList.add('active');

@@ -46,6 +46,8 @@ import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_avatar.dart' show proxiedAvatarUrl;
 import '../../widgets/nym_icons.dart';
 import '../../widgets/wallpaper/wallpaper_layer.dart';
+import '../emoji/emoji_block.dart';
+import '../emoji/emoji_block_ui.dart';
 import '../emoji/emoji_picker.dart';
 import '../ai_consent/ai_consent.dart';
 import '../i18n/i18n.dart';
@@ -1058,6 +1060,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     for (final key in ref.read(appStateProvider).blockedChannels.toList()) {
       notifier.removeBlockedChannel(key);
     }
+    final blockedPacks = ref.read(blockedEmojiPacksProvider);
+    ref.read(blockedEmojiPacksProvider.notifier).clear();
+    for (final e in blockedPacks) {
+      ref.read(liveCustomEmojiProvider.notifier).unblocked(e.coord);
+    }
 
     // Rebuild Settings from the cleared store so visual defaults revert without a relaunch.
     ref.read(settingsProvider.notifier).reloadFromStore();
@@ -1954,6 +1961,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       controller.syncSettings();
                     },
                   ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr('Blocked Emoji Packs Unblock {list}', {
+            'list': ref.read(blockedEmojiPacksProvider).isEmpty
+                ? tr('No blocked emoji packs')
+                : ref
+                    .read(blockedEmojiPacksProvider)
+                    .map((e) => e.name.isNotEmpty ? e.name : e.d)
+                    .join(' ')
+          }),
+          child: FormGroup(
+            key: const ValueKey('settings-blocked-emoji-packs'),
+            label: tr('Blocked Emoji Packs'),
+            child: BlockedEmojiPacksList(
+              frame: (child) => _listBox(child: child),
+              emptyFrame: _emptyListBox,
+            ),
           ),
         ),
         _GroupSpec(

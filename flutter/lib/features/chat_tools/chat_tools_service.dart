@@ -223,8 +223,11 @@ class ChatToolsService {
     if (isSaved(state, id)) return;
     final now = _nowMs;
     final sv = entry['sv'] is num ? (entry['sv'] as num).toInt() + 1 : 0;
-    _persistSaved(addSaved(
-        state, {...entry, 'sv': now > sv ? now : sv}, now));
+    final gone = (state['removed'] as Map<String, num>)[id];
+    final past = gone == null ? 0 : gone.toInt() + 1;
+    var at = now > sv ? now : sv;
+    if (past > at) at = past;
+    _persistSaved(addSaved(state, {...entry, 'sv': at}, now));
     _savedRev++;
     _setPending(hooks.syncAllowed());
     _changed();

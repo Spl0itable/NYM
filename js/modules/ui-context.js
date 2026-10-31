@@ -261,21 +261,38 @@ Object.assign(NYM.prototype, {
         // ctxDeleteMessage is wired via data-action in index.html and dispatched through inline-bindings.js.
     },
 
-    openReportModal() {
-        if (!this.contextMenuData) return;
+    openReportModal(target) {
+        const B = typeof window !== 'undefined' ? window.NymEmojiBlock : null;
+        const pack = target && target.kind === 'emojiPack' && B && B.validCoord(target.coord) ? target : null;
+        if (!pack && !this.contextMenuData) return;
+        this._reportTarget = pack;
 
         const modal = document.getElementById('reportModal');
         const targetNym = document.getElementById('reportTargetNym');
         const reportMessageCheckbox = document.getElementById('reportMessage');
+        const messageRow = reportMessageCheckbox && typeof reportMessageCheckbox.closest === 'function' ? reportMessageCheckbox.closest('.nm-h-11') : null;
 
-        targetNym.innerHTML = this.formatNymWithPubkey(this.contextMenuData.nym, this.contextMenuData.pubkey);
-
-        if (this.contextMenuData.messageId) {
-            reportMessageCheckbox.disabled = false;
-            reportMessageCheckbox.checked = true;
-        } else {
-            reportMessageCheckbox.disabled = true;
+        if (pack) {
+            const author = B.authorOf(pack.coord);
+            const label = typeof this.uiText === 'function' ? this.uiText('Emoji pack') : 'Emoji pack';
+            const name = pack.name || B.dOf(pack.coord);
+            const who = typeof this._emojiPackAuthorLabel === 'function' ? this._emojiPackAuthorLabel(author) : author.slice(0, 8);
+            targetNym.innerHTML = `${this.escapeHtml(label)}: <span class="report-pack-name" data-no-i18n>${this.escapeHtml(name)}</span> · <span class="report-pack-author" data-no-i18n>${this.escapeHtml(who)}</span>`;
+            targetNym.dataset.coord = pack.coord;
             reportMessageCheckbox.checked = false;
+            reportMessageCheckbox.disabled = true;
+            if (messageRow) messageRow.style.display = 'none';
+        } else {
+            targetNym.innerHTML = this.formatNymWithPubkey(this.contextMenuData.nym, this.contextMenuData.pubkey);
+            delete targetNym.dataset.coord;
+            if (messageRow) messageRow.style.display = '';
+            if (this.contextMenuData.messageId) {
+                reportMessageCheckbox.disabled = false;
+                reportMessageCheckbox.checked = true;
+            } else {
+                reportMessageCheckbox.disabled = true;
+                reportMessageCheckbox.checked = false;
+            }
         }
 
         modal.style.display = 'flex';
@@ -284,21 +301,26 @@ Object.assign(NYM.prototype, {
     closeReportModal() {
         const modal = document.getElementById('reportModal');
         modal.style.display = 'none';
+        this._reportTarget = null;
 
         document.getElementById('reportType').value = 'nudity';
         document.getElementById('reportDetails').value = '';
-        document.getElementById('reportMessage').checked = true;
+        const reportMessage = document.getElementById('reportMessage');
+        reportMessage.checked = true;
+        const messageRow = typeof reportMessage.closest === 'function' ? reportMessage.closest('.nm-h-11') : null;
+        if (messageRow) messageRow.style.display = '';
     },
 
     async submitReport() {
-        if (!this.contextMenuData) return;
+        const pack = this._reportTarget || null;
+        if (!pack && !this.contextMenuData) return;
 
         const reportType = document.getElementById('reportType').value;
         const reportDetails = document.getElementById('reportDetails').value;
         const reportMessage = document.getElementById('reportMessage').checked;
 
-        const pubkey = this.contextMenuData.pubkey;
-        const messageId = this.contextMenuData.messageId;
+        const pubkey = pack ? '' : this.contextMenuData.pubkey;
+        const messageId = pack ? '' : this.contextMenuData.messageId;
 
         try {
             // NIP-56 kind 1984 report event.
@@ -310,11 +332,14 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
 
-            // p tag is always required for user reports.
-            event.tags.push(['p', pubkey, reportType]);
+            if (pack) {
+                event.tags.push(...window.NymEmojiBlock.reportTags(pack.coord, reportType));
+            } else {
+                event.tags.push(['p', pubkey, reportType]);
 
-            if (reportMessage && messageId) {
-                event.tags.push(['e', messageId, reportType]);
+                if (reportMessage && messageId) {
+                    event.tags.push(['e', messageId, reportType]);
+                }
             }
 
             const signedEvent = await this.signEvent(event);
@@ -392,7 +417,7 @@ Object.assign(NYM.prototype, {
 
         const ctxBio = document.getElementById('ctxBio');
         if (ctxBio) {
-            const bio = this.getBio(pubkey);
+            const bio = typeof this.stripBlockedEmoji === 'function' ? this.stripBlockedEmoji(this.getBio(pubkey)) : this.getBio(pubkey);
             if (ctxBio.textContent !== bio) ctxBio.textContent = bio;
         }
 
@@ -668,7 +693,7 @@ Object.assign(NYM.prototype, {
 
         const ctxBio = document.getElementById('ctxBio');
         if (ctxBio) {
-            const bio = ctxMask ? '' : this.getBio(pubkey);
+            const bio = ctxMask ? '' : (typeof this.stripBlockedEmoji === 'function' ? this.stripBlockedEmoji(this.getBio(pubkey)) : this.getBio(pubkey));
             ctxBio.textContent = bio;
         }
 
@@ -1441,7 +1466,7 @@ Object.assign(NYM.prototype, {
             const popup = document.createElement('div');
             popup.className = 'quick-react-popup';
 
-            popup.innerHTML = quickEmojis.map(emoji => {
+            popup.innerHTML = quickEmojis.filter((e) => !(typeof this._emojiStringBlocked === 'function' && this._emojiStringBlocked(e))).map(emoji => {
                 const cm = typeof emoji === 'string' && emoji.match(/^:([a-zA-Z0-9_]+):$/);
                 if (cm && this.customEmojis && this.customEmojis.has(cm[1])) {
                     return `<button class="quick-react-emoji" data-emoji=":${this.escapeHtml(cm[1])}:">${this.renderCustomEmojiImg(cm[1])}</button>`;
@@ -1971,7 +1996,7 @@ Object.assign(NYM.prototype, {
             if (m[1] !== undefined) {
                 const code = m[1];
                 const url = this.customEmojis && this.customEmojis.get(code);
-                if (!url) continue;
+                if (!url || (typeof this.isCustomEmojiBlocked === 'function' && this.isCustomEmojiBlocked(code))) continue;
                 pushText(text.slice(last, m.index));
                 const img = document.createElement('img');
                 img.className = 'custom-emoji';

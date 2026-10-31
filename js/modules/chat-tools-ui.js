@@ -219,7 +219,9 @@
             const state = this._savedLoad();
             if (C().isSaved(state, entry.id)) return;
             const now = Date.now();
-            this._savedPersist(C().addSaved(state, Object.assign({}, entry, { sv: Math.max(now, (Number(entry.sv) || 0) + 1) }), now));
+            const gone = state && state.removed ? Number(state.removed[entry.id]) || 0 : 0;
+            const sv = Math.max(now, (Number(entry.sv) || 0) + 1, gone ? gone + 1 : 0);
+            this._savedPersist(C().addSaved(state, Object.assign({}, entry, { sv }), now));
             this._savedRev = (this._savedRev || 0) + 1;
             this._savedSetPending(this.savedMode() === 'sync');
             this._renderSavedPanel();

@@ -1777,7 +1777,7 @@ Object.assign(NYM.prototype, {
         const known = (e) => {
             if (typeof e !== 'string') return false;
             const m = e.match(/^:([a-zA-Z0-9_]+):$/);
-            return !m || (this.customEmojis && this.customEmojis.has(m[1]));
+            return !m || (this.customEmojis && this.customEmojis.has(m[1]) && !this.isCustomEmojiBlocked(m[1]));
         };
         const add = (e) => { if (e && known(e) && !seen.has(e)) { seen.add(e); out.push(e); } };
         (Array.isArray(this.recentEmojis) ? this.recentEmojis : []).forEach(add);
@@ -2158,7 +2158,7 @@ Object.assign(NYM.prototype, {
         const known = (e) => {
             if (typeof e !== 'string') return false;
             const m = e.match(/^:([a-zA-Z0-9_]+):$/);
-            return !m || (this.customEmojis && this.customEmojis.has(m[1]));
+            return !m || (this.customEmojis && this.customEmojis.has(m[1]) && !this.isCustomEmojiBlocked(m[1]));
         };
         const add = (e) => { if (e && known(e) && !seen.has(e)) { seen.add(e); out.push(e); } };
         (Array.isArray(this.recentEmojis) ? this.recentEmojis : []).forEach(add);
@@ -2342,7 +2342,7 @@ Object.assign(NYM.prototype, {
             const set = map[emoji];
             if (!set || !set.size) return;
             const shown = Array.from(set).filter((pk) => pk === this.pubkey || !this._callerHidden(pk));
-            if (!shown.length) return;
+            if (!shown.length || (typeof this._emojiStringBlocked === 'function' && this._emojiStringBlocked(emoji))) return;
             hasAny = true;
             const badge = document.createElement('button');
             badge.type = 'button';

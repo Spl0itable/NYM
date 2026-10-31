@@ -288,6 +288,7 @@ Object.assign(NYM.prototype, {
         if (this.emojiMap && this.emojiMap[shortcode.toLowerCase()]) return;
         if (this.customEmojis.get(shortcode) === url) return;
         this.customEmojis.set(shortcode, url);
+        this._emojiBlockCodes = null;
         // The formatting context snapshots this map; tell it the snapshot moved.
         if (typeof this._invalidateFormatCtx === 'function') this._invalidateFormatCtx();
         if (!this._pendingEmojiRefreshCodes) this._pendingEmojiRefreshCodes = new Set();
@@ -315,6 +316,7 @@ Object.assign(NYM.prototype, {
         this._pendingEmojiRefreshCodes = new Set();
         const roots = document.querySelectorAll('.message-content, .notification-item-body, .reaction-badge');
         if (roots.length === 0) return;
+        const blockedCodes = this._blockedEmojiCodes();
         const skip = (node, root) => {
             let p = node.parentNode;
             while (p && p !== root) {
@@ -347,6 +349,10 @@ Object.assign(NYM.prototype, {
                 for (const mm of matches) {
                     if (mm.index > last) {
                         frag.appendChild(document.createTextNode(text.slice(last, mm.index)));
+                    }
+                    if (blockedCodes.has(mm[1])) {
+                        last = mm.index + mm[0].length;
+                        continue;
                     }
                     const tmp = document.createElement('span');
                     tmp.innerHTML = this.renderCustomEmojiImg(mm[1], extra, !extra) || '';
@@ -445,8 +451,9 @@ Object.assign(NYM.prototype, {
     _emojiWantedCoords() {
         const out = [];
         const seen = new Set();
+        const blocked = this._globalEmojiPackSet();
         const add = (coord) => {
-            if (!_RX_EMOJI_COORD.test(coord) || seen.has(coord)) return;
+            if (!_RX_EMOJI_COORD.test(coord) || seen.has(coord) || blocked.has(coord)) return;
             seen.add(coord);
             if (this.customEmojiPacks && this.customEmojiPacks.has(coord.slice(6))) return;
             if (this._emojiCoordsTried && this._emojiCoordsTried.has(coord)) return;
@@ -459,6 +466,7 @@ Object.assign(NYM.prototype, {
 
     requestEmojiPack(coord) {
         if (!_RX_EMOJI_COORD.test(coord || '')) return;
+        if (this._globalEmojiPackSet().has(coord)) return;
         if (this.customEmojiPacks && this.customEmojiPacks.has(coord.slice(6))) return;
         if (!this._emojiWanted) this._emojiWanted = new Set();
         if (this._emojiWanted.size >= 500) return;
@@ -565,6 +573,7 @@ Object.assign(NYM.prototype, {
                 this.registerCustomEmoji(t[1], t[2]);
                 this._markTaggedEmoji(t[1], t[2]);
             }
+            if (typeof t[3] === 'string' && t[2]) this._learnBlockedEmojiTag(t);
             if (!anon && typeof t[3] === 'string' && (!this.customEmojis || !this.customEmojis.has(t[1]))) this.requestEmojiPack(t[3]);
         }
     },
@@ -576,6 +585,7 @@ Object.assign(NYM.prototype, {
 
     _emojiPackHidden(pack) {
         if (!pack) return true;
+        if (this.isEmojiPackBlocked(pack)) return true;
         const pk = String(pack.pubkey || '');
         if (pk && pk === this.pubkey) return false;
         if (this._emojiPackBlocked(pack)) return true;
@@ -589,7 +599,7 @@ Object.assign(NYM.prototype, {
         this._emojiPickerDirty = true;
         if (!this.customEmojiPacks || !this.customEmojis) return;
         for (const pack of this.customEmojiPacks.values()) {
-            if (!pack || !Array.isArray(pack.emojis) || this._emojiPackBlocked(pack)) continue;
+            if (!pack || !Array.isArray(pack.emojis) || this._emojiPackBlocked(pack) || this.isEmojiPackBlocked(pack)) continue;
             for (const e of pack.emojis) {
                 if (e && e.shortcode && !this.customEmojis.has(e.shortcode)) this.registerCustomEmoji(e.shortcode, e.url);
             }
@@ -605,8 +615,14 @@ Object.assign(NYM.prototype, {
         if (existing && (existing.created_at || 0) >= (pack.created_at || 0)) return;
         this.customEmojiPacks.set(key, pack);
         this._emojiCodePack = null;
+        const packBlocked = this.isEmojiPackBlocked(pack);
+        if (packBlocked) {
+            this._emojiBlockChanged();
+            this._repointBlockedEmojiCodes();
+            this._scheduleEmojiBlockSweep();
+        }
         this._emojiPickerDirty = true;
-        if (!blocked) for (const e of pack.emojis) this.registerCustomEmoji(e.shortcode, e.url);
+        if (!blocked && !packBlocked) for (const e of pack.emojis) this.registerCustomEmoji(e.shortcode, e.url);
         if (persist) this._saveCustomEmojiCache();
         this._prefetchCustomEmojiImages();
     },
@@ -669,6 +685,7 @@ Object.assign(NYM.prototype, {
     renderCustomEmojiImg(shortcode, extraClass = '', tip = true) {
         const url = this.customEmojiUrl(shortcode);
         if (!url) return null;
+        if (this.isCustomEmojiBlocked(shortcode)) return '';
         const safeUrl = this.escapeHtml(this.getProxiedEmojiUrl(url));
         const safeCode = this.escapeHtml(shortcode);
         const cls = 'custom-emoji' + (extraClass ? ' ' + extraClass : '');
@@ -688,6 +705,10 @@ Object.assign(NYM.prototype, {
             const code = m[1];
             if (seen.has(code)) continue;
             const url = emojis.get(code);
+            if (url && this._emojiUrlBlocked(url)) {
+                seen.add(code);
+                continue;
+            }
             if (url) {
                 seen.add(code);
                 const packKey = map || anon ? '' : this._emojiPackKeyFor(code, url);
@@ -754,7 +775,7 @@ Object.assign(NYM.prototype, {
         if (tokens.length === 0 || tokens.length > 6) return false;
         return tokens.every(tok => {
             const m = tok.match(/^:([a-zA-Z0-9_]+):$/);
-            return m && this.customEmojis.has(m[1]);
+            return m && this.customEmojis.has(m[1]) && !this.isCustomEmojiBlocked(m[1]);
         });
     },
 
@@ -762,6 +783,7 @@ Object.assign(NYM.prototype, {
         if (typeof emoji === 'string') {
             const m = emoji.match(/^:([a-zA-Z0-9_]+):$/);
             if (m) {
+                if (this.isCustomEmojiBlocked(m[1])) return '';
                 const img = this.renderCustomEmojiImg(m[1], 'custom-emoji-reaction', tip);
                 if (img) return img;
                 this.noteMissingCustomEmoji(m[1]);
@@ -793,6 +815,7 @@ Object.assign(NYM.prototype, {
     emojiOptionHtml(emoji, emojiToNames, btnClass = 'emoji-option') {
         if (typeof emoji === 'string') {
             const m = emoji.match(/^:([a-zA-Z0-9_]+):$/);
+            if (m && this.isCustomEmojiBlocked(m[1])) return '';
             if (m && this.customEmojis && this.customEmojis.has(m[1])) {
                 const img = this.renderCustomEmojiImg(m[1]);
                 const code = this.escapeHtml(m[1]);
@@ -939,7 +962,7 @@ Object.assign(NYM.prototype, {
             if (shown >= 50) break;
             if (this._emojiPackHidden(pack)) continue;
             const emojis = pack.emojis
-                .filter(e => this.customEmojis.has(e.shortcode))
+                .filter(e => this.customEmojis.has(e.shortcode) && !this._emojiUrlBlocked(e.url) && !this.isCustomEmojiBlocked(e.shortcode))
                 .slice(0, 120);
             if (emojis.length === 0) continue;
             shown++;
@@ -950,8 +973,10 @@ Object.assign(NYM.prototype, {
             const favBtn = key
                 ? `<button type="button" class="emoji-pack-fav-btn${isFav ? ' active' : ''}" data-action="toggleEmojiPackFavorite" data-pack-key="${this.escapeHtml(key)}" title="${isFav ? 'Unfavorite' : 'Favorite'} this pack" aria-label="${isFav ? 'Unfavorite' : 'Favorite'} this pack"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 2 L14.9 8.6 L22 9.3 L16.5 14 L18.2 21 L12 17.3 L5.8 21 L7.5 14 L2 9.3 L9.1 8.6 Z"/></svg></button>`
                 : '';
-            html += `<div class="${sectionClass}" data-category="custom">` +
-                `<div class="${titleClass} emoji-pack-title">${title}${favBtn}</div><div class="${gridClass}">` +
+            const blockBtn = key && !this.isEmojiPackOwn(pack) ? this._emojiPackBlockButtonHtml(key) : '';
+            const actions = blockBtn ? `<span class="emoji-pack-actions">${favBtn}${blockBtn}</span>` : favBtn;
+            html += `<div class="${sectionClass}" data-category="custom" data-pack-key="${this.escapeHtml(key)}">` +
+                `<div class="${titleClass} emoji-pack-title">${title}${actions}</div><div class="${gridClass}">` +
                 emojis.map(e => this.emojiOptionHtml(`:${e.shortcode}:`, null, btnClass)).join('') +
                 `</div></div>`;
         }
@@ -1000,11 +1025,338 @@ Object.assign(NYM.prototype, {
     renderCustomEmojiInEscapedText(escapedText) {
         if (!escapedText || !this.customEmojis || this.customEmojis.size === 0) return escapedText;
         return escapedText.replace(/:([a-zA-Z0-9_]+):/g, (match, code) => {
+            if (this.isCustomEmojiBlocked(code)) return '';
             if (this.customEmojis.has(code)) {
                 return this.renderCustomEmojiImg(code) || match;
             }
             return match;
         });
+    },
+
+    _eb() {
+        const g = typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : null);
+        return g && g.NymEmojiBlock ? g.NymEmojiBlock : null;
+    },
+
+    _ebText(text, args) {
+        if (typeof this.uiText === 'function') return this.uiText(text, args);
+        return String(text).replace(/\{(\w+)\}/g, (m, k) => (args && args[k] != null ? String(args[k]) : m));
+    },
+
+    _blockedEmojiPackList() {
+        if (!this._emojiBlockList) {
+            const B = this._eb();
+            let stored = [];
+            try { stored = JSON.parse(localStorage.getItem('nym_blocked_emoji_packs') || '[]'); } catch (_) { }
+            this._emojiBlockList = B ? B.normalize(stored) : [];
+        }
+        return this._emojiBlockList;
+    },
+
+    _globalEmojiPackList() {
+        if (!this._emojiGlobalList) {
+            const B = this._eb();
+            let stored = null;
+            try { stored = JSON.parse(localStorage.getItem(B ? B.GLOBAL_KEY : 'nym_global_emoji_blocks') || 'null'); } catch (_) { }
+            this._emojiGlobalList = (B && B.globalList(stored)) || [];
+        }
+        return this._emojiGlobalList;
+    },
+
+    _globalEmojiUrlList() {
+        if (!this._emojiGlobalUrls) {
+            const B = this._eb();
+            let stored = null;
+            try { stored = JSON.parse(localStorage.getItem(B ? B.GLOBAL_URL_KEY : 'nym_global_emoji_block_urls') || 'null'); } catch (_) { }
+            this._emojiGlobalUrls = (B && B.globalUrls(stored)) || [];
+        }
+        return this._emojiGlobalUrls;
+    },
+
+    _globalEmojiPackSet() {
+        const list = this._globalEmojiPackList();
+        if (this._emojiGlobalSetOf !== list) {
+            this._emojiGlobalSet = new Set(list);
+            this._emojiGlobalSetOf = list;
+        }
+        return this._emojiGlobalSet;
+    },
+
+    _setGlobalEmojiBlocks(ep, epu) {
+        const B = this._eb();
+        const next = B ? B.globalList(ep) : null;
+        if (!next) return false;
+        const prev = this._globalEmojiPackList();
+        const prevUrls = this._globalEmojiUrlList();
+        const nextUrls = next.length ? (B.globalUrls(epu) || prevUrls) : [];
+        if (JSON.stringify(prev) === JSON.stringify(next) && JSON.stringify(prevUrls) === JSON.stringify(nextUrls)) return false;
+        this._emojiGlobalList = next;
+        this._emojiGlobalUrls = nextUrls;
+        try { localStorage.setItem(B.GLOBAL_KEY, JSON.stringify(next)); } catch (_) { }
+        try { localStorage.setItem(B.GLOBAL_URL_KEY, JSON.stringify(nextUrls)); } catch (_) { }
+        this._emojiBlockChanged();
+        this._repointBlockedEmojiCodes();
+        const kept = new Set(next);
+        for (const coord of prev) {
+            if (kept.has(coord)) continue;
+            const pack = this.customEmojiPacks && this.customEmojiPacks.get(coord.slice(6));
+            if (!pack || !Array.isArray(pack.emojis) || this.isEmojiPackBlocked(pack) || this._emojiPackBlocked(pack)) continue;
+            for (const e of pack.emojis) if (e && !this.customEmojis.has(e.shortcode)) this.registerCustomEmoji(e.shortcode, e.url);
+        }
+        this._applyEmojiBlocksToDom();
+        return true;
+    },
+
+    _emojiBlockState() {
+        if (!this._emojiBlockSt) {
+            const B = this._eb();
+            const list = this._blockedEmojiPackList();
+            const global = this._globalEmojiPackList();
+            const gurls = this._globalEmojiUrlList();
+            const st = B && (list.length || global.length || gurls.length)
+                ? B.state(list, this.customEmojiPacks ? this.customEmojiPacks.values() : [], global, gurls)
+                : { coords: new Set(), urls: new Set() };
+            if (B && st.coords.size && this._emojiTagCoords) {
+                const tags = [];
+                for (const k of this._emojiTagCoords) {
+                    const i = k.indexOf('\n');
+                    tags.push(['emoji', '', k.slice(0, i), k.slice(i + 1)]);
+                }
+                B.learnTags(tags, st);
+            }
+            this._emojiBlockSt = st;
+        }
+        return this._emojiBlockSt;
+    },
+
+    _emojiBlockChanged() {
+        this._emojiBlockSt = null;
+        this._emojiBlockCodes = null;
+        this._emojiPickerDirty = true;
+        this._emojiCodePack = null;
+        if (typeof this._invalidateFormatCtx === 'function') this._invalidateFormatCtx();
+    },
+
+    _learnBlockedEmojiTag(t) {
+        const B = this._eb();
+        if (!B || !B.validCoord(t[3]) || typeof t[2] !== 'string') return;
+        if (!this._emojiTagCoords) this._emojiTagCoords = new Set();
+        const set = this._emojiTagCoords;
+        const k = `${t[2]}\n${t[3]}`;
+        if (set.has(k)) return;
+        if (set.size >= B.MAX_LEARNED) set.delete(set.values().next().value);
+        set.add(k);
+        const st = this._emojiBlockState();
+        if (st.coords.has(t[3]) && B.learnTags([t], st) > 0) {
+            this._emojiBlockCodes = null;
+            this._emojiPickerDirty = true;
+            if (typeof this._invalidateFormatCtx === 'function') this._invalidateFormatCtx();
+            this._scheduleEmojiBlockSweep();
+        }
+    },
+
+    _scheduleEmojiBlockSweep() {
+        if (this._emojiBlockSweepT) return;
+        this._emojiBlockSweepT = setTimeout(() => {
+            this._emojiBlockSweepT = null;
+            this._applyEmojiBlocksToDom();
+        }, 100);
+    },
+
+    _repointBlockedEmojiCodes() {
+        if (!this.customEmojiPacks || !this.customEmojis) return;
+        const st = this._emojiBlockState();
+        if (!st.urls.size) return;
+        for (const pack of this.customEmojiPacks.values()) {
+            if (!pack || !Array.isArray(pack.emojis) || this._emojiPackBlocked(pack) || this.isEmojiPackBlocked(pack)) continue;
+            for (const e of pack.emojis) {
+                if (!e || !e.shortcode || !e.url || st.urls.has(e.url)) continue;
+                const cur = this.customEmojis.get(e.shortcode);
+                if (cur && st.urls.has(cur)) this.registerCustomEmoji(e.shortcode, e.url);
+            }
+        }
+    },
+
+    isEmojiPackBlocked(pack) {
+        const key = this._emojiPackKey(pack);
+        return !!key && this._emojiBlockState().coords.has(`30030:${key}`);
+    },
+
+    _emojiUrlBlocked(url) {
+        return !!url && this._emojiBlockState().urls.has(url);
+    },
+
+    isCustomEmojiBlocked(code) {
+        if (!code || !this.customEmojis) return false;
+        const st = this._emojiBlockState();
+        if (st.urls.size === 0) return false;
+        const url = this.customEmojis.get(code);
+        return !!url && st.urls.has(url);
+    },
+
+    _blockedEmojiCodes() {
+        if (!this._emojiBlockCodes) {
+            const out = new Set();
+            const st = this._emojiBlockState();
+            if (st.urls.size && this.customEmojis) {
+                for (const [code, url] of this.customEmojis) if (st.urls.has(url)) out.add(code);
+            }
+            this._emojiBlockCodes = out;
+        }
+        return this._emojiBlockCodes;
+    },
+
+    _emojiStringBlocked(emoji) {
+        if (typeof emoji !== 'string') return false;
+        const m = emoji.match(/^:([a-zA-Z0-9_]+):$/);
+        return !!m && this.isCustomEmojiBlocked(m[1]);
+    },
+
+    stripBlockedEmoji(text) {
+        const B = this._eb();
+        if (!B || typeof text !== 'string' || this._emojiBlockState().urls.size === 0) return text;
+        return B.strip(text, (code) => this.isCustomEmojiBlocked(code));
+    },
+
+    _emojiPackBlockButtonHtml(key) {
+        const label = this.escapeHtml(this._ebText('Block this pack'));
+        return `<button type="button" class="emoji-pack-block-btn" data-action="blockEmojiPack" data-pack-key="${this.escapeHtml(key)}" title="${label}" aria-label="${label}"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg></button>`;
+    },
+
+    async blockEmojiPack(key) {
+        const pack = this.customEmojiPacks && this.customEmojiPacks.get(key);
+        const B = this._eb();
+        if (!pack || !B || this.isEmojiPackOwn(pack) || !B.packCoord(pack)) return false;
+        const ask = typeof window !== 'undefined' && typeof window.showAppConfirm === 'function' ? window.showAppConfirm : null;
+        if (!ask) return false;
+        const res = await ask(this._ebText('Emoji from this pack will be hidden everywhere: the emoji picker, autocomplete, reactions and messages. You can unblock it in Settings.'), {
+            title: this._ebText('Block emoji pack?'),
+            okLabel: this._ebText('Block'),
+            danger: true,
+            checkboxLabel: this._ebText('Also report this pack')
+        });
+        if (!res || !res.confirmed) return false;
+        this._blockEmojiPackNow(pack);
+        if (res.checked) this.openEmojiPackReport(pack);
+        return true;
+    },
+
+    _blockEmojiPackNow(pack) {
+        const B = this._eb();
+        const entry = B && B.entryFor(pack, Math.floor(Date.now() / 1000));
+        if (!entry) return false;
+        const key = this._emojiPackKey(pack);
+        const favs = this._getEmojiPackFavorites();
+        const fi = favs.indexOf(key);
+        if (fi !== -1) {
+            favs.splice(fi, 1);
+            try { localStorage.setItem('nym_emoji_pack_favorites', JSON.stringify(favs)); } catch (_) { }
+        }
+        this._setBlockedEmojiPacks(B.add(this._blockedEmojiPackList(), entry));
+        return true;
+    },
+
+    openEmojiPackReport(pack) {
+        const B = this._eb();
+        const coord = B ? B.packCoord(pack) : '';
+        if (!coord || typeof this.openReportModal !== 'function') return;
+        this.openReportModal({ kind: 'emojiPack', coord, name: String(pack.title || pack.identifier || ''), author: B.authorOf(coord) });
+    },
+
+    unblockEmojiPack(coord) {
+        const B = this._eb();
+        if (!B) return;
+        this._setBlockedEmojiPacks(B.remove(this._blockedEmojiPackList(), coord));
+        const pack = this.customEmojiPacks && this.customEmojiPacks.get(String(coord || '').slice(6));
+        if (pack && Array.isArray(pack.emojis)) {
+            for (const e of pack.emojis) if (e && !this.customEmojis.has(e.shortcode)) this.registerCustomEmoji(e.shortcode, e.url);
+        }
+    },
+
+    unblockEmojiPackFromSettings(coord) {
+        this.unblockEmojiPack(coord);
+    },
+
+    _setBlockedEmojiPacks(list, opts) {
+        const B = this._eb();
+        const norm = B ? B.normalize(list) : [];
+        this._emojiBlockList = norm;
+        try { localStorage.setItem('nym_blocked_emoji_packs', JSON.stringify(norm)); } catch (_) { }
+        this._emojiBlockChanged();
+        this._repointBlockedEmojiCodes();
+        if (!(opts && opts.anon)) {
+            for (const e of norm) if (this.customEmojiPacks && !this.customEmojiPacks.has(e.coord.slice(6))) this.requestEmojiPack(e.coord);
+        }
+        this._applyEmojiBlocksToDom();
+        this.updateBlockedEmojiPacksList();
+        if (!(opts && opts.remote)) {
+            this._saveCustomEmojiCache();
+            if (typeof nostrSettingsSave === 'function') {
+                try { nostrSettingsSave(); } catch (_) { }
+            }
+        }
+    },
+
+    _applySyncedEmojiBlocks(list) {
+        if (!Array.isArray(list)) return;
+        const B = this._eb();
+        const next = B ? B.normalize(list) : [];
+        if (JSON.stringify(next) === JSON.stringify(this._blockedEmojiPackList())) return;
+        this._setBlockedEmojiPacks(next, { remote: true });
+    },
+
+    _emojiBlockSyncPayload() {
+        return this._blockedEmojiPackList().map((e) => ({ coord: e.coord, name: e.name, sample: e.sample.map((s) => ({ shortcode: s.shortcode, url: s.url })), at: e.at }));
+    },
+
+    _applyEmojiBlocksToDom() {
+        if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+        document.querySelectorAll('[data-category="custom"][data-pack-key]').forEach((el) => {
+            const key = el.getAttribute('data-pack-key') || '';
+            if (key && this._emojiBlockState().coords.has(`30030:${key}`)) el.remove();
+        });
+        const codes = this._blockedEmojiCodes();
+        if (codes.size) {
+            document.querySelectorAll('.custom-emoji-option, .quick-react-emoji, .msg-sheet-emoji').forEach((el) => {
+                const m = String(el.getAttribute('data-emoji') || '').match(/^:([a-zA-Z0-9_]+):$/);
+                if (m && codes.has(m[1])) el.remove();
+            });
+            document.querySelectorAll('img.custom-emoji').forEach((img) => {
+                const code = img.getAttribute('data-emoji-code');
+                if (code && codes.has(code)) img.remove();
+            });
+        }
+        if (typeof this._refreshVisibleReactions === 'function') this._refreshVisibleReactions();
+    },
+
+    _emojiPackAuthorLabel(pk) {
+        const name = typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pk) : '';
+        return name || `${String(pk).slice(0, 8)}…`;
+    },
+
+    updateBlockedEmojiPacksList() {
+        const el = typeof document !== 'undefined' && typeof document.getElementById === 'function' ? document.getElementById('blockedEmojiPacksList') : null;
+        if (!el) return;
+        const list = this._blockedEmojiPackList();
+        if (!list.length) {
+            el.innerHTML = `<div class="nm-dim12">${this.escapeHtml(this._ebText('No blocked emoji packs'))}</div>`;
+            return;
+        }
+        const proxied = (u) => (typeof this.getProxiedEmojiUrl === 'function' ? this.getProxiedEmojiUrl(u) : u);
+        const unblock = this.escapeHtml(this._ebText('Unblock'));
+        el.innerHTML = list.slice().reverse().map((e) => {
+            const author = e.coord.slice(6, 70);
+            const pack = this.customEmojiPacks && this.customEmojiPacks.get(e.coord.slice(6));
+            const name = e.name || (pack && String(pack.title || pack.identifier || '')) || e.coord.slice(71);
+            const sample = e.sample.length ? e.sample : (pack && Array.isArray(pack.emojis) ? pack.emojis.slice(0, 4) : []);
+            const imgs = sample.map((s) => `<img class="blocked-pack-sample" src="${this.escapeHtml(proxied(s.url))}" alt="" width="20" height="20" loading="lazy" decoding="async" draggable="false">`).join('');
+            const by = this._ebText('by {author}', { author: this._emojiPackAuthorLabel(author) });
+            return `<div class="blocked-item blocked-emoji-pack" data-coord="${this.escapeHtml(e.coord)}">` +
+                `<span class="blocked-pack-info"><span class="blocked-pack-samples" aria-hidden="true">${imgs}</span>` +
+                `<span class="blocked-pack-text"><span class="blocked-pack-name" data-no-i18n>${this.escapeHtml(name)}</span>` +
+                `<span class="blocked-pack-author" data-no-i18n>${this.escapeHtml(by)}</span></span></span>` +
+                `<button class="unblock-btn" data-action="unblockEmojiPackFromSettings" data-coord="${this.escapeHtml(e.coord)}">${unblock}</button></div>`;
+        }).join('');
     },
 
 });

@@ -400,6 +400,8 @@ window.nymHaptic = function (kind) {
         'selectP2PFile':              function () { window.selectP2PFile(); },
         'toggleEmojiPicker':          function () { nym().toggleEmojiPicker(); },
         'closeEnhancedEmojiModal':    function () { nym().closeEnhancedEmojiModal(); },
+        'blockEmojiPack':             function (e, t) { e && e.stopPropagation && e.stopPropagation(); nym().blockEmojiPack(t && t.dataset ? t.dataset.packKey : ''); },
+        'unblockEmojiPackFromSettings': function (_e, t) { nym().unblockEmojiPackFromSettings(t && t.dataset ? t.dataset.coord : ''); },
         'toggleEmojiPackFavorite':    function (e, t) { e && e.stopPropagation && e.stopPropagation(); nym().toggleEmojiPackFavorite(t && t.dataset ? t.dataset.packKey : ''); },
         'toggleEmojiCategoryFavorite':function (e, t) { e && e.stopPropagation && e.stopPropagation(); nym().toggleEmojiCategoryFavorite(t && t.dataset ? t.dataset.category : ''); },
         'toggleGifPicker':            function () { nym().toggleGifPicker(); },

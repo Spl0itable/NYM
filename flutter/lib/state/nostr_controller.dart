@@ -47,6 +47,7 @@ import '../features/commands/command_handler.dart';
 import '../features/commands/command_i18n.dart';
 import '../features/commands/command_registry.dart';
 import '../features/emoji/custom_emoji.dart';
+import '../features/emoji/emoji_block.dart';
 import '../features/dm_polls/dm_polls_providers.dart';
 import '../features/accounts/account_host.dart';
 import '../features/accounts/switch_outbox_stash.dart';
@@ -1944,6 +1945,10 @@ class NostrController {
     try {
       _ref.read(liveCustomEmojiProvider.notifier).clearAll();
     } catch (_) {}
+    try {
+      _ref.read(blockedEmojiPacksProvider.notifier).clear();
+      _ref.read(emojiTagCoordsProvider.notifier).clear();
+    } catch (_) {}
 
     // Final sweep for anything a straggling writer re-created after the wipe.
     try {
@@ -2101,6 +2106,10 @@ class NostrController {
     } catch (_) {}
     try {
       _ref.read(liveCustomEmojiProvider.notifier).clearAll();
+    } catch (_) {}
+    try {
+      _ref.read(blockedEmojiPacksProvider.notifier).clear();
+      _ref.read(emojiTagCoordsProvider.notifier).clear();
     } catch (_) {}
     // Re-read settings so the setup screen doesn't keep the signed-out user's color mode.
     try {
@@ -2889,7 +2898,8 @@ class NostrController {
     final isBlocked = senderPubkey.isNotEmpty &&
         blockState.blockedUsers.contains(senderPubkey);
     if (isBlocked) return;
-    final cleanBody = blockState.stripBlockedQuotes(body, quoted);
+    final cleanBody =
+        blockState.stripBlockedQuotes(_stripHiddenEmoji(body), quoted);
     final sourceRef = _notifySource(source);
     final directChannel = _entryChannel(historyType, route);
     final entryChannel = directChannel.isNotEmpty
@@ -3439,6 +3449,7 @@ class NostrController {
     String? channelHint,
   }) {
     if (emoji.isEmpty || messageId.isEmpty) return;
+    if (_hiddenEmojiToken(emoji)) return;
     final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
     if (self.isEmpty) return;
     if (targetAuthorPubkey != self || reactorPubkey == self) return;
@@ -5647,7 +5658,7 @@ class NostrController {
 
   /// Sends [text] to the current view: optimistic echo, then publish.
   Future<void> sendCurrent(String text) async {
-    final trimmed = text.trim();
+    final trimmed = _stripHiddenEmoji(text).trim();
     if (trimmed.isEmpty) return;
 
     // Route slash commands to the command handler.
@@ -5685,7 +5696,7 @@ class NostrController {
 
   /// Sends to the active channel under a fresh ephemeral key and anon nym; PM/group views use the real key.
   Future<bool> sendCurrentPseudonymous(String text) async {
-    final trimmed = text.trim();
+    final trimmed = _stripHiddenEmoji(text).trim();
     if (trimmed.isEmpty) return false;
     if (isCommandLine(trimmed)) {
       _dispatcher.handle(trimmed);
@@ -10340,7 +10351,7 @@ class NostrController {
 
   /// Re-publishes [messageId] with an `['edit', originalId]` tag and rewrites it locally; true if attempted.
   Future<bool> editMessage(String messageId, String newContent) async {
-    final trimmed = newContent.trim();
+    final trimmed = _stripHiddenEmoji(newContent).trim();
     if (messageId.isEmpty || trimmed.isEmpty) return false;
     final appState = _ref.read(appStateProvider.notifier);
     final state = _ref.read(appStateProvider);
@@ -11490,6 +11501,7 @@ class NostrController {
     required String kind,
   }) async {
     if (messageId.isEmpty || emoji.isEmpty) return false;
+    if (_hiddenEmojiToken(emoji)) return false;
     if (!_checkReactionRateLimit(messageId, emoji)) return false;
 
     final appState = _ref.read(appStateProvider.notifier);
@@ -12133,6 +12145,9 @@ class NostrController {
       hiddenChannels: _readSet(StorageKeys.hiddenChannels),
       blockedChannels: _readSet(StorageKeys.blockedChannels),
     );
+    try {
+      _ref.read(blockedEmojiPacksProvider.notifier).reload();
+    } catch (_) {}
   }
 
   /// Persists closed PMs and close times so stale backlog can't re-open them after relaunch.
@@ -15079,6 +15094,21 @@ class NostrController {
       } catch (_) {}
     }
 
+    final blockedEmojiPacks = p[EmojiBlock.syncField];
+    if (blockedEmojiPacks is List) {
+      try {
+        final packs = _ref.read(blockedEmojiPacksProvider.notifier);
+        final before = packs.coords;
+        if (packs.applySynced(blockedEmojiPacks)) {
+          final live = _ref.read(liveCustomEmojiProvider.notifier);
+          for (final c in before.difference(packs.coords)) {
+            live.unblocked(c);
+          }
+          live.blocksChanged();
+        }
+      } catch (_) {}
+    }
+
     // Closed PMs are a set union (no invented times); closed and leave times merge by per-key max.
     final closedTimes = <String, int>{};
     final rawClosedTimes = p['closedPMTimes'];
@@ -16865,6 +16895,51 @@ class NostrController {
       return true;
     } catch (_) {
       _emitSystemMessage(tr('Failed to submit report'));
+      return false;
+    }
+  }
+
+  Future<bool> submitEmojiPackReport({
+    required String coord,
+    required String type,
+    String? details,
+  }) async {
+    final service = _service;
+    final identity = _identity;
+    final sig = _signer;
+    if (service == null || identity == null || sig == null) return false;
+    final tags = EmojiBlock.reportTags(coord, type);
+    if (tags.isEmpty) return false;
+    try {
+      final unsigned = UnsignedEvent(
+        pubkey: identity.pubkey,
+        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        kind: 1984,
+        tags: tags,
+        content: details ?? '',
+      );
+      final signed = await sig.sign(unsigned);
+      await service.pool.publish(signed);
+      _emitSystemMessage(tr('Report submitted successfully'));
+      return true;
+    } catch (_) {
+      _emitSystemMessage(tr('Failed to submit report'));
+      return false;
+    }
+  }
+
+  String _stripHiddenEmoji(String text) {
+    try {
+      return _ref.read(hiddenEmojiProvider).strip(text);
+    } catch (_) {
+      return text;
+    }
+  }
+
+  bool _hiddenEmojiToken(String emoji) {
+    try {
+      return _ref.read(hiddenEmojiProvider).token(emoji);
+    } catch (_) {
       return false;
     }
   }

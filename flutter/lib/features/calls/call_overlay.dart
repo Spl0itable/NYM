@@ -19,6 +19,7 @@ import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/context_menu/context_menu_actions.dart';
 import '../../widgets/context_menu/context_menu_panel.dart';
 import '../../widgets/nym_icons.dart';
+import '../emoji/emoji_block.dart';
 import '../emoji/emoji_picker.dart';
 import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
@@ -127,7 +128,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
   /// Full emoji picker as a bottom sheet over the call; [onPick] gets the emoji.
   void _openEmojiPicker(ValueChanged<String> onPick) {
     showCallEmojiPicker(context,
-        recents: ref.read(recentEmojisProvider), onPick: onPick);
+        recents: ref.read(visibleRecentEmojisProvider), onPick: onPick);
   }
 
   /// Chat panel: a fixed 320px sibling of the grid on wide layouts, full-body on narrow ones.
@@ -244,7 +245,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
                       right: 0,
                       bottom: 92,
                       child: _ReactionsBar(
-                        recents: ref.watch(recentEmojisProvider),
+                        recents: ref.watch(visibleRecentEmojisProvider),
                         onPick: (e) {
                           service.sendReaction(e);
                           setState(() => _reactionsOpen = false);
@@ -767,7 +768,7 @@ class _ReactionsBar extends StatelessWidget {
     final c = context.nym;
     // Recents padded with defaults; custom codes are kept only while their pack is known.
     final codeToUrl = ProviderScope.containerOf(context)
-        .read(liveCustomEmojiProvider)
+        .read(visibleCustomEmojiProvider)
         .codeToUrl;
     final emojis = callReactionBarEmojis(recents,
         isKnownCustom: (code) => codeToUrl.containsKey(code));
@@ -954,7 +955,7 @@ class _ChatRow extends ConsumerWidget {
 
   void _openQuickReact(BuildContext context, Rect anchor) {
     final recents =
-        ProviderScope.containerOf(context).read(recentEmojisProvider);
+        ProviderScope.containerOf(context).read(visibleRecentEmojisProvider);
     final canMenu = !msg.isSelf && msg.pubkey.isNotEmpty;
     showQuickReactPopup(
       context,
@@ -1209,12 +1210,14 @@ class _ReactionBadges extends StatelessWidget {
     final c = context.nym;
     final selfPk =
         ProviderScope.containerOf(context).read(appStateProvider).selfPubkey;
+    final hidden =
+        ProviderScope.containerOf(context).read(hiddenEmojiProvider);
     return Wrap(
       spacing: 4,
       runSpacing: 4,
       children: [
         for (final entry in msg.reactions.entries)
-          if (entry.value.isNotEmpty)
+          if (entry.value.isNotEmpty && !hidden.token(entry.key))
             GestureDetector(
               onTap: () => onReact(msg.mid, entry.key),
               child: Container(

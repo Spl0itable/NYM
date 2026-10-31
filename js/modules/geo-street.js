@@ -476,13 +476,14 @@
             const build = session.build;
             const [z, x, y] = key.split('/').map(Number);
             const url = X.tilePath(build, z, x, y);
-            session.sent.push(Date.now());
             const ac = new AbortController();
             inflight.set(key, ac);
             push(stats.requests, url);
             let status = 0, bytes = null, body = '';
             try {
-                const resp = await fetch(url, fetchOpts(ac.signal));
+                const started = fetch(url, fetchOpts(ac.signal));
+                session.sent.push(Date.now());
+                const resp = await started;
                 status = resp.status;
                 if (status === 200) bytes = new Uint8Array(await resp.arrayBuffer());
                 else if (status === 404) body = await resp.text().catch(() => '');

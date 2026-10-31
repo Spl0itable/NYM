@@ -55,6 +55,7 @@ import '../../../widgets/common/hollow_bullet.dart';
 import '../../../widgets/common/nym_tooltip.dart';
 import '../../../core/theme/nym_a11y.dart';
 import '../../../widgets/common/nym_label.dart';
+import '../../emoji/emoji_block.dart';
 
 /// Shared stateless [ApiClient] for proxy URL construction; its builders do no network.
 final _proxyApi = ApiClient();
@@ -134,8 +135,9 @@ class MessageContent extends ConsumerWidget {
       commonMark: commonMark,
     );
 
-    final shown = ref.watch(
-        appStateProvider.select((s) => s.stripBlockedQuotes(content, quoted)));
+    final hiddenEmoji = ref.watch(hiddenEmojiProvider.select((h) => h));
+    final shown = hiddenEmoji.strip(ref.watch(
+        appStateProvider.select((s) => s.stripBlockedQuotes(content, quoted))));
     final blocks = NymFormat.format(shown, ctx);
     final size = fontSize ?? textSize.toDouble();
     final color = baseColor ?? c.text;
@@ -4265,6 +4267,7 @@ class InlineEmojiText extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final codeToUrl = ref.watch(liveCustomEmojiProvider).codeToUrl;
+    final hiddenEmoji = ref.watch(hiddenEmojiProvider.select((h) => h));
     final side = emojiSize ?? (style.fontSize ?? 14) * 1.75;
 
     Widget plainText() => Text(text,
@@ -4303,6 +4306,7 @@ class InlineEmojiText extends ConsumerWidget {
     if (wholeStringOnly) {
       // An image only when the whole text is a known custom code.
       final code = _rxWholeToken.firstMatch(text)?.group(1);
+      if (code != null && hiddenEmoji.code(code)) return const SizedBox.shrink();
       final url = code == null ? null : codeToUrl[code];
       if (url == null) {
         if (code != null) noteMissingCustomEmoji(code);
@@ -4339,6 +4343,11 @@ class InlineEmojiText extends ConsumerWidget {
     var last = 0;
     for (final m in _rxToken.allMatches(text)) {
       final code = m.group(1)!;
+      if (hiddenEmoji.code(code)) {
+        if (m.start > last) addText(last, m.start);
+        last = m.end;
+        continue;
+      }
       // Only known custom codes are replaced; built-in and unknown codes stay literal.
       final url = codeToUrl[code];
       if (url == null) {

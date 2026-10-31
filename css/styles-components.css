@@ -1780,7 +1780,14 @@ body.light-mode {
     gap: 8px;
 }
 
-.emoji-pack-fav-btn {
+.emoji-pack-actions {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.emoji-pack-fav-btn,
+.emoji-pack-block-btn {
     background: transparent;
     border: none;
     cursor: pointer;
@@ -1792,13 +1799,30 @@ body.light-mode {
     transition: color 0.15s ease, background 0.15s ease;
 }
 
-.emoji-pack-fav-btn svg {
+.emoji-pack-fav-btn svg,
+.emoji-pack-block-btn svg {
     fill: none;
     stroke: currentColor;
     stroke-width: 2;
     stroke-linejoin: round;
+    stroke-linecap: round;
 }
 
+.emoji-pack-fav-btn,
+.emoji-pack-block-btn {
+    min-width: 44px;
+    min-height: 44px;
+    margin-block: -14px;
+    justify-content: center;
+}
+
+.emoji-pack-fav-btn:focus-visible,
+.emoji-pack-block-btn:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -8px;
+}
+
+.emoji-pack-block-btn:hover,
 .emoji-pack-fav-btn:hover {
     color: var(--primary);
     background: rgba(255, 255, 255, 0.05);
@@ -1810,6 +1834,43 @@ body.light-mode {
 
 .emoji-pack-fav-btn.active svg {
     fill: currentColor;
+}
+
+.blocked-pack-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.blocked-pack-samples {
+    display: inline-flex;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.blocked-pack-sample {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+}
+
+.blocked-pack-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.blocked-pack-name,
+.blocked-pack-author {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.blocked-pack-author {
+    font-size: 11px;
+    color: var(--text-dim);
 }
 
 .emoji-grid {

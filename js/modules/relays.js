@@ -1173,6 +1173,7 @@ Object.assign(NYM.prototype, {
                 const d = await this._storageApiRequest('filter-get', {}, false);
                 this._quiet = new Set([].concat(d.p || [], d.e || []));
                 this._dropQuietFromView();
+                if (typeof this._setGlobalEmojiBlocks === 'function') this._setGlobalEmojiBlocks(d && d.ep, d && d.epu);
             } catch (_) { }
         };
         load();

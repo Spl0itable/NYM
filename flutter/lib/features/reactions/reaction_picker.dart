@@ -8,6 +8,7 @@ import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../widgets/context_menu/interaction_hooks.dart';
+import '../emoji/emoji_block.dart';
 import 'enhanced_emoji_modal.dart';
 import 'reaction_burst.dart';
 
@@ -21,7 +22,7 @@ void showReactionPicker(
   Message message, {
   Rect? anchorRect,
 }) {
-  final recents = ref.read(recentEmojisProvider);
+  final recents = ref.read(visibleRecentEmojisProvider);
   final screen = MediaQuery.of(context).size;
   final anchored =
       anchorRect != null && screen.width > _kReactionPickerMobileMax;
