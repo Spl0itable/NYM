@@ -745,42 +745,34 @@ class _ConnectionModeLine extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            runSpacing: 4,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
             children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Text(
-                    tr('Connection').toUpperCase(),
-                    style: TextStyle(
-                      color: c.textDim,
-                      fontSize: 9,
-                      letterSpacing: 0.4,
-                    ),
+              Expanded(
+                child: _ModeText(
+                  label: tr('Connection').toUpperCase(),
+                  value: value,
+                  labelStyle: TextStyle(
+                    color: c.textDim,
+                    fontSize: 9,
+                    letterSpacing: 0.4,
                   ),
-                  const SizedBox(width: 10),
-                  Text(
-                    value,
-                    style: TextStyle(
-                      color: c.primary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      fontFamily: 'monospace',
-                    ),
+                  valueStyle: TextStyle(
+                    color: c.primary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: 'monospace',
                   ),
-                ],
-              ),
-              if (action != null)
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  children: [action, ?second],
                 ),
+              ),
+              if (action != null) ...[
+                action,
+                if (second != null) ...[
+                  const SizedBox(width: 6),
+                  second,
+                ],
+              ],
             ],
           ),
           if (hint.isNotEmpty) ...[
@@ -820,6 +812,88 @@ class _ConnectionModeLine extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _ModeText extends StatelessWidget {
+  const _ModeText({
+    required this.label,
+    required this.value,
+    required this.labelStyle,
+    required this.valueStyle,
+  });
+
+  static const double _gap = 10;
+  static const double _minFit = 0.8;
+
+  final String label;
+  final String value;
+  final TextStyle labelStyle;
+  final TextStyle valueStyle;
+
+  static TextStyle _scaled(TextStyle s, double fit) => s.copyWith(
+        fontSize: s.fontSize! * fit,
+        letterSpacing: s.letterSpacing == null ? null : s.letterSpacing! * fit,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final base = DefaultTextStyle.of(context).style;
+    final scaler = MediaQuery.textScalerOf(context);
+    final direction = Directionality.of(context);
+    double measure(String text, TextStyle style) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: base.merge(style)),
+        textDirection: direction,
+        textScaler: scaler,
+        maxLines: 1,
+      )..layout();
+      final w = painter.width;
+      painter.dispose();
+      return w;
+    }
+
+    return LayoutBuilder(builder: (context, box) {
+      final room = box.maxWidth;
+      final natural =
+          measure(label, labelStyle) + _gap + measure(value, valueStyle);
+      final fit = natural <= room
+          ? 1.0
+          : (room / natural * 0.98).clamp(_minFit, 1.0).toDouble();
+      final labelAt = _scaled(labelStyle, fit);
+      final valueAt = _scaled(valueStyle, fit);
+      final gap = _gap * fit;
+      final labelRoom = room - measure(value, valueAt) - gap;
+      final showLabel = labelRoom >= scaler.scale(labelAt.fontSize!) * 3;
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          if (showLabel) ...[
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                style: labelAt,
+              ),
+            ),
+            SizedBox(width: gap),
+          ],
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: room),
+            child: Text(
+              value,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
+              style: valueAt,
+            ),
+          ),
+        ],
+      );
+    });
   }
 }
 

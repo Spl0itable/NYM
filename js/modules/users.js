@@ -1091,7 +1091,8 @@ Object.assign(NYM.prototype, {
         if (!this._avatarUpdateQueue) this._avatarUpdateQueue = new Map();
         this._avatarUpdateQueue.set(safePk, { url: avatarUrl, pubkey });
         if (this._avatarUpdateRaf) return;
-        this._avatarUpdateRaf = requestAnimationFrame(() => this._flushAvatarUpdates());
+        this._avatarUpdateRaf = true;
+        this._frameOrTimer(() => this._flushAvatarUpdates());
     },
 
     _flushAvatarUpdates() {
@@ -1965,8 +1966,7 @@ Object.assign(NYM.prototype, {
     updateUserList() {
         if (this._userListRafPending) return;
         this._userListRafPending = true;
-        const raf = window.requestAnimationFrame || (cb => setTimeout(cb, 16));
-        raf(() => {
+        this._frameOrTimer(() => {
             this._userListRafPending = false;
             this._doUpdateUserList();
         });

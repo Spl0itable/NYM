@@ -328,6 +328,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
       if (!mounted) return;
       _refreshD1Activity();
       _ticker.value++;
+      _rooms = null;
       setState(() {}); // re-run _channels() against the new "now".
     });
     // Repaint only when the terminator is shown.
@@ -486,11 +487,76 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     return f;
   }
 
-  List<GeohashChannelPoint> _channels() {
-    final state = ref.read(appStateProvider);
-    return buildGeohashChannels(state,
-        windowHours: _activeWindowHours, placeLabel: _placeLabel);
+  ({
+    AppState state,
+    int inputs,
+    int hours,
+    List<GeoPlace> places,
+    List<GeoFeature> features,
+    List<GeohashChannelPoint> rooms,
+  })? _rooms;
+
+  static int _roomInputs(AppState s) {
+    var rooms = 0;
+    s.keyRevs.forEach((k, v) {
+      if (k.startsWith('#')) rooms = rooms ^ Object.hash(k, v);
+    });
+    return Object.hash(s.globalRev, rooms, s.contentFilterSignature,
+        s.autoMutedUsers.length);
   }
+
+  List<GeohashChannelPoint> _roomsOf(AppState s) {
+    final hit = _rooms;
+    if (hit != null &&
+        hit.hours == _activeWindowHours &&
+        identical(hit.places, _places) &&
+        identical(hit.features, _features)) {
+      if (identical(hit.state, s)) return hit.rooms;
+      final inputs = _roomInputs(s);
+      if (inputs == hit.inputs) {
+        _rooms = (
+          state: s,
+          inputs: inputs,
+          hours: hit.hours,
+          places: hit.places,
+          features: hit.features,
+          rooms: hit.rooms,
+        );
+        return hit.rooms;
+      }
+    }
+    final rooms = buildGeohashChannels(s,
+        windowHours: _activeWindowHours, placeLabel: _placeLabel);
+    _rooms = (
+      state: s,
+      inputs: _roomInputs(s),
+      hours: _activeWindowHours,
+      places: _places,
+      features: _features,
+      rooms: rooms,
+    );
+    return rooms;
+  }
+
+  int _frameSignature(AppState s) {
+    final sel = _selected?.geohash.toLowerCase();
+    return Object.hash(
+      Object.hashAllUnordered(s.pinnedChannels),
+      sel != null && s.channels.any((c) => c.key == sel),
+    );
+  }
+
+  int _roomsSignature(AppState s) => Object.hash(
+        Object.hashAll([
+          for (final p in _roomsOf(s))
+            Object.hash(p.geohash, p.messages, p.isJoined, p.lastActivityMs),
+        ]),
+        Object.hashAll(s.pinnedChannels),
+        Object.hashAll([for (final c in s.channels) c.key]),
+      );
+
+  List<GeohashChannelPoint> _channels() =>
+      _roomsOf(ref.read(appStateProvider));
 
   /// Changes the window and forces an immediate redraw; no D1 refetch.
   void _setActiveWindow(int hours) {
@@ -1083,27 +1149,17 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
           });
         }
 
-        // Watch the store and location so dots, heatmap and the location row update live.
-        ref.watch(appStateProvider);
+        ref.watch(appStateProvider.select(_frameSignature));
         ref.watch(settingsProvider.select((s) => s.sortByProximity));
         ref.watch(userLocationProvider);
-        final channels = _channels();
 
-        // Keep the heatmap image in sync with the current inputs.
         final dpr = capGeoDpr(MediaQuery.devicePixelRatioOf(context));
-        _maybeRebuildHeat(size, channels, dpr);
         _streetSync(size);
 
         WidgetsBinding.instance.addPostFrameCallback((_) => _measureOccupied());
         final narrow = size.width < kGlobeNarrowBreakpoint;
         final rail = DuoScope.railOf(context);
         _railSize = size;
-        final nowMs = DateTime.now().millisecondsSinceEpoch;
-        final recent = <String>{
-          for (final c in channels)
-            if (isGeoRecent(c.lastActivityMs, nowMs)) c.geohash,
-        };
-        _syncAmbient(recent.isNotEmpty && !_heatmap);
         final saved = _savedSet();
         final inset = narrow ? 10.0 : 16.0;
         final bottomPad = MediaQuery.paddingOf(context).bottom;
@@ -1122,7 +1178,18 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
           child: Stack(
             fit: StackFit.expand,
             children: [
-              _mapGestureLayer(size, style, channels, recent, saved),
+              Consumer(builder: (context, ref, _) {
+                ref.watch(appStateProvider.select(_roomsSignature));
+                final channels = _channels();
+                _maybeRebuildHeat(size, channels, dpr);
+                final nowMs = DateTime.now().millisecondsSinceEpoch;
+                final recent = <String>{
+                  for (final c in channels)
+                    if (isGeoRecent(c.lastActivityMs, nowMs)) c.geohash,
+                };
+                _syncAmbient(recent.isNotEmpty && !_heatmap);
+                return _mapGestureLayer(size, style, channels, recent, saved);
+              }),
               if (_stackRooms != null)
                 Positioned.fill(
                   child: Listener(
@@ -1142,7 +1209,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
                   ),
                 ),
               if (showLists)
-                _listsPanel(narrow, inset, size, bottomPad, channels, saved),
+                _listsPanel(narrow, inset, size, bottomPad, saved),
               if (_selected != null)
                 _infoPanel(_selected!, narrow, inset, size, columnBottom,
                     bottomPad, saved),
@@ -1507,7 +1574,31 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   }
 
   Widget _listsPanel(bool narrow, double inset, Size size, double bottomPad,
-      List<GeohashChannelPoint> channels, Set<String> saved) {
+      Set<String> saved) {
+    final panel = Consumer(builder: (context, ref, _) {
+      ref.watch(appStateProvider.select(_roomsSignature));
+      return _listsBox(size, _channels(), saved);
+    });
+    if (narrow) {
+      return Positioned(
+        left: inset,
+        right: inset + kGeoTouch + 8,
+        bottom: inset + bottomPad,
+        height: math.max(220.0, size.height * 0.42),
+        child: panel,
+      );
+    }
+    return Positioned(
+      left: inset,
+      top: inset + kGeoTouch + 8,
+      bottom: inset + bottomPad,
+      width: 300,
+      child: panel,
+    );
+  }
+
+  Widget _listsBox(
+      Size size, List<GeohashChannelPoint> channels, Set<String> saved) {
     final nym = context.nym;
     final byGh = {for (final c in channels) c.geohash: c};
     final savedRows = [
@@ -1534,23 +1625,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
       placeLabel: _placeLabel,
       onOpen: (gh) => _focusCell(gh, size),
     );
-    final panel = _panelBox(nym, lists, key: const ValueKey('geo-lists-panel'));
-    if (narrow) {
-      return Positioned(
-        left: inset,
-        right: inset + kGeoTouch + 8,
-        bottom: inset + bottomPad,
-        height: math.max(220.0, size.height * 0.42),
-        child: panel,
-      );
-    }
-    return Positioned(
-      left: inset,
-      top: inset + kGeoTouch + 8,
-      bottom: inset + bottomPad,
-      width: 300,
-      child: panel,
-    );
+    return _panelBox(nym, lists, key: const ValueKey('geo-lists-panel'));
   }
 
   Widget _mapGestureLayer(

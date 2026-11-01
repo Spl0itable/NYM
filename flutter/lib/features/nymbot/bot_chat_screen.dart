@@ -50,7 +50,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   final _scroll = ScrollController();
 
   /// Whether the scroll-to-bottom button shows (>150px up); in the reversed list `offset` is that distance.
-  bool _showScrollButton = false;
+  final ValueNotifier<bool> _showScrollButton = ValueNotifier(false);
 
   Timer? _runsTimer;
   final Map<String, GlobalKey> _runKeys = <String, GlobalKey>{};
@@ -85,6 +85,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   void dispose() {
     _runsTimer?.cancel();
     _scroll.dispose();
+    _showScrollButton.dispose();
     super.dispose();
   }
 
@@ -97,10 +98,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   }
 
   void _onScrolled() {
-    final show = _scroll.hasClients && _scroll.offset > 150;
-    if (show != _showScrollButton) {
-      setState(() => _showScrollButton = show);
-    }
+    _showScrollButton.value = _scroll.hasClients && _scroll.offset > 150;
   }
 
   void _scrollToBottom() {
@@ -342,12 +340,16 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
             )),
           ),
           // Shown >150px from the bottom.
-          if (_showScrollButton)
-            Positioned(
-              right: 24,
-              bottom: 16,
-              child: _ScrollToBottomButton(onTap: _scrollToBottom),
+          Positioned(
+            right: 24,
+            bottom: 16,
+            child: ValueListenableBuilder<bool>(
+              valueListenable: _showScrollButton,
+              builder: (context, show, _) => show
+                  ? _ScrollToBottomButton(onTap: _scrollToBottom)
+                  : const SizedBox.shrink(),
             ),
+          ),
         ],
       ),
     );

@@ -48,6 +48,14 @@ class AttestService {
   /// Renew this early so a device offline for a while still renews before peers stop trusting it.
   static const Duration renewBefore = Duration(days: 7);
   static const Duration retryAfter = Duration(hours: 6);
+  static const List<Duration> retrySoon = [
+    Duration(seconds: 1),
+    Duration(seconds: 3),
+    Duration(seconds: 8),
+    Duration(seconds: 20),
+    Duration(seconds: 45),
+  ];
+  static const Duration requestTimeout = Duration(seconds: 20);
 
   final KeyValueStore _kv;
   final http.Client _client;
@@ -56,6 +64,8 @@ class AttestService {
   final String _platform;
 
   Future<void>? _inFlight;
+  String? _inFlightFor;
+  String? _for;
   DateTime? _nextTry;
 
   String? _badge;
@@ -82,8 +92,25 @@ class AttestService {
           [AttestBadge.tagName, _badge!]
         ];
 
+  void _syncIdentity(String pubkey) {
+    if (_for == pubkey) return;
+    _for = pubkey;
+    _badge = null;
+    _tier = null;
+    _nextTry = null;
+  }
+
+  String? badgeFor(String pubkey) => _for == pubkey ? _badge : null;
+
+  Future<String?> awaitBadge(String pubkey) async {
+    final pending = _inFlightFor == pubkey ? _inFlight : null;
+    if (pending != null) await pending;
+    return badgeFor(pubkey);
+  }
+
   /// Loads a stored badge for [pubkey]; true when live. Callers still run [ensureBadge] to renew.
   bool restore(String pubkey) {
+    _syncIdentity(pubkey);
     final raw = _kv.getString(StorageKeys.attestBadge);
     if (raw == null || raw.isEmpty) return false;
     try {
@@ -114,10 +141,10 @@ class AttestService {
 
   /// Enrolls or renews; never throws, since failure only leaves this install unbadged.
   Future<void> ensureBadge(EventSigner signer, {bool force = false}) {
-    final existing = _inFlight;
-    if (existing != null) return existing;
-
     final pubkey = signer.pubkey;
+    final existing = _inFlight;
+    if (existing != null && _inFlightFor == pubkey) return existing;
+
     restore(pubkey);
     final expiry = _storedExpiry(pubkey);
     if (!force &&
@@ -130,69 +157,107 @@ class AttestService {
       return Future<void>.value();
     }
 
-    final run = _enroll(signer).whenComplete(() => _inFlight = null);
+    late final Future<void> run;
+    run = _enroll(signer).whenComplete(() {
+      if (identical(_inFlight, run)) {
+        _inFlight = null;
+        _inFlightFor = null;
+      }
+    });
     _inFlight = run;
+    _inFlightFor = pubkey;
     return run;
   }
 
+  static bool _soon(Object e) {
+    if (e is _NotReady) return true;
+    if (e is EnrollRefused) return e.status >= 500 || e.status == 408;
+    return false;
+  }
+
   Future<void> _enroll(EventSigner signer) async {
-    try {
-      final pubkey = signer.pubkey;
-      var issued = await _challenge(pubkey);
-      if (issued == null) throw StateError('no challenge');
-
-      final platformProof = await _platformProof(issued['challenge'] as String);
-      Map<String, dynamic>? res;
-      if (platformProof != null) {
-        try {
-          res = await _enrollWith(signer, issued, platformProof,
-              mine: platformProof['platform'] == 'android');
-          lastPlatformRefusal = null;
-        } on EnrollRefused catch (e) {
-          if (!e.platformRefusal) rethrow;
-          lastPlatformRefusal = e.describe();
-          issued = await _challenge(pubkey);
-          if (issued == null) throw StateError('no challenge');
+    final pubkey = signer.pubkey;
+    for (var step = 0;; step++) {
+      try {
+        await _enrollOnce(signer, pubkey);
+        if (_for == pubkey) {
+          _nextTry = null;
+          lastError = null;
         }
+        return;
+      } on _Abandoned {
+        return;
+      } catch (e) {
+        if (_for != pubkey) return;
+        lastError = e is EnrollRefused
+            ? e.describe()
+            : (e is StateError ? e.message : e.toString());
+        if (!_soon(e) || step >= retrySoon.length) {
+          _nextTry = DateTime.now().add(retryAfter);
+          return;
+        }
+        await Future<void>.delayed(retrySoon[step]);
+        if (_for != pubkey) return;
+      } finally {
+        lastAttemptAt = DateTime.now();
       }
-      if (res == null) {
-        final web = await _webProof(issued);
-        if (web == null) throw StateError('no proof');
-        res = await _enrollWith(signer, issued, web, mine: true);
-      }
-
-      final badge = res['badge'] as String?;
-      if (badge == null || badge.isEmpty) throw StateError('no badge');
-
-      final authority = res['authority'] as String?;
-      if (pinnedAuthority.length != 64 &&
-          authority != null &&
-          authority.length == 64) {
-        _kv.setString(StorageKeys.attestAuthority, authority);
-      }
-
-      _badge = badge;
-      _tier = _tierFromName(res['tier'] as String?);
-      _kv.setString(
-        StorageKeys.attestBadge,
-        jsonEncode({
-          'pubkey': pubkey,
-          'badge': badge,
-          'tier': res['tier'] ?? 'origin',
-          'expiresAt': (res['expiresAt'] as num?)?.toInt() ?? 0,
-        }),
-      );
-      _nextTry = null;
-      lastError = null;
-    } on EnrollRefused catch (e) {
-      lastError = e.describe();
-      _nextTry = DateTime.now().add(retryAfter);
-    } catch (e) {
-      lastError = e is StateError ? e.message : e.toString();
-      _nextTry = DateTime.now().add(retryAfter);
-    } finally {
-      lastAttemptAt = DateTime.now();
     }
+  }
+
+  void _still(String pubkey) {
+    if (_for != pubkey) throw const _Abandoned();
+  }
+
+  Future<void> _enrollOnce(EventSigner signer, String pubkey) async {
+    var issued = await _challenge(pubkey);
+    if (issued == null) throw StateError('no challenge');
+    _still(pubkey);
+
+    final platformProof = await _platformProof(issued['challenge'] as String);
+    _still(pubkey);
+    Map<String, dynamic>? res;
+    if (platformProof != null) {
+      try {
+        res = await _enrollWith(signer, issued, platformProof,
+            mine: platformProof['platform'] == 'android');
+        lastPlatformRefusal = null;
+      } on EnrollRefused catch (e) {
+        if (!e.platformRefusal) rethrow;
+        lastPlatformRefusal = e.describe();
+        issued = await _challenge(pubkey);
+        if (issued == null) throw StateError('no challenge');
+      }
+    }
+    _still(pubkey);
+    if (res == null) {
+      final web = await _webProof(issued);
+      if (web == null) throw StateError('no proof');
+      _still(pubkey);
+      res = await _enrollWith(signer, issued, web, mine: true);
+    }
+    _still(pubkey);
+
+    final badge = res['badge'] as String?;
+    if (badge == null || badge.isEmpty) throw StateError('no badge');
+
+    final authority = res['authority'] as String?;
+    if (pinnedAuthority.length != 64 &&
+        authority != null &&
+        authority.length == 64) {
+      _kv.setString(StorageKeys.attestAuthority, authority);
+    }
+
+    _badge = badge;
+    _tier = _tierFromName(res['tier'] as String?);
+    _kv.setString(
+      StorageKeys.attestBadge,
+      jsonEncode({
+        'pubkey': pubkey,
+        'badge': badge,
+        'tier': res['tier'] ?? 'origin',
+        'expiresAt': (res['expiresAt'] as num?)?.toInt() ?? 0,
+      }),
+    );
   }
 
   Future<Map<String, dynamic>> _enrollWith(
@@ -209,11 +274,12 @@ class AttestService {
       signer: signer,
       sensitive: true,
       powBits: powBits,
+      abort: () => _for != signer.pubkey,
       extraTags: [
         ['challenge', challenge]
       ],
     );
-    if (auth == null) throw StateError('auth signing failed');
+    if (auth == null) throw const _NotReady('auth signing failed');
     final reply = await _post(<String, dynamic>{
       'action': 'enroll',
       'pubkey': signer.pubkey,
@@ -236,6 +302,9 @@ class AttestService {
       'pubkey': pubkey,
     });
     final body = reply.body;
+    if (reply.status >= 500 || reply.status == 408) {
+      throw _NotReady('challenge HTTP ${reply.status}');
+    }
     if (!reply.ok || body == null || body['error'] != null) return null;
     return body['challenge'] is String ? body : null;
   }
@@ -294,11 +363,19 @@ class AttestService {
   }
 
   Future<Map<String, dynamic>?> _buildManifestFiles() async {
+    final http.Response resp;
     try {
-      final resp = await _client.get(
-        Uri.parse('https://$_host/build-manifest.json'),
-        headers: ApiConfig.defaultHeaders,
-      );
+      resp = await _client
+          .get(
+            Uri.parse('https://$_host/build-manifest.json'),
+            headers: ApiConfig.defaultHeaders,
+          )
+          .timeout(requestTimeout);
+    } catch (e) {
+      throw _NotReady('manifest: $e');
+    }
+    if (resp.statusCode >= 500) throw _NotReady('manifest HTTP ${resp.statusCode}');
+    try {
       if (resp.statusCode != 200) return null;
       final decoded = jsonDecode(resp.body);
       final files = decoded is Map ? decoded['files'] : null;
@@ -311,14 +388,21 @@ class AttestService {
   String _url() => 'https://$_host/api/attest';
 
   Future<_ApiReply> _post(Map<String, dynamic> body) async {
-    final resp = await _client.post(
-      Uri.parse(_url()),
-      headers: {
-        'Content-Type': 'application/json',
-        ...ApiConfig.defaultHeaders,
-      },
-      body: jsonEncode(body),
-    );
+    final http.Response resp;
+    try {
+      resp = await _client
+          .post(
+            Uri.parse(_url()),
+            headers: {
+              'Content-Type': 'application/json',
+              ...ApiConfig.defaultHeaders,
+            },
+            body: jsonEncode(body),
+          )
+          .timeout(requestTimeout);
+    } catch (e) {
+      throw _NotReady('network: $e');
+    }
     Map<String, dynamic>? map;
     try {
       final decoded = jsonDecode(resp.body);
@@ -333,6 +417,18 @@ class _ApiReply {
   final int status;
   final Map<String, dynamic>? body;
   bool get ok => status >= 200 && status < 300;
+}
+
+class _NotReady implements Exception {
+  const _NotReady(this.message);
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+class _Abandoned implements Exception {
+  const _Abandoned();
 }
 
 class EnrollRefused implements Exception {

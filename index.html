@@ -1337,10 +1337,12 @@
             <div class="modal-header">Network Stats</div>
             <div class="modal-body nm-h-36">
                 <div class="relay-stats-mode" id="rsConnectionMode">
-                    <span class="relay-stats-mode-label">Connection</span>
-                    <span class="relay-stats-mode-value" id="rsConnectionModeValue">Connecting...</span>
-                    <button type="button" class="relay-stats-mode-btn" id="rsTransportBtn" data-action="toggleRelayTransportFromStats" hidden></button>
-                    <button type="button" class="relay-stats-mode-btn relay-stats-mode-btn-alt" id="rsTransportDirectBtn" data-action="useDirectRelaysFromStats" hidden></button>
+                    <div class="relay-stats-mode-line">
+                        <span class="relay-stats-mode-label">Connection</span>
+                        <span class="relay-stats-mode-value" id="rsConnectionModeValue">Connecting...</span>
+                        <button type="button" class="relay-stats-mode-btn" id="rsTransportBtn" data-action="toggleRelayTransportFromStats" hidden></button>
+                        <button type="button" class="relay-stats-mode-btn relay-stats-mode-btn-alt" id="rsTransportDirectBtn" data-action="useDirectRelaysFromStats" hidden></button>
+                    </div>
                     <span class="relay-stats-mode-hint" id="rsConnectionModeHint"></span>
                     <span class="relay-stats-mode-note" id="rsTransportNote" role="status" aria-live="polite" hidden></span>
                 </div>

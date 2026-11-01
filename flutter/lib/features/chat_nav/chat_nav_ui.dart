@@ -152,8 +152,11 @@ class ChatNavListBinding with WidgetsBindingObserver {
     return dividerId = info?.id;
   }
 
-  void bind(Map<String, int> indexById, int maxIndex) {
+  int _newestIndex = 0;
+
+  void bind(Map<String, int> indexById, int maxIndex, {int newestIndex = 0}) {
     _indexById = indexById;
+    _newestIndex = newestIndex;
     _members = null;
     final id = dividerId;
     dividerIndex = id == null ? null : indexById[id];
@@ -314,7 +317,7 @@ class ChatNavListBinding with WidgetsBindingObserver {
     final n = nav;
     ItemPosition? newest;
     for (final q in pos) {
-      if (q.index == 0) newest = q;
+      if (q.index == _newestIndex) newest = q;
     }
     final bottom = newest != null &&
         (viewport > 0

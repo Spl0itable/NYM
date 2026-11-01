@@ -4735,7 +4735,7 @@ function initWallpaperUI() {
 }
 
 const NYMCHAT_VERSION = 'v3.75.545';
-const NYMCHAT_BUILD = 862;
+const NYMCHAT_BUILD = 877;
 
 function nymUiArgs(template, args) {
     if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);
@@ -6278,6 +6278,9 @@ function applyNostrLogin(pubkey, secretKey, method) {
     }
     nym.pubkey = pubkey;
     if (identitySwitched && typeof nym.pqResetIdentityState === 'function') nym.pqResetIdentityState();
+    if (identitySwitched && typeof nym.ensureAttestBadge === 'function') {
+        try { nym.ensureAttestBadge(); } catch (_) { }
+    }
     if (identitySwitched) {
         dropReplacedSessionNym();
         nym.nym = nym.generateRandomNym();

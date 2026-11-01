@@ -110,6 +110,20 @@ const List<String> kPqStatusStrings = [
   kPqReachOne,
 ];
 
+int settingsAppSignature(AppState s) => Object.hash(
+      Object.hashAll(s.blockedUsers),
+      Object.hashAll([for (final pk in s.blockedUsers) s.users[pk]?.nym]),
+      Object.hashAll(s.friends),
+      Object.hashAll([for (final pk in s.friends) s.users[pk]?.nym]),
+      Object.hashAll(s.blockedKeywords),
+      Object.hashAll(s.pinnedChannels),
+      Object.hashAll(s.hiddenChannels),
+      Object.hashAll(s.blockedChannels),
+    );
+
+int settingsChannelSignature(AppState s) =>
+    Object.hashAllUnordered([for (final c in s.channels) c.channel]);
+
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({
     super.key,
@@ -430,7 +444,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final settings = _liveSettings(ref.watch(settingsProvider));
     final ctrl = ref.read(settingsProvider.notifier);
     // Re-render moderation lists on add/remove.
-    ref.watch(appStateProvider);
+    ref.watch(appStateProvider.select(settingsAppSignature));
     // Re-render the pending user-to-user transfers list.
     ref.watch(visibleSettingsTransfersProvider);
 
@@ -1420,7 +1434,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   ({List<_GroupSpec> privacy, List<_GroupSpec> pms, List<_GroupSpec> safety})
       _privacy(Settings s, SettingsController ctrl) {
     // Moderation sets live on AppState.
-    final app = ref.watch(appStateProvider);
+    final app = ref.read(appStateProvider);
     final blockedRelays = ref.watch(blockedRelaysProvider);
     // A durable Nostr login locks keypair rotation to 'persistent'.
     final nostrLoggedIn =
@@ -2250,7 +2264,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   List<_GroupSpec> _channels(Settings s, SettingsController ctrl) {
-    final state = ref.watch(appStateProvider);
+    final state = ref.read(appStateProvider);
     return [
       _toggleSpec(
         key: 'groupChatPMOnlyMode',
@@ -2279,7 +2293,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: FormGroup(
             label: tr('Default Landing Channel'),
             hint: tr('Channel to load when you first open or reload the app'),
-            child: _landingChannelField(state.channels),
+            child: Consumer(
+              key: const ValueKey('settings-landing-channel'),
+              builder: (context, ref, _) {
+                ref.watch(appStateProvider.select(settingsChannelSignature));
+                return _landingChannelField(
+                    ref.read(appStateProvider).channels);
+              },
+            ),
           ),
         ),
         _toggleSpec(

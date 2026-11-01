@@ -51,11 +51,15 @@ bool geohashCellNameHidden(AppState state, String gh,
 }
 
 /// Plotted channels whose heat is the sum over the window of `max(local[i], d1[i])` per hour.
+@visibleForTesting
+int geohashChannelBuilds = 0;
+
 List<GeohashChannelPoint> buildGeohashChannels(
   AppState state, {
   required int windowHours,
   String Function(String gh)? placeLabel,
 }) {
+  geohashChannelBuilds++;
   final nowMs = DateTime.now().millisecondsSinceEpoch;
   final cutoffMs = nowMs - windowHours * 3600 * 1000;
 

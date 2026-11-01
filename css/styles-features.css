@@ -4271,22 +4271,63 @@ body.a11y-contrast.light-mode {
     border: 1px solid var(--glass-border);
 }
 
+.relay-stats-mode-line {
+    display: flex;
+    flex-basis: 100%;
+    align-items: baseline;
+    min-width: 0;
+    container-type: inline-size;
+}
+
 .relay-stats-mode-label {
+    flex: 0 100000 auto;
+    min-width: 0;
+    margin-right: 10px;
+    margin-right: clamp(8px, calc((100cqi - 74px) * 0.0735), 10px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-family: var(--font-sans);
     font-size: 9px;
+    font-size: clamp(7.2px, calc((100cqi - 74px) * 0.0662), 9px);
     color: var(--text-dim);
     text-transform: uppercase;
     letter-spacing: 0.4px;
 }
 
 .relay-stats-mode-value {
+    flex: 0 1 auto;
+    min-width: 6ch;
+    margin-right: 10px;
+    margin-right: clamp(8px, calc((100cqi - 74px) * 0.0735), 10px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-family: var(--font-mono);
     font-size: 13px;
+    font-size: clamp(10.4px, calc((100cqi - 74px) * 0.0956), 13px);
     font-weight: 700;
     color: var(--primary);
 }
 
+.relay-stats-mode-line:has(> .relay-stats-mode-btn-alt:not([hidden])) > .relay-stats-mode-label {
+    margin-right: clamp(8px, calc((100cqi - 152px) * 0.0735), 10px);
+    font-size: clamp(7.2px, calc((100cqi - 152px) * 0.0662), 9px);
+}
+
+.relay-stats-mode-line:has(> .relay-stats-mode-btn-alt:not([hidden])) > .relay-stats-mode-value {
+    margin-right: clamp(8px, calc((100cqi - 152px) * 0.0735), 10px);
+    font-size: clamp(10.4px, calc((100cqi - 152px) * 0.0956), 13px);
+}
+
+@container (max-width: 225px) {
+    .relay-stats-mode-line:has(> .relay-stats-mode-btn-alt:not([hidden])) > .relay-stats-mode-label {
+        display: none;
+    }
+}
+
 .relay-stats-mode-btn {
+    flex: none;
     margin-left: auto;
     padding: 3px 8px;
     font-family: var(--font-sans);
@@ -4322,7 +4363,6 @@ body.a11y-contrast.light-mode {
     .relay-stats-mode-btn {
         min-height: 44px;
         min-width: 44px;
-        padding: 3px 12px;
     }
 }
 

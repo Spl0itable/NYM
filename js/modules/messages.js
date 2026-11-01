@@ -3650,11 +3650,6 @@ Object.assign(NYM.prototype, {
             && typeof this.ensureAttestBadge === 'function') {
             try { this.ensureAttestBadge(); } catch (_) { }
         }
-        if (typeof this.composerVerifying === 'function' && this.composerVerifying()) {
-            if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
-            if (typeof this.queueSendAfterVerify === 'function') this.queueSendAfterVerify();
-            return;
-        }
 
         if (this.pendingEdit) {
             const edit = this.pendingEdit;
@@ -3758,8 +3753,7 @@ Object.assign(NYM.prototype, {
 
         // Hardcore mode: rotate keypair after every sent message.
         if (this.connectionMode === 'ephemeral' && localStorage.getItem('nym_keypair_mode') === 'hardcore') {
-            await this.generateKeypair();
-            this.nym = this.generateRandomNym();
+            await this._rotateHardcoreAfterSend();
             document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
             this.updateSidebarAvatar();
         }
@@ -4705,7 +4699,25 @@ Object.assign(NYM.prototype, {
             const head = this._chWinIndex(fresh, headId);
             this._chPrependRows(key, container, fresh, head >= 0 && head <= at ? head : Math.max(0, at - count), at, isPM);
         };
-        requestAnimationFrame(() => setTimeout(run, 0));
+        this._frameOrTimer(run, true);
+    },
+
+    _frameOrTimer(fn, afterFrame) {
+        const doc = typeof document !== 'undefined' ? document : null;
+        let done = false;
+        const go = () => {
+            if (done) return;
+            done = true;
+            if (doc && doc.removeEventListener) doc.removeEventListener('visibilitychange', onChange);
+            fn();
+        };
+        const onChange = () => { if (doc.hidden) setTimeout(go, 0); };
+        if (!doc || doc.hidden || typeof requestAnimationFrame !== 'function') {
+            setTimeout(go, 0);
+            return;
+        }
+        if (doc.addEventListener) doc.addEventListener('visibilitychange', onChange);
+        requestAnimationFrame(() => { if (afterFrame) setTimeout(go, 0); else go(); });
     },
 
     _chPrependRows(key, container, messages, from, to, isPM) {
@@ -4873,9 +4885,7 @@ Object.assign(NYM.prototype, {
         if (scroller._cnKeep) return;
         scroller.style.overflowAnchor = 'none';
         const token = this._chWinHoldToken = (this._chWinHoldToken || 0) + 1;
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-            if (this._chWinHoldToken === token) scroller.style.overflowAnchor = '';
-        }));
+        this._frameOrTimer(() => this._frameOrTimer(() => { if (this._chWinHoldToken === token) scroller.style.overflowAnchor = ''; }));
     },
 
     _chWinRestore(scroller, anchor) {

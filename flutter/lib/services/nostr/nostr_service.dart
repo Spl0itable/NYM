@@ -394,13 +394,29 @@ class NostrService {
   EventSigner? signer;
 
   /// Attestation badge for outgoing channel messages; null until enrolled, and messages still send without it.
-  String? attestBadge;
+  String? get attestBadge =>
+      _attestBadgeKey != null && _attestBadgeKey == signer?.pubkey
+          ? _attestBadge
+          : null;
+
+  set attestBadge(String? badge) =>
+      setAttestBadge(badge, signer?.pubkey ?? '');
+
+  String? _attestBadge;
+  String? _attestBadgeKey;
+
+  void setAttestBadge(String? badge, String pubkey) {
+    _attestBadge = badge;
+    _attestBadgeKey = badge == null || pubkey.isEmpty ? null : pubkey;
+  }
 
   /// Swaps the signing identity in place for hardcore mode without reconnecting or re-subscribing, as the PWA does.
   void rotateIdentity(Identity newIdentity, EventSigner? newSigner) {
     _candidateGen++;
     identity = newIdentity;
     signer = newSigner;
+    _attestBadge = null;
+    _attestBadgeKey = null;
   }
 
   /// The active transport, swapped to direct if the proxy is unreachable and back on recovery.
@@ -674,6 +690,7 @@ class NostrService {
     pool.connectAll();
 
     _mainSub = pool.subscribe(_buildCriticalFilters());
+    markLiveSubscription(_mainSub!);
     _eventSub = _mainSub!.events.listen(_routeMain);
     _syncPresenceSub();
 
@@ -963,6 +980,7 @@ class NostrService {
           kinds: const [EventKind.geoPresence],
           since: nowSec - GeoPresence.sinceWindowSec),
     ]);
+    markLiveSubscription(sub);
     sub.events.listen(_routeInbound, onError: (_) {});
     _presenceSub = sub;
   }
@@ -1004,6 +1022,7 @@ class NostrService {
     final old = _mainSub;
     final oldListener = _eventSub;
     final next = pool.subscribe(_buildCriticalFilters());
+    markLiveSubscription(next);
     _mainSub = next;
     _eventSub = next.events.listen(_routeMain);
     if (old == null || old.isClosed) {
@@ -1029,6 +1048,12 @@ class NostrService {
   final Map<Subscription, void Function()> _retireMain = {};
 
   bool _isRetiringMain(Subscription sub) => _retireMain.containsKey(sub);
+
+  final Expando<bool> _liveSubs = Expando<bool>();
+
+  void markLiveSubscription(Subscription sub) => _liveSubs[sub] = true;
+
+  bool _isLiveSub(Subscription sub) => _liveSubs[sub] ?? false;
 
   void _retireAllMain() {
     for (final retire in _retireMain.values.toList()) {
@@ -1063,6 +1088,15 @@ class NostrService {
       p.onShardLost = (at) =>
           _handlers?.onShardLost?.call(at?.millisecondsSinceEpoch ?? 0);
       p.onShardReconnected = () => _handlers?.onShardReconnected?.call();
+      p.retiredSub = _isRetiringMain;
+      p.liveSub = _isLiveSub;
+    }
+    if (p is RelayPool) {
+      p.onLiveSubClosed =
+          (at) => _handlers?.onShardLost?.call(at.millisecondsSinceEpoch);
+      p.onLiveSubResent = () => _handlers?.onShardReconnected?.call();
+      p.retiredSub = _isRetiringMain;
+      p.liveSub = _isLiveSub;
     }
   }
 
@@ -1074,6 +1108,12 @@ class NostrService {
 
     if (p is RelayPoolProxy) p.onConnectedChanged = note;
     if (p is RelayPool) p.onConnectedChanged = note;
+  }
+
+  Future<void> whenPoolLive({Duration timeout = const Duration(seconds: 5)}) {
+    final p = _pool;
+    if (p is RelayPoolProxy) return p.whenLive(timeout: timeout);
+    return Future<void>.value();
   }
 
   void probePool({bool wake = true}) {
@@ -1238,6 +1278,7 @@ class NostrService {
       direct.setAddedRelays(_directAdded);
       _pool = direct;
       _wireCount(direct);
+      _wireLiveness(direct);
       direct.geoOriginAllows = geoOriginAllowsEvent;
       direct.connectAll();
       _handOverHeld(old, direct);
@@ -1633,6 +1674,7 @@ class NostrService {
     ]);
     final s = sub.events.listen((e) => _handlers?.onEvent?.call(e));
     sub.eose.then((_) => null);
+    markLiveSubscription(sub);
     _channelTypingSub = sub;
     _channelTypingKey = id;
     // Typing events route through onEvent; cancellation is handled on close.
@@ -1729,6 +1771,7 @@ class NostrService {
       ),
     ]);
     _ephemeralSubKeys[sub] = List<String>.of(ephemeralPubkeys);
+    markLiveSubscription(sub);
     return sub;
   }
 
@@ -2119,7 +2162,9 @@ class NostrService {
     if (sig == null) return null;
 
     final isGeo = geohash != null && geohash.isNotEmpty;
-    final badge = signerOverride == null ? attestBadge : null;
+    final badge = signerOverride == null && _attestBadgeKey == sig.pubkey
+        ? _attestBadge
+        : null;
     final signed = await buildChannelMessage(
       signer: sig,
       channelKey: channelKey,

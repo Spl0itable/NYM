@@ -130,7 +130,7 @@
 
         _syncComposerPlaceholder() {
             const input = document.getElementById('messageInput');
-            if (!input || this._composerVerifying) return;
+            if (!input) return;
             const want = this._composerBasePlaceholder();
             if (input.dataset.composerPlaceholder === want) return;
             input.dataset.composerPlaceholder = want;

@@ -121,6 +121,31 @@ Object.assign(NYM.prototype, {
         return this._cryptoCall('minePow', [event, difficulty], () => this._minePowMainThread(event, difficulty));
     },
 
+    async _minePowParallel(event, difficulty, abort) {
+        if (!difficulty || difficulty <= 0) return event;
+        let pool;
+        try { pool = await this._ensureCryptoPool(); } catch (_) { pool = null; }
+        if (!pool || !pool.length) return this._minePow(event, difficulty);
+        const chunk = 1 << 17;
+        let next = 0;
+        let found = null;
+        let broken = false;
+        const lane = async () => {
+            while (!found && !broken && !(abort && abort())) {
+                const start = next;
+                next += chunk;
+                const res = await this._cryptoCall('minePowRange', [event, difficulty, start, chunk], () => undefined);
+                if (res === undefined) { broken = true; return; }
+                if (res && !found) found = res;
+            }
+        };
+        const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2;
+        const lanes = Math.max(1, Math.min(pool.length, cores - 1));
+        await Promise.all(Array.from({ length: lanes }, lane));
+        if (abort && abort()) return null;
+        return found || this._minePow(event, difficulty);
+    },
+
     // Hashes for ~4ms, yields to the event loop, then resumes.
     async _minePowMainThread(event, difficulty) {
         if (!difficulty || difficulty <= 0) return event;
@@ -3052,15 +3077,39 @@ Object.assign(NYM.prototype, {
             if (!replayId) this.displayMessage(optimisticMessage);
             this.recordOwnActivity();
 
+            const ahead = this._channelPublishTail || null;
+            let releaseTurn = null;
+            const turn = new Promise((resolve) => { releaseTurn = resolve; });
+            this._channelPublishTail = turn;
+            const typedUnder = this.pubkey;
+            let signedTurn = null;
+            const signing = new Promise((resolve) => { signedTurn = resolve; });
+            if (!this._channelSigns) this._channelSigns = new Set();
+            this._channelSigns.add(signing);
+            const doneSigning = () => {
+                signedTurn();
+                if (this._channelSigns) this._channelSigns.delete(signing);
+            };
+
             (async () => {
+                let held = false;
                 try {
                     if (!replayId && typeof this.awaitAttestBadge === 'function') {
-                        try { await this.awaitAttestBadge(); } catch (_) { }
+                        let waiting = null;
+                        try { waiting = this.awaitAttestBadge(); } catch (_) { waiting = null; }
+                        held = typeof this._attestPending === 'function' && this._attestPending();
+                        if (held) this._noteQueuedSend(tempId);
+                        try { await waiting; } catch (_) { }
+                        if (held) { held = false; this._settleQueuedSend(tempId); }
                     }
+                    if (this.pubkey !== typedUnder) throw new Error('identity changed');
                     if (typeof this.attachAttestTag === 'function') this.attachAttestTag(event);
                     const difficulty = this._effectivePowDifficulty();
                     if (difficulty > 0) event = await this._minePow(event, difficulty);
+                    if (this.pubkey !== typedUnder) throw new Error('identity changed');
                     const signedEvent = await this.signEvent(event);
+                    doneSigning();
+                    if (ahead) await ahead;
                     if (typeof this.recordEventProvenanceSource === 'function') {
                         this.recordEventProvenanceSource(signedEvent, 'THIS CLIENT');
                     }
@@ -3074,7 +3123,12 @@ Object.assign(NYM.prototype, {
                         setTimeout(() => this.publishDeletionEvent(eventIdToDelete), 600000);
                     }
                 } catch (err) {
+                    if (held) this._settleQueuedSend(tempId);
                     this._markOptimisticFailed(tempId, storageKey, err);
+                } finally {
+                    doneSigning();
+                    releaseTurn();
+                    if (this._channelPublishTail === turn) this._channelPublishTail = null;
                 }
             })();
 
@@ -3521,6 +3575,14 @@ Object.assign(NYM.prototype, {
     _geoPresenceGeohash() {
         const ch = this._presenceChannel();
         return ch && ch.type === 'geohash' ? ch.id : null;
+    },
+
+    async _rotateHardcoreAfterSend() {
+        while (this._channelSigns && this._channelSigns.size) {
+            await Promise.all(Array.from(this._channelSigns));
+        }
+        await this.generateKeypair();
+        this.nym = this.generateRandomNym();
     },
 
     _geoPresenceRotatingKey() {

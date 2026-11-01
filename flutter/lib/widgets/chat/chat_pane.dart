@@ -186,11 +186,19 @@ Object chatHeaderSignature(AppState s, ChatView view) {
   switch (view.kind) {
     case ViewKind.channel:
       final key = view.id.toLowerCase();
-      final count = channelOnlineNymsCount(s.users.values, key,
-          nowMs: DateTime.now().millisecondsSinceEpoch,
-          selfPubkey: s.selfPubkey,
-          isPersonHidden: (u) => s.isPersonHidden(u.pubkey, u.nym));
-      return (rev, count, s.pinnedChannels.contains(key));
+      ChannelEntry? ch;
+      for (final c in s.channels) {
+        if (c.key == view.id) {
+          ch = c;
+          break;
+        }
+      }
+      return (
+        ch?.isGeohash,
+        ch?.geohashKey,
+        ch?.channel,
+        s.pinnedChannels.contains(key),
+      );
     case ViewKind.pm:
       final u = s.users[view.id];
       return (
@@ -789,6 +797,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     Widget avatar;
     Widget titleText;
     String sub;
+    String? onlineIn;
     var dot = false;
     switch (view.kind) {
       case ViewKind.channel:
@@ -797,10 +806,10 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                 size: 18, color: c.primary));
         titleText = Text(title,
             maxLines: 1, overflow: TextOverflow.ellipsis, style: titleStyle);
-        sub = geohash != null
-            ? [if (loc.text.isNotEmpty) '${loc.text}${loc.dist}', meta.text]
-                .join(' · ')
-            : meta.text;
+        sub = geohash != null && loc.text.isNotEmpty
+            ? '${loc.text}${loc.dist}'
+            : '';
+        onlineIn = view.id.toLowerCase();
       case ViewKind.pm:
         final user = app.users[view.id];
         avatar = SizedBox(
@@ -847,6 +856,19 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           desc.isNotEmpty ? desc : tr('end-to-end encrypted'),
         ].join(' · ');
     }
+
+    Widget subLine(String text) => Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          softWrap: false,
+          style: TextStyle(
+              color: context.highContrast
+                  ? legibleOn(c.textDim, flattenOver(c.glassBg, c.bg))
+                  : c.textDim,
+              fontSize: NymType.sm,
+              height: 16 / NymType.sm),
+        );
 
     final VoidCallback? onTap = switch (view.kind) {
       ViewKind.channel when geohash != null => () => _openExplorerAt(geohash),
@@ -906,18 +928,16 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                       const SizedBox(width: 5),
                     ],
                     Flexible(
-                      child: Text(
-                        sub,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        softWrap: false,
-                        style: TextStyle(
-                            color: context.highContrast
-                                ? legibleOn(c.textDim, flattenOver(c.glassBg, c.bg))
-                                : c.textDim,
-                            fontSize: NymType.sm,
-                            height: 16 / NymType.sm),
-                      ),
+                      child: onlineIn == null
+                          ? subLine(sub)
+                          : _ChannelOnlineLine(
+                              channel: onlineIn,
+                              line: (count) {
+                                final online = tr('{count} online nyms',
+                                    {'count': _abbreviateCount(count)});
+                                return subLine(
+                                    sub.isEmpty ? online : '$sub · $online');
+                              }),
                     ),
                   ],
                 ),
@@ -1103,6 +1123,23 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       return '${(n / 1000).toStringAsFixed(n < 10000 ? 1 : 0)}k';
     }
     return '${(n / 1000000).toStringAsFixed(1)}M';
+  }
+}
+
+class _ChannelOnlineLine extends ConsumerWidget {
+  const _ChannelOnlineLine({required this.channel, required this.line});
+
+  final String channel;
+  final Widget Function(int count) line;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(appStateProvider.select((s) =>
+        channelOnlineNymsCount(s.users.values, channel,
+            nowMs: DateTime.now().millisecondsSinceEpoch,
+            selfPubkey: s.selfPubkey,
+            isPersonHidden: (u) => s.isPersonHidden(u.pubkey, u.nym))));
+    return line(count);
   }
 }
 

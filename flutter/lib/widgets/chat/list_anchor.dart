@@ -34,6 +34,19 @@ class AnchoredUnits {
     return context == null ? null : Scrollable.maybeOf(context)?.position;
   }
 
+  double? get anchor {
+    for (final list in _contexts.values) {
+      for (final context in list) {
+        if (!context.mounted) continue;
+        final box = context.findRenderObject();
+        if (box is! RenderBox || !box.attached) continue;
+        final viewport = RenderAbstractViewport.maybeOf(box);
+        if (viewport is RenderViewport) return viewport.anchor;
+      }
+    }
+    return null;
+  }
+
   double? edgeOf(String id) {
     final context = contextOf(id);
     if (context == null) return null;
@@ -104,6 +117,11 @@ class _AnchoredUnitState extends State<AnchoredUnit> {
   Widget build(BuildContext context) => widget.child;
 }
 
+class BottomFollow {
+  bool armed = false;
+  double Function()? anchor;
+}
+
 class ListAnchorKeeper {
   ListAnchorKeeper({required this.controller, required this.units});
 
@@ -132,20 +150,29 @@ class ListAnchorKeeper {
     required double viewportHeight,
     required double bottomInset,
     required bool follow,
+    int newestIndex = 0,
+    int newestTo = 0,
+    String? newestUnitTo,
+    bool stable = false,
   }) {
     if (!controller.isAttached || viewportHeight <= 0) return;
     final sorted = positions.toList()
       ..sort((a, b) => b.index.compareTo(a.index));
     if (sorted.isEmpty) return;
     if (follow) {
-      if (target == 0) return;
-      final newest = unitAt(0);
+      if (target == newestTo &&
+          (newestUnitTo == null || anchorUnit == newestUnitTo)) {
+        return;
+      }
+      final newest = unitAt(newestIndex);
       final edge = newest == null ? null : units.edgeOf(newest);
       if (newest != null && edge != null) {
-        _jump(0, edge - bottomInset / viewportHeight, newest);
+        _jump(newestTo, edge - (newestTo == 0 ? bottomInset / viewportHeight : 0),
+            newestUnitTo ?? newest);
         return;
       }
     }
+    if (stable) return;
     final candidates = <String>[];
     for (final p in sorted) {
       final unit = unitAt(p.index);
@@ -230,11 +257,13 @@ class ListAnchorKeeper {
 }
 
 class KeepReadingPhysics extends ScrollPhysics {
-  const KeepReadingPhysics({super.parent});
+  const KeepReadingPhysics({super.parent, this.follow});
+
+  final BottomFollow? follow;
 
   @override
   KeepReadingPhysics applyTo(ScrollPhysics? ancestor) =>
-      KeepReadingPhysics(parent: buildParent(ancestor));
+      KeepReadingPhysics(parent: buildParent(ancestor), follow: follow);
 
   @override
   double adjustPositionForNewDimensions({
@@ -243,11 +272,33 @@ class KeepReadingPhysics extends ScrollPhysics {
     required bool isScrolling,
     required double velocity,
   }) {
+    final up = newPosition.axisDirection == AxisDirection.up;
+    final still = newPosition.pixels == oldPosition.pixels;
+    final away = oldPosition.pixels - oldPosition.minScrollExtent;
+    final gate = follow;
+    if (up &&
+        still &&
+        gate != null &&
+        gate.armed &&
+        newPosition.minScrollExtent < oldPosition.minScrollExtent) {
+      gate.armed = false;
+      return (newPosition.minScrollExtent + (away > 0 ? away : 0.0)).clamp(
+          newPosition.minScrollExtent, newPosition.maxScrollExtent);
+    }
     final shift = oldPosition.viewportDimension - newPosition.viewportDimension;
-    if (shift != 0 &&
-        newPosition.axisDirection == AxisDirection.up &&
-        oldPosition.extentBefore > 1) {
-      return (oldPosition.pixels + shift).clamp(
+    if (shift != 0 && up && oldPosition.extentBefore > 1) {
+      final anchor = gate?.anchor?.call() ?? 0.0;
+      return (oldPosition.pixels + shift * (1 - anchor)).clamp(
+          newPosition.minScrollExtent, newPosition.maxScrollExtent);
+    }
+    if (shift != 0 && up && still && away <= 1) {
+      return newPosition.minScrollExtent;
+    }
+    if (up &&
+        still &&
+        away.abs() <= 1 &&
+        newPosition.minScrollExtent < oldPosition.minScrollExtent) {
+      return (newPosition.minScrollExtent + away).clamp(
           newPosition.minScrollExtent, newPosition.maxScrollExtent);
     }
     return super.adjustPositionForNewDimensions(

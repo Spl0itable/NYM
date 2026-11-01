@@ -1064,11 +1064,9 @@ Object.assign(NYM.prototype, {
 
     _updateNotificationBadge() {
         this._scheduleAppBadge();
-        // Coalesce burst calls into a single DOM update per animation frame.
         if (this._notifBadgeRafPending) return;
         this._notifBadgeRafPending = true;
-        const raf = window.requestAnimationFrame || (cb => setTimeout(cb, 16));
-        raf(() => {
+        this._frameOrTimer(() => {
             this._notifBadgeRafPending = false;
             this._doUpdateNotificationBadge();
         });

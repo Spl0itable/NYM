@@ -137,6 +137,7 @@ class Nip98Auth {
     int? createdAt,
     List<List<String>> extraTags = const [],
     int powBits = 0,
+    bool Function()? abort,
   }) async {
     final pubkey = signer.pubkey;
     final now = createdAt ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -166,7 +167,9 @@ class Nip98Auth {
       content: content,
     );
     // Mine before signing, since the nonce tag is part of the id.
-    if (powBits > 0) unsigned = await mineNonce(unsigned, powBits);
+    if (powBits > 0) {
+      unsigned = await mineNonce(unsigned, powBits, abort: abort);
+    }
     try {
       final signed = await signer.sign(unsigned);
       final auth = signed.toJson();

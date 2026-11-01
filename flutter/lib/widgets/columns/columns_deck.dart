@@ -1620,7 +1620,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
 
   double _viewportHeight = 0;
   bool _atBottom = true;
-  bool _showScrollButton = false;
+  final ValueNotifier<bool> _showScrollButton = ValueNotifier(false);
 
   /// Detects appended messages for autoscroll.
   int _lastMessageCount = 0;
@@ -1647,7 +1647,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       // A repurposed column re-renders pinned to the newest message.
       _lastMessageCount = 0;
       _atBottom = true;
-      _showScrollButton = false;
+      _showScrollButton.value = false;
       _restore = null;
       _groups = null;
       _keeper.reset();
@@ -1668,6 +1668,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     _navService.release(widget.desc.storageKey);
     _nav.dispose();
     _dayFloat.dispose();
+    _showScrollButton.dispose();
     super.dispose();
   }
 
@@ -1694,12 +1695,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     final atBottom = distanceFromBottom < 120;
     final showButton = distanceFromBottom > 150;
     if (atBottom != _atBottom) widget.onAtBottomChanged?.call(atBottom);
-    if (atBottom != _atBottom || showButton != _showScrollButton) {
-      setState(() {
-        _atBottom = atBottom;
-        _showScrollButton = showButton;
-      });
-    }
+    _atBottom = atBottom;
+    _showScrollButton.value = showButton;
     final built = _groups;
     if (built != null) {
       ItemPosition? top;
@@ -2099,12 +2096,15 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                       child: ChatFloatInset(
                         child: Align(
                           alignment: Alignment.bottomRight,
-                          child: ChatNavFabs(
-                            binding: _nav,
-                            slot: 36,
-                            bottom: _showScrollButton
-                                ? _ScrollBottomButton(onTap: _scrollToBottom)
-                                : null,
+                          child: ValueListenableBuilder<bool>(
+                            valueListenable: _showScrollButton,
+                            builder: (context, show, _) => ChatNavFabs(
+                              binding: _nav,
+                              slot: 36,
+                              bottom: show
+                                  ? _ScrollBottomButton(onTap: _scrollToBottom)
+                                  : null,
+                            ),
                           ),
                         ),
                       ),

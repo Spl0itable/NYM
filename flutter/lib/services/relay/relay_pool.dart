@@ -10,6 +10,7 @@ import '../../features/relays/relay_block.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
 import 'held_publishes.dart';
+import 'live_sub_retry.dart';
 import 'relay_connection.dart';
 import 'relay_message.dart';
 import 'relay_stats.dart';
@@ -640,6 +641,7 @@ class RelayPool implements PoolTransport {
   @override
   Future<void> disconnectAll() async {
     _disposed = true;
+    _liveRetry.dispose();
     _started = false;
     for (final c in _connections.values) {
       c.retire();
@@ -652,10 +654,10 @@ class RelayPool implements PoolTransport {
     for (final s in subs) {
       await s.close();
     }
-    for (final s in _msgSubs.values) {
+    for (final s in _msgSubs.values.toList()) {
       await s.cancel();
     }
-    for (final s in _statusSubs.values) {
+    for (final s in _statusSubs.values.toList()) {
       await s.cancel();
     }
     _msgSubs.clear();
@@ -737,6 +739,7 @@ class RelayPool implements PoolTransport {
 
   /// Closes sockets but keeps [Subscription]s alive for the direct/proxy swap.
   Future<void> disconnectSocketsOnly() async {
+    _liveRetry.dispose();
     _wakeTimer?.cancel();
     _wakeTimer = null;
     _stopSampler();
@@ -825,6 +828,7 @@ class RelayPool implements PoolTransport {
       case ClosedMessage(:final subId, :final reason):
         // Count a relay-side CLOSED as EOSE so the quorum doesn't stall.
         _subscriptions[subId]?.onEose(relayUrl, closed: true);
+        _noteLiveClosed(relayUrl, subId, reason);
         _dropIfRelayWideRejection(relayUrl, reason);
       case OkMessage(:final message):
         // OKs are handled per connection via publish() futures.
@@ -832,6 +836,42 @@ class RelayPool implements PoolTransport {
       case NoticeMessage(:final message):
         _dropIfRelayWideRejection(relayUrl, message);
     }
+  }
+
+  void Function(DateTime at)? onLiveSubClosed;
+
+  void Function()? onLiveSubResent;
+
+  bool Function(Subscription sub)? retiredSub;
+
+  bool Function(Subscription sub)? liveSub;
+
+  late final LiveSubRetry _liveRetry = LiveSubRetry(() => relayClock());
+
+  void _noteLiveClosed(String url, String subId, String reason) {
+    final sub = _subscriptions[subId];
+    if (_disposed || sub == null || sub.isClosed) return;
+    if (retiredSub?.call(sub) ?? false) return;
+    if (!(liveSub?.call(sub) ?? true)) return;
+    if (_liveRetry.note(url, subId, reason, (ids) => _resendClosed(url, ids))) {
+      onLiveSubClosed?.call(relayClock());
+    }
+  }
+
+  void _resendClosed(String url, Set<String> ids) {
+    final conn = _connections[url];
+    if (_disposed || conn == null || !conn.isConnected || !_isReadable(url)) {
+      return;
+    }
+    for (final id in ids) {
+      final sub = _subscriptions[id];
+      final filters = _activeFilters[id];
+      if (sub == null || sub.isClosed || filters == null) continue;
+      if (retiredSub?.call(sub) ?? false) continue;
+      if (!(liveSub?.call(sub) ?? true)) continue;
+      _subscribeOn(url, conn, id, filters);
+    }
+    onLiveSubResent?.call();
   }
 
   void _dropIfRelayWideRejection(String relayUrl, String reason) {

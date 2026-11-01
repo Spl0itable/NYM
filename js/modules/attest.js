@@ -9,6 +9,8 @@
     // Re-enroll with this much of the badge's term left so briefly-offline devices still renew in time.
     const RENEW_BEFORE_MS = 7 * 24 * 3600 * 1000;
     const ENROLL_RETRY_MS = 10 * 60 * 1000;
+    const ENROLL_SOON_MS = [1000, 3000, 8000, 20000, 45000];
+    const ATTEST_FETCH_TIMEOUT_MS = 20000;
     // Verified badges are cached per (pubkey, badge).
     const VERIFY_CACHE_MAX = 4000;
 
@@ -140,16 +142,71 @@
         async _attestApi(body) {
             const apiHost = this._getApiHost && this._getApiHost();
             if (!apiHost) throw new Error('no api host');
-            const resp = await this._edgeFetch(`https://${apiHost}/api/attest`, {
+            const opts = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
-            });
+            };
+            if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+                opts.signal = AbortSignal.timeout(ATTEST_FETCH_TIMEOUT_MS);
+            }
+            const resp = await this._edgeFetch(`https://${apiHost}/api/attest`, opts);
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || (data && data.error)) {
-                throw new Error((data && data.error) || `attest failed (${resp.status})`);
+                const err = new Error((data && data.error) || `attest failed (${resp.status})`);
+                err.attestStatus = resp.status || 0;
+                throw err;
             }
             return data || {};
+        },
+
+        _attestTransient(err) {
+            const status = err && err.attestStatus;
+            if (!status) return true;
+            return status >= 500 || status === 408;
+        },
+
+        _attestSyncIdentity() {
+            const pk = this.pubkey || '';
+            if (this._attestFor === pk) return;
+            this._attestFor = pk;
+            this.attestBadge = null;
+            this.attestTier = null;
+            this._attestNextTry = 0;
+            const rec = pk ? this._loadAttestBadge() : null;
+            if (rec) {
+                this.attestBadge = rec.badge;
+                this.attestTier = rec.tier;
+            }
+        },
+
+        _attestRotatingKey() {
+            if (this.connectionMode !== 'ephemeral') return false;
+            try {
+                return localStorage.getItem('nym_keypair_mode') === 'hardcore';
+            } catch (_) {
+                return false;
+            }
+        },
+
+        _attestPending() {
+            this._attestSyncIdentity();
+            if (this._attestRotatingKey()) return false;
+            return !!this.pubkey && !this.attestBadge && !!this._attestEnrolling
+                && this._attestEnrollingFor === this.pubkey;
+        },
+
+        _attestWaitSoon(ms) {
+            return new Promise((resolve) => {
+                let timer = null;
+                const done = () => {
+                    if (timer) clearTimeout(timer);
+                    if (typeof window !== 'undefined' && window.removeEventListener) window.removeEventListener('online', done);
+                    resolve();
+                };
+                timer = setTimeout(done, ms);
+                if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('online', done);
+            });
         },
 
         // The PWA cannot attest itself; a native shell supplies window.NymNativeAttest.
@@ -176,6 +233,7 @@
 
         // Mining happens before signing because the nonce tag is part of the id.
         async _signAttestAuth(challenge, powBits) {
+            const pk = this.pubkey;
             const apiHost = this._getApiHost && this._getApiHost();
             const event = {
                 kind: 27235,
@@ -187,22 +245,26 @@
                     ['challenge', challenge]
                 ],
                 content: '',
-                pubkey: this.pubkey
+                pubkey: pk
             };
             if (apiHost) event.tags.push(['u', `https://${apiHost}/api/attest`]);
             const bits = Number(powBits) || 0;
             let mined = event;
-            if (bits > 0 && typeof this._minePow === 'function') {
-                mined = (await this._minePow(event, bits)) || event;
+            const mine = typeof this._minePowParallel === 'function' ? this._minePowParallel : this._minePow;
+            if (bits > 0 && typeof mine === 'function') {
+                mined = (await mine.call(this, event, bits, () => this.pubkey !== pk)) || event;
             }
+            if (this.pubkey !== pk) throw new Error('identity changed');
             return this.signEvent(mined);
         },
 
         // Enrolls if there is no live badge, or renews one nearing its end.
         async ensureAttestBadge(opts) {
             const force = !!(opts && opts.force);
-            if (!this.pubkey) return null;
-            if (this._attestEnrolling) return this._attestEnrolling;
+            this._attestSyncIdentity();
+            const pk = this.pubkey;
+            if (!pk || this._attestRotatingKey()) return null;
+            if (this._attestEnrolling && this._attestEnrollingFor === pk) return this._attestEnrolling;
 
             const existing = this._loadAttestBadge();
             if (existing && !force && existing.expiresAt - Date.now() > RENEW_BEFORE_MS) {
@@ -214,96 +276,78 @@
                 return existing || null;
             }
 
-            this._attestEnrolling = (async () => {
+            const run = this._attestEnrollLoop(pk);
+            this._attestEnrolling = run;
+            this._attestEnrollingFor = pk;
+            run.then(() => {
+                if (this._attestEnrolling !== run) return;
+                this._attestEnrolling = null;
+                this._attestEnrollingFor = '';
+            });
+            return run;
+        },
+
+        async _attestEnrollLoop(pk) {
+            for (let step = 0; ; step++) {
                 try {
-                    if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
-                    const issued = await this._attestApi({ action: 'challenge', pubkey: this.pubkey });
-                    const challenge = issued && issued.challenge;
-                    if (!challenge) throw new Error('no challenge');
-                    const proof = await this._platformAttestation(challenge);
-                    // Only the web tier is probed; native builds carry a stronger proof.
-                    const build = (proof.platform === 'web' && Array.isArray(issued.buildProbe))
-                        ? await this._buildProof(issued.buildProbe)
-                        : null;
-                    // Only the web tier pays; native builds carry a stronger proof.
-                    const auth = await this._signAttestAuth(
-                        challenge, proof.platform === 'web' ? issued.powBits : 0);
-                    const res = await this._attestApi(Object.assign({
-                        action: 'enroll',
-                        pubkey: this.pubkey,
-                        challenge,
-                        auth,
-                        build
-                    }, proof));
-                    if (!res.badge) throw new Error('no badge');
-                    if (res.authority && /^[0-9a-f]{64}$/.test(res.authority)
-                        && !/^[0-9a-f]{64}$/.test(PINNED_AUTHORITY)) {
-                        try { localStorage.setItem(AUTHORITY_LS_KEY, res.authority); } catch (_) { }
-                    }
-                    const rec = {
-                        pubkey: this.pubkey,
-                        badge: res.badge,
-                        tier: res.tier || 'origin',
-                        expiresAt: Number(res.expiresAt) || 0
-                    };
-                    this._saveAttestBadge(rec);
-                    this.attestBadge = rec.badge;
-                    this.attestTier = rec.tier;
-                    this._attestNextTry = 0;
+                    const rec = await this._attestEnrollOnce(pk);
+                    if (this.pubkey === pk) this._attestNextTry = 0;
                     return rec;
-                } catch (_) {
-                    // Enrollment failures stay silent; the user just goes unbadged.
-                    this._attestNextTry = Date.now() + ENROLL_RETRY_MS;
-                    return this._loadAttestBadge();
-                } finally {
-                    this._attestEnrolling = null;
-                    if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
-                }
-            })();
-            return this._attestEnrolling;
-        },
-
-        composerVerifying() {
-            return !!this._attestEnrolling && !this.attestBadge && !this.inPMMode;
-        },
-
-        _syncComposerVerifying() {
-            if (typeof document === 'undefined') return;
-            const btn = document.getElementById('sendBtn');
-            const input = document.getElementById('messageInput');
-            if (!btn || !input) return;
-            const on = this.composerVerifying();
-            if (on === !!this._composerVerifying) return;
-            this._composerVerifying = on;
-            if (on) {
-                btn.dataset.attestPrevLabel = btn.getAttribute('aria-label') || 'Send';
-                btn.setAttribute('aria-label', 'VERIFYING...');
-                btn.setAttribute('title', 'VERIFYING...');
-                btn.classList.add('send-btn-verifying');
-                btn.setAttribute('aria-busy', 'true');
-                input.dataset.attestPrevPlaceholder = input.getAttribute('data-placeholder') || '';
-                input.setAttribute('data-placeholder', 'Verifying your session...');
-            } else {
-                if (btn.dataset.attestPrevLabel) {
-                    btn.setAttribute('aria-label', btn.dataset.attestPrevLabel);
-                    btn.setAttribute('title', btn.dataset.attestPrevLabel);
-                }
-                btn.classList.remove('send-btn-verifying');
-                btn.removeAttribute('aria-busy');
-                btn.disabled = false;
-                delete input.dataset.composerPlaceholder;
-                if (typeof this._composerBasePlaceholder === 'function') {
-                    input.setAttribute('data-placeholder', this._composerBasePlaceholder());
-                    input.dataset.composerPlaceholder = this._composerBasePlaceholder();
-                } else if (input.dataset.attestPrevPlaceholder) {
-                    input.setAttribute('data-placeholder', input.dataset.attestPrevPlaceholder);
+                } catch (err) {
+                    if (this.pubkey !== pk) return null;
+                    if (!this._attestTransient(err) || step >= ENROLL_SOON_MS.length) {
+                        this._attestNextTry = Date.now() + ENROLL_RETRY_MS;
+                        return this._loadAttestBadge();
+                    }
+                    await this._attestWaitSoon(ENROLL_SOON_MS[step]);
+                    if (this.pubkey !== pk) return null;
                 }
             }
-            if (typeof this.i18nApplyNow === 'function') {
-                try { this.i18nApplyNow(btn); } catch (_) { }
+        },
+
+        async _attestEnrollOnce(pk) {
+            const still = () => {
+                if (this.pubkey !== pk) throw new Error('identity changed');
+            };
+            const issued = await this._attestApi({ action: 'challenge', pubkey: pk });
+            const challenge = issued && issued.challenge;
+            if (!challenge) throw new Error('no challenge');
+            still();
+            const proof = await this._platformAttestation(challenge);
+            const probe = proof.platform === 'web' && Array.isArray(issued.buildProbe) ? issued.buildProbe : null;
+            const build = probe ? await this._buildProof(probe) : null;
+            if (probe && !build) throw new Error('build proof not ready');
+            still();
+            const auth = await this._signAttestAuth(
+                challenge, proof.platform === 'web' ? issued.powBits : 0);
+            still();
+            const res = await this._attestApi(Object.assign({
+                action: 'enroll',
+                pubkey: pk,
+                challenge,
+                auth,
+                build
+            }, proof));
+            if (!res.badge) {
+                const err = new Error('no badge');
+                err.attestStatus = 422;
+                throw err;
             }
-            this._i18nComposerPlaceholder(input);
-            if (!on) this._flushQueuedSend();
+            still();
+            if (res.authority && /^[0-9a-f]{64}$/.test(res.authority)
+                && !/^[0-9a-f]{64}$/.test(PINNED_AUTHORITY)) {
+                try { localStorage.setItem(AUTHORITY_LS_KEY, res.authority); } catch (_) { }
+            }
+            const rec = {
+                pubkey: pk,
+                badge: res.badge,
+                tier: res.tier || 'origin',
+                expiresAt: Number(res.expiresAt) || 0
+            };
+            this._saveAttestBadge(rec);
+            this.attestBadge = rec.badge;
+            this.attestTier = rec.tier;
+            return rec;
         },
 
         _i18nComposerPlaceholder(input) {
@@ -313,52 +357,28 @@
             try { this.i18nBindAttr(input, 'data-placeholder', value); } catch (_) { }
         },
 
-        queueSendAfterVerify() {
-            this._composerSendQueued = {
-                channel: this.currentChannel,
-                geohash: this.currentGeohash,
-                pm: !!this.inPMMode
-            };
-            const btn = typeof document !== 'undefined' ? document.getElementById('sendBtn') : null;
-            if (btn) {
-                btn.setAttribute('aria-label', 'SENDING...');
-                btn.setAttribute('title', 'SENDING...');
-                if (typeof this.i18nApplyNow === 'function') {
-                    try { this.i18nApplyNow(btn); } catch (_) { }
-                }
-            }
-        },
-
-        _flushQueuedSend() {
-            const queued = this._composerSendQueued;
-            if (!queued) return;
-            this._composerSendQueued = null;
-            const sameView = queued.pm === !!this.inPMMode
-                && queued.channel === this.currentChannel
-                && queued.geohash === this.currentGeohash;
-            if (!sameView || typeof this.sendMessage !== 'function') return;
-            const send = () => { try { this.sendMessage(); } catch (_) { } };
-            if (typeof setTimeout === 'function') setTimeout(send, 0); else send();
-        },
-
         async awaitAttestBadge(maxMs) {
+            this._attestSyncIdentity();
+            if (this._attestRotatingKey()) return null;
             if (this.attestBadge) return this.attestBadge;
-            if (!this.pubkey) return null;
-            let pending = this._attestEnrolling;
+            const pk = this.pubkey;
+            if (!pk) return null;
+            let pending = this._attestEnrolling && this._attestEnrollingFor === pk ? this._attestEnrolling : null;
             if (!pending) {
                 try { pending = this.ensureAttestBadge(); } catch (_) { pending = null; }
             }
             if (!pending || typeof pending.then !== 'function') return this.attestBadge || null;
-            const limit = Number(maxMs) > 0 ? Number(maxMs) : 8000;
-            await Promise.race([
-                pending.catch(() => null),
-                new Promise(resolve => setTimeout(resolve, limit))
-            ]);
+            const waits = [pending.catch(() => null)];
+            if (Number(maxMs) > 0) waits.push(new Promise(resolve => setTimeout(resolve, Number(maxMs))));
+            await Promise.race(waits);
+            if (this.pubkey !== pk) return null;
             return this.attestBadge || null;
         },
 
         attachAttestTag(event) {
-            if (!event || !Array.isArray(event.tags) || !this.attestBadge) return event;
+            this._attestSyncIdentity();
+            if (!event || !Array.isArray(event.tags) || !this.attestBadge || this._attestRotatingKey()) return event;
+            if (event.pubkey && event.pubkey !== this.pubkey) return event;
             const tag = this.ATTEST_BADGE_TAG;
             if (event.tags.some(t => Array.isArray(t) && t[0] === tag)) return event;
             event.tags.push([tag, this.attestBadge]);
@@ -367,7 +387,8 @@
 
         // Tags to attach to an outgoing channel message.
         attestTagsForEvent() {
-            return this.attestBadge ? [[BADGE_TAG, this.attestBadge]] : [];
+            this._attestSyncIdentity();
+            return this.attestBadge && !this._attestRotatingKey() ? [[BADGE_TAG, this.attestBadge]] : [];
         }
     });
 })();

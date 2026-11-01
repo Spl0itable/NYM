@@ -46,9 +46,16 @@ class MessageListScroller {
   /// Held by message id, since indexes move as messages arrive, so leaving a thread restores the old position.
   ({String id, double alignment})? _anchor;
 
-  void bind(ItemScrollController controller, Map<String, int> indexById) {
+  int _newest = 0;
+
+  double Function()? _newestAlignment;
+
+  void bind(ItemScrollController controller, Map<String, int> indexById,
+      {int newest = 0, double Function()? newestAlignment}) {
     _controller = controller;
     _indexById = indexById;
+    _newest = newest;
+    _newestAlignment = newestAlignment;
   }
 
   void rememberAnchor(String messageId, double alignment) {
@@ -86,6 +93,10 @@ class MessageListScroller {
   }) {
     final controller = _controller;
     if (controller == null || !controller.isAttached) return Future.value();
+    if (index < _newest) {
+      index = _newest;
+      alignment += _newestAlignment?.call() ?? 0;
+    }
     _scrollCount++;
     _inFlight++;
     return controller
@@ -139,7 +150,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   final ItemPositionsListener _positionsListener =
       ItemPositionsListener.create();
 
-  bool _showScrollButton = false;
+  final ValueNotifier<bool> _scrollButton = ValueNotifier(false);
 
   late final MessageAnnouncer _announcer = MessageAnnouncer(speak: _speak);
 
@@ -254,6 +265,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     _announcer.dispose();
     _nav.dispose();
     _dayFloat.dispose();
+    _scrollButton.dispose();
     super.dispose();
   }
 
@@ -271,6 +283,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       // The item nearest the viewport bottom (leading edge in a reversed list) is what gets restored.
       ItemPosition? nearest;
       for (final p in positions) {
+        if (!_idByIndex.containsKey(p.index)) continue;
         if (nearest == null || p.itemLeadingEdge < nearest.itemLeadingEdge) {
           nearest = p;
         }
@@ -278,7 +291,10 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       final id = nearest == null ? null : _idByIndex[nearest.index];
       if (id == null) return;
       // Already at the newest message: nothing to restore, and pinning would fight the autoscroll.
-      if (nearest!.index == 0 && nearest.itemLeadingEdge >= -0.01) return;
+      if (nearest!.index == (_units?.offset ?? 0) &&
+          nearest.itemLeadingEdge >= -0.01) {
+        return;
+      }
       final unit = _unitByIndex[nearest.index];
       var alignment = (unit == null ? null : _anchors.edgeOf(unit)) ??
           nearest.itemLeadingEdge;
@@ -290,6 +306,13 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   }
 
   static const double _bottomInset = 16;
+
+  late final BottomFollow _follow = BottomFollow()
+    ..anchor = (() => _anchors.anchor ?? 0);
+
+  double _bottomAlignment(int index) => index == 0 || _viewportHeight <= 0
+      ? 0
+      : _bottomInset / _viewportHeight;
 
   bool _keepQueued = false;
 
@@ -338,14 +361,25 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     }
     final positions = _positionsListener.itemPositions.value;
     ItemPosition? newest;
+    final newestIndex = before?.offset ?? 0;
     for (final p in positions) {
-      if (p.index == 0) {
+      if (p.index == newestIndex) {
         newest = p;
         break;
       }
     }
     final follow = newest != null &&
         _bottomInset - newest.itemLeadingEdge * _viewportHeight <= 150;
+    final moved = before == null ||
+        before.units.isEmpty ||
+        built.indexByUnit[_unitIdOf(before.units.last)] != before.offset;
+    if (follow && !moved) {
+      _follow.armed = true;
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        _follow.armed = false;
+      });
+      return;
+    }
     final oldUnits = _unitByIndex;
     _keeper.keep(
       positions: positions,
@@ -354,6 +388,11 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       viewportHeight: _viewportHeight,
       bottomInset: _bottomInset,
       follow: follow,
+      newestIndex: before?.offset ?? 0,
+      newestTo: built.offset,
+      newestUnitTo: built.units.isEmpty ? null : _unitIdOf(built.units.last),
+      stable: before != null &&
+          _holdsStill(before, built, _keeper.target, positions),
     );
   }
 
@@ -421,10 +460,11 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     final unitByIndex = <int, String>{};
     final atByIndex = <int, int>{};
     final dayStarts = <int>{};
+    final offset = _slotOffset(cached, units);
     String? lastDay;
     for (var f = 0; f < units.length; f++) {
       final unit = units[f];
-      final revIndex = units.length - 1 - f;
+      final revIndex = offset + units.length - 1 - f;
       final firstAt = unit is _GroupUnit
           ? unit.entries.first.message.createdAt
           : (unit as _PollUnit).poll.createdAt;
@@ -435,15 +475,12 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       final day = DayClock.instance.keyOf(firstAt);
       if (day != lastDay) dayStarts.add(revIndex);
       lastDay = DayClock.instance.keyOf(lastAt);
-      final String unitId;
       if (unit is _GroupUnit) {
         for (final entry in unit.entries) {
           indexById[entry.message.id] = revIndex;
         }
-        unitId = 'group_${unit.entries.first.message.id}';
-      } else {
-        unitId = 'poll_${(unit as _PollUnit).poll.id}';
       }
+      final unitId = _unitIdOf(unit);
       indexByUnit[unitId] = revIndex;
       unitByIndex[revIndex] = unitId;
     }
@@ -460,7 +497,65 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       unitByIndex: unitByIndex,
       atByIndex: atByIndex,
       dayStarts: dayStarts,
+      offset: offset,
     );
+  }
+
+  static const int _slotReserve = 64;
+
+  int _slotOffset(_UnitsBuild? prev, List<_RenderUnit> units) {
+    if (prev == null || prev.units.isEmpty || units.isEmpty) {
+      return _slotReserve;
+    }
+    final newest = _unitIdOf(prev.units.last);
+    for (var f = units.length - 1, k = 0;
+        f >= 0 && k <= prev.offset;
+        f--, k++) {
+      if (_unitIdOf(units[f]) == newest) return prev.offset - k;
+    }
+    return _slotReserve;
+  }
+
+  bool _sameSlot(_UnitsBuild a, _UnitsBuild b, int index) {
+    if (a.dayStarts.contains(index) != b.dayStarts.contains(index)) {
+      return false;
+    }
+    final x = a.unitAt(index);
+    final y = b.unitAt(index);
+    if (x == null || y == null) {
+      return x == null &&
+          y == null &&
+          (index < a.offset) == (index < b.offset);
+    }
+    if (x is _GroupUnit && y is _GroupUnit) {
+      return _sameEntries(x.entries, y.entries);
+    }
+    return x is _PollUnit && y is _PollUnit && identical(x.poll, y.poll);
+  }
+
+  bool _holdsStill(
+      _UnitsBuild a, _UnitsBuild b, int? target, Iterable<ItemPosition> seen) {
+    if (target == null ||
+        a.useBubbles != b.useBubbles ||
+        a.breakBefore != b.breakBefore ||
+        a.units.isEmpty ||
+        b.indexByUnit[_unitIdOf(a.units.last)] != a.offset) {
+      return false;
+    }
+    var lo = -1;
+    var hi = -1;
+    for (final p in seen) {
+      if (p.itemTrailingEdge <= 0 || p.itemLeadingEdge >= 1) continue;
+      if (a.unitAt(p.index) == null) continue;
+      if (lo < 0 || p.index < lo) lo = p.index;
+      if (p.index > hi) hi = p.index;
+    }
+    if (lo < 0) return false;
+    final to = target > hi ? target : hi;
+    for (var i = target < lo ? target : lo; i <= to; i++) {
+      if (!_sameSlot(a, b, i)) return false;
+    }
+    return true;
   }
 
   /// Shows the FAB beyond 150px from the bottom; offset 0 rests index 0's edge 16px inside the viewport.
@@ -469,8 +564,9 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     if (positions.isEmpty) return;
     _navTick();
     ItemPosition? newest;
+    final newestIndex = _units?.offset ?? 0;
     for (final p in positions) {
-      if (p.index == 0) {
+      if (p.index == newestIndex) {
         newest = p;
         break;
       }
@@ -484,9 +580,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       final distanceFromBottom = 16 - newest.itemLeadingEdge * _viewportHeight;
       shouldShow = distanceFromBottom > 150;
     }
-    if (shouldShow != _showScrollButton) {
-      setState(() => _showScrollButton = shouldShow);
-    }
+    _scrollButton.value = shouldShow;
     _updateDayFloat(positions, !shouldShow);
   }
 
@@ -688,12 +782,15 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         '@${_baseNym(selfNym)}', _navBreak);
     final units = built.units;
     final indexById = built.indexById;
-    _nav.bind(indexById, units.length - 1);
+    _nav.bind(indexById, built.offset + units.length - 1,
+        newestIndex: built.offset);
     _nav.observeLive(messages,
-        away: _showScrollButton ||
+        away: _scrollButton.value ||
             !ref.read(appStateProvider.notifier).appVisible);
     final scroller = ref.read(messageListScrollerProvider(view.storageKey));
-    scroller.bind(_itemScrollController, indexById);
+    scroller.bind(_itemScrollController, indexById,
+        newest: built.offset,
+        newestAlignment: () => _bottomAlignment(built.offset));
     _idByIndex = {for (final e in indexById.entries) e.value: e.key};
     _unitByIndex = built.unitByIndex;
     if (!_restoreDone) {
@@ -711,7 +808,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       _listBuilt = true;
       _seenScrolls = scroller.scrollCount;
       _keeper.reset(
-        target: restore?.index ?? 0,
+        target: restore?.index ?? built.offset,
         anchorUnit: restore == null ? null : built.unitByIndex[restore.index],
       );
     }
@@ -754,22 +851,28 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                         scrollOffsetController: _offsetController,
                         itemPositionsListener: _positionsListener,
                         reverse: true,
-                        physics: const KeepReadingPhysics(),
-                        initialScrollIndex: restore?.index ?? 0,
-                        initialAlignment: restore?.alignment ?? 0,
+                        physics: KeepReadingPhysics(follow: _follow),
+                        initialScrollIndex: restore?.index ?? built.offset,
+                        initialAlignment: restore?.alignment ??
+                            _bottomAlignment(built.offset),
                         padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
                         // Channels get one extra top unit, the history-edge notice, shown once the user scrolls back to it.
-                        itemCount: units.length + (isChannel ? 1 : 0),
+                        itemCount:
+                            built.offset + units.length + (isChannel ? 1 : 0),
                         itemBuilder: (context, revIndex) {
+                          if (revIndex < built.offset) {
+                            return const SizedBox.shrink();
+                          }
                           final mouse = PointerInput.mouseOf(context);
-                          if (revIndex == units.length) {
+                          if (revIndex == built.offset + units.length) {
                             return MessageSelection.plain(
                                 mouse,
                                 _ChannelHistoryEdgeNotice(
                                     textSize: settings.textSize.toDouble(),
                                     partial: historyMissing));
                           }
-                          final forward = units.length - 1 - revIndex;
+                          final forward =
+                              built.offset + units.length - 1 - revIndex;
                           final unit = units[forward];
                           final Widget child;
                           // Key by the group's lead message id so appends don't reparent rows and restart their snap-in animation.
@@ -858,14 +961,17 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                       child: ChatFloatInset(
                         child: Align(
                           alignment: Alignment.bottomRight,
-                          child: ChatNavFabs(
-                            binding: _nav,
-                            slot: _fabSlot(context),
-                            bottom: _showScrollButton
-                                ? _ScrollToBottomButton(
-                                    size: _fabSlot(context),
-                                    onTap: _scrollToBottom)
-                                : null,
+                          child: ValueListenableBuilder<bool>(
+                            valueListenable: _scrollButton,
+                            builder: (context, show, _) => ChatNavFabs(
+                              binding: _nav,
+                              slot: _fabSlot(context),
+                              bottom: show
+                                  ? _ScrollToBottomButton(
+                                      size: _fabSlot(context),
+                                      onTap: _scrollToBottom)
+                                  : null,
+                            ),
                           ),
                         ),
                       ),
@@ -1100,6 +1206,7 @@ class _UnitsBuild {
     required this.unitByIndex,
     required this.atByIndex,
     required this.dayStarts,
+    required this.offset,
   });
 
   final List<Message> messages;
@@ -1114,7 +1221,17 @@ class _UnitsBuild {
   final Map<int, String> unitByIndex;
   final Map<int, int> atByIndex;
   final Set<int> dayStarts;
+  final int offset;
+
+  _RenderUnit? unitAt(int index) {
+    final f = units.length - 1 - (index - offset);
+    return index < offset || f < 0 ? null : units[f];
+  }
 }
+
+String _unitIdOf(_RenderUnit unit) => unit is _GroupUnit
+    ? 'group_${unit.entries.first.message.id}'
+    : 'poll_${(unit as _PollUnit).poll.id}';
 
 double _fabSlot(BuildContext context) =>
     MediaQuery.sizeOf(context).width <= ChatFabs.phoneMax ? 36 : 40;

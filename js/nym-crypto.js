@@ -454,18 +454,70 @@
         return T.finalizeEvent(wrap, ephSk);
     }
 
-    function minePow(event, difficulty) {
-        if (!difficulty || difficulty <= 0) return event;
+    const POW_MARK = 'nympowmark' + '7f3a91';
+
+    function powPlan(event, difficulty) {
         const T = NT();
         let i = event.tags.findIndex(t => Array.isArray(t) && t[0] === 'nonce');
         if (i < 0) { event.tags.push(['nonce', '0', String(difficulty)]); i = event.tags.length - 1; }
         else event.tags[i] = ['nonce', '0', String(difficulty)];
-        let nonce = 0;
-        while (true) {
-            event.tags[i][1] = String(nonce);
+        const sha = T._sha256;
+        if (!sha || typeof sha.create !== 'function' || typeof TextEncoder === 'undefined') return { i, base: null };
+        event.tags[i][1] = POW_MARK;
+        const ser = JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content]);
+        event.tags[i][1] = '0';
+        const at = ser.indexOf(POW_MARK);
+        if (at < 0 || ser.indexOf(POW_MARK, at + 1) >= 0) return { i, base: null };
+        const enc = new TextEncoder();
+        return { i, base: sha.create().update(enc.encode(ser.slice(0, at))), tail: enc.encode(ser.slice(at + POW_MARK.length)) };
+    }
+
+    function leadingZeroBits(d) {
+        let bits = 0;
+        for (let k = 0; k < d.length; k++) {
+            if (d[k] === 0) { bits += 8; continue; }
+            return bits + Math.clz32(d[k]) - 24;
+        }
+        return bits;
+    }
+
+    function minePowRange(event, difficulty, start, count) {
+        if (!difficulty || difficulty <= 0) return event;
+        const T = NT();
+        const plan = powPlan(event, difficulty);
+        const digits = new Uint8Array(24);
+        const from = Math.max(0, Math.floor(Number(start) || 0));
+        const end = from + Math.max(0, Math.floor(Number(count) || 0));
+        for (let n = from; n < end; n++) {
+            let hit;
+            if (plan.base) {
+                const s = String(n);
+                for (let k = 0; k < s.length; k++) digits[k] = s.charCodeAt(k);
+                const h = plan.base.clone();
+                h.update(digits.subarray(0, s.length));
+                h.update(plan.tail);
+                hit = leadingZeroBits(h.digest()) >= difficulty;
+            } else {
+                event.tags[plan.i][1] = String(n);
+                hit = T.nip13.getPow(T.getEventHash(event)) >= difficulty;
+            }
+            if (!hit) continue;
+            event.tags[plan.i][1] = String(n);
             event.id = T.getEventHash(event);
             if (T.nip13.getPow(event.id) >= difficulty) return event;
-            nonce++;
+            plan.base = null;
+        }
+        event.tags[plan.i][1] = '0';
+        delete event.id;
+        return null;
+    }
+
+    function minePow(event, difficulty) {
+        if (!difficulty || difficulty <= 0) return event;
+        const step = 1 << 20;
+        for (let start = 0; ; start += step) {
+            const mined = minePowRange(event, difficulty, start, step);
+            if (mined) return mined;
         }
     }
 
@@ -544,7 +596,7 @@
     }
 
     root.NymCrypto = {
-        randomNow, encryptBitchat, bitchatWrap, nip59Wrap, minePow, unwrapGiftWrap,
+        randomNow, encryptBitchat, bitchatWrap, nip59Wrap, minePow, minePowRange, unwrapGiftWrap,
         pqNip59Wrap, pqEncrypt, pqDecrypt, pqConversationKey, isPqPayload,
         isPq2Payload, pq2Seal, pq2Open, pq2Encrypt, pq2Decrypt, pq2LayerKeys,
         pq2Nip59Wrap,

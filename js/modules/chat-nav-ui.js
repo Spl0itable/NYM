@@ -409,7 +409,8 @@
             if (!this._cnDue) this._cnDue = new Set();
             this._cnDue.add(key);
             if (this._cnDueRaf) return;
-            this._cnDueRaf = requestAnimationFrame(() => {
+            this._cnDueRaf = true;
+            this._frameOrTimer(() => {
                 this._cnDueRaf = null;
                 const keys = [...this._cnDue];
                 this._cnDue.clear();

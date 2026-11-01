@@ -73,6 +73,7 @@ import '../features/media_notes/media_note_stores.dart';
 import '../features/media_notes/media_notes.dart' as media_notes;
 import '../features/notifications/app_badge.dart';
 import '../features/notifications/background_catch_up.dart';
+import '../features/notifications/catch_up_plan.dart';
 import '../features/notifications/live_gap.dart';
 import '../features/notifications/notification_routing.dart';
 import '../features/notifications/self_reference.dart';
@@ -871,6 +872,11 @@ class NostrController {
       }
       _identity = identity;
       _signer = signer;
+      if (signer != null && !_attestRotatingKey()) {
+        final attest =
+            _attest ??= _newAttest();
+        unawaited(attest.ensureBadge(signer));
+      }
 
       // Load the PQ root (PQ-ROOT-SPEC §5.3) before anything derives a key; it arrives via [unlockedSecrets].
       await _loadPqRoot(unlockedSecrets: unlockedSecrets);
@@ -966,11 +972,13 @@ class NostrController {
       service.pqSelfKey = pqSelfKey;
       service.pqSelfLayered = pqSelfUsesLayered;
       final attest =
-          _attest ??= AttestService(kv: _ref.read(keyValueStoreProvider));
+          _attest ??= _newAttest();
       appAttestAuthority = attest.authorityPubkey;
       final selfPubkey = signer?.pubkey;
-      if (selfPubkey != null && attest.restore(selfPubkey)) {
-        service.attestBadge = attest.badge;
+      if (selfPubkey != null &&
+          !_attestRotatingKey() &&
+          attest.restore(selfPubkey)) {
+        service.setAttestBadge(attest.badge, selfPubkey);
       }
       unawaited(_ensureAttestBadge());
       _groups = GroupManager(service)
@@ -1139,6 +1147,7 @@ class NostrController {
   }
 
   void _onShardLost(int lastLiveAtMs) {
+    _lossAtMs = DateTime.now().millisecondsSinceEpoch;
     _liveGap.note(lastLiveAtMs: lastLiveAtMs);
   }
 
@@ -1156,7 +1165,10 @@ class NostrController {
     if (svc != null) {
       _ref.read(appStateProvider.notifier).setProxyMode(svc.isProxyMode);
     }
-    if (count == 0 && !wasOffline) _liveGap.note();
+    if (count == 0 && !wasOffline) {
+      _lossAtMs = DateTime.now().millisecondsSinceEpoch;
+      _liveGap.note();
+    }
     if (count > 0 && wasOffline) {
       // Reconnect edge: re-run the full D1 backfill, since relay REQs only carry new events.
       if (_liveGap.pending) {
@@ -1196,24 +1208,40 @@ class NostrController {
   Future<void> _awaitAttestBadge() async {
     final service = _service;
     final attest = _attest;
-    if (service == null || attest == null) return;
-    if (service.attestBadge != null) return;
-    final pending = attest.inFlight;
-    if (pending == null) return;
-    await pending.timeout(const Duration(seconds: 8), onTimeout: () {});
-    service.attestBadge = attest.badge;
+    final pubkey = service?.signer?.pubkey;
+    if (service == null || attest == null || pubkey == null) return;
+    if (_attestRotatingKey()) return;
+    if (service.attestBadge != null && attest.badgeFor(pubkey) != null) return;
+    if (attest.badgeFor(pubkey) == null && attest.inFlight == null) {
+      await _ensureAttestBadge();
+    }
+    final badge = await attest.awaitBadge(pubkey);
+    if (identical(_service, service)) service.setAttestBadge(badge, pubkey);
+  }
+
+  bool _attestRotatingKey() => _geoPresenceRotatingKey();
+
+  Future<void>? _channelSendTail;
+
+  bool _attestPendingFor(NostrService service) {
+    final attest = _attest;
+    final pubkey = service.signer?.pubkey;
+    if (attest == null || pubkey == null || _attestRotatingKey()) return false;
+    return attest.badgeFor(pubkey) == null && attest.inFlight != null;
   }
 
   /// Enrolls or renews this install's attestation badge; best-effort and silent when the device can't attest.
   Future<void> _ensureAttestBadge() async {
     final service = _service;
     final signer = service?.signer;
-    if (service == null || signer == null) return;
+    if (service == null || signer == null || _attestRotatingKey()) return;
     final attest =
-        _attest ??= AttestService(kv: _ref.read(keyValueStoreProvider));
+        _attest ??= _newAttest();
     appAttestAuthority = attest.authorityPubkey;
     await attest.ensureBadge(signer);
-    service.attestBadge = attest.badge;
+    if (identical(_service, service)) {
+      service.setAttestBadge(attest.badgeFor(signer.pubkey), signer.pubkey);
+    }
     appAttestAuthority = attest.authorityPubkey;
   }
 
@@ -1232,7 +1260,8 @@ class NostrController {
         if (d1Only) _gapD1FloorSec = sinceSec;
         try {
           await _backfillFromD1OnReconnect();
-          await _restoreAllChannelArchives(force: true, sinceSec: sinceSec);
+          await _restoreAllChannelArchives(
+              force: true, sinceSec: sinceSec, paced: true);
         } finally {
           _liveGapSinceSec = 0;
           if (_gapD1FloorSec == sinceSec) _gapD1FloorSec = 0;
@@ -1285,7 +1314,8 @@ class NostrController {
       if (!identical(_storageSync, sync)) return;
       await _backfillGroupArchive(force: true);
       if (channels && identical(_storageSync, sync)) {
-        await _restoreAllChannelArchives(force: true, sinceSec: floorSec);
+        await _restoreAllChannelArchives(
+            force: true, sinceSec: floorSec, paced: true, skipCovered: false);
       }
     } catch (_) {
     } finally {
@@ -1467,15 +1497,44 @@ class NostrController {
 
   /// Awaits discovery first so newly discovered channels are in the restore set and don't open empty; best-effort.
   Future<void> _restoreAllChannelArchives(
-      {bool force = false, int sinceSec = 0}) async {
+      {bool force = false,
+      int sinceSec = 0,
+      bool paced = false,
+      bool skipCovered = true}) async {
     await _discoverChannelActivity();
     if (_retired) return;
     final keys = <String>{
       for (final c in _ref.read(appStateProvider).channels) c.key,
     };
     final view = _ref.read(appStateProvider).view;
-    if (view.kind == ViewKind.channel && view.id.isNotEmpty) keys.add(view.id);
-    await _backfillChannelArchivesFor(keys, force: force, sinceSec: sinceSec);
+    final open =
+        view.kind == ViewKind.channel && view.id.isNotEmpty ? view.id : null;
+    if (open != null) keys.add(open);
+    if (!paced) {
+      await _backfillChannelArchivesFor(keys, force: force, sinceSec: sinceSec);
+      return;
+    }
+    final plan = planChannelCatchUp(keys,
+        open: open,
+        lastActivityMs: _ref.read(appStateProvider).channelLastActivity,
+        restoredAtMs: _archiveRestoredAt,
+        coveredSinceMs: skipCovered ? _lossAtMs : 0);
+    await runChannelCatchUp(
+        plan,
+        (batch) =>
+            _backfillChannelArchivesFor(batch, force: force, sinceSec: sinceSec),
+        stopped: () => _retired);
+  }
+
+  final Map<String, int> _archiveRestoredAt = {};
+
+  int _lossAtMs = 0;
+
+  Future<void> _afterPoolLive(void Function() run) async {
+    final svc = _service;
+    if (svc != null) await svc.whenPoolLive();
+    if (_retired || _suspended) return;
+    run();
   }
 
   /// Restores [keys] with bounded concurrency; [force] bypasses the per-channel 60s freshness window.
@@ -1973,6 +2032,14 @@ class NostrController {
 
   @visibleForTesting
   static PoolTransport Function()? debugPoolFactory;
+
+  @visibleForTesting
+  static AttestService Function(KeyValueStore kv)? debugAttestFactory;
+
+  AttestService _newAttest() {
+    final kv = _ref.read(keyValueStoreProvider);
+    return debugAttestFactory?.call(kv) ?? AttestService(kv: kv);
+  }
 
   bool _suspended = false;
   bool _retired = false;
@@ -8437,12 +8504,34 @@ class NostrController {
       if (service == null || identity == null) return;
       final isGeo = state.channels
           .any((c) => c.key == view.id.toLowerCase() && c.isGeohash);
+      final ahead = _channelSendTail;
+      final turn = Completer<void>();
+      _channelSendTail = turn.future;
+      final heldKey = echo?.id;
+      var held = false;
       try {
-        await _awaitAttestBadge();
+        final waiting = _awaitAttestBadge();
+        if (heldKey != null && _attestPendingFor(service)) {
+          held = true;
+          QueuedSends.instance.register(heldKey, heldKey);
+          QueuedSends.instance.markHeld(heldKey);
+        }
+        await waiting;
+        if (held) {
+          held = false;
+          QueuedSends.instance.release(heldKey!);
+        }
+        await ahead;
+        final live = _identity;
+        if (!identical(_service, service) ||
+            live == null ||
+            service.signer?.pubkey != live.pubkey) {
+          throw StateError('identity changed');
+        }
         final signed = await service.publishChannelMessage(
           channelKey: view.id,
           content: trimmed,
-          nym: identity.nym,
+          nym: live.nym,
           geohash: isGeo ? view.id : null,
           emojiTags: _contentTags(trimmed),
           // Clamped up to the Nymchat floor by the service.
@@ -8463,7 +8552,11 @@ class NostrController {
         // Hardcore mode rotates identity after the publish, so this message used the old one.
         await _rotateHardcoreIdentityIfNeeded();
       } catch (_) {
+        if (held) QueuedSends.instance.release(heldKey!);
         if (echo != null) appState.markOptimisticFailed(echo.id);
+      } finally {
+        if (!turn.isCompleted) turn.complete();
+        if (identical(_channelSendTail, turn.future)) _channelSendTail = null;
       }
       return;
     }
@@ -13222,11 +13315,13 @@ class NostrController {
     _onViewOpened(_ref.read(appStateProvider).view);
     _markOpenThreadSeen();
     // Re-pull the full D1 backlog on every resume, even if the socket never dropped; throttled and idempotent.
-    if (_liveGap.pending) {
-      unawaited(_catchUpLiveGap());
-    } else {
-      unawaited(_backfillFromD1OnReconnect());
-    }
+    unawaited(_afterPoolLive(() {
+      if (_liveGap.pending) {
+        unawaited(_catchUpLiveGap());
+      } else {
+        unawaited(_backfillFromD1OnReconnect());
+      }
+    }));
     _ref.read(appStateProvider.notifier).markVisibleColumnsRead();
     unawaited(_reconcileShopPurchases());
     unawaited(_reconcilePendingZaps());
@@ -13255,7 +13350,10 @@ class NostrController {
     _stopGeoPresenceSend();
     _stopAllAnonPresence();
     if (_botChannelRuns.isNotEmpty) _botChannelRunsSave();
-    _liveGap.note();
+    if (backgrounded) {
+      _lossAtMs = DateTime.now().millisecondsSinceEpoch;
+      _liveGap.note();
+    }
     if (!keepConnectionsAlive) {
       _service?.stopGeoRelayKeepAlive();
     }
@@ -13482,6 +13580,7 @@ class NostrController {
       void Function(NostrEvent event)? onRestored}) async {
     try {
       // Time-bound the fetch (10s → empty) so an orphaned request can't pin the slot; empty tells waiters to retry.
+      final startedAt = DateTime.now().millisecondsSinceEpoch;
       var answered = false;
       final events = await sync
           .channelGet([name], force: force, sinceSec: sinceSec, onResult: (ok) {
@@ -13492,6 +13591,7 @@ class NostrController {
         const Duration(seconds: 10),
         onTimeout: () => const <Map<String, dynamic>>[],
       );
+      if (answered) _archiveRestoredAt[name] = startedAt;
       final selfPk = _identity?.pubkey;
       final restored = (await verifiedRows(events, _verifyArchived))
           .where((ev) => !archivedSpam(ev, selfPk,
@@ -13698,6 +13798,7 @@ class NostrController {
         },
       ),
     ]);
+    service.markLiveSubscription(sub);
     _shopReceiptSub = sub;
     sub.events.listen((event) {
       final bolt = event.tagValue('bolt11');
@@ -15878,6 +15979,7 @@ class NostrController {
         .channels
         .any((c) => c.key == channelKey.toLowerCase() && c.isGeohash);
     await _awaitAttestBadge();
+    if (!identical(_service, service)) throw StateError('identity changed');
     final signed = await service.publishChannelMessage(
       buildOnly: true,
       channelKey: channelKey,
@@ -16870,6 +16972,7 @@ class NostrController {
         },
       ),
     ]);
+    service.markLiveSubscription(sub);
     _p2pSub = sub;
     final streamSub = sub.events.listen((e) {
       onEvent(e.pubkey, e.kind, e.content);
@@ -18097,9 +18200,15 @@ final pendingUserSettingsTransfersProvider = StateNotifierProvider<
 
 final visibleSettingsTransfersProvider =
     Provider<List<UserSettingsTransfer>>((ref) {
-  final s = ref.watch(appStateProvider);
+  final pending = ref.watch(pendingUserSettingsTransfersProvider);
+  ref.watch(appStateProvider.select((s) => Object.hash(
+        s.contentFilterSignature,
+        s.autoMutedUsers.length,
+        Object.hashAll([for (final t in pending) s.users[t.fromPubkey]?.nym]),
+      )));
+  final s = ref.read(appStateProvider);
   return [
-    for (final t in ref.watch(pendingUserSettingsTransfersProvider))
+    for (final t in pending)
       if (!s.isPersonHidden(t.fromPubkey) &&
           !s.isPersonHidden(t.fromPubkey, t.fromNym))
         t,
