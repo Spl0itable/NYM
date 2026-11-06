@@ -7926,7 +7926,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                 } else if (messagesContainer && !nym._channelLoadingOlder) {
                     const storageKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
-                    const startIdx = nym.channelRenderedStart.get(storageKey);
+                    const startIdx = typeof nym._chWinStart === 'function' ? nym._chWinStart(storageKey) : nym.channelRenderedStart.get(storageKey);
                     if (startIdx !== undefined && startIdx > 0) {
                         nym._channelLoadingOlder = true;
                         requestAnimationFrame(() => {

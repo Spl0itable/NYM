@@ -1447,7 +1447,9 @@ Object.assign(NYM.prototype, {
                 const messages = this.messages.get(storageKey);
                 const blockedArrival = !message.isOwn && this.blockedUsers && this.blockedUsers.has(message.pubkey);
                 if (messages && (messages.length > this.channelMessageLimit || (blockedArrival && this._blockedOverCap(messages)))) {
-                    this.messages.set(storageKey, this._storeTrim(messages, this.channelMessageLimit, m => m.id, true));
+                    const kept = this._storeTrim(messages, this.channelMessageLimit, m => m.id, true);
+                    this.messages.set(storageKey, kept);
+                    if (kept !== messages) this._chWinDropTrimmed(storageKey, messages, kept);
                 }
 
                 if (typeof this._maybeRefreshZapNotif === 'function') {
@@ -1535,6 +1537,10 @@ Object.assign(NYM.prototype, {
 
         if (!_threadRender && !_cvContainer && !this._bulkAppending && !message.isPM && !this.inPMMode &&
             this._chWinDetached(container.dataset.virtualScrollKey) && this._chWinHolds(container.dataset.virtualScrollKey, message)) {
+            return;
+        }
+
+        if (!_threadRender && !_cvContainer && !this._bulkAppending && !message.isPM && !this.inPMMode && this._chWinAbove(container, message)) {
             return;
         }
 
@@ -4783,11 +4789,11 @@ Object.assign(NYM.prototype, {
             if (jumped !== null) return jumped;
         }
 
-        const currentStart = this.channelRenderedStart.get(storageKey);
-        if (currentStart === undefined || currentStart <= 0) return false;
-
         const messages = this.getFilteredMessages(storageKey);
         if (messages.length === 0) return false;
+
+        const currentStart = windowed ? this._chWinStart(storageKey, messages) : this.channelRenderedStart.get(storageKey);
+        if (currentStart === undefined || currentStart <= 0) return false;
 
         const newStart = this._olderPageStart(messages, currentStart, this.channelLoadMoreSize, targetId);
         if (newStart === currentStart) return false;
@@ -4819,6 +4825,8 @@ Object.assign(NYM.prototype, {
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
 
+        const stale = newStart > 0 ? container.querySelector(':scope > .channel-history-limit') : null;
+        if (stale) stale.remove();
         container.insertBefore(frag, container.firstChild);
 
         if (newStart === 0 && !container.querySelector('.channel-history-limit')) {
@@ -4867,6 +4875,101 @@ Object.assign(NYM.prototype, {
         return -1;
     },
 
+    _chWinStart(key, messages) {
+        const container = document.getElementById('messagesContainer');
+        const known = this.channelRenderedStart.get(key);
+        if (!container || this._cvActive || container.dataset.virtualScrollKey !== key) return known;
+        if (known === 0 && container.querySelector(':scope > .channel-history-limit')) return 0;
+        const list = messages || this.getFilteredMessages(key);
+        for (const el of container.querySelectorAll('.message[data-message-id]')) {
+            const at = this._chWinIndex(list, el.dataset.messageId);
+            if (at < 0) continue;
+            if (at !== known) this.channelRenderedStart.set(key, at);
+            return at;
+        }
+        return known;
+    },
+
+    _chWinAbove(container, message) {
+        const key = container && container.id === 'messagesContainer' ? container.dataset.virtualScrollKey : null;
+        if (!key || message.isOwn || this._cvActive) return false;
+        const first = container.querySelector('.message[data-message-id][data-created-at]');
+        if (!first) return false;
+        const at = this._orderAt(message);
+        const ms = this._orderMs(message);
+        const hasMs = Number.isFinite(ms) && ms > at * 1000;
+        if (this._msgSortsAfter(first, at, hasMs, hasMs ? ms : 0, message._seq || 0)) return false;
+        if (container.querySelectorAll('.message[data-message-id]').length < (this.channelPageSize || 50)) return false;
+        const banner = container.querySelector(':scope > .channel-history-limit');
+        if (banner) banner.remove();
+        this.channelDOMCache.delete(key);
+        return true;
+    },
+
+    _chWinDropTrimmed(key, before, after) {
+        const container = typeof document !== 'undefined' ? document.getElementById('messagesContainer') : null;
+        if (!container || this._cvActive || this.inPMMode || container.dataset.virtualScrollKey !== key) return;
+        const gone = before.length - after.length;
+        let removed = 0;
+        for (let i = 0; i < before.length && i < gone + 8; i++) {
+            const m = before[i];
+            if (!m || this._msgListHas(after, m.id)) continue;
+            const el = container.querySelector('.message' + this._cnSelector(m.id));
+            if (!el) continue;
+            this._chWinPruneRow(container, el);
+            removed++;
+        }
+        if (!removed) return;
+        const head = container.querySelector('.message[data-message-id]');
+        if (head) this._settleBubbleHeadAfterPrune(container, head);
+        this.channelDOMCache.delete(key);
+    },
+
+    _chWinReconcile(key, container) {
+        const scroller = this._getMessagesScroller();
+        if (!scroller || this.activeThread || container.dataset.virtualScrollKey !== key) return false;
+        if (typeof this._threadViewOccupies === 'function' && this._threadViewOccupies(container)) return false;
+        let rows = container.querySelectorAll('.message[data-message-id]');
+        if (!rows.length) return false;
+        const list = this.getFilteredMessages(key);
+        const first = this._chWinIndex(list, rows[0].dataset.messageId);
+        let last = this._chWinIndex(list, rows[rows.length - 1].dataset.messageId);
+        if (first < 0 || last < first) return false;
+        if (last - first + 1 > rows.length) {
+            const have = new Set();
+            for (const r of rows) have.add(r.dataset.messageId);
+            this._suppressSound = true;
+            try {
+                for (let i = first + 1; i < last; i++) {
+                    const m = list[i];
+                    if (m && !have.has(m.id) && !(m.nymMessageId && have.has(m.nymMessageId))) this.displayMessage(m);
+                }
+            } finally {
+                this._suppressSound = false;
+            }
+            this._chWinTrim(key, container, !!this.userScrolledUp);
+            this._recomputeAllBubbleGrouping(container);
+            this._chWinDivider(key);
+            rows = container.querySelectorAll('.message[data-message-id]');
+            last = this._chWinIndex(list, rows[rows.length - 1].dataset.messageId);
+        }
+        const tail = !this._chWinDetached(key) && last >= 0 && last < list.length - 1;
+        let trimmed = false;
+        if (tail && !this.userScrolledUp) {
+            this._chWinFill(container, list.slice(last + 1));
+            trimmed = this._chWinTrim(key, container, false);
+            this._recomputeAllBubbleGrouping(container);
+        } else if (tail) {
+            this.channelWindowEnd.set(key, rows[rows.length - 1].dataset.messageId);
+            this.userScrolledUp = true;
+        }
+        const banner = first > 0 ? container.querySelector(':scope > .channel-history-limit') : null;
+        if (banner) banner.remove();
+        if (!trimmed && first !== this.channelRenderedStart.get(key)) this.channelRenderedStart.set(key, first);
+        this.channelDOMCache.delete(key);
+        return true;
+    },
+
     _chWinDetached(key) {
         return !!(key && this.channelWindowEnd && this.channelWindowEnd.has(key));
     },
@@ -4894,24 +4997,25 @@ Object.assign(NYM.prototype, {
         if (Math.abs(delta) >= 1) scroller.scrollTop += delta;
     },
 
+    _chWinPruneRow(container, el) {
+        const prev = el.previousElementSibling;
+        if (prev && prev.classList.contains('cn-divider')) prev.remove();
+        const stack = el.parentElement;
+        this._revokeNodeBlobs(el);
+        el.remove();
+        if (stack && stack !== container && !stack.querySelector('.message')) {
+            const group = stack.closest('.message-group');
+            const shell = group && group.parentElement === container ? group : stack;
+            const before = shell.previousElementSibling;
+            if (before && before.classList.contains('cn-divider')) before.remove();
+            if (shell.parentElement === container) shell.remove();
+        }
+    },
+
     _chWinPrune(container, fromEnd, count) {
         const rows = container.querySelectorAll('.message[data-message-id]');
         const n = Math.min(count, rows.length);
-        for (let i = 0; i < n; i++) {
-            const el = rows[fromEnd ? rows.length - 1 - i : i];
-            const prev = el.previousElementSibling;
-            if (prev && prev.classList.contains('cn-divider')) prev.remove();
-            const stack = el.parentElement;
-            this._revokeNodeBlobs(el);
-            el.remove();
-            if (stack && stack !== container && !stack.querySelector('.message')) {
-                const group = stack.closest('.message-group');
-                const shell = group && group.parentElement === container ? group : stack;
-                const before = shell.previousElementSibling;
-                if (before && before.classList.contains('cn-divider')) before.remove();
-                if (shell.parentElement === container) shell.remove();
-            }
-        }
+        for (let i = 0; i < n; i++) this._chWinPruneRow(container, rows[fromEnd ? rows.length - 1 - i : i]);
         let edge = fromEnd ? container.lastElementChild : container.firstElementChild;
         while (edge && !edge.matches('.message[data-message-id]') && !edge.querySelector('.message[data-message-id]')) {
             const next = fromEnd ? edge.previousElementSibling : edge.nextElementSibling;
@@ -5070,7 +5174,7 @@ Object.assign(NYM.prototype, {
     },
 
     // The view may have opened before hydration populated this.messages, so repaint the full history.
-    _refreshActiveViewsAfterHydration() {
+    _refreshActiveViewsAfterHydration(sweep) {
         try {
             const container = document.getElementById('messagesContainer');
 
@@ -5097,10 +5201,13 @@ Object.assign(NYM.prototype, {
                 const key = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
                 const stored = this.getFilteredMessages(key).length;
                 const domCount = container.querySelectorAll('.message[data-message-id]').length;
-                if (stored > domCount) {
+                const short = !this.userScrolledUp && !this._chWinDetached(key) && domCount < Math.min(stored, this.channelPageSize || 50);
+                if (stored > domCount && (domCount === 0 || short)) {
                     container.dataset.lastChannel = '';
                     this.channelDOMCache.delete(key);
                     this.loadChannelMessages(this.currentChannel || `#${this.currentGeohash}`);
+                } else if (!sweep && domCount) {
+                    this._chWinReconcile(key, container);
                 }
             }
         } catch (_) { }

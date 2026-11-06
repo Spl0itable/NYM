@@ -1228,7 +1228,7 @@
                 // Columns reconcile against the store; single view re-renders the open channel.
                 if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile(0);
                 if (typeof this._refreshActiveViewsAfterHydration === 'function') {
-                    this._refreshActiveViewsAfterHydration();
+                    this._refreshActiveViewsAfterHydration(true);
                 }
             }
             return dropped;
