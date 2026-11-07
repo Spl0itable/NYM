@@ -37,7 +37,8 @@ function isNymchatClient(request, env) {
 
 const APP_ORIGIN_HOSTS = new Set([
   "web.nymchat.app",
-  "nymchat.app"
+  "nymchat.app",
+  "nym-staging.pages.dev"
 ]);
 
 function clientOriginAllowed(request, env) {
