@@ -40,6 +40,9 @@ class NymAvatar extends StatefulWidget {
     this.label,
     this.imageUrl,
     this.localOnly = false,
+    this.backdrop,
+    this.placeholder,
+    this.fallback,
   });
 
   final String seed;
@@ -50,6 +53,12 @@ class NymAvatar extends StatefulWidget {
   final String? imageUrl;
 
   final bool localOnly;
+
+  final Color? backdrop;
+
+  final Widget? placeholder;
+
+  final Widget? fallback;
 
   @override
   State<NymAvatar> createState() => _NymAvatarState();
@@ -76,8 +85,8 @@ class _NymAvatarState extends State<NymAvatar> {
       builder: (context, _, _) {
         final meshBytes = MeshAvatarRegistry.instance.bytesFor(widget.seed);
         if (meshBytes != null) {
-          return ClipOval(
-            child: Image.memory(
+          return _round(
+            Image.memory(
               meshBytes,
               width: widget.size,
               height: widget.size,
@@ -88,7 +97,7 @@ class _NymAvatarState extends State<NymAvatar> {
                       MediaQuery.devicePixelRatioOf(context) *
                       1.5)
                   .ceil(),
-              errorBuilder: (_, _, _) => _identicon(context),
+              errorBuilder: (_, _, _) => widget.fallback ?? _identicon(context),
             ),
           );
         }
@@ -99,7 +108,7 @@ class _NymAvatarState extends State<NymAvatar> {
 
   Widget _buildNetwork(BuildContext context) {
     final proxied = proxiedAvatarUrl(widget.imageUrl);
-    final fallback = _identicon(context);
+    final fallback = widget.fallback ?? _identicon(context);
     if (proxied == null) return fallback;
     if (widget.localOnly) {
       return FutureBuilder<Uint8List?>(
@@ -107,8 +116,8 @@ class _NymAvatarState extends State<NymAvatar> {
         builder: (context, snap) {
           final bytes = snap.data;
           if (bytes == null) return fallback;
-          return ClipOval(
-            child: Image.memory(
+          return _round(
+            Image.memory(
               bytes,
               width: widget.size,
               height: widget.size,
@@ -124,8 +133,8 @@ class _NymAvatarState extends State<NymAvatar> {
         },
       );
     }
-    return ClipOval(
-      child: SizedBox(
+    return _round(
+      SizedBox(
         width: widget.size,
         height: widget.size,
         child: InlineNetworkImage(
@@ -134,10 +143,19 @@ class _NymAvatarState extends State<NymAvatar> {
           height: widget.size,
           fit: BoxFit.cover,
           // Identicon while loading and after every source (proxy and raw) fails.
-          placeholder: fallback,
+          placeholder: widget.placeholder ?? fallback,
           errorChild: fallback,
         ),
       ),
+    );
+  }
+
+  Widget _round(Widget child) {
+    final backdrop = widget.backdrop;
+    return ClipOval(
+      child: backdrop == null
+          ? child
+          : ColoredBox(color: backdrop, child: child),
     );
   }
 

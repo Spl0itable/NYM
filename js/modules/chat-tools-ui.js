@@ -636,25 +636,27 @@
 
         async _publishKeep(key, nid, kept, at) {
             const surface = this._ctSurfaceForKey(key);
+            const claim = (typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null);
+            const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
             try {
                 if (surface === 'group') {
                     const gid = String(key).slice(6);
                     const g = this.groupConversations && this.groupConversations.get(gid);
                     if (!g || !Array.isArray(g.members)) return false;
-                    const rumor = { kind: 69420, created_at: at, tags: C().keepTags([nid], kept, null, gid), content: '', pubkey: this.pubkey };
-                    await this._sendGiftWrapsAsync(g.members, rumor, null, gid);
+                    const rumor = { kind: 69420, created_at: at, tags: C().keepTags([nid], kept, null, gid), content: '', pubkey: me.pubkey };
+                    await this._sendGiftWrapsAsync(g.members, rumor, null, gid, { claim });
                     return true;
                 }
                 if (surface === 'dm') {
                     const peer = this._ctPeerFromKey(key);
                     if (!peer || !/^[0-9a-f]{64}$/i.test(peer)) return false;
-                    for (const to of [peer, this.pubkey]) {
-                        const rumor = { kind: 69420, created_at: at, tags: C().keepTags([nid], kept, to, null), content: '', pubkey: this.pubkey };
+                    for (const to of [peer, me.pubkey]) {
+                        const rumor = { kind: 69420, created_at: at, tags: C().keepTags([nid], kept, to, null), content: '', pubkey: me.pubkey };
                         if (this.privkey && typeof this._pmSignalWrapAsync === 'function') {
-                            const wrapped = await this._pmSignalWrapAsync(rumor, to);
+                            const wrapped = await this._pmSignalWrapAsync(rumor, to, me.sk);
                             this.sendDMToRelays(['EVENT', wrapped]);
                         } else {
-                            await this._sendGiftWrapsAsync([to], rumor, null);
+                            await this._sendGiftWrapsAsync([to], rumor, null, null, { claim });
                         }
                     }
                     return true;
@@ -781,6 +783,7 @@
                 this._ctNotice(this._ct("The Bluetooth mesh isn't running."));
                 return false;
             }
+            const sentAs = { nym: this.nym, pubkey: this.pubkey };
             let mid;
             try { mid = await mesh.sendPrivateMessage(peerID, content); } catch (err) {
                 this._ctNotice(this._ct("Couldn't send over the Bluetooth mesh: {error}", { error: (err && err.message) || 'error' }));
@@ -793,8 +796,8 @@
             const msg = {
                 id: 'mesh-pm-' + mid,
                 nymMessageId: mid,
-                author: this.nym,
-                pubkey: this.pubkey,
+                author: sentAs.nym,
+                pubkey: sentAs.pubkey,
                 content,
                 created_at: Math.floor(nowMs / 1000),
                 _ms: nowMs,
@@ -948,7 +951,8 @@
                     let thumb = '';
                     if (it.kind === 'image') {
                         const src = this._ctMediaSrc(it);
-                        thumb = src ? `<img src="${esc(src)}" alt="" loading="lazy" decoding="async">` : '';
+                        const blur = this._blursImagesFrom(it.pubkey, !!it.pubkey && it.pubkey === this.pubkey);
+                        thumb = src ? `<img src="${esc(src)}"${blur ? ' class="blurred"' : ''} alt="" loading="lazy" decoding="async">` : '';
                     } else {
                         thumb = `<span class="ct-media-video">${esc(this._ct(it.name === 'round' ? C().STRINGS.round : 'Video'))}</span>`;
                     }

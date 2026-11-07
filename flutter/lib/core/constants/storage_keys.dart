@@ -231,6 +231,7 @@ class StorageKeys {
   // Sidebar layout
   static const sidebarSectionCollapsed = 'nym_sidebar_section_collapsed';
   static const sidebarSectionOrder = 'nym_sidebar_section_order';
+  static const sidebarChannelsMode = 'nym_sidebar_channels_mode';
 
   // Misc
   static const tutorialSeen = 'nym_tutorial_seen';

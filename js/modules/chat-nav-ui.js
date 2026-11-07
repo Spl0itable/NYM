@@ -258,11 +258,12 @@
 
         _cnFindMessage(ctx, id) {
             if (!id) return null;
-            return ctx.container.querySelector('.message' + this._cnSelector(id));
+            const sel = this._cnSelector(id);
+            return ctx.container.querySelector('.message' + sel + ', .me-message' + sel);
         },
 
         _cnRows(ctx) {
-            return ctx.container.querySelectorAll('.message[data-message-id]:not(.blocked-user-message):not(.blocked)');
+            return ctx.container.querySelectorAll('.message[data-message-id]:not(.blocked-user-message):not(.blocked), .me-message[data-message-id]:not(.blocked-user-message):not(.blocked)');
         },
 
         _cnRowAt(el) {
@@ -278,6 +279,10 @@
             const ids = [];
             for (let j = i; j >= 0 && ids.length < N().JUMP.markMax && this._cnRowAt(rows[j]) === at; j--) ids.push(rows[j].dataset.messageId);
             return { at, ids };
+        },
+
+        _cnOffScreen(ctx) {
+            return !!ctx.col && typeof this._notifColumnOnScreen === 'function' && !this._notifColumnOnScreen(ctx.col);
         },
 
         _cnTrack(key) {
@@ -305,6 +310,7 @@
                 if (last > 0) mark = N().markAdvance(mark, last, shown.filter((r) => r.at === last).map((r) => r.id));
             }
             if (mark !== entry.mark) this._cnSetMark(entry, mark);
+            if (this._cnOffScreen(ctx)) return;
             if (mark && mark.at > 0 && typeof this._markShownNotificationsSeen === 'function') this._markShownNotificationsSeen(key, mark.at);
             const ms = this._cnMentions();
             const mc = ms.chats[key];
@@ -350,7 +356,7 @@
             const anchor = this._cnAnchor(ctx, entry, id);
             if (anchor) return N().jumpDir({ top: anchor.getBoundingClientRect().top, viewTop: ctx.scroller.getBoundingClientRect().top });
             const hit = this._cnRaw(entry.key).find((x) => this._cnDomId(x) === id);
-            const first = ctx.container.querySelector('.message[data-message-id]');
+            const first = ctx.container.querySelector('.message[data-message-id], .me-message[data-message-id]');
             const firstAt = first ? this._cnRowAt(first) : 0;
             return N().jumpDir({ at: hit ? this._cnAt(hit) : firstAt, firstAt });
         },
@@ -785,7 +791,7 @@
                 }
             }
             if (!this._bulkAppending && !message.isHistorical && entry && !N().markUnder(entry.mark, row.at, row.id) && this._cnIsMention(message)
-                && (document.hidden || !N().atBottom(ctx.scroller.scrollTop))) {
+                && (document.hidden || this._cnOffScreen(ctx) || !N().atBottom(ctx.scroller.scrollTop))) {
                 this._cnSetMentions(N().mentionAdd(this._cnMentions(), key, [{ id: row.id, at: row.at }], Date.now()), [key]);
             }
             this._cnSchedule(key);
@@ -798,13 +804,13 @@
             for (let guard = 0; guard < 200; guard++) {
                 const id = N().mentionNext(this._cnShownMentions(k), k);
                 if (!id) { this._cnUpdateFabs(k); return false; }
-                let el = ctx.container.querySelector('.message' + this._cnSelector(id));
+                let el = this._cnFindMessage(ctx, id);
                 for (let i = 0; !el && i < 20; i++) {
                     const inStore = this._cnStoreList(k).some((m) => this._cnDomId(m) === id);
                     if (!inStore) break;
                     const before = ctx.container.querySelectorAll('[data-message-id]').length;
                     this._cnLoadOlder(ctx, k, id);
-                    el = ctx.container.querySelector('.message' + this._cnSelector(id));
+                    el = this._cnFindMessage(ctx, id);
                     if (ctx.container.querySelectorAll('[data-message-id]').length === before) break;
                 }
                 if (!el) {

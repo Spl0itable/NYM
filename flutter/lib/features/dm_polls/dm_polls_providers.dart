@@ -51,6 +51,7 @@ DmPollsHooks dmPollsAppHooks(Ref ref) {
     },
     translate: (text, [vars]) => tr(text, vars),
     personHidden: (pk) => ref.read(appStateProvider).isPersonHidden(pk),
+    hardcore: () => ctl().hardcoreRotating,
   );
 }
 

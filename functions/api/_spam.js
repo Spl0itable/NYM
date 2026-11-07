@@ -95,6 +95,12 @@ export function nymbotPubkeys(env) {
   nymbotKeyCache = { raw, keys };
   return keys;
 }
+
+export function nymbotWhoHereReply(env, ev) {
+  if (!ev || (ev.kind !== 20000 && ev.kind !== 23333) || typeof ev.pubkey !== "string" || !Array.isArray(ev.tags)) return false;
+  if (!nymbotPubkeys(env).has(ev.pubkey)) return false;
+  return ev.tags.some((t) => Array.isArray(t) && t[0] === "who" && t[1] === "here");
+}
 const SETTINGS_REFRESH_MS = 60000;
 const SIMILAR_WINDOW_MS = 48 * 3600000;
 const EXACT_CACHE_MS = 6 * 3600000;
@@ -1866,8 +1872,12 @@ const HIDDEN_SENDERS_BUCKET_MS = 60000;
 const HIDDEN_SENDERS_CACHE_S = 60;
 
 export async function hiddenSenders(env, sinceMs) {
+  return (await hiddenSendersChecked(env, sinceMs)).set;
+}
+
+export async function hiddenSendersChecked(env, sinceMs) {
   const out = new Set();
-  if (!env || !hasD1(env.DB_NOPE)) return out;
+  if (!env || !hasD1(env.DB_NOPE)) return { ok: true, set: out };
   const bucket = Math.floor((Number(sinceMs) || 0) / HIDDEN_SENDERS_BUCKET_MS);
   const since = bucket * HIDDEN_SENDERS_BUCKET_MS;
   const key = "hidden-senders-by/" + bucket;
@@ -1883,13 +1893,13 @@ export async function hiddenSenders(env, sinceMs) {
         if (r && typeof r.pubkey === "string" && Number(r.n) > 0) rows.push([r.pubkey.toLowerCase(), Number(r.n)]);
       }
       await cachePut(null, key, rows, HIDDEN_SENDERS_CACHE_S);
-    } catch (_) { return out; }
+    } catch (_) { return { ok: false, set: out }; }
   }
   const counts = new Map();
   for (const r of rows) if (Array.isArray(r) && typeof r[0] === "string") counts.set(r[0], (counts.get(r[0]) || 0) + (Number(r[1]) || 0));
   const restored = state.restored.size ? await restoredHiddenBySender(env, since) : null;
   for (const [pk, n] of counts) if (n > ((restored && restored.get(pk)) || 0)) out.add(pk);
-  return out;
+  return { ok: true, set: out };
 }
 
 const RESTORED_LOOKUP_CHUNK = 90;

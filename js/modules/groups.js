@@ -1149,7 +1149,9 @@ Object.assign(NYM.prototype, {
                 this._saveGroupConversations();
                 if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(5000, { wanted: true });
             }
-        } catch (_) { }
+        } catch (_) { } finally {
+            if (typeof this._noteConvRestore === 'function') this._noteConvRestore('groups');
+        }
     },
 
     handleGroupReaction(rumor, senderPubkey, wrapId) {
@@ -2808,9 +2810,10 @@ Object.assign(NYM.prototype, {
     },
 
     async _sendGiftWrapsAsync(members, rumor, expirationTs, groupId = null, opts = {}) {
+        const claimSk = opts.claim && opts.claim.sk ? opts.claim.sk : null;
         if (groupId && typeof this._ensureOwnEphemeralSub === 'function') this._ensureOwnEphemeralSub();
         // Archive-only self copy so group messages also hydrate from D1.
-        if (groupId) this._archiveGroupRumorSelf(rumor, expirationTs);
+        if (groupId && !claimSk) this._archiveGroupRumorSelf(rumor, expirationTs);
 
         const depositToD1 = (!!groupId || opts.deposit === true) && this._isArchivableGroupRumor(rumor);
         const W = (typeof window !== 'undefined' && window.NymWrapOutbox) || null;
@@ -2838,19 +2841,20 @@ Object.assign(NYM.prototype, {
                     const memberKemPk = this._pqWrapKeyFor(pubkey);
                     const wrapped = memberKemPk
                         ? await this.pqWrapForPeerAsync(this._pqWrapUsesPq2(pubkey), rumor,
-                            this.privkey, encryptTo, memberKemPk, expirationTs)
-                        : await this.nip59WrapEventAsync(rumor, this.privkey, encryptTo, expirationTs);
+                            claimSk || this.privkey, encryptTo, memberKemPk, expirationTs)
+                        : await this.nip59WrapEventAsync(rumor, claimSk || this.privkey, encryptTo, expirationTs);
                     if (memberKemPk) {
                         pqCount++;
                         if (this.pqPeerIsRootSeeded(pubkey)) rootCount++;
                     }
                     const tier = tierFor(pubkey);
                     if (opts.queuedDom && typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(wrapped.id, opts.queuedDom);
+                    if (opts.receipt && typeof this._noteReceiptWrap === 'function') this._noteReceiptWrap(wrapped.id);
                     this.sendDMToRelays(['EVENT', wrapped], { tier });
                     this._recordGiftWrapId(sharedId, wrapped.id);
                     if (depositToD1) this._depositPMEvent(wrapped, tier);
                     if (this.activeCosmetics?.has('cosmetic-redacted')) {
-                        setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
+                        setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059, opts.claim); }, 600000);
                     }
                 } catch (e) {
                     console.warn('[GiftWrap] Local wrap failed for', pubkey, e);
@@ -2917,7 +2921,7 @@ Object.assign(NYM.prototype, {
                 if (depositToD1) this._depositPMEvent(wrapped, tier);
 
                 if (this.activeCosmetics?.has('cosmetic-redacted')) {
-                    setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
+                    setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059, opts.claim); }, 600000);
                 }
             } catch (e) {
                 console.warn('[GiftWrap] Remote wrap failed for', pubkey, e);
@@ -2941,12 +2945,15 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Group messages require a logged-in account');
             return false;
         }
+        const claim = options.claim || (typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null);
 
         // Wait for reconnect catch-up so we have the latest ephemeral keys before encrypting.
         await this._dmCatchupReady;
 
         const group = this.groupConversations.get(groupId);
         if (!group) return false;
+        if (claim && claim.sk && !this._claimHolds(claim)) return false;
+        const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
         if (typeof this._gtGroupSendBlocked === 'function' && !options.gtChecked) {
             const loc = window.NymGroupTools && window.NymGroupTools.parseLocation(content);
             const liveUpdate = !!(loc && loc.kind !== 'pin' && loc.seq > 0);
@@ -2988,7 +2995,7 @@ Object.assign(NYM.prototype, {
         const threadRoot = options.threadRoot || null;
         if (threadRoot) tags.push(['nymthread', threadRoot]);
 
-        const rumor = { kind: 14, created_at: now, tags, content, pubkey: this.pubkey };
+        const rumor = { kind: 14, created_at: now, tags, content, pubkey: me.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
 
@@ -2996,8 +3003,8 @@ Object.assign(NYM.prototype, {
         if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
         const msg = {
             id: nymMessageId,
-            author: this.nym,
-            pubkey: this.pubkey,
+            author: me.nym,
+            pubkey: me.pubkey,
             content,
             created_at: now,
             _ms: nowMs,
@@ -3033,7 +3040,7 @@ Object.assign(NYM.prototype, {
             this.displayMessage(msg);
         }
 
-        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { queuedDom: nymMessageId });
+        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { queuedDom: nymMessageId, claim });
         // Post-quantum only if every member got a PQ wrap; one classical copy exposes the plaintext.
         const coverage = this.pqGroupCoverageFor(nymMessageId);
         if (coverage) {
@@ -3050,7 +3057,7 @@ Object.assign(NYM.prototype, {
         // Coalesced so rapid sends don't churn or drop refreshes.
         this._scheduleEphemeralSubRefresh();
 
-        this.recordOwnActivity();
+        this.recordOwnActivity('send', claim);
 
         return true;
     },
@@ -5109,7 +5116,7 @@ Object.assign(NYM.prototype, {
         this.hideAutocomplete();
         this.hideChannelAutocomplete();
         this.hideEmojiAutocomplete();
-        this._focusMessageInput();
+        this._focusMessageInput(true);
     },
 
     _markVisibleGroupMessagesRead() {
@@ -5160,7 +5167,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async sendEditedGroupMessage(newContent, originalMessageId, groupId, originalNymMessageId) {
+    async sendEditedGroupMessage(newContent, originalMessageId, groupId, originalNymMessageId, claim) {
         try {
             if (!this._canSendGiftWraps()) {
                 this.displaySystemMessage('Group messages require a logged-in account');
@@ -5169,6 +5176,8 @@ Object.assign(NYM.prototype, {
 
             const group = this.groupConversations.get(groupId);
             if (!group) return false;
+            if (claim && claim.sk && !this._claimHolds(claim)) return false;
+            const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
 
             const now = Math.floor(Date.now() / 1000);
             const nymMessageId = this._generateSharedEventId();
@@ -5179,16 +5188,16 @@ Object.assign(NYM.prototype, {
             tags.push(['x', nymMessageId]);
             tags.push(['edit', originalNymMessageId || originalMessageId]);
 
-            const rumor = { kind: 14, created_at: now, tags, content: newContent, pubkey: this.pubkey };
+            const rumor = { kind: 14, created_at: now, tags, content: newContent, pubkey: me.pubkey };
             const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
                 ? now + this.settings.dmTTLSeconds : null;
 
             // Track edit locally
             const lookupId = originalNymMessageId || originalMessageId;
-            this.editedMessages.set(`${this.pubkey}:${lookupId}`, {
+            this.editedMessages.set(`${me.pubkey}:${lookupId}`, {
                 newContent,
                 editEventId: nymMessageId,
-                senderPubkey: this.pubkey,
+                senderPubkey: me.pubkey,
                 timestamp: new Date(now * 1000),
                 editAt: now
             });
@@ -5206,7 +5215,7 @@ Object.assign(NYM.prototype, {
 
             this.updateMessageInDOM(lookupId, newContent);
 
-            await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
+            await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { claim });
             return true;
         } catch (error) {
             this.displaySystemMessage(this.uiText('Failed to edit message: {error}', { error: error.message }));

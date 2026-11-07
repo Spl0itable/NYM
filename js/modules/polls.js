@@ -14,7 +14,7 @@ Object.assign(NYM.prototype, {
         const tags = [
             ['d', `nym-poll-${pollUniqueId}`],
             ['t', 'nym-poll'],
-            ['n', this.nym],
+            ...this._nTags(this.pubkey, this.nym),
             ['g', this.currentGeohash],
             ['poll_question', question],
         ];
@@ -66,7 +66,7 @@ Object.assign(NYM.prototype, {
             ['d', `nym-poll-vote-${pollId}`],
             ['t', 'nym-poll-vote'],
             ['e', pollId],
-            ['n', this.nym],
+            ...this._nTags(this.pubkey, this.nym),
             ['g', poll.geohash],
             ['response', String(optionIndex)]
         ];

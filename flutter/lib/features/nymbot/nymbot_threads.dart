@@ -28,7 +28,7 @@ List<Message> threadChainFor(AppState s, String storageKey, String rootId) {
   ];
 }
 
-/// Bot message a plain reply answers, only if the bot is the root or last speaker.
+/// Bot message a plain reply answers, only in a thread rooted on a bot message.
 Message? threadBotReplyTarget(
   AppState s,
   String storageKey,
@@ -39,8 +39,8 @@ Message? threadBotReplyTarget(
       .where((m) => m.content.trim().isNotEmpty)
       .toList();
   if (chain.isEmpty) return null;
-  if (!_isBotMessage(chain.first, botPubkey) &&
-      !_isBotMessage(chain.last, botPubkey)) {
+  if (threadKeyForMessage(chain.first) != rootId ||
+      !_isBotMessage(chain.first, botPubkey)) {
     return null;
   }
   final bots = chain.where((m) => _isBotMessage(m, botPubkey)).toList();

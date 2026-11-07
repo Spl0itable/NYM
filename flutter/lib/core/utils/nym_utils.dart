@@ -27,6 +27,12 @@ String getNymFromPubkey(String baseNym, String pubkey) {
   return '$base#${getPubkeySuffix(pubkey)}';
 }
 
+List<List<String>> nymTags(String nym) => nym.isEmpty
+    ? const <List<String>>[]
+    : <List<String>>[
+        ['n', nym]
+      ];
+
 bool isPlaceholderNym(String? nym) {
   if (nym == null) return true;
   final base = stripPubkeySuffix(nym).trim();

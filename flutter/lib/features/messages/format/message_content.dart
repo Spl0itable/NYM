@@ -216,12 +216,13 @@ class MessageContent extends ConsumerWidget {
           _Collapsible(collapseKey: hostMessageId, child: body)
         else
           body,
-        for (final url in previewUrls) LinkPreviewCard(url: url),
+        for (final url in previewUrls)
+          LinkPreviewCard(key: ValueKey(url), url: url, blur: blurImages),
         // Reference cards also sit outside the collapsible body.
         for (final token in nostrRefs)
           NostrRefCard(
+            key: ValueKey(token),
             token: token,
-            blurImages: blurImages,
             onJump: (id) => _jumpToEvent(ref, id),
             onOpenProfile: (pubkey, nym) =>
                 _openProfileCtx(context, ref, pubkey, nym),
@@ -468,6 +469,7 @@ class MessageContent extends ConsumerWidget {
           topLevel: true,
           hostMessageId: hostMessageId,
           scrollKey: scrollKey,
+          blurMedia: blurImages,
         );
       case MediaBlock(:final items):
         return _MediaGallery(items: items, blur: blurImages);
@@ -3182,10 +3184,12 @@ class _QuoteBox extends ConsumerWidget {
     this.topLevel = false,
     this.hostMessageId,
     this.scrollKey,
+    this.blurMedia = false,
   });
   final QuoteBlock block;
   final Color color;
   final double size;
+  final bool blurMedia;
 
   /// Only direct children of the body are independently truncated.
   final bool topLevel;
@@ -3406,14 +3410,24 @@ class _QuoteBox extends ConsumerWidget {
     final dim = c.textDim;
     switch (child) {
       case ParagraphBlock(:final inlines):
-        return _RichInline(inlines: inlines, color: dim, size: size - 1);
+        return _RichInline(
+            inlines: inlines, color: dim, size: size - 1, blurMedia: blurMedia);
       case HeadingBlock(:final inlines):
         return _RichInline(
-            inlines: inlines, color: dim, size: size, weight: FontWeight.w700);
+            inlines: inlines,
+            color: dim,
+            size: size,
+            weight: FontWeight.w700,
+            blurMedia: blurMedia);
       case SubtextBlock(:final inlines):
-        return _RichInline(inlines: inlines, color: dim, size: (size - 1) * 0.8);
+        return _RichInline(
+            inlines: inlines,
+            color: dim,
+            size: (size - 1) * 0.8,
+            blurMedia: blurMedia);
       case ListBlock():
-        return _ListView(block: child, color: dim, size: size - 1);
+        return _ListView(
+            block: child, color: dim, size: size - 1, blurMedia: blurMedia);
       case CodeBlock(:final code, :final lang):
         return _CodeBox(code: code, lang: lang, size: size - 1);
       case QuoteBlock():
@@ -3423,9 +3437,10 @@ class _QuoteBox extends ConsumerWidget {
           color: dim,
           size: size,
           hostMessageId: hostMessageId,
+          blurMedia: blurMedia,
         );
       case MediaBlock(:final items):
-        return _MediaGallery(items: items);
+        return _MediaGallery(items: items, blur: blurMedia);
       case AudioBlock():
         return audioOrMediaNote(child);
     }
@@ -3563,6 +3578,7 @@ class _MediaTile extends ConsumerWidget {
       final image = photo(cell: cell);
       return blur
           ? _BlurReveal(
+              key: ValueKey(item.url),
               onRevealedTap: () => _openFullscreen(context),
               blurred: photo(blurSigma: 20, cell: cell),
               child: image,
@@ -4243,10 +4259,20 @@ class _ViewerChipFaceState extends State<_ViewerChipFace> {
   }
 }
 
+Widget blurReveal(
+        {Key? key,
+        required Widget blurred,
+        required Widget child,
+        VoidCallback? onRevealedTap}) =>
+    _BlurReveal(key: key, blurred: blurred, onRevealedTap: onRevealedTap, child: child);
+
 /// Image blurred until tapped.
 class _BlurReveal extends StatefulWidget {
   const _BlurReveal(
-      {required this.blurred, required this.child, this.onRevealedTap});
+      {super.key,
+      required this.blurred,
+      required this.child,
+      this.onRevealedTap});
   final Widget blurred;
   final Widget child;
 

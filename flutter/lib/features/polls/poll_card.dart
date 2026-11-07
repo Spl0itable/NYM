@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -119,7 +120,7 @@ class _PollCardState extends ConsumerState<PollCard> {
 
     // Self uses primary, bitchat theme a per-user hue, else secondary; Genesis flair bolds.
     final bitchat = (!isOwn && settings.theme == NymThemeKey.bitchat)
-        ? bitchatUserColor(poll.pubkey, isLight: c.isLight)
+        ? bitchatUserColor(poll.pubkey, isLight: c.isLight, contrast: context.highContrast)
         : null;
     final authorColor = isOwn ? c.primary : (bitchat ?? c.secondary);
     final authorStyle = TextStyle(

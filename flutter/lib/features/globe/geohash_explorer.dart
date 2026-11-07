@@ -39,6 +39,7 @@ import 'street_plan.dart';
 import 'topojson.dart';
 import '../shortcuts/escape_layers.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../core/utils/isolate_gate.dart';
 
 /// Below this width the explorer uses its phone layout.
 const double kGlobeNarrowBreakpoint = 768;
@@ -95,7 +96,7 @@ Future<List<GeoPlace>> loadBundledGeoPlaces() {
       rootBundle.loadString(kAdmin1Asset),
       rootBundle.loadString(kWorldTopoAsset),
     ]);
-    return compute(buildGeoPlacesIsolate, src);
+    return gatedCompute(buildGeoPlacesIsolate, src);
   }();
   _bundledPlaces = f;
   f.catchError((Object _) {
@@ -114,7 +115,7 @@ Future<GeoTierGeometry> loadBundledGeoTier(int tier) {
   if (cached != null) return cached;
   final f = () async {
     final src = await rootBundle.loadString(kGeoTierAssets[tier], cache: false);
-    return compute(decodeGeoTier, src);
+    return gatedCompute(decodeGeoTier, src);
   }();
   _bundledTiers[tier] = f;
   f.catchError((Object _) {
@@ -362,7 +363,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     try {
       final jsonStr = await rootBundle.loadString(kWorldTopoAsset);
       // Decode off the UI thread.
-      final feats = await compute(decodeWorldFeaturesIsolate, jsonStr);
+      final feats = await gatedCompute(decodeWorldFeaturesIsolate, jsonStr);
       await prewarmGeoPaths(feats);
       if (!mounted) return;
       setState(() => _features = feats);
@@ -447,7 +448,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   Future<void> _loadAdmin1() async {
     try {
       final jsonStr = await rootBundle.loadString(kAdmin1Asset);
-      final feats = await compute(decodeAdmin1FeaturesIsolate, jsonStr);
+      final feats = await gatedCompute(decodeAdmin1FeaturesIsolate, jsonStr);
       await prewarmGeoPaths(feats, closed: false);
       if (!mounted) return;
       setState(() => _admin1Features = feats);
@@ -460,7 +461,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   Future<void> _loadCities() async {
     try {
       final jsonStr = await rootBundle.loadString(kCitiesAsset);
-      final cities = await compute(decodeCitiesIsolate, jsonStr);
+      final cities = await gatedCompute(decodeCitiesIsolate, jsonStr);
       if (!mounted) return;
       setState(() => _cities = cities);
     } catch (_) {

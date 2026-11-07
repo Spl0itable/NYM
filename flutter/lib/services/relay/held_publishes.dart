@@ -13,6 +13,8 @@ class HeldPublishes<T> {
   final Duration wait;
   final List<_Held<T>> _items = [];
 
+  bool Function(NostrEvent event)? drops;
+
   bool get isEmpty => _items.isEmpty;
 
   List<NostrEvent> get events => [
@@ -56,8 +58,14 @@ class HeldPublishes<T> {
     if (_items.isEmpty) return;
     final list = List<_Held<T>>.of(_items);
     _items.clear();
+    final drop = drops;
     for (final item in list) {
       item.timer?.cancel();
+      final event = item.event;
+      if (drop != null && event != null && drop(event)) {
+        item.settle(0);
+        continue;
+      }
       item.send(via).then(item.settle, onError: (Object _) => item.settle(0));
     }
   }

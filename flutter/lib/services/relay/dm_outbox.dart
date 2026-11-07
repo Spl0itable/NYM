@@ -24,6 +24,7 @@ class _DmEntry {
 class DmOutbox {
   DmOutbox({
     required this.send,
+    this.drop,
     DateTime Function()? now,
     this.cap = 2000,
     this.maxTries = 8,
@@ -32,6 +33,7 @@ class DmOutbox {
   }) : _now = now ?? DateTime.now;
 
   Future<int> Function(NostrEvent event) send;
+  final bool Function(NostrEvent event)? drop;
   final DateTime Function() _now;
   final int cap;
   final int maxTries;
@@ -130,6 +132,12 @@ class DmOutbox {
       return;
     }
     while (length > 0) {
+      final head = _q[0].isNotEmpty ? _q[0] : (_q[1].isNotEmpty ? _q[1] : _q[2]);
+      final skip = drop;
+      if (skip != null && skip(head.first.event)) {
+        _ids.remove(head.removeAt(0).event.id);
+        continue;
+      }
       final r = wrapBucketTake(_bucket, _nowMs(), 1, bucket);
       _bucket = r.state;
       if (!r.ok) {

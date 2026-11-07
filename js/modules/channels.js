@@ -307,53 +307,65 @@ Object.assign(NYM.prototype, {
     _seedUnreadFromD1Activity() {
         const act = this._d1UnreadBuckets;
         if (!act || act.size === 0 || !this.channels) return;
-        if (typeof this._contentFiltersActive === 'function' && this._contentFiltersActive()) return;
         if (!this.channelLastRead) this.channelLastRead = new Map();
-        if (!this._d1Unread) this._d1Unread = new Map();
-        const now = Math.floor(Date.now() / 1000);
         let changed = false;
-        const seedKey = (unreadKey, name, buckets) => {
-            if (!Array.isArray(buckets)) return;
-            const lastRead = this.channelLastRead.get(unreadKey) || 0;
-            // Buckets are hourly, index 0 = the hour ending now; the boundary bucket is prorated.
-            const newest = (this._d1ChannelLast && this._d1ChannelLast.get(name)) || 0;
-            let count = 0;
-            if (!(lastRead > 0 && newest > 0 && newest <= lastRead)) {
-                const windowSec = lastRead > 0 ? Math.max(0, now - lastRead) : 24 * 3600;
-                const whole = Math.min(24, Math.floor(windowSec / 3600));
-                for (let h = 0; h < whole; h++) count += (buckets[h] || 0);
-                if (whole < 24) {
-                    const fraction = (windowSec - whole * 3600) / 3600;
-                    if (fraction > 0) count += Math.floor((buckets[whole] || 0) * fraction);
-                }
-                const unreadNewest = (this._d1UnreadLast && this._d1UnreadLast.get(name)) || 0;
-                if (count === 0 && lastRead > 0 && unreadNewest > lastRead) count = 1;
-            }
-            // D1 is the archive of record: keep it as a floor so a stale local cache can't drop the badge.
-            this._d1Unread.set(unreadKey, count);
-            if (!this._d1UnreadBasis) this._d1UnreadBasis = new Map();
-            this._d1UnreadBasis.set(unreadKey, lastRead);
+        const seedKey = (unreadKey) => {
             const standing = this.unreadCounts.get(unreadKey) || 0;
-            if (count > standing) {
-                this._setUnreadCount(unreadKey, count);
-                this._renderUnreadBadge(unreadKey, count);
-                changed = true;
-            } else if (count === 0 && standing > 0 && this._recomputeUnreadCount(unreadKey) === 0) {
-                this._setUnreadCount(unreadKey, 0);
-                this._renderUnreadBadge(unreadKey, 0);
-                changed = true;
-            }
+            const count = this._publicUnreadCount(unreadKey);
+            if (count === standing) return;
+            this._setUnreadCount(unreadKey, count);
+            this._renderUnreadBadge(unreadKey, count);
+            changed = true;
         };
         this.channels.forEach((value) => {
             if (!value) return;
             const name = String(value.geohash || value.channel || '').toLowerCase();
             if (!name) return;
             if (this.blockedChannels && this.blockedChannels.has(name)) return;
-            // Never badge the conversation on screen; collapsed thread replies don't advance the read watermark.
             if (this._channelIsOnScreen('#' + name)) return;
-            seedKey('#' + name, name, act.get(name));
+            seedKey('#' + name);
         });
         if (changed) this._persistUnreadCounts();
+    },
+
+    _noteChannelHistoryLoaded(names) {
+        if (!this._channelHistoryLoaded) this._channelHistoryLoaded = new Set();
+        for (const n of names || []) if (n) this._channelHistoryLoaded.add(String(n).toLowerCase());
+    },
+
+    _channelHistoryKnown(key) {
+        if (!this._channelHistoryLoaded || typeof key !== 'string') return false;
+        return this._channelHistoryLoaded.has((key.charAt(0) === '#' ? key.slice(1) : key).toLowerCase());
+    },
+
+    _isPublicUnreadKey(key) {
+        return typeof key === 'string' && !!key && !key.startsWith('pm-') && !key.startsWith('group-');
+    },
+
+    _publicUnreadCount(key) {
+        const cached = this.messages && this.messages.get(key);
+        if (Array.isArray(cached) && cached.length > 0) return this._recomputeUnreadCount(key);
+        const saved = (this.unreadCounts && this.unreadCounts.get(key)) || 0;
+        return saved && !this._channelHistoryKnown(key) && this._unreadCountStillValid(key) ? saved : 0;
+    },
+
+    _unreadOwnKeys() {
+        const now = Date.now();
+        const c = this._unreadOwnCache;
+        if (c && c.pk === this.pubkey && now - c.at < 5000) return c.keys;
+        const keys = new Set();
+        if (this.pubkey) keys.add(this.pubkey);
+        try {
+            const A = typeof window !== 'undefined' ? window.NymAccounts : null;
+            const idx = A && typeof A.read === 'function' ? A.read() : null;
+            if (idx && Array.isArray(idx.accounts)) for (const a of idx.accounts) if (a && typeof a.pubkey === 'string' && a.pubkey) keys.add(a.pubkey);
+        } catch (_) { }
+        this._unreadOwnCache = { pk: this.pubkey, at: now, keys };
+        return keys;
+    },
+
+    _unreadOwnKey(pk) {
+        return !!pk && this._unreadOwnKeys().has(pk);
     },
 
     // Under column view this is the focused, visible, bottom-pinned column (as in _cvMarkColumnRead).
@@ -1556,6 +1568,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const draft = this._inputDrafts.get(key) || '';
         if ((input.value || '') === draft) return;
         input.value = draft;
+        this._parkComposer(input);
         if (typeof this.autoResizeTextarea === 'function') this.autoResizeTextarea(input);
         if (typeof this.updateTranslateInputBtn === 'function') this.updateTranslateInputBtn();
         if (typeof this.handleInputChange === 'function') this.handleInputChange(draft);
@@ -1708,6 +1721,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         // Paint the active channel if its view settled empty before the archive arrived.
         if (applied) this._repaintActiveChannelIfEmpty(names);
         if (completed) this._noteChannelCovered(names, newest);
+        if (completed) this._noteChannelHistoryLoaded(names);
         this._noteArchiveResult(names, completed);
         return completed;
     },
@@ -1735,7 +1749,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!this.getFilteredMessages(storageKey).length) return;
         const container = document.getElementById('messagesContainer');
         if (!container) return;
-        if (container.querySelectorAll('.message[data-message-id]').length > 0) return;
+        if (container.querySelectorAll('.message[data-message-id], .me-message[data-message-id], .group-notice[data-message-id]').length > 0) return;
         if (typeof this._clearMessageSkeleton === 'function') this._clearMessageSkeleton(container);
         container.dataset.lastChannel = '';
         this.channelDOMCache.delete(storageKey);
@@ -1876,10 +1890,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.hideAutocomplete();
         this.hideChannelAutocomplete();
         this.hideEmojiAutocomplete();
-        this._focusMessageInput();
+        this._focusMessageInput(true);
     },
 
-    _focusMessageInput() {
+    _focusMessageInput(park) {
         if (window.innerWidth <= 768) return;
         // Only refocus the message input when focus isn't already on another control.
         const active = document.activeElement;
@@ -1890,7 +1904,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         }
         const input = document.getElementById('messageInput');
-        if (input) input.focus();
+        if (!input) return;
+        input.focus();
+        if (park) this._parkComposer(input);
+    },
+
+    _parkComposer(input) {
+        if (input && document.activeElement === input && window.NymShortcuts && typeof window.NymShortcuts.park === 'function') window.NymShortcuts.park(input);
     },
 
     addChannel(channel, geohash = '') {
@@ -2265,10 +2285,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Every caller gates this on `!message.isHistorical`, so it means one more live unread arrived.
     updateUnreadCount(channel, createdAt, live) {
+        if (this._isPublicUnreadKey(channel)) { this._applyPublicUnread(channel); return; }
         let count = this._recomputeUnreadCount(channel);
-        // Don't let a partial local cache drop the badge below the D1 archive.
-        count = Math.max(count, this._d1UnreadFloor(channel));
-        // Bump the standing count only for messages newer than the read watermark, since relays replay old events.
         if (this._unreadCountStillValid(channel)) {
             const standing = this.unreadCounts.get(channel) || 0;
             const lastRead = (this.channelLastRead && this.channelLastRead.get(channel)) || 0;
@@ -2283,8 +2301,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Re-derive without the live-arrival bump, for callers that only changed which stored messages are visible.
     refreshUnreadCount(channel) {
+        if (this._isPublicUnreadKey(channel)) { this._applyPublicUnread(channel); return; }
         let count = this._recomputeUnreadCount(channel);
-        count = Math.max(count, this._d1UnreadFloor(channel));
         if (this._unreadCountStillValid(channel)) {
             count = Math.max(count, this.unreadCounts.get(channel) || 0);
         }
@@ -2294,15 +2312,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this._scheduleChannelSort();
     },
 
-    _d1UnreadFloor(channel) {
-        if (!this._d1Unread) return 0;
-        if (typeof this._contentFiltersActive === 'function' && this._contentFiltersActive()) return 0;
-        const floor = this._d1Unread.get(channel) || 0;
-        if (!floor) return 0;
-        const basis = this._d1UnreadBasis && this._d1UnreadBasis.get(channel);
-        const lastRead = (this.channelLastRead && this.channelLastRead.get(channel)) || 0;
-        if (basis !== undefined && lastRead > basis) return 0;
-        return floor;
+    _applyPublicUnread(channel) {
+        const count = this._publicUnreadCount(channel);
+        if ((this.unreadCounts.get(channel) || 0) === count && this.unreadCounts.has(channel) === (count > 0)) return;
+        this._setUnreadCount(channel, count);
+        this._persistUnreadCounts();
+        this._renderUnreadBadge(channel, count);
+        this._scheduleChannelSort();
     },
 
     _markReadStateKnown() {
@@ -2332,23 +2348,27 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!this.channelLastRead) this.channelLastRead = new Map();
         const lastRead = this.channelLastRead.get(channel) || 0;
         let messages;
-        if (channel.startsWith('pm-') || channel.startsWith('group-')) {
+        const chan = this._isPublicUnreadKey(channel);
+        if (!chan) {
             messages = this.pmMessages && this.pmMessages.get(channel);
         } else {
             messages = this.messages && this.messages.get(channel);
         }
         if (!Array.isArray(messages) || messages.length === 0) return 0;
         const idx = typeof this._msgIndexOf === 'function' ? this._msgIndexOf(messages) : null;
-        if (!idx) return this._unreadTally(messages, 0, messages.length, lastRead);
+        if (!idx) return this._unreadTally(messages, 0, messages.length, lastRead, null, chan ? this._unreadView(messages) : null);
         if (!this._unreadMemo) this._unreadMemo = new WeakMap();
         const state = this._unreadState(lastRead);
         const memo = this._unreadMemo.get(messages);
         const n = messages.length;
         if (memo && memo.idx === idx && this._unreadSame(memo, state) && Date.now() < memo.until
-            && n >= memo.n && messages[0] === memo.first && messages[memo.n - 1] === memo.last && this._unreadPeopleSame(memo)) {
+            && n >= memo.n && messages[0] === memo.first && messages[memo.n - 1] === memo.last && this._unreadPeopleSame(memo)
+            && !this._unreadRootArrived(memo, messages, n)) {
             let count = memo.count;
-            for (const m of memo.pending) count += this._unreadTally([m], 0, 1, lastRead, memo.people);
-            count += this._unreadTally(messages, memo.n, n, lastRead, memo.people);
+            const view = memo.view ? this._unreadView(messages, memo.view.track) : null;
+            for (const m of memo.pending) count += this._unreadTally([m], 0, 1, lastRead, memo.people, view);
+            count += this._unreadTally(messages, memo.n, n, lastRead, memo.people, view);
+            if (view && view.track.until < memo.until) memo.until = view.track.until;
             memo.count = count;
             memo.n = n;
             memo.last = messages[n - 1];
@@ -2356,22 +2376,49 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return count;
         }
         const people = this._unreadNymsMatter() ? new Map() : null;
-        const count = this._unreadTally(messages, 0, n, lastRead, people);
-        this._unreadMemo.set(messages, { idx, lastRead, sig: state.sig, refs: state.refs, until: this._unreadMuteUntil(), n, first: messages[0], last: messages[n - 1], pending: new Set(), count, people });
+        const view = chan ? this._unreadView(messages) : null;
+        const count = this._unreadTally(messages, 0, n, lastRead, people, view);
+        const until = Math.min(this._unreadMuteUntil(), view ? view.track.until : Infinity);
+        this._unreadMemo.set(messages, { idx, lastRead, sig: state.sig, refs: state.refs, until, n, first: messages[0], last: messages[n - 1], pending: new Set(), count, people, view: view ? { track: view.track } : null });
         return count;
     },
 
-    _unreadTally(messages, from, to, lastRead, people) {
+    _unreadView(list, track) {
+        return {
+            list,
+            own: this._unreadOwnKeys(),
+            threads: typeof this.threadsEnabled === 'function' && !!this.threadsEnabled(),
+            gates: typeof this._clientGatesActive === 'function' && !!this._clientGatesActive(),
+            track: track || { roots: new Set(), until: Infinity }
+        };
+    },
+
+    _unreadRootArrived(memo, messages, n) {
+        const track = memo.view && memo.view.track;
+        if (!track || !track.roots.size) return false;
+        for (const m of memo.pending) if (m && track.roots.has(m.id)) return true;
+        for (let i = memo.n; i < n; i++) if (messages[i] && track.roots.has(messages[i].id)) return true;
+        return false;
+    },
+
+    _unreadTally(messages, from, to, lastRead, people, view) {
         const filtered = typeof this.isContentHidden === 'function';
         const held = this._pmPieceHolds;
+        const drawn = view && typeof this._channelDrawn === 'function';
         let count = 0;
         for (let i = from; i < to; i++) {
             const m = messages[i];
             if (!m || m.isOwn || m.slowHeld || m._spamGated) continue;
             if (held && held.has(m)) continue;
             if ((m.created_at || 0) <= lastRead) continue;
+            if (view && m.pubkey && view.own.has(m.pubkey)) continue;
             if (people && filtered && Array.isArray(m.people) && m.people.length) this._unreadNotePeople(people, m.people);
             if (filtered ? this.isContentHidden(m) : (this.blockedUsers && m.pubkey && this.blockedUsers.has(m.pubkey))) continue;
+            if (drawn && !this._channelDrawn(m, view.list, view.threads, view.gates)) continue;
+            if (view) {
+                if (view.threads && m.threadRoot) view.track.roots.add(m.threadRoot);
+                if (m.expiresAt > 0) view.track.until = Math.min(view.track.until, m.expiresAt * 1000);
+            }
             count++;
         }
         return count;
@@ -2402,7 +2449,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     _unreadState(lastRead) {
         const size = (v) => (v && typeof v.size === 'number' ? v.size : (Array.isArray(v) ? v.length : 0));
         const gates = typeof this._clientGatesActive === 'function' && this._clientGatesActive() ? 1 : 0;
-        const sig = [lastRead, this.pubkey || '', this.nym || '', this._cfVersion || 0, this._cfEditEpoch || 0, this._cnFilterEpoch || 0,
+        const sig = [lastRead, this.pubkey || '', this.nym || '', typeof this.threadsEnabled === 'function' && this.threadsEnabled() ? 1 : 0, size(this._unreadOwnKeys()), this._cfVersion || 0, this._cfEditEpoch || 0, this._cnFilterEpoch || 0,
             this._unreadEpoch || 0, size(this.blockedUsers), size(this.blockedKeywords), size(this.deletedEventIds), size(this._quiet),
             size(this.autoMutedPubkeys), size(this.friends), size(this.blockedChannels), size(this.hiddenChannels),
             this.spamFilterEnabled === false ? 0 : 1, this.spamFilterAggressive === false ? 0 : 1, this.notifyFriendsOnly ? 1 : 0, gates,
@@ -2459,13 +2506,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!this._unreadSame(memo, this._unreadState(lastRead))) return;
         let count = memo.count;
         let gone = 0;
+        const view = memo.view ? this._unreadView(from, memo.view.track) : null;
         for (const i of dropped) {
             if (!(i >= 0 && i < end)) continue;
             const m = from[i];
             if (m === memo.last) return;
             gone++;
             if (memo.pending.has(m)) memo.pending.delete(m);
-            else count -= this._unreadTally(from, i, i + 1, lastRead);
+            else count -= this._unreadTally(from, i, i + 1, lastRead, null, view);
         }
         const n = end - gone;
         if (n <= 0 || to[n - 1] !== memo.last) return;
@@ -2638,8 +2686,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         this.channelLastRead.set(channel, lastTs);
         this._setUnreadCount(channel, 0);
-        // Drop the D1 floor; it was relative to the old lastRead.
-        if (this._d1Unread) this._d1Unread.delete(channel);
         this._persistUnreadCounts(true);
         if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
         this._renderUnreadBadge(channel, 0);
@@ -2707,11 +2753,77 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (c && c.geohash) open.add('#' + c.geohash);
             }
         }
-        if (this.pmConversations) for (const k of this.pmConversations.keys()) open.add(k);
-        if (this.groupConversations) for (const k of this.groupConversations.keys()) open.add(k);
+        if (this.pmConversations) {
+            const pmKey = typeof this.getPMConversationKey === 'function' && this.pubkey;
+            for (const k of this.pmConversations.keys()) {
+                open.add(k);
+                if (pmKey) open.add(this.getPMConversationKey(k));
+            }
+        }
+        if (this.groupConversations) {
+            for (const k of this.groupConversations.keys()) {
+                open.add(k);
+                open.add(typeof this.getGroupConversationKey === 'function' ? this.getGroupConversationKey(k) : 'group-' + k);
+            }
+        }
         if (this.currentChannel) open.add(this.currentChannel);
         if (this.currentGeohash) open.add('#' + this.currentGeohash);
+        if (this._convRestore && this.channelLastRead) {
+            for (const k of this.channelLastRead.keys()) {
+                if (k.startsWith('pm-') || k.startsWith('group-')) open.add(k);
+            }
+        }
         return open;
+    },
+
+    _awaitConvRestore() {
+        this._convRestore = new Set();
+    },
+
+    _noteConvRestore(part) {
+        const parts = this._convRestore;
+        if (!parts) return;
+        parts.add(part);
+        const archive = typeof this._pmArchiveAllowed === 'function' && this._pmArchiveAllowed();
+        if (parts.has('cache') && parts.has('groups') && (parts.has('d1') || !archive)) this._convRestore = null;
+    },
+
+    _readMarkFromSync(key) {
+        const m = /^pm-([0-9a-f]{64})$/.exec(key);
+        return m && this.pubkey && typeof this.getPMConversationKey === 'function' ? this.getPMConversationKey(m[1]) : key;
+    },
+
+    _applySyncedLastRead(map) {
+        if (!map || typeof map !== 'object') return false;
+        if (!this.channelLastRead) this.channelLastRead = new Map();
+        const advanced = [];
+        for (const [k, v] of Object.entries(map)) {
+            if (typeof v !== 'number' || v <= 0) continue;
+            const ch = this._readMarkFromSync(k);
+            const cur = this.channelLastRead.get(ch) || 0;
+            if (v > cur) { this.channelLastRead.set(ch, v); advanced.push([ch, v]); }
+        }
+        if (!advanced.length) return false;
+        if (typeof this._cnPruneRemoteRead === 'function') {
+            try { this._cnPruneRemoteRead(advanced); } catch (_) { }
+        }
+        if (typeof this._persistUnreadCounts === 'function') {
+            this._persistUnreadCounts(true);
+            if (typeof this._seedUnreadFromD1Activity === 'function') this._seedUnreadFromD1Activity();
+            if (typeof this.recomputeAllUnreadCounts === 'function') this.recomputeAllUnreadCounts();
+        }
+        return true;
+    },
+
+    _readStateKept(entries, max) {
+        if (!(entries.length > max)) return entries;
+        const open = this._unreadOpenKeys();
+        const kept = [];
+        const rest = [];
+        for (const e of entries) (open.has(e[0]) ? kept : rest).push(e);
+        kept.sort((a, b) => b[1] - a[1]);
+        rest.sort((a, b) => b[1] - a[1]);
+        return kept.concat(rest).slice(0, max);
     },
 
     _unreadBounded(map, open, now) {
@@ -2848,7 +2960,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const prev = this._cfLastSnap || null;
             if (!force && prev && prev.sig === snap.sig) return;
             this._cfLastSnap = snap;
-            this._cfRecountAll(prev);
+            this._cfRecountAll();
             this._cfRefreshRows();
             if (window.NymLayout && typeof window.NymLayout.refreshPreviews === 'function') window.NymLayout.refreshPreviews();
             if (typeof this._updateNotificationBadge === 'function') this._updateNotificationBadge();
@@ -2902,63 +3014,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return snap;
     },
 
-    _cfCtxFrom(snap) {
-        const cur = this._cfCtx();
-        return {
-            self: this.pubkey || '',
-            blockedUsers: snap.blockedUsers,
-            keywords: snap.keywords,
-            blockedChannels: snap.blockedChannels,
-            hiddenChannels: snap.hiddenChannels,
-            friendsOnly: snap.friendsOnly,
-            packs: snap.packs.length > 0,
-            friend: (pk) => snap.friends.has(pk),
-            bot: cur.bot,
-            pack: snap.packs.length ? cur.pack : undefined,
-            muted: (pk) => snap.gates && snap.muted.has(pk),
-            nymOf: cur.nymOf,
-            deleted: cur.deleted,
-            quiet: cur.quiet,
-            spam: (m) => (m.isPM || snap.gates) && typeof this.isSpamMessage === 'function'
-                && this.isSpamMessage(m.content, { enabled: snap.spamOn !== false, aggressive: snap.spamAgg !== false }),
-            gated: cur.gated
-        };
-    },
-
-    _cfUnreadWith(key, ctx) {
-        const F = window.NymContentFilter;
-        const list = this.messages && this.messages.get(key);
-        if (!F || !Array.isArray(list)) return 0;
-        const lastRead = (this.channelLastRead && this.channelLastRead.get(key)) || 0;
-        let count = 0;
-        for (const m of list) {
-            if (!m || m.isOwn || m.slowHeld || m._spamGated) continue;
-            if ((m.created_at || 0) <= lastRead) continue;
-            if (F.hidden(ctx, this._cfView(m), m)) continue;
-            count++;
-        }
-        return count;
-    },
-
-    _cfRecountAll(prev) {
+    _cfRecountAll() {
         const keys = new Set();
         if (this.messages) for (const k of this.messages.keys()) keys.add(k);
         if (this.pmMessages) for (const k of this.pmMessages.keys()) keys.add(k);
-        const prevCtx = prev ? this._cfCtxFrom(prev) : null;
         for (const k of keys) {
             if (!k) continue;
             const isConv = k.startsWith('pm-') || k.startsWith('group-');
             const store = isConv ? this.pmMessages : this.messages;
             const cached = store && store.get(k);
             if (!Array.isArray(cached) || cached.length === 0) continue;
-            const visible = this._recomputeUnreadCount(k);
-            let count = visible;
-            if (!isConv && this._unreadCountStillValid(k)) {
-                const standing = this.unreadCounts.get(k) || 0;
-                const before = prevCtx ? this._cfUnreadWith(k, prevCtx) : visible;
-                count = Math.max(visible, standing + visible - before);
-            }
-            count = Math.max(count, this._d1UnreadFloor(k));
+            const count = this._recomputeUnreadCount(k);
             if ((this.unreadCounts.get(k) || 0) === count) continue;
             this._setUnreadCount(k, count);
             this._renderUnreadBadge(k, count);
@@ -3069,20 +3135,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const cached = store && store.get(k);
             const persisted = this.unreadCounts.get(k) || 0;
             let count;
-            if (Array.isArray(cached) && cached.length > 0) {
+            if (!isConv) {
+                count = this._publicUnreadCount(k);
+            } else if (Array.isArray(cached) && cached.length > 0) {
                 count = this._recomputeUnreadCount(k);
             } else {
-                // No cached messages to derive from; keep the persisted count.
                 count = this._unreadCountStillValid(k) ? persisted : 0;
-            }
-            const floor = this._d1UnreadFloor(k);
-            if (isConv) {
-                // PM/group history is restored in full, so the cache count is authoritative.
-                count = Math.max(count, floor || 0);
-            } else {
-                // A public channel's cache is partial, so keep the stored count as a floor until a read lowers it.
-                count = Math.max(count, floor || 0);
-                if (this._unreadCountStillValid(k)) count = Math.max(count, persisted);
             }
             this._setUnreadCount(k, count);
             this._renderUnreadBadge(k, count);

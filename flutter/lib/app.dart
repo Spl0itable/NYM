@@ -27,7 +27,6 @@ import 'features/i18n/localization_service.dart';
 import 'features/mesh/mesh_controller.dart';
 import 'features/notifications/app_badge.dart';
 import 'features/notifications/notification_route_target.dart';
-import 'features/notifications/notification_routing.dart';
 import 'features/onboarding/boot_gate.dart';
 import 'features/share/nearby/nearby_inbox.dart';
 import 'features/share/share_intake.dart';
@@ -180,16 +179,8 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       return;
     }
     try {
-      final target = decodeNotificationPayload(payload);
-      if (target != null) {
-        openNotificationRoute(
-          target,
-          AppNotificationRouteTarget(
-            controller: ref.read(nostrControllerProvider),
-            appState: ref.read(appStateProvider.notifier),
-            container: ProviderScope.containerOf(context, listen: false),
-          ),
-        );
+      if (openNotificationTap(
+          ProviderScope.containerOf(context, listen: false), payload)) {
         return;
       }
       _deepLinks?.handleUrl(payload);

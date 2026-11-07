@@ -28,7 +28,9 @@ Object.assign(NYM.prototype, {
         this.shareChannel();
     },
 
-    async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot, anon, as) {
+    async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot, anon, as, claim) {
+        const typedPubkey = claim ? claim.pubkey : this.pubkey;
+        const typedNym = claim ? claim.nym : this.nym;
         if (!as && typeof this.aiConsentAllowed === 'function' && !this.aiConsentAllowed('nymbot')) return anon ? 'failed' : undefined;
         const anonModel = anon ? window.NymAnonNymbot : null;
         if (anon && !anonModel) return 'unavailable';
@@ -223,8 +225,8 @@ Object.assign(NYM.prototype, {
         }
         const senderNym = anon
             ? anonModel.senderNym(anon.nym, anon.pubkey)
-            : (as ? as.nym + '#' + as.pubkey.slice(-4) : String(this.nym || 'nym').replace(/#[0-9a-f]{4}$/i, '') + '#' + this.getPubkeySuffix(this.pubkey));
-        const askerPubkey = anon ? undefined : (as ? as.pubkey : this.pubkey);
+            : (as ? as.nym + '#' + as.pubkey.slice(-4) : String(typedNym || 'nym').replace(/#[0-9a-f]{4}$/i, '') + '#' + this.getPubkeySuffix(typedPubkey));
+        const askerPubkey = anon ? undefined : (as ? as.pubkey : typedPubkey);
         const relay = as && typeof as.publish === 'function' ? as : (anon ? this._anonBotRelay(anon) : null);
         if (anon && !relay) return 'failed';
         const run = this._botChannelRunBegin(geohash, !!anon);
@@ -970,7 +972,7 @@ Object.assign(NYM.prototype, {
         this.updateStoredNymsForPubkey(this.pubkey, newNym);
         this.updatePMNicknameFromProfile(this.pubkey, newNym);
 
-        await this.saveToNostrProfile();
+        await this.saveToNostrProfile({ chosenName: true });
 
         const changeMessage = this.uiText("Your nym's new nick is now {nym}", { nym: this.nym });
         this.displaySystemMessage(changeMessage);

@@ -70,6 +70,16 @@ class _CvDimens {
 
 enum _ColumnKind { channel, pm, group }
 
+class _ShownColumns extends ChangeNotifier {
+  _ShownColumns(this._test);
+
+  final bool Function(_ColumnDesc desc) _test;
+
+  bool has(_ColumnDesc desc) => _test(desc);
+
+  void recheck() => notifyListeners();
+}
+
 /// A deck column descriptor resolving its own storage key, unread key, title and icon.
 class _ColumnDesc {
   const _ColumnDesc.channel(this.channel, this.geohash)
@@ -216,9 +226,12 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
   /// Kept so [dispose] can unregister without touching `ref`.
   AppStateNotifier? _gateHost;
 
+  late final _ShownColumns _shown = _ShownColumns(_descOnScreen);
+
   @override
   void initState() {
     super.initState();
+    _stripScroll.addListener(_shown.recheck);
     cvColumnWidth.value = clampColumnWidth(ref
             .read(keyValueStoreProvider)
             .getString(StorageKeys.columnWidth))
@@ -239,17 +252,30 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     if (_isMobile || !_stripScroll.hasClients) {
       return [_columns[_focused.clamp(0, _columns.length - 1)].storageKey];
     }
-    final pos = _stripScroll.position;
     return [
       for (var i = 0; i < _columns.length; i++)
-        if (_CvDimens.padding + i * (_CvDimens.column + _CvDimens.gap) <
-                pos.pixels + pos.viewportDimension &&
-            _CvDimens.padding +
-                    i * (_CvDimens.column + _CvDimens.gap) +
-                    _CvDimens.column >
-                pos.pixels)
-          _columns[i].storageKey,
+        if (_stripShows(i)) _columns[i].storageKey,
     ];
+  }
+
+  bool _stripShows(int i) {
+    final pos = _stripScroll.position;
+    final left = _CvDimens.padding + i * (_CvDimens.column + _CvDimens.gap);
+    return left < pos.pixels + pos.viewportDimension &&
+        left + _CvDimens.column > pos.pixels;
+  }
+
+  bool _descOnScreen(_ColumnDesc desc) {
+    if (!mounted) return false;
+    if (_isMobile) return true;
+    final i = _columns.indexOf(desc);
+    if (i < 0) return false;
+    if (!_stripScroll.hasClients ||
+        !_stripScroll.position.hasPixels ||
+        !_stripScroll.position.hasViewportDimension) {
+      return i == _focused;
+    }
+    return _stripShows(i);
   }
 
   @override
@@ -268,6 +294,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     _removeGhost();
     _pageController.dispose();
     _stripScroll.dispose();
+    _shown.dispose();
     super.dispose();
   }
 
@@ -1074,14 +1101,15 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       case _ColumnKind.channel:
         return '#${d.geohash.isNotEmpty ? d.geohash : d.channel}';
       case _ColumnKind.pm:
+        final live = app.pmNymFor(d.pubkey);
+        if (!isPlaceholderNym(live)) return live!;
+        if (!isPlaceholderNym(d.nym)) return d.nym;
         final conv =
             app.pmConversations.where((c) => c.pubkey == d.pubkey).toList();
         final nym = conv.isNotEmpty ? conv.first.nym : null;
         return (nym != null && nym.isNotEmpty)
             ? nym
-            : (d.nym.isNotEmpty
-                ? d.nym
-                : (app.users[d.pubkey]?.nym ?? tr('Private message')));
+            : (d.nym.isNotEmpty ? d.nym : (live ?? tr('Private message')));
       case _ColumnKind.group:
         final g = app.groups.where((g) => g.id == d.groupId).toList();
         return g.isNotEmpty
@@ -1282,51 +1310,58 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
               child: Scrollbar(
                 controller: _stripScroll,
                 thumbVisibility: true,
-                child: SingleChildScrollView(
-                  key: _stripKey,
-                  controller: _stripScroll,
-                  scrollDirection: Axis.horizontal,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: _CvDimens.padding),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (var i = 0; i < _columns.length; i++) ...[
-                        _DesktopColumnSlot(
-                          key: ValueKey('cvcol_${_columns[i].key}'),
-                          index: i,
-                          total: _columns.length,
-                          desc: _columns[i],
-                          titleWidget: _columnTitleWidget(
-                              context, _columns[i], titleStyle),
-                          icon: _columnIcon(context, _columns[i]),
-                          focused: i == _focused,
-                          transparent: transparentColumns,
-                          dimmed: _dragActive && _dragIndex == i,
-                          onClose: () => _removeColumn(_columns[i]),
-                          onFocus: () => _focusColumn(i),
-                          onDragDown: (e, boundaryCtx) =>
-                              _onColumnHeaderDown(i, e, boundaryCtx),
-                          onDragMove: _onColumnHeaderMove,
-                          onDragEnd: _onColumnHeaderUp,
-                          onAtBottomChanged: _atBottomHandlerFor(_columns[i]),
-                        ),
-                        const SizedBox(width: _CvDimens.gap),
+                child: NotificationListener<ScrollMetricsNotification>(
+                  onNotification: (n) {
+                    if (n.depth == 0) _shown.recheck();
+                    return false;
+                  },
+                  child: SingleChildScrollView(
+                    key: _stripKey,
+                    controller: _stripScroll,
+                    scrollDirection: Axis.horizontal,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: _CvDimens.padding),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (var i = 0; i < _columns.length; i++) ...[
+                          _DesktopColumnSlot(
+                            key: ValueKey('cvcol_${_columns[i].key}'),
+                            index: i,
+                            total: _columns.length,
+                            desc: _columns[i],
+                            titleWidget: _columnTitleWidget(
+                                context, _columns[i], titleStyle),
+                            icon: _columnIcon(context, _columns[i]),
+                            focused: i == _focused,
+                            transparent: transparentColumns,
+                            dimmed: _dragActive && _dragIndex == i,
+                            onClose: () => _removeColumn(_columns[i]),
+                            onFocus: () => _focusColumn(i),
+                            onDragDown: (e, boundaryCtx) =>
+                                _onColumnHeaderDown(i, e, boundaryCtx),
+                            onDragMove: _onColumnHeaderMove,
+                            onDragEnd: _onColumnHeaderUp,
+                            onAtBottomChanged: _atBottomHandlerFor(_columns[i]),
+                            shown: _shown,
+                          ),
+                          const SizedBox(width: _CvDimens.gap),
+                        ],
+                        if (_pickerOpen)
+                          _PickerColumn(
+                            rows: _availableRows(
+                                context, channels, pms, groups, pmOnly),
+                            onPick: _addPickedColumn,
+                            onClose: () => setState(() => _pickerOpen = false),
+                          )
+                        else
+                          _AddColumnButton(
+                            c: c,
+                            width: _CvDimens.addColumn,
+                            onTap: _openAddColumn,
+                          ),
                       ],
-                      if (_pickerOpen)
-                        _PickerColumn(
-                          rows: _availableRows(
-                              context, channels, pms, groups, pmOnly),
-                          onPick: _addPickedColumn,
-                          onClose: () => setState(() => _pickerOpen = false),
-                        )
-                      else
-                        _AddColumnButton(
-                          c: c,
-                          width: _CvDimens.addColumn,
-                          onTap: _openAddColumn,
-                        ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -1410,6 +1445,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
           onNext: () => _stepFocused(1),
           onOpenTabs: _openTabsView,
           onAtBottomChanged: _atBottomHandlerFor(desc),
+          shown: _shown,
         );
       },
     ));
@@ -1434,6 +1470,7 @@ class _DesktopColumnSlot extends StatefulWidget {
     required this.onDragMove,
     required this.onDragEnd,
     this.onAtBottomChanged,
+    this.shown,
   });
 
   final int index;
@@ -1454,6 +1491,8 @@ class _DesktopColumnSlot extends StatefulWidget {
   final VoidCallback onDragEnd;
 
   final ValueChanged<bool>? onAtBottomChanged;
+
+  final _ShownColumns? shown;
 
   @override
   State<_DesktopColumnSlot> createState() => _DesktopColumnSlotState();
@@ -1486,6 +1525,7 @@ class _DesktopColumnSlotState extends State<_DesktopColumnSlot> {
       onHeaderMove: widget.onDragMove,
       onHeaderUp: widget.onDragEnd,
       onAtBottomChanged: widget.onAtBottomChanged,
+      shown: widget.shown,
     );
 
     // Any click focuses the column, except on the close button.
@@ -1519,6 +1559,7 @@ class _MobileColumn extends StatelessWidget {
     required this.onNext,
     required this.onOpenTabs,
     this.onAtBottomChanged,
+    this.shown,
   });
 
   final int index;
@@ -1531,6 +1572,8 @@ class _MobileColumn extends StatelessWidget {
   final VoidCallback onOpenTabs;
 
   final ValueChanged<bool>? onAtBottomChanged;
+
+  final _ShownColumns? shown;
 
   @override
   Widget build(BuildContext context) {
@@ -1548,6 +1591,7 @@ class _MobileColumn extends StatelessWidget {
       onNext: onNext,
       onOpenTabs: onOpenTabs,
       onAtBottomChanged: onAtBottomChanged,
+      shown: shown,
     );
   }
 }
@@ -1571,6 +1615,7 @@ class _DeckColumn extends ConsumerStatefulWidget {
     this.onHeaderMove,
     this.onHeaderUp,
     this.onAtBottomChanged,
+    this.shown,
   });
 
   final _ColumnDesc desc;
@@ -1599,6 +1644,8 @@ class _DeckColumn extends ConsumerStatefulWidget {
 
   /// Reports at-bottom transitions for the deck's read gate.
   final ValueChanged<bool>? onAtBottomChanged;
+
+  final _ShownColumns? shown;
 
   @override
   ConsumerState<_DeckColumn> createState() => _DeckColumnState();
@@ -1637,11 +1684,23 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     super.initState();
     _positions.itemPositions.addListener(_onPositionsChanged);
     _navService = ref.read(chatNavProvider);
+    _nav.onScreen = _isShown;
+    widget.shown?.addListener(_onShown);
+  }
+
+  bool _isShown() => widget.shown?.has(widget.desc) ?? true;
+
+  void _onShown() {
+    if (_isShown()) _nav.recheck();
   }
 
   @override
   void didUpdateWidget(covariant _DeckColumn old) {
     super.didUpdateWidget(old);
+    if (old.shown != widget.shown) {
+      old.shown?.removeListener(_onShown);
+      widget.shown?.addListener(_onShown);
+    }
     if (old.desc.storageKey != widget.desc.storageKey) {
       _navService.release(old.desc.storageKey);
       // A repurposed column re-renders pinned to the newest message.
@@ -1665,6 +1724,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   @override
   void dispose() {
     _positions.itemPositions.removeListener(_onPositionsChanged);
+    widget.shown?.removeListener(_onShown);
     _navService.release(widget.desc.storageKey);
     _nav.dispose();
     _dayFloat.dispose();
@@ -1988,7 +2048,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                 away: !_atBottom ||
                                     !ref
                                         .read(appStateProvider.notifier)
-                                        .appVisible);
+                                        .appVisible ||
+                                    !_isShown(),
+                                shown: _isShown());
                             _nav.afterBuild(scroller);
                             _unitByIndex = built.unitByIndex;
                             final restore = _listBuilt

@@ -357,7 +357,7 @@
         if (!phone() || !listOpen()) return;
         var t = e.target;
         if (!t || !t.closest) return;
-        var row = t.closest('.channel-item, .pm-item');
+        var row = t.closest('.channel-item, .pm-item, .ps-row');
         if (!row || !sidebar().contains(row)) return;
         if (t.closest('.row-menu-btn, .pin-btn, .hide-btn, .section-reorder-btn')) return;
         if (document.body.classList.contains('sidebar-reorder-mode')) return;
@@ -639,11 +639,13 @@
         return !!n.inPMMode && n.currentGroup === v.id;
     }
 
-    function restoreLastView() {
+    function restoreLastView(taken) {
         var n = window.nym;
         if (!n || !phone()) return false;
-        var raw = null;
-        try { raw = localStorage.getItem(LAST_VIEW_KEY); } catch (_) { }
+        var raw = taken === undefined ? null : taken;
+        if (taken === undefined) {
+            try { raw = localStorage.getItem(LAST_VIEW_KEY); } catch (_) { }
+        }
         var v = parseView(raw);
         if (!v) return false;
         if (v.type === 'channel' && n.settings && n.settings.groupChatPMOnlyMode) return false;
@@ -651,15 +653,17 @@
             try { localStorage.removeItem(LAST_VIEW_KEY); } catch (_) { }
             return false;
         }
-        var moves = n.navigationHistory ? n.navigationHistory.length : 0;
+        var seq = n._navSeq || 0;
+        var taps = n._notifTapSeq || 0;
         var tries = 0;
         var attempt = function () {
+            if ((n._notifTapSeq || 0) !== taps) return;
             if (sameView(n, v)) return;
             if (viewReady(n, v)) { openView(n, v); return; }
             if (++tries > 40) return;
             setTimeout(function () {
-                var now = n.navigationHistory ? n.navigationHistory.length : 0;
-                if (now > moves + 1) return;
+                var now = n._navSeq || 0;
+                if (now !== seq && now !== n._landingNavSeq) return;
                 attempt();
             }, 250);
         };

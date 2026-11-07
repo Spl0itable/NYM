@@ -431,6 +431,23 @@ class SettingsController extends StateNotifier<Settings> {
     _stampPref('highContrast', syncedTs);
   }
 
+  void setSidebarChannelsMode(String v, {int? syncedTs}) {
+    if (v != 'list' && v != 'stream') return;
+    _kv.setString(StorageKeys.sidebarChannelsMode, v);
+    state = state.copyWith(sidebarChannelsMode: v);
+    _stampPref('sidebarChannelsMode', syncedTs);
+  }
+
+  void pushSyncedChange() {
+    if (_remoteDepth > 0) return;
+    final cb = onPrefChanged;
+    if (cb != null) {
+      cb();
+    } else {
+      _syncedChanged();
+    }
+  }
+
   void setHidePreviews(bool v, {int? syncedTs}) {
     _kv.setBool(StorageKeys.hidePreviews, v);
     state = state.copyWith(hidePreviews: v);

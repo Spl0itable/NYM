@@ -1766,10 +1766,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             hint: tr("Choose where senders can see when you've read their "
                 'messages (✓✓). "Enabled everywhere" includes PMs, group '
                 'chats, and public channels.'),
+            amberHint: keypairValue == 'hardcore'
+                ? tr('Hardcore mode sends no read or delivery receipts.')
+                : null,
             child: FormSelect<String>(
               key: const ValueKey('setting-readReceiptsScope'),
-              value: s.readReceiptsScope,
+              value: keypairValue == 'hardcore'
+                  ? 'disabled'
+                  : s.readReceiptsScope,
               items: scopeItems,
+              disabled: keypairValue == 'hardcore',
               onChanged: ctrl.setReadReceiptsScope,
             ),
           ),

@@ -7,6 +7,7 @@ import '../../models/group.dart';
 import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../common/nym_avatar.dart';
+import '../nym_svg_bytes.dart';
 
 class GroupSidebarAvatar extends ConsumerWidget {
   const GroupSidebarAvatar({
@@ -91,7 +92,7 @@ class GroupSidebarAvatar extends ConsumerWidget {
 
 const String _groupGlyphSvg =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
-    'stroke="{C}" stroke-width="1.75" stroke-linecap="round" '
+    'stroke="currentColor" stroke-width="1.75" stroke-linecap="round" '
     'stroke-linejoin="round">'
     '<circle cx="12" cy="7" r="2.75"/>'
     '<path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/>'
@@ -100,14 +101,7 @@ const String _groupGlyphSvg =
     '<circle cx="19.5" cy="9.5" r="2"/>'
     '<path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>';
 
-String get groupChatGlyphSvg => _groupGlyphSvg.replaceAll('{C}', 'currentColor');
-
-String _hex(Color c) {
-  int ch(double v) => (v * 255).round() & 0xff;
-  return '#${ch(c.r).toRadixString(16).padLeft(2, '0')}'
-      '${ch(c.g).toRadixString(16).padLeft(2, '0')}'
-      '${ch(c.b).toRadixString(16).padLeft(2, '0')}';
-}
+String get groupChatGlyphSvg => _groupGlyphSvg;
 
 class _GroupAvatarStack extends StatelessWidget {
   const _GroupAvatarStack(
@@ -171,8 +165,8 @@ class _GroupAvatarStack extends StatelessWidget {
                   shape: BoxShape.circle,
                   border: Border.all(color: c.primaryA(0.3), width: 1),
                 ),
-                child: SvgPicture.string(
-                  _groupGlyphSvg.replaceAll('{C}', _hex(c.primary)),
+                child: SvgPicture(
+                  NymSvgLoader(_groupGlyphSvg, color: c.primary.withAlpha(255)),
                   width: s * 0.3,
                   height: s * 0.3,
                 ),
@@ -218,8 +212,8 @@ class _GroupAvatarStack extends StatelessWidget {
                 shape: BoxShape.circle,
                 border: Border.all(color: c.primaryA(0.3), width: 1),
               ),
-              child: SvgPicture.string(
-                _groupGlyphSvg.replaceAll('{C}', _hex(c.primary)),
+              child: SvgPicture(
+                NymSvgLoader(_groupGlyphSvg, color: c.primary.withAlpha(255)),
                 width: 8,
                 height: 8,
               ),
@@ -247,8 +241,8 @@ class _GroupIconWrap extends StatelessWidget {
         color: c.primaryA(0.10),
         border: Border.all(color: c.primaryA(0.25), width: 1),
       ),
-      child: SvgPicture.string(
-        _groupGlyphSvg.replaceAll('{C}', _hex(c.primary)),
+      child: SvgPicture(
+        NymSvgLoader(_groupGlyphSvg, color: c.primary.withAlpha(255)),
         width: size * 14 / 26,
         height: size * 14 / 26,
       ),

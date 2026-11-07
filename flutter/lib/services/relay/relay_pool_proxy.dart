@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../../core/constants/event_kinds.dart';
 import '../../core/constants/relays.dart';
 import '../../features/relays/relay_add.dart';
 import '../../features/relays/relay_block.dart';
@@ -451,12 +452,14 @@ class _ShardSocket {
     this.onLost,
     this.onLinked,
     this.onFirstFrame,
+    this.onFresh,
     this.reqFilter,
     this.confirmTimeout = const Duration(seconds: 12),
     DateTime Function()? now,
   }) : _now = now ?? relayClock;
 
   static const Duration freshCheck = Duration(seconds: 3);
+  static const Duration freshRetryWait = Duration(milliseconds: 1000);
   static const int unackedMax = 200;
   static const Duration unackedTtl = Duration(seconds: 60);
 
@@ -469,13 +472,33 @@ class _ShardSocket {
   DateTime? _heardAt;
   bool _adopted = false;
   final Map<String, (String, DateTime)> _unacked = {};
+  final Map<String, String> _nextOnly = {};
+  bool _nextLate = false;
+  DateTime? _refreshAt;
+  Timer? _retryTimer;
+  bool _retryNext = false;
+  int _nextFails = 0;
 
   bool get refreshing => _next != null;
+
+  DateTime? _freshAt;
+
+  bool freshSince(Duration d) {
+    if (_next != null || _retryTimer != null) return true;
+    final at = _freshAt;
+    return at != null && _now().difference(at) < d;
+  }
 
   bool get _heardSinceFresh {
     final h = _heardAt;
     final n = _nextAt;
     return h != null && n != null && !h.isBefore(n);
+  }
+
+  bool get _heardSinceRefresh {
+    final h = _heardAt;
+    final at = _refreshAt;
+    return h != null && at != null && !h.isBefore(at);
   }
 
   final String? Function(String frame)? reqFilter;
@@ -485,6 +508,8 @@ class _ShardSocket {
   final void Function(_ShardSocket sock)? onLinked;
 
   final void Function(_ShardSocket sock)? onFirstFrame;
+
+  final void Function(_ShardSocket sock)? onFresh;
 
   Object? _closeError;
 
@@ -618,6 +643,7 @@ class _ShardSocket {
   void _onChannelDone(WebSocketChannel ch, Object? error) {
     if (identical(ch, _next)) {
       _dropNext();
+      _retryFresh();
     } else if (identical(ch, _channel)) {
       if (error != null) _closeError = error;
       _onDone();
@@ -656,7 +682,14 @@ class _ShardSocket {
     if (_next != null && at != null && _now().difference(at) < freshCheck) {
       return false;
     }
-    _dropNext();
+    _cancelRetry();
+    _nextFails = 0;
+    _refreshAt = _now();
+    return _dialNext();
+  }
+
+  bool _dialNext({bool retry = false}) {
+    _dropNext(replay: false);
     final WebSocketChannel ch;
     try {
       ch = channelFactory(Uri.parse(url));
@@ -667,17 +700,54 @@ class _ShardSocket {
       _dropNext();
       return false;
     }
+    _retryNext = retry;
     _sendOn(ch, PoolFrame.relays(shard.relays, shard.dmRelays));
     _nextTimer = Timer(freshCheck, () => _checkNext(ch));
     return true;
   }
 
+  void _cancelRetry() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+  }
+
+  void _retryFresh() {
+    if (_closedByUser || _held || !_open || _heardSinceRefresh) return;
+    final quick = _nextFails == 0;
+    _nextFails++;
+    var delayMs = shardReconnectDelayMs(
+        quick ? -1 : _reconnectAttempt, rng.nextDouble());
+    if (!quick) _reconnectAttempt++;
+    final at = _refreshAt;
+    if (at != null) {
+      delayMs = max(delayMs,
+          (freshRetryWait - _now().difference(at)).inMilliseconds);
+    }
+    _cancelRetry();
+    _retryTimer = Timer(Duration(milliseconds: delayMs), () {
+      _retryTimer = null;
+      if (_closedByUser || _held || !_open || _next != null) return;
+      if (_heardSinceRefresh) return;
+      if (_dialNext(retry: true)) onFresh?.call(this);
+    });
+  }
+
   void _checkNext(WebSocketChannel ch) {
     if (!identical(ch, _next)) return;
     _nextTimer = null;
-    if (!_heardSinceFresh) {
+    if (!_heardSinceFresh && (_frameSinceConnect || _nextSeen)) {
+      final silent = !_nextSeen;
       recycle();
+      if (silent && identical(_channel, ch)) _retryFresh();
       return;
+    }
+    if (!_nextSeen) {
+      _nextLate = true;
+      final late = _nextOnly.values.toList();
+      _nextOnly.clear();
+      for (final frame in late) {
+        sendCurrent(frame);
+      }
     }
     _nextTimer = Timer(confirmTimeout, () {
       if (identical(ch, _next)) _dropNext();
@@ -689,7 +759,7 @@ class _ShardSocket {
     if (ch == null) return;
     final oldSub = _sub;
     final oldCh = _channel;
-    final alive = _heardSinceFresh;
+    final alive = _heardSinceFresh || !_frameSinceConnect;
     final lastLiveAt = upstreamAt ?? openedAt;
     _nextTimer?.cancel();
     _nextTimer = null;
@@ -705,6 +775,12 @@ class _ShardSocket {
     if (_nextRelays.isNotEmpty) connectedRelays = _nextRelays;
     _nextRelays = const [];
     _nextSeen = false;
+    _nextOnly.clear();
+    _nextLate = false;
+    _retryNext = false;
+    _nextFails = 0;
+    _cancelRetry();
+    _freshAt = _now();
     unawaited(oldSub?.cancel());
     try {
       oldCh?.sink.close();
@@ -735,8 +811,15 @@ class _ShardSocket {
     probe = null;
     connectedRelays = _nextRelays;
     _nextRelays = const [];
+    _nextOnly.clear();
+    _nextLate = false;
+    _retryNext = false;
+    _nextFails = 0;
+    _cancelRetry();
+    _freshAt = _now();
     final seen = _nextSeen;
     _nextSeen = false;
+    _heardAt = null;
     _adopted = !seen;
     _frameSinceConnect = seen;
     linked = seen;
@@ -744,11 +827,18 @@ class _ShardSocket {
       onFirstFrame?.call(this);
     } else {
       _armConfirmTimer();
+      final wait = freshCheck - _now().difference(openedAt!);
+      if (wait > Duration.zero) {
+        _retryTimer = Timer(wait, () {
+          _retryTimer = null;
+          _retryFresh();
+        });
+      }
     }
     return true;
   }
 
-  void _dropNext() {
+  void _dropNext({bool replay = true}) {
     final ch = _next;
     final sub = _nextSub;
     _nextTimer?.cancel();
@@ -757,12 +847,22 @@ class _ShardSocket {
     _nextSub = null;
     _nextAt = null;
     _nextSeen = false;
+    _nextLate = false;
+    _retryNext = false;
     _nextRelays = const [];
     unawaited(sub?.cancel());
-    if (ch == null) return;
-    try {
-      ch.sink.close();
-    } catch (_) {}
+    if (ch != null) {
+      try {
+        ch.sink.close();
+      } catch (_) {}
+    }
+    if (!replay) return;
+    final pending = _nextOnly.values.toList();
+    _nextOnly.clear();
+    if (_closedByUser) return;
+    for (final frame in pending) {
+      sendCurrent(frame);
+    }
   }
 
   void noteSent(String id, String frame) {
@@ -811,6 +911,7 @@ class _ShardSocket {
     final msg = PoolMessage.parse(data);
     if (msg == null) return;
     _heardAt = _now();
+    if (_retryNext && _next != null) _dropNext();
     if (msg is PoolOk) _unacked.remove(msg.id);
     // A real inbound frame proves the connection, so reset the backoff.
     _reconnectAttempt = 0;
@@ -862,6 +963,7 @@ class _ShardSocket {
         proxyCloseNamesRateLimit(_closeError, reason: _channel?.closeReason);
     _closeError = null;
     if (lastCloseRateLimited && _reconnectAttempt < 4) _reconnectAttempt = 4;
+    _cancelRetry();
     _cleanup();
     onClosed(this);
     if (wasLive && !_closedByUser) onLost?.call(this, lastLiveAt);
@@ -884,6 +986,7 @@ class _ShardSocket {
 
   void hold() {
     _held = true;
+    _cancelRetry();
     _dropNext();
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -931,6 +1034,17 @@ class _ShardSocket {
 
   bool sendNext(String frame) => _next != null && _sendOn(_next, frame);
 
+  bool sendFreshOnly(String id, String frame) {
+    if (!_open) return false;
+    final next = _next;
+    if (next == null) return _sendOn(_channel, frame);
+    if (_nextLate) return send(frame);
+    _nextOnly[id] = frame;
+    return _sendOn(next, frame);
+  }
+
+  void forgetFreshOnly(String id) => _nextOnly.remove(id);
+
   bool sendCurrent(String frame) => _open && _sendOn(_channel, frame);
 
   bool _sendOn(WebSocketChannel? ch, String frame) {
@@ -955,6 +1069,7 @@ class _ShardSocket {
     _closedByUser = true;
     _open = false;
     _settled = true;
+    _cancelRetry();
     _dropNext();
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -1172,7 +1287,7 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  void wake() {
+  void wake({bool network = false}) {
     if (_disposed || _livenessHeld) return;
     final now = _now();
     for (final sock in _sockets.toList()) {
@@ -1187,6 +1302,7 @@ class RelayPoolProxy implements PoolTransport {
     }
     retryDownShards();
     for (final sock in _sockets.toList()) {
+      if (!network && sock.freshSince(resumeFresh)) continue;
       if (!sock.refresh()) continue;
       if (sock.probe == null) {
         _sendProbe(sock, now, limit: resumeProbeTimeout, currentOnly: true);
@@ -1492,6 +1608,7 @@ class RelayPoolProxy implements PoolTransport {
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
         onFirstFrame: _onShardFirstFrame,
+        onFresh: _onShardFresh,
         onLost: _onShardLost,
         onLinked: (_) => _noteCount(),
         reqFilter: _addedFrame,
@@ -1524,11 +1641,25 @@ class RelayPoolProxy implements PoolTransport {
     _trackSubKinds(id, filters);
     sub.startEose();
     final frame = PoolFrame.req(id, filters);
+    final freshOnly = _widePresence(filters);
     for (final sock in _sockets) {
-      sock.send(frame);
+      if (freshOnly) {
+        sock.sendFreshOnly(id, frame);
+      } else {
+        sock.send(frame);
+      }
     }
     return sub;
   }
+
+  static bool _widePresence(List<NostrFilter> filters) =>
+      filters.isNotEmpty &&
+      filters.every((f) =>
+          f.ids == null &&
+          f.authors == null &&
+          f.tags.isEmpty &&
+          f.kinds?.length == 1 &&
+          f.kinds!.first == EventKind.geoPresence);
 
   @override
   void closeSubscription(Subscription sub) {
@@ -1538,6 +1669,7 @@ class RelayPoolProxy implements PoolTransport {
     _eosedShards.remove(sub.subId);
     final frame = PoolFrame.close(sub.subId);
     for (final sock in _sockets) {
+      sock.forgetFreshOnly(sub.subId);
       sock.send(frame);
     }
   }
@@ -1580,6 +1712,8 @@ class RelayPoolProxy implements PoolTransport {
   bool get _mustHold => !_disposed && !_sockets.any((s) => s.isOpen);
 
   List<NostrEvent> get heldEvents => _held.events;
+
+  set heldDrops(bool Function(NostrEvent event)? fn) => _held.drops = fn;
 
   int _broadcast(String frame, {String? eventId}) {
     var n = 0;
@@ -1720,6 +1854,7 @@ class RelayPoolProxy implements PoolTransport {
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
         onFirstFrame: _onShardFirstFrame,
+        onFresh: _onShardFresh,
         onLost: _onShardLost,
         onLinked: (_) => _noteCount(),
         reqFilter: _addedFrame,

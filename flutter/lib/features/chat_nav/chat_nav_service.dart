@@ -512,7 +512,7 @@ class ChatNavService {
   String jumpTextFor(String key, [List<Message>? list]) =>
       jumpText(jumpCountFor(key, list), _tr);
 
-  bool advance(String key, num at, Iterable<String> ids) {
+  bool advance(String key, num at, Iterable<String> ids, {bool sweep = true}) {
     final e = _entries[key];
     if (e == null) return false;
     final next = markAdvance(e.mark, at, ids);
@@ -521,13 +521,19 @@ class ChatNavService {
     }
     e.mark = next;
     _saveMark(key, next);
-    final ms = mentions();
-    final after = mentionMark(ms, key, next, _nowMs);
-    if (mentionCount(after, key) != mentionCount(ms, key)) _setMentions(after);
+    if (sweep) sweepMentions(key);
     return true;
   }
 
-  bool seeAll(String key, [List<Message>? list]) {
+  void sweepMentions(String key) {
+    final e = _entries[key];
+    if (e == null) return;
+    final ms = mentions();
+    final after = mentionMark(ms, key, e.mark, _nowMs);
+    if (mentionCount(after, key) != mentionCount(ms, key)) _setMentions(after);
+  }
+
+  bool seeAll(String key, [List<Message>? list, bool shown = true]) {
     final e = _entries[key];
     if (e == null) return false;
     final src = list ?? _store(key);
@@ -538,12 +544,16 @@ class ChatNavService {
         final at = effAt(m);
         if (at > newest) newest = at;
       }
-      changed = advance(key, newest, [
-        for (final m in src)
-          if (effAt(m) == newest) m.id,
-      ]);
+      changed = advance(
+          key,
+          newest,
+          [
+            for (final m in src)
+              if (effAt(m) == newest) m.id,
+          ],
+          sweep: shown);
     }
-    if (mentionCountFor(key) > 0) {
+    if (shown && mentionCountFor(key) > 0) {
       _setMentions(mentionClear(mentions(), key, _nowMs));
       changed = true;
     }
@@ -831,11 +841,12 @@ class ChatNavService {
     return reply(m, idx.hasRoot(root));
   }
 
-  void noteLive(String key, Message m, {required bool away}) {
+  void noteLive(String key, Message m,
+      {required bool away, bool shown = true}) {
     final e = _entries[key];
     final row = _row(m);
     if (row.own) {
-      if (e != null) advance(key, row.at, [m.id]);
+      if (e != null) advance(key, row.at, [m.id], sweep: shown);
       return;
     }
     if (!away || !_isMention(m)) return;

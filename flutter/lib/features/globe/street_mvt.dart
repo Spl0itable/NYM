@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:io' show gzip;
-import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'street_plan.dart';
+import '../../core/utils/isolate_gate.dart';
 
 class MvtFeature {
   const MvtFeature(this.id, this.type, this.props, this.cmds);
@@ -441,4 +441,4 @@ StreetTile? _tryBuild(StreetTileJob j) {
 }
 
 Future<List<StreetTile?>> decodeStreetTiles(List<StreetTileJob> jobs) =>
-    Isolate.run(() => decodeStreetTilesSync(jobs));
+    gatedCompute(decodeStreetTilesSync, jobs);

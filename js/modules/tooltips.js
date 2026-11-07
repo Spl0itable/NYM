@@ -11,6 +11,8 @@
     var keyboard = false;
     var warmUntil = 0;
     var pressed = null;
+    var follow = 0;
+    var MOVES = /^(transform|translate|scale|rotate|top|left|right|bottom|inset|margin|padding|width|height|min|max|all$)/;
 
     function hoverCapable() {
         try { return !window.matchMedia || window.matchMedia('(hover: hover), (any-hover: hover)').matches; } catch (_) { return true; }
@@ -169,6 +171,41 @@
         return true;
     }
 
+    function moves(a) {
+        if (a.transitionProperty) return MOVES.test(a.transitionProperty);
+        var frames = a.effect && typeof a.effect.getKeyframes === 'function' ? a.effect.getKeyframes() : [];
+        for (var i = 0; i < frames.length; i++) {
+            for (var k in frames[i]) if (k !== 'offset' && MOVES.test(k)) return true;
+        }
+        return false;
+    }
+
+    function settling(el) {
+        for (var n = el.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+            if (typeof n.getAnimations !== 'function') return false;
+            var list = n.getAnimations();
+            for (var i = 0; i < list.length; i++) {
+                var a = list[i];
+                var timing = a.effect && typeof a.effect.getComputedTiming === 'function' ? a.effect.getComputedTiming() : null;
+                if (a.playState === 'running' && timing && isFinite(timing.endTime) && moves(a)) return true;
+            }
+        }
+        return false;
+    }
+
+    function track(el) {
+        cancelAnimationFrame(follow);
+        follow = 0;
+        if (!settling(el)) return;
+        var step = function () {
+            follow = 0;
+            if (owner !== el) return;
+            if (!place(el)) { hide(); return; }
+            if (settling(el)) follow = requestAnimationFrame(step);
+        };
+        follow = requestAnimationFrame(step);
+    }
+
     function open(el) {
         return el.hasAttribute('aria-haspopup') && el.getAttribute('aria-haspopup') !== 'false' && el.getAttribute('aria-expanded') === 'true';
     }
@@ -194,10 +231,13 @@
         owner = el;
         t.classList.add('show');
         if (!place(el)) hide();
+        else track(el);
     }
 
     function hide(warm) {
         clearTimeout(timer);
+        cancelAnimationFrame(follow);
+        follow = 0;
         if (warm !== true) warmUntil = 0;
         else if (owner) warmUntil = Date.now() + WARM;
         owner = null;

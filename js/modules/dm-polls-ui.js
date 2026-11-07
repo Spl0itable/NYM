@@ -83,6 +83,19 @@
             return [this.pubkey, msg.conversationPubkey].filter(Boolean);
         },
 
+        _dpHardcore() {
+            return typeof this._hardcoreRotating === 'function' && this._hardcoreRotating();
+        },
+
+        _dpHardcoreVoteRefused(msg) {
+            return !!(msg.isGroup && this._dpHardcore() && this.groupConversations && this.groupConversations.get(msg.groupId) &&
+                this._dpAllowed(msg).indexOf(this.pubkey) < 0);
+        },
+
+        _dpHardcoreCloseRefused(msg) {
+            return !!(msg.isOwn && msg.pubkey !== this.pubkey && this._dpHardcore());
+        },
+
         _dpTally(msg, poll) {
             const entry = this._dpStore()[msg.nymMessageId];
             const allowed = this._dpAllowed(msg).filter((pk) => pk === this.pubkey ||
@@ -109,13 +122,16 @@
 
         async _dpSend(msg, rumor) {
             if (typeof this._canSendGiftWraps === 'function' && !this._canSendGiftWraps()) return;
+            const claim = (typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null);
+            const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
+            rumor.pubkey = me.pubkey;
             if (msg.isGroup) {
                 const g = this.groupConversations.get(msg.groupId);
                 if (!g) return;
-                await this._sendGiftWrapsAsync(g.members, rumor, null, msg.groupId);
+                await this._sendGiftWrapsAsync(g.members, rumor, null, msg.groupId, { claim });
                 return;
             }
-            await this._sendGiftWrapsAsync([this.pubkey, msg.conversationPubkey], rumor, null);
+            await this._sendGiftWrapsAsync([me.pubkey, msg.conversationPubkey], rumor, null, null, { claim });
         },
 
         async dmPollVote(pollId, optionIndex) {
@@ -124,7 +140,10 @@
             const { msg, poll } = loc;
             const idx = Number(optionIndex);
             if (!Number.isInteger(idx) || idx < 0 || idx >= poll.options.length) return;
-            if (this._dpAllowed(msg).indexOf(this.pubkey) < 0) return;
+            if (this._dpAllowed(msg).indexOf(this.pubkey) < 0) {
+                if (this._dpHardcoreVoteRefused(msg)) this.displaySystemMessage(this._dpx(P().STRINGS.hardcoreVoteRefused));
+                return;
+            }
             const t = this._dpTally(msg, poll);
             if (t.closed) {
                 this.displaySystemMessage(this._dpx(P().STRINGS.closedNotice));
@@ -144,7 +163,11 @@
 
         async dmPollClose(pollId) {
             const loc = this._dpLocate(pollId);
-            if (!loc || loc.msg.pubkey !== this.pubkey) return;
+            if (!loc) return;
+            if (loc.msg.pubkey !== this.pubkey) {
+                if (this._dpHardcoreCloseRefused(loc.msg)) this.displaySystemMessage(this._dpx(P().STRINGS.hardcoreCloseRefused));
+                return;
+            }
             const { msg, poll } = loc;
             if (this._dpTally(msg, poll).closed) return;
             const store = this._dpStore();
@@ -207,7 +230,7 @@
             const pollId = message.nymMessageId;
             const t = this._dpTally(message, poll);
             const mine = Object.prototype.hasOwnProperty.call(t.choices, this.pubkey) ? t.choices[this.pubkey] : -1;
-            const canVote = !t.closed && this._dpAllowed(message).indexOf(this.pubkey) >= 0;
+            const canVote = !t.closed && (this._dpAllowed(message).indexOf(this.pubkey) >= 0 || this._dpHardcoreVoteRefused(message));
             const options = poll.options.map((text, i) => {
                 const voters = t.order.filter((pk) => t.choices[pk] === i);
                 const pct = P().percent(t.counts[i], t.total);

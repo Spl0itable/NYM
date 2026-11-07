@@ -179,6 +179,13 @@ class Subscription {
 
   bool get answered => _answered;
 
+  int _verifying = 0;
+  Completer<void>? _drained;
+
+  Future<void> get drained => _verifying == 0
+      ? Future<void>.value()
+      : (_drained ??= Completer<void>()).future;
+
   Future<void> get eose => _eose.future;
 
   Future<void> get firstEose => _firstEose.future;
@@ -203,16 +210,25 @@ class Subscription {
     if (_delivered.contains(event.id)) return;
     final key = copyKey(event);
     if (!_deduper.add(key)) return;
-    final ok = await _verify(event);
-    if (!ok) {
-      _deduper.forget(key);
-      _onRejected?.call(event);
-      return;
+    _verifying++;
+    try {
+      final ok = await _verify(event);
+      if (!ok) {
+        _deduper.forget(key);
+        _onRejected?.call(event);
+        return;
+      }
+      if (_closed) return;
+      if (!_delivered.add(event.id)) return;
+      _answered = true;
+      if (!_events.isClosed) _events.add(event);
+    } finally {
+      if (--_verifying == 0) {
+        final waiting = _drained;
+        _drained = null;
+        waiting?.complete();
+      }
     }
-    if (_closed) return;
-    if (!_delivered.add(event.id)) return;
-    _answered = true;
-    if (!_events.isClosed) _events.add(event);
   }
 
   void onEose(String relayUrl, {bool closed = false}) {
@@ -736,6 +752,8 @@ class RelayPool implements PoolTransport {
   void handOverHeld(PoolTransport next) => _held.flush(next);
 
   List<NostrEvent> get heldEvents => _held.events;
+
+  set heldDrops(bool Function(NostrEvent event)? fn) => _held.drops = fn;
 
   /// Closes sockets but keeps [Subscription]s alive for the direct/proxy swap.
   Future<void> disconnectSocketsOnly() async {

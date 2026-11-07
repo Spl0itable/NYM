@@ -30,6 +30,8 @@
         closedNotice: 'This poll is closed.',
         botRefused: "Polls aren't available in the Nymbot chat.",
         sendFailed: "Couldn't send the poll. Try again.",
+        hardcoreVoteRefused: 'Voting in group polls is off in hardcore mode, since your key changes after every message.',
+        hardcoreCloseRefused: 'Closing polls is off in hardcore mode, since your key changes after every message.',
     });
 
     const RX_ID = /^[0-9a-f]{64}$/;

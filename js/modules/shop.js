@@ -181,14 +181,15 @@ Object.assign(NYM.prototype, {
             }
             return this.botAnonRequest(action, extra, opts);
         }
-        if (this.pubkey) {
+        const as = (opts && opts.as) || (typeof this._botRunAsFor === 'function' ? this._botRunAsFor(extra) : null);
+        if (this.pubkey && !as) {
             try {
                 await this._ensureApiSocket();
                 return await this._apiSocketSend(action, extra, { raw: true, timeout: opts && opts.timeout });
             } catch (_) { /* fall back to HTTP */ }
         }
-        const body = Object.assign({ action, pubkey: this.pubkey }, extra || {});
-        body.auth = await this._signBotAuth(action, 'bot', await this._authPayloadHash(body));
+        const body = Object.assign({ action, pubkey: as ? as.pubkey : this.pubkey }, extra || {});
+        body.auth = await this._signBotAuth(action, 'bot', await this._authPayloadHash(body), as);
         const resp = await this._edgeFetch(`https://${apiHost}/api/bot`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

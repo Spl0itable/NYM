@@ -5225,7 +5225,8 @@ body.light-mode input.form-range[type="range"] {
     .user-item,
     .ssk-channel,
     .ssk-pm,
-    .ssk-nym {
+    .ssk-nym,
+    .sb-frow {
         min-height: 44px;
     }
 

@@ -1,6 +1,8 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import 'nym_svg_bytes.dart';
+
 /// The PWA's inline-SVG icons verbatim, rendered via [NymSvgIcon] tinted through `currentColor`.
 class NymIcons {
   NymIcons._();
@@ -662,11 +664,10 @@ class NymSvgIcon extends StatelessWidget {
     return Center(
       widthFactor: 1,
       heightFactor: 1,
-      child: SvgPicture.string(
-        svg,
+      child: SvgPicture(
+        NymSvgLoader(svg, color: color),
         width: size,
         height: size,
-        theme: SvgTheme(currentColor: color),
       ),
     );
   }

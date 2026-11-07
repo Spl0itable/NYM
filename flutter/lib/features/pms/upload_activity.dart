@@ -70,7 +70,7 @@ class UploadActivity {
         ['typing', status],
         if (status == 'start' && isKind(activity)) ['activity', activity!],
         [wireTag, channel],
-        ['n', nym],
+        if (nym.isNotEmpty) ['n', nym],
       ];
 
   static UploadActivitySignal? decode(Object? tags) {

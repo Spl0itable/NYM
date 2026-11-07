@@ -915,6 +915,8 @@ async function handlePanicAction(context, body) {
 // Public Nostr kind 0 profile mirror, stored as the signed event so clients can verify and reconcile it.
 var PROFILE_MAX_EVENT = 64 * 1024;
 
+var PROFILE_FUTURE_SKEW_S = 600;
+
 function profileIsValidEvent(ev, pubkey) {
   try {
     if (!ev || typeof ev !== "object") return false;
@@ -998,9 +1000,11 @@ async function handleProfileAction(context, body) {
     var ev = body.event;
     if (!profileIsValidEvent(ev, userPubkey)) return json({ error: "Invalid profile event." }, 400);
     if (JSON.stringify(ev).length > PROFILE_MAX_EVENT) return json({ error: "Profile too large." }, 413);
+    var profileNowS = Math.floor(Date.now() / 1000);
+    if ((ev.created_at || 0) > profileNowS + PROFILE_FUTURE_SKEW_S) return json({ error: "Profile event is dated in the future." }, 400);
     try {
       var prev = await env.DB_PROFILES.prepare("SELECT created_at, updated_at FROM profiles WHERE pubkey = ?").bind(userPubkey).first();
-      if (prev && (prev.created_at || 0) >= (ev.created_at || 0)) {
+      if (prev && (prev.created_at || 0) >= (ev.created_at || 0) && (prev.created_at || 0) <= profileNowS + PROFILE_FUTURE_SKEW_S) {
         return json({ ok: true, updatedAt: prev.updated_at || 0, stale: true });
       }
     } catch (e) { }

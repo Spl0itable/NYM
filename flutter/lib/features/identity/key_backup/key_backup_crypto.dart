@@ -9,6 +9,7 @@ import '../../../core/crypto/keys.dart';
 import '../../../core/crypto/nip44.dart' as nip44;
 import '../../../core/crypto/pq.dart' as pq;
 import '../pq_root.dart';
+import '../../../core/utils/isolate_gate.dart';
 
 const String kKeyBackupFormat = 'nym-key-backup-v1';
 const int kKeyBackupIterations = 600000;
@@ -57,7 +58,7 @@ Future<Uint8List> deriveBackupKey(String pin, Uint8List salt) {
   if (!isValidBackupPin(pin)) {
     return Future.error(ArgumentError('PIN must be 4 to 8 digits'));
   }
-  return compute(_deriveInIsolate, <Object>[pin, Uint8List.fromList(salt)]);
+  return gatedCompute(_deriveInIsolate, <Object>[pin, Uint8List.fromList(salt)]);
 }
 
 class BackupSecret {

@@ -290,6 +290,7 @@ Object.assign(NYM.prototype, {
             cancel();
             pressTimer = setTimeout(() => {
                 pressTimer = null;
+                if (window.NymChatNav && window.NymChatNav.pinGestureLocks(this._pinG)) return;
                 const items = this._buildSidebarMenuItems(itemEl);
                 if (!items.length) return;
                 fired = true;

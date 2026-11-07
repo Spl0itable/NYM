@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -38,6 +39,7 @@ import '../../features/settings/settings_screen.dart';
 import '../../features/shop/shop_modal.dart';
 import '../../models/channel.dart';
 import '../../models/group.dart';
+import '../../models/message.dart';
 import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -63,6 +65,9 @@ import 'row_preview.dart';
 import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
 import 'sidebar_rows.dart';
+import 'public_stream_rows.dart';
+import '../../features/sidebar/public_stream.dart';
+import '../../features/sidebar/sidebar_layout.dart';
 import 'sidebar_skeleton.dart';
 import '../common/list_empty_note.dart';
 import 'user_list_item.dart';
@@ -72,6 +77,11 @@ import 'unread_pill.dart';
 import '../common/nym_field.dart';
 import '../common/nym_tooltip.dart';
 import '../../core/theme/nym_a11y.dart';
+import '../../features/sidebar_folders/folders.dart';
+import '../../features/sidebar_folders/folders_providers.dart';
+import 'sidebar_folders_ui.dart';
+
+part 'sidebar_folder_section.dart';
 
 enum _SectionId { channels, pms, nyms }
 
@@ -122,8 +132,6 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
   final Set<_SectionId> _collapsed = {};
 
-  late List<_SectionId> _order;
-
   List<ChatView> _navOrder = const [];
 
   void _publishNavOrder(List<ChatView> next) {
@@ -166,13 +174,23 @@ class _SidebarState extends ConsumerState<Sidebar> {
   final Map<Key, (Object, Widget)> _channelMemo = {};
   final Map<Key, (Object, Widget)> _pmMemo = {};
   final Map<Key, (Object, Widget)> _nymMemo = {};
+  final Map<Key, (Object, Widget)> _streamMemo = {};
 
   @visibleForTesting
   Map<String, int> get debugRowMemoCounts => {
         'channel': _channelMemo.length,
         'pm': _pmMemo.length,
         'nym': _nymMemo.length,
+        'stream': _streamMemo.length,
       };
+
+  final GlobalKey _psHead = GlobalKey();
+  final ValueNotifier<int> _psPill = ValueNotifier(0);
+  bool _psScrolled = false;
+  bool _psVisible = false;
+  int _psPending = 0;
+  bool _psFrame = false;
+  bool _psRelease = false;
 
   // Skeleton rows are dropped after an 8s safety timeout even if no content arrives.
   bool _skelTimedOut = false;
@@ -181,7 +199,6 @@ class _SidebarState extends ConsumerState<Sidebar> {
   @override
   void initState() {
     super.initState();
-    _order = List.of(_SectionId.values);
     _skelTimer = Timer(const Duration(seconds: 8), () {
       if (mounted) setState(() => _skelTimedOut = true);
     });
@@ -196,6 +213,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
     _skelTimer?.cancel();
     _rowClock?.cancel();
     _scroll.dispose();
+    _psPill.dispose();
     super.dispose();
   }
 
@@ -210,23 +228,6 @@ class _SidebarState extends ConsumerState<Sidebar> {
     for (final id in _decodeIds(collapsedRaw)) {
       final s = _SectionIdName.fromId(id);
       if (s != null) _collapsed.add(s);
-    }
-
-    // Missing sections are appended in their default order.
-    final orderRaw = kv.getString(StorageKeys.sidebarSectionOrder);
-    final stored = _decodeIds(orderRaw)
-        .map(_SectionIdName.fromId)
-        .whereType<_SectionId>()
-        .toList();
-    if (stored.isNotEmpty) {
-      final next = <_SectionId>[];
-      for (final s in stored) {
-        if (!next.contains(s)) next.add(s);
-      }
-      for (final s in _SectionId.values) {
-        if (!next.contains(s)) next.add(s);
-      }
-      _order = next;
     }
   }
 
@@ -254,13 +255,6 @@ class _SidebarState extends ConsumerState<Sidebar> {
         );
   }
 
-  void _persistOrder() {
-    ref.read(keyValueStoreProvider).setString(
-          StorageKeys.sidebarSectionOrder,
-          jsonEncode(_order.map((s) => s.id).toList()),
-        );
-  }
-
   void _toggleCollapse(_SectionId s) {
     setState(() {
       if (!_collapsed.remove(s)) _collapsed.add(s);
@@ -274,15 +268,111 @@ class _SidebarState extends ConsumerState<Sidebar> {
   }
 
   void _moveSection(_SectionId s, int delta) {
-    final i = _order.indexOf(s);
-    final j = i + delta;
-    if (i < 0 || j < 0 || j >= _order.length) return;
-    setState(() {
-      _order
-        ..removeAt(i)
-        ..insert(j, s);
+    final layout = ref.read(sidebarFolderLayoutProvider);
+    if (layout.ready && layout.tokens.any((t) => t.startsWith('f:'))) {
+      folderMoveToken(ref, s.id, delta);
+      return;
+    }
+    ref.read(sidebarSectionOrderProvider.notifier).move(s.id, delta);
+  }
+
+  void _psTick() => ref.read(publicStreamTickProvider.notifier).state++;
+
+  void _psSchedule() {
+    if (_psFrame) return;
+    _psFrame = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _psFrame = false;
+      if (!mounted) return;
+      if (_psRelease) {
+        _psRelease = false;
+        _psTick();
+      }
+      _psPill.value = _psVisible ? _psPending : 0;
     });
-    _persistOrder();
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  void _psOnLayout(double scrollOffset, double paintExtent) {
+    final scrolled = psIsHeld(headTop: -scrollOffset, viewTop: 0);
+    final visible = paintExtent > 0;
+    ref.read(publicStreamPagerProvider).scrolled = scrolled;
+    if (scrolled == _psScrolled && visible == _psVisible) return;
+    if (_psScrolled && !scrolled && ref.read(publicStreamPagerProvider).hold != null) {
+      _psRelease = true;
+    }
+    _psScrolled = scrolled;
+    _psVisible = visible;
+    _psSchedule();
+  }
+
+  void _psOnPointer(bool down) {
+    ref.read(publicStreamPagerProvider).pointer = down;
+    if (!down && ref.read(publicStreamPagerProvider).hold != null) _psTick();
+  }
+
+  void _psToHead() {
+    final ctx = _psHead.currentContext;
+    if (ctx != null) Scrollable.ensureVisible(ctx);
+  }
+
+  void _psShowNew() {
+    final pager = ref.read(publicStreamPagerProvider);
+    pager.hold = null;
+    pager.release = true;
+    _psToHead();
+    _psTick();
+  }
+
+  void _psMore(PsButton b) {
+    final pager = ref.read(publicStreamPagerProvider);
+    pager.shown = b.next;
+    if (b.kind == 'less') {
+      pager.hold = null;
+      pager.release = true;
+      _psToHead();
+    }
+    _psTick();
+  }
+
+  void _psOpen(String key, String id) {
+    Message? msg;
+    for (final m in ref.read(appStateProvider).messages[key] ?? const <Message>[]) {
+      if (m.id == id) msg = m;
+    }
+    if (msg == null) return;
+    if (ref.read(meshScreenOpenProvider)) {
+      ref.read(meshScreenOpenProvider.notifier).state = false;
+    }
+    openSearchHit(ref.read, key, msg);
+    widget.onItemSelected?.call();
+  }
+
+  Widget _streamRow(PsRow<Message> r, PsParts text, bool hide, double textSize,
+      int i18n) {
+    final m = r.m;
+    final tag = psTagLabel(r.key.substring(1));
+    final ts = m.ms > 0 ? m.ms : m.createdAt * 1000;
+    final key = ValueKey('ps-${r.id}');
+    return _memoRow(
+      _streamMemo,
+      key,
+      (r.id, text, m.author, m.pubkey, ts, m.isOwn, hide, textSize, i18n, tag),
+      () => PublicStreamRow(
+        key: key,
+        id: r.id,
+        storageKey: r.key,
+        tag: tag,
+        author: m.author,
+        pubkey: m.pubkey,
+        parts: text,
+        ts: ts,
+        own: m.isOwn,
+        hide: hide,
+        onTap: () => _psOpen(r.key, r.id),
+        onPointer: _psOnPointer,
+      ),
+    );
   }
 
   Widget? _frozen;
@@ -423,19 +513,42 @@ class _SidebarState extends ConsumerState<Sidebar> {
   }
 
   void _syncNav() {
-    final pmOnly = ref.read(settingsProvider).groupChatPMOnlyMode;
+    final pmOnly = ref.read(settingsProvider).groupChatPMOnlyMode ||
+        ref.read(settingsProvider).sidebarChannelsMode == 'stream';
     final channels = ref.read(sidebarChannelRowsProvider).rows;
     final pms = ref.read(sidebarPmRowsProvider).rows;
-    _publishNavOrder([
-      for (final sec in _order)
-        if (sec == _SectionId.channels && !pmOnly)
-          for (final r in channels) ChatView.channel(r.item.key)
-        else if (sec == _SectionId.pms)
-          for (final r in pms)
-            r.item.group != null
-                ? ChatView.group(r.item.group!.id)
-                : ChatView.pm(r.item.pm!.pubkey),
-    ]);
+    final slots = ref.read(sidebarFolderLayoutProvider).tokens;
+    final split = ref.read(sidebarFolderSplitProvider);
+    final closed = ref.read(sidebarFolderCollapsedProvider);
+    ChatView pmView(SidebarPmEntry e) =>
+        e.group != null ? ChatView.group(e.group!.id) : ChatView.pm(e.pm!.pubkey);
+    final out = <ChatView>[];
+    final seen = <String>{};
+    void add(ChatView v) {
+      if (seen.add(v.storageKey)) out.add(v);
+    }
+
+    for (final t in slots) {
+      if (t.startsWith('f:')) {
+        final fid = t.substring(2);
+        if (closed.contains(fid)) continue;
+        for (final r in split.folders[fid]?.rows.rows ?? const <SidebarRow<Object>>[]) {
+          final item = r.item;
+          add(item is ChannelEntry
+              ? ChatView.channel(item.key)
+              : pmView(item as SidebarPmEntry));
+        }
+      } else if (t == 'channels' && !pmOnly) {
+        for (final r in channels) {
+          add(ChatView.channel(r.item.key));
+        }
+      } else if (t == 'pms') {
+        for (final r in pms) {
+          add(pmView(r.item));
+        }
+      }
+    }
+    _publishNavOrder(out);
   }
 
   void _ensurePmProfiles() {
@@ -455,7 +568,24 @@ class _SidebarState extends ConsumerState<Sidebar> {
     final chatLock = ref.read(chatLockProvider);
     final lockShown =
         ref.watch(chatLockBadgesProvider.select((b) => b.shown));
+    final stream = settings.sidebarChannelsMode == 'stream';
+    ref.listen(settingsProvider.select((s) => s.sidebarChannelsMode),
+        (prev, next) {
+      if (prev == next) return;
+      ref.read(publicStreamPagerProvider).reset();
+      _psTick();
+      _syncNav();
+      if (next == 'stream' && (_channelSearch || _channelTerm.isNotEmpty)) {
+        setState(() {
+          _channelSearch = false;
+          _channelTerm = '';
+        });
+      }
+    });
+    final slots = ref.watch(sidebarFolderLayoutProvider).tokens;
     ref.listen(sidebarChannelRowsProvider, (_, _) => _syncNav());
+    ref.listen(sidebarFolderSplitProvider, (_, _) => _syncNav());
+    ref.listen(sidebarFolderCollapsedProvider, (_, _) => _syncNav());
     ref.listen(sidebarPmRowsProvider, (_, _) {
       _ensurePmProfiles();
       _syncNav();
@@ -554,6 +684,67 @@ class _SidebarState extends ConsumerState<Sidebar> {
               },
             ),
         ],
+      );
+    }
+
+    Widget streamRows(BuildContext context, WidgetRef ref) {
+      final flag = ref.watch(sidebarChannelRowsProvider.select((d) => d.flag));
+      final c = context.nym;
+      if (!_skelTimedOut && !flag) {
+        _streamMemo.clear();
+        return SliverList.list(children: [
+          for (final f in const [0.70, 0.42, 0.50, 0.58])
+            SidebarSkeletonRow.channel(barWidthFactor: f),
+        ]);
+      }
+      ref.watch(publicStreamViewProvider.select((v) => v.sig));
+      final hide = ref.read(settingsProvider).hidePreviews;
+      final view = ref.read(publicStreamViewProvider);
+      final page = view.page;
+      if (_psPending != page.pending) {
+        _psPending = page.pending;
+        _psSchedule();
+      }
+      final ids = <Key>[for (final r in page.rows) ValueKey('ps-${r.id}')];
+      _trimMemo(_streamMemo, ids);
+      final b = page.button;
+      return PublicStreamProbe(
+        onLayout: _psOnLayout,
+        sliver: SliverSemantics(
+          key: const ValueKey('ps-list'),
+          container: true,
+          explicitChildNodes: true,
+          label: tr('Public stream, newest first, read only'),
+          sliver: SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            sliver: _rowsSliver(
+              keys: ids,
+              rowAt: (i) =>
+                  _streamRow(page.rows[i], view.texts[i], hide, textSize, i18n),
+              trailing: [
+                if (b != null)
+                  KeyedSubtree(
+                    key: const ValueKey('ps-more'),
+                    child: _ViewMoreButton(
+                      more: b.kind == 'less' ? 0 : b.n,
+                      stepMore: b.kind == 'show',
+                      onTap: () => _psMore(b),
+                    ),
+                  ),
+                if (page.rows.isEmpty)
+                  Padding(
+                    key: const ValueKey('ps-note'),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    child: Text(
+                      tr('No public messages in the last 24 hours.'),
+                      style: TextStyle(fontSize: NymType.sm, color: c.textDim),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
       );
     }
 
@@ -690,12 +881,20 @@ class _SidebarState extends ConsumerState<Sidebar> {
           return _NavSection(
             id: const ValueKey('section-channels'),
             sectionKey: TutorialTargets.keyFor(TutorialTarget.channelList),
-            title: tr('Public Channels'),
+            title: stream ? tr('Public Stream') : tr('Public Channels'),
+            headerKey: _psHead,
+            showSearch: !stream,
+            below: _PublicModeControl(
+              mode: settings.sidebarChannelsMode,
+              onChanged: (m) => ref
+                  .read(settingsProvider.notifier)
+                  .setSidebarChannelsMode(m),
+            ),
             open: !_collapsed.contains(s),
-            searching: _channelSearch,
+            searching: _channelSearch && !stream,
             reorderMode: _reorderMode,
-            canMoveUp: _order.indexOf(s) > 0,
-            canMoveDown: _order.indexOf(s) < _order.length - 1,
+            canMoveUp: slots.indexOf(s.id) > 0,
+            canMoveDown: slots.indexOf(s.id) < slots.length - 1,
             onMoveUp: () => _moveSection(s, -1),
             onMoveDown: () => _moveSection(s, 1),
             onToggleOpen: () => _toggleCollapse(s),
@@ -716,7 +915,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
             ),
             searchHint: tr('Search channels...'),
             searchTooltip: tr('Search channels'),
-            body: _SidebarLive(builder: channelRows),
+            body: _SidebarLive(builder: stream ? streamRows : channelRows),
           );
         case _SectionId.pms:
           return _NavSection(
@@ -726,8 +925,8 @@ class _SidebarState extends ConsumerState<Sidebar> {
             open: !_collapsed.contains(s),
             searching: _pmSearch,
             reorderMode: _reorderMode,
-            canMoveUp: _order.indexOf(s) > 0,
-            canMoveDown: _order.indexOf(s) < _order.length - 1,
+            canMoveUp: slots.indexOf(s.id) > 0,
+            canMoveDown: slots.indexOf(s.id) < slots.length - 1,
             onMoveUp: () => _moveSection(s, -1),
             onMoveDown: () => _moveSection(s, 1),
             onToggleOpen: () => _toggleCollapse(s),
@@ -781,8 +980,8 @@ class _SidebarState extends ConsumerState<Sidebar> {
             searching: _nymSearch,
             reorderMode: _reorderMode,
             isUserList: true,
-            canMoveUp: _order.indexOf(s) > 0,
-            canMoveDown: _order.indexOf(s) < _order.length - 1,
+            canMoveUp: slots.indexOf(s.id) > 0,
+            canMoveDown: slots.indexOf(s.id) < slots.length - 1,
             onMoveUp: () => _moveSection(s, -1),
             onMoveDown: () => _moveSection(s, 1),
             onToggleOpen: () => _toggleCollapse(s),
@@ -826,7 +1025,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
               },
             ),
           ),
-          child: Scrollbar(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Scrollbar(
             controller: _scroll,
             child: CustomScrollView(
               controller: _scroll,
@@ -851,14 +1053,53 @@ class _SidebarState extends ConsumerState<Sidebar> {
                                 child: _SidebarActions(
                                     onItemSelected: widget.onItemSelected))),
                   ),
-                for (final s in _order)
-                  if (!(settings.groupChatPMOnlyMode &&
-                      s == _SectionId.channels))
+                for (final t in slots)
+                  if (t.startsWith('f:'))
+                    _FolderSection(
+                      key: ValueKey('folder-sec-${t.substring(2)}'),
+                      fid: t.substring(2),
+                      reorderMode: _reorderMode,
+                      canMoveUp: slots.indexOf(t) > 0,
+                      canMoveDown: slots.indexOf(t) < slots.length - 1,
+                      onMove: (d) => folderMoveToken(ref, t, d),
+                      onHold: _toggleReorderMode,
+                      textSize: textSize,
+                      i18n: i18n,
+                      selfPubkey: selfPubkey,
+                      select: select,
+                      onItemSelected: widget.onItemSelected,
+                    )
+                  else if (_SectionIdName.fromId(t) case final s?
+                      when !(settings.groupChatPMOnlyMode &&
+                          s == _SectionId.channels))
                     sectionFor(s),
                 const SliverToBoxAdapter(
                     child: SizedBox(height: NymSpace.s3)),
               ],
             ),
+          ),
+              ),
+              if (stream)
+                Positioned(
+                  top: 4,
+                  left: 0,
+                  right: 0,
+                  child: ValueListenableBuilder<int>(
+                    valueListenable: _psPill,
+                    builder: (context, n, _) {
+                      final l = psPillLabel(n);
+                      if (l == null) return const SizedBox.shrink();
+                      return Center(
+                        child: PublicStreamPill(
+                          text: tr(l.template,
+                              {if (n > 1) 'n': _abbreviateNumber(n)}),
+                          onTap: _psShowNew,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
           ),
         ),
             ),
@@ -929,6 +1170,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
                   ),
           ),
           const SizedBox(width: NymSpace.s2),
+          if (_reorderMode && ref.watch(sidebarFoldersProvider).ready) ...[
+            _NewFolderButton(
+              onTap: () => unawaited(folderNew(context, ref, picker: true)),
+            ),
+            const SizedBox(width: NymSpace.s1),
+          ],
           _editButton(context),
         ],
       ),
@@ -1830,6 +2077,112 @@ class _NavTitleText extends StatelessWidget {
   }
 }
 
+class _PublicModeControl extends StatefulWidget {
+  const _PublicModeControl({required this.mode, required this.onChanged});
+
+  final String mode;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_PublicModeControl> createState() => _PublicModeControlState();
+}
+
+class _PublicModeControlState extends State<_PublicModeControl> {
+  final Map<String, FocusNode> _nodes = {
+    for (final m in kPsModes) m: FocusNode(debugLabel: 'ps-mode-$m'),
+  };
+
+  @override
+  void dispose() {
+    for (final n in _nodes.values) {
+      n.dispose();
+    }
+    super.dispose();
+  }
+
+  void _step(int d) {
+    final i = kPsModes.indexOf(widget.mode);
+    final next = kPsModes[(i + d + kPsModes.length) % kPsModes.length];
+    widget.onChanged(next);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _nodes[next]?.requestFocus();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final big = context.largeTouchTargets;
+    return Semantics(
+      key: const ValueKey('ps-mode-group'),
+      container: true,
+      explicitChildNodes: true,
+      label: tr('Public section view'),
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.arrowLeft): () => _step(-1),
+          const SingleActivator(LogicalKeyboardKey.arrowUp): () => _step(-1),
+          const SingleActivator(LogicalKeyboardKey.arrowRight): () => _step(1),
+          const SingleActivator(LogicalKeyboardKey.arrowDown): () => _step(1),
+        },
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(0, 2, 0, 6),
+          child: Row(
+            children: [
+              for (final m in kPsModes) ...[
+                if (m != kPsModes.first) const SizedBox(width: 4),
+                Expanded(
+                  child: Builder(builder: (context) {
+                    final on = m == widget.mode;
+                    final label = m == 'list' ? tr('Channel list') : tr('Stream');
+                    return Semantics(
+                      key: ValueKey('ps-mode-$m'),
+                      inMutuallyExclusiveGroup: true,
+                      checked: on,
+                      label: label,
+                      onTap: () => widget.onChanged(m),
+                      excludeSemantics: true,
+                      child: Material(
+                        color: on ? c.primaryA(0.12) : Colors.transparent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: NymRadius.rxs,
+                          side: BorderSide(
+                              color: on ? c.primaryA(0.5) : c.glassBorder),
+                        ),
+                        child: InkWell(
+                          focusNode: _nodes[m],
+                          canRequestFocus: on,
+                          borderRadius: NymRadius.rxs,
+                          onTap: () => widget.onChanged(m),
+                          child: Container(
+                            constraints:
+                                BoxConstraints(minHeight: big ? 44 : 32),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            alignment: Alignment.center,
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: on ? c.text : c.textDim),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _NavSection extends StatelessWidget {
   const _NavSection({
     required this.id,
@@ -1852,6 +2205,9 @@ class _NavSection extends StatelessWidget {
     this.leadingIcon,
     this.titleText,
     this.isUserList = false,
+    this.showSearch = true,
+    this.below,
+    this.headerKey,
   });
 
   final Key id;
@@ -1874,6 +2230,9 @@ class _NavSection extends StatelessWidget {
   final VoidCallback onMoveDown;
   final Widget? leadingIcon;
   final bool isUserList;
+  final bool showSearch;
+  final Widget? below;
+  final Key? headerKey;
 
   @override
   Widget build(BuildContext context) {
@@ -1886,6 +2245,8 @@ class _NavSection extends StatelessWidget {
     final header = Padding(
       key: id,
       padding: pad.copyWith(bottom: 0),
+      child: KeyedSubtree(
+        key: headerKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1910,12 +2271,14 @@ class _NavSection extends StatelessWidget {
                     leadingIcon!,
                     SizedBox(width: context.largeTouchTargets ? 12 : 10),
                   ],
-                  _MiniIcon(
-                    svg: NymIcons.search,
-                    tooltip: searchTooltip,
-                    onTap: onToggleSearch,
-                  ),
-                  SizedBox(width: context.largeTouchTargets ? 12 : 10),
+                  if (showSearch) ...[
+                    _MiniIcon(
+                      svg: NymIcons.search,
+                      tooltip: searchTooltip,
+                      onTap: onToggleSearch,
+                    ),
+                    SizedBox(width: context.largeTouchTargets ? 12 : 10),
+                  ],
                   _MiniIcon(
                     svg: open ? NymIcons.chevronDown : NymIcons.chevronRight,
                     tooltip:
@@ -1926,6 +2289,7 @@ class _NavSection extends StatelessWidget {
               ),
             ),
           ),
+          if (reorderMode && below != null) below!,
           if (open && searching)
             Padding(
               padding: const EdgeInsets.fromLTRB(0, 0, 0, 10),
@@ -1935,6 +2299,7 @@ class _NavSection extends StatelessWidget {
               ),
             ),
         ],
+      ),
       ),
     );
     final group = SliverMainAxisGroup(
@@ -2110,10 +2475,12 @@ class _MiniIcon extends StatefulWidget {
     required this.svg,
     this.tooltip,
     required this.onTap,
+    this.focusable = true,
   });
   final String svg;
   final String? tooltip;
   final VoidCallback onTap;
+  final bool focusable;
 
   @override
   State<_MiniIcon> createState() => _MiniIconState();
@@ -2153,6 +2520,7 @@ class _MiniIconState extends State<_MiniIcon> {
         ),
       ),
     );
+    if (!widget.focusable) return HitSlop(child: ExcludeSemantics(child: btn));
     return HitSlop(
       child: NymFocusable(
         onActivate: widget.onTap,
@@ -2221,6 +2589,7 @@ class _GroupListItem extends ConsumerWidget {
     required this.selfPubkey,
     required this.users,
     required this.onTap,
+    this.reorder = true,
   });
 
   final Group group;
@@ -2230,10 +2599,12 @@ class _GroupListItem extends ConsumerWidget {
   final String selfPubkey;
   final Map<String, User> users;
   final VoidCallback onTap;
+  final bool reorder;
 
   void _leaveMenu(BuildContext context, WidgetRef ref, Offset at) {
     showSidebarQuickMenu(context, at, groupId: group.id, [
       ...chatNavSidebarItems(ref, 'group-${group.id}'),
+      ...folderSidebarItems(context, ref, 'group-${group.id}', at: at),
       ...chatLockSidebarItems(ref, 'group-${group.id}'),
       ...chatToolSidebarItems(context, 'group-${group.id}'),
       SidebarQuickMenuItem(
@@ -2405,6 +2776,7 @@ class _GroupListItem extends ConsumerWidget {
         ),
       ),
     );
+    if (!reorder) return row;
     return PinnedReorder(
       storageKey: 'group-${group.id}',
       onHoldMenu: (pos) {

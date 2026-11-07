@@ -5,7 +5,6 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../features/globe/geo_projection.dart' show geohashBounds;
@@ -15,6 +14,7 @@ import '../../models/channel.dart';
 import '../../services/api/api_client.dart';
 import '../../services/storage/key_value_store.dart';
 import '../../state/settings_provider.dart';
+import '../../core/utils/isolate_gate.dart';
 
 /// Bound on the persisted map; entries are ~30 bytes.
 const int kGeohashPlaceMax = 500;
@@ -97,7 +97,7 @@ class GeohashPlaceCache {
     return _worldFeatures ??= () async {
       try {
         final jsonStr = await rootBundle.loadString(kWorldTopoAsset);
-        return await compute(decodeWorldTopoJson, jsonStr);
+        return await gatedCompute(decodeWorldTopoJson, jsonStr);
       } catch (_) {
         return const <GeoFeature>[];
       }

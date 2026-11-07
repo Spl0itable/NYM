@@ -51,6 +51,12 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
     _start(_target);
   }
 
+  @override
+  void didUpdateWidget(covariant MessageTranslation oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.content != widget.content) _start(_target);
+  }
+
   void _start(String target) {
     final plain = TranslateService.stripQuotes(widget.content);
     _seed = ref.read(translationCacheProvider).settled(plain, target);
@@ -91,6 +97,7 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
         ),
       ),
       child: FutureBuilder<TranslationResult>(
+        key: ObjectKey(future),
         future: future,
         initialData: _seed,
         builder: (context, snap) {

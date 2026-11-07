@@ -6,6 +6,7 @@ import '../../models/message.dart';
 import '../../models/nostr_event.dart';
 import '../../services/nostr/event_mapper.dart';
 import '../nymbot/bot_runs.dart' show botReplyToFromTags;
+import '../sync/sync_merge.dart' show marksMerge;
 import '../p2p/p2p_models.dart';
 import 'pm_support_tokens.dart';
 import 'upload_activity.dart';
@@ -89,6 +90,79 @@ class PmLogic {
   /// Wire-level key (`pm-<sorted pubkeys>`) for cross-device dedup; not the store key.
   static String pmWireKey(String self, String other) =>
       getPMConversationKey(self, other);
+
+  static final RegExp _readPeerKey = RegExp(r'^pm-([0-9a-f]{64})$');
+  static final RegExp _readPairKey =
+      RegExp(r'^pm-([0-9a-f]{64})-([0-9a-f]{64})$');
+
+  static String readMarkToWire(String key, String self) {
+    final m = _readPeerKey.firstMatch(key);
+    if (m == null || !RegExp(r'^[0-9a-f]{64}$').hasMatch(self)) return key;
+    return pmWireKey(self, m.group(1)!);
+  }
+
+  static String readMarkFromWire(String key, String self) {
+    final m = _readPairKey.firstMatch(key);
+    if (m == null || self.isEmpty) return key;
+    if (m.group(1) == self) return pmStorageKey(m.group(2)!);
+    if (m.group(2) == self) return pmStorageKey(m.group(1)!);
+    return key;
+  }
+
+  static String threadReadToWire(String key, String self) {
+    final i = key.indexOf('|');
+    return i < 0 ? key : readMarkToWire(key.substring(0, i), self) + key.substring(i);
+  }
+
+  static String threadReadFromWire(String key, String self) {
+    final i = key.indexOf('|');
+    return i < 0
+        ? key
+        : readMarkFromWire(key.substring(0, i), self) + key.substring(i);
+  }
+
+  static Map<String, int> threadReadsToWire(Map<String, int> marks, String self) {
+    final out = <String, int>{};
+    marks.forEach((k, v) {
+      final w = threadReadToWire(k, self);
+      if (v > (out[w] ?? 0)) out[w] = v;
+    });
+    return out;
+  }
+
+  static Map<String, num> threadReadsFromWire(Map<dynamic, dynamic> raw, String self) {
+    final out = <String, num>{};
+    raw.forEach((k, v) {
+      if (k is! String || v is! num) return;
+      final t = threadReadFromWire(k, self);
+      if (v > (out[t] ?? 0)) out[t] = v;
+    });
+    return out;
+  }
+
+  static Map<String, int> readMarksToWire(Map<String, int> marks, String self) {
+    final out = <String, int>{};
+    marks.forEach((k, v) {
+      final w = readMarkToWire(k, self);
+      if (v > (out[w] ?? 0)) out[w] = v;
+    });
+    return out;
+  }
+
+  static Map<String, Map<String, Object>> seenMarksToWire(Object? raw, String self) =>
+      _seenMarksMapped(raw, (k) => readMarkToWire(k, self));
+
+  static Map<String, Map<String, Object>> seenMarksFromWire(Object? raw, String self) =>
+      _seenMarksMapped(raw, (k) => readMarkFromWire(k, self));
+
+  static Map<String, Map<String, Object>> _seenMarksMapped(
+      Object? raw, String Function(String key) map) {
+    var out = <String, Map<String, Object>>{};
+    marksMerge(const {}, raw).forEach((k, v) {
+      out = marksMerge(out, {map(k): v});
+    });
+    return out;
+  }
 
   /// Maps a decrypted kind-14 rumor to a PM [Message]; [senderVerified] comes from NIP-59 seal verification.
   static Message? mapPmRumor({

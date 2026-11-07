@@ -32,7 +32,10 @@ class NotificationService {
 
   final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
-  final _payloadStreamController = StreamController<String>.broadcast();
+  late final StreamController<String> _payloadStreamController =
+      StreamController<String>.broadcast(onListen: _releaseEarlyTaps);
+  final List<String> _earlyTaps = <String>[];
+  bool _tapsHeard = false;
   String? _initialPayload;
   int _notificationIdCounter = 0;
   final Random _random = Random();
@@ -40,6 +43,27 @@ class NotificationService {
 
   /// Tap payloads from notifications opened while the app was running.
   Stream<String> get payloadStream => _payloadStreamController.stream;
+
+  void _deliverTap(String payload) {
+    if (_tapsHeard) {
+      _payloadStreamController.add(payload);
+      return;
+    }
+    _earlyTaps.add(payload);
+  }
+
+  void _releaseEarlyTaps() {
+    if (_tapsHeard) return;
+    _tapsHeard = true;
+    final early = List<String>.of(_earlyTaps);
+    _earlyTaps.clear();
+    for (final p in early) {
+      _payloadStreamController.add(p);
+    }
+  }
+
+  @visibleForTesting
+  static void debugDeliverTap(String payload) => _instance._deliverTap(payload);
 
   /// The payload of the notification that launched the app, consumed once.
   String? takeInitialPayload() {
@@ -75,7 +99,7 @@ class NotificationService {
       onDidReceiveNotificationResponse: (NotificationResponse response) {
         final payload = response.payload;
         if (payload != null && payload.isNotEmpty) {
-          _payloadStreamController.add(payload);
+          _deliverTap(payload);
         }
       },
     );
@@ -230,7 +254,15 @@ class NotificationService {
         threadIdentifier: conversationKey,
       );
 
+  @visibleForTesting
+  static int debugClearCount = 0;
+
+  @visibleForTesting
+  static void debugSetLaunchPayload(String? payload) =>
+      _instance._initialPayload = payload;
+
   static Future<void> cancelEverything() async {
+    debugClearCount++;
     if (!isSupported) return;
     try {
       await _instance._notifications.cancelAll();

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
 import 'media_notes.dart';
+import '../../core/utils/isolate_gate.dart';
 
 class CompressedPhoto {
   const CompressedPhoto(this.bytes, this.width, this.height);
@@ -43,7 +44,7 @@ Future<Uint8List?> compressPhoto(Uint8List bytes, String mime,
     double quality = MediaNoteLimits.photoQuality}) async {
   if (!compressibleImageMime(mime)) return null;
   try {
-    final r = await compute(compressPhotoSync,
+    final r = await gatedCompute(compressPhotoSync,
         (bytes: bytes, maxDimension: maxDimension, quality: quality));
     if (r == null || r.bytes.length >= bytes.length) return null;
     return r.bytes;

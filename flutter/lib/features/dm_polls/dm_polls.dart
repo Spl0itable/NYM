@@ -44,6 +44,10 @@ class DmPollStrings {
   static const String closedNotice = 'This poll is closed.';
   static const String botRefused = "Polls aren't available in the Nymbot chat.";
   static const String sendFailed = "Couldn't send the poll. Try again.";
+  static const String hardcoreVoteRefused =
+      'Voting in group polls is off in hardcore mode, since your key changes after every message.';
+  static const String hardcoreCloseRefused =
+      'Closing polls is off in hardcore mode, since your key changes after every message.';
 
   static Map<String, String> toJson() => {
         'header': header,
@@ -57,6 +61,8 @@ class DmPollStrings {
         'closedNotice': closedNotice,
         'botRefused': botRefused,
         'sendFailed': sendFailed,
+        'hardcoreVoteRefused': hardcoreVoteRefused,
+        'hardcoreCloseRefused': hardcoreCloseRefused,
       };
 
   static const List<String> ui = [
@@ -68,6 +74,8 @@ class DmPollStrings {
     closedNotice,
     botRefused,
     sendFailed,
+    hardcoreVoteRefused,
+    hardcoreCloseRefused,
   ];
 }
 

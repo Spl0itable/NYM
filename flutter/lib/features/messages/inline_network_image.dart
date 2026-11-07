@@ -15,6 +15,7 @@ import 'blurred_image.dart';
 import 'cover_resize_image.dart';
 
 import 'pausable_animated_image.dart';
+import '../../widgets/nym_svg_bytes.dart';
 
 bool isAssetImageUrl(String url) => url.startsWith('assets/');
 
@@ -192,7 +193,7 @@ class InlineNetworkImage extends StatefulWidget {
     }
     if (_looksLikeSvg(bytes)) {
       try {
-        final info = await vg.loadPicture(SvgBytesLoader(bytes), null);
+        final info = await NymSvgBytes.gated(() => vg.loadPicture(SvgBytesLoader(bytes), null));
         return _Decoded.svg(info.picture, info.size);
       } catch (_) {
         return null; // The strict compiler rejected it; never paint it.

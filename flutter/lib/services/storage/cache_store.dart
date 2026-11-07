@@ -4,7 +4,6 @@ import 'dart:typed_data';
 
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show compute;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_sqlcipher/sqflite.dart';
@@ -16,6 +15,7 @@ import '../../models/message.dart';
 import '../../models/user.dart';
 import 'account_scope.dart';
 import 'secure_store.dart';
+import '../../core/utils/isolate_gate.dart';
 
 /// SQLCipher-encrypted mirror of the PWA's IndexedDB `nym-cache`, with the same LRU limits and no app state.
 class CacheStore {
@@ -458,7 +458,7 @@ class CacheStore {
       raw[key] = json;
     }
     if (raw.isEmpty) return {};
-    return compute(decodeMessageStores, raw);
+    return gatedCompute(decodeMessageStores, raw);
   }
 
   /// Wipes the `pms` table when PM caching is disabled.

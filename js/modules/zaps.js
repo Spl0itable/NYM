@@ -899,6 +899,7 @@ Object.assign(NYM.prototype, {
                 return null;
             }
 
+            const zapClaim = (typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null);
             const zapRequest = {
                 kind: 9734,
                 created_at: Math.floor(Date.now() / 1000),
@@ -908,7 +909,7 @@ Object.assign(NYM.prototype, {
                     ['relays', ...this.defaultRelays.slice(0, 5)] // Limit to 5 relays
                 ],
                 content: comment || '',
-                pubkey: this.pubkey
+                pubkey: zapClaim ? zapClaim.pubkey : this.pubkey
             };
 
             if (this.currentZapTarget.messageId) {
@@ -931,7 +932,7 @@ Object.assign(NYM.prototype, {
                 zapRequest.tags.push(['k', '0']);
             }
 
-            const signedEvent = await this.signEvent(zapRequest);
+            const signedEvent = await (zapClaim ? this._signClaimed(zapRequest, zapClaim) : this.signEvent(zapRequest));
             this._lastSignedZapRequest = signedEvent;
 
             return signedEvent;

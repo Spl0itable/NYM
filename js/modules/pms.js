@@ -446,6 +446,8 @@ Object.assign(NYM.prototype, {
     },
 
     async sendNIP17PM(content, recipientPubkey, options = {}) {
+        const claim = options.claim || null;
+        const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
         const nowMs = Date.now();
         const now = Math.floor(nowMs / 1000);
 
@@ -469,7 +471,7 @@ Object.assign(NYM.prototype, {
                 ...(typeof this.quoteTagsForContent === 'function' ? this.quoteTagsForContent(content) : [])
             ],
             content,
-            pubkey: this.pubkey
+            pubkey: me.pubkey
         };
 
         const longPieces = this._botLongPieces(content, recipientPubkey);
@@ -489,12 +491,13 @@ Object.assign(NYM.prototype, {
             return await this._sendAnonBotPM(content, recipientPubkey, options);
         }
 
-        if (this.privkey) {
+        if (me.sk) {
             const NT = window.NostrTools;
             // Ensure at least one announcement lookup, for sends that skip opening the conversation.
             if (typeof this.ensurePqAnnouncement === 'function') {
                 try { await this.ensurePqAnnouncement(recipientPubkey); } catch (_) { }
             }
+            if (claim && !this._claimHolds(claim)) throw new Error('identity changed');
             // See pqPmPlan (pq.js) for why post-quantum replaces rather than accompanies the others.
             const plan = this.pqPmPlan(recipientPubkey);
             const recipientKemPk = plan.kemPk;
@@ -518,16 +521,16 @@ Object.assign(NYM.prototype, {
                         created_at: now,
                         tags: [],
                         content: encoded.content,
-                        pubkey: this.pubkey
+                        pubkey: me.pubkey
                     };
-                    const bitchatWrapped = await this.bitchatWrapEventAsync(bitchatRumor, this.privkey, recipientPubkey, expirationTs);
+                    const bitchatWrapped = await this.bitchatWrapEventAsync(bitchatRumor, me.sk, recipientPubkey, expirationTs);
                     this.sendDMToRelays(['EVENT', bitchatWrapped]);
                     sentWrappedEvents.push(['EVENT', bitchatWrapped]);
                     wrapped = bitchatWrapped;
                     this._recordGiftWrapId(nymMessageId, bitchatWrapped.id);
 
                     if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                        setTimeout(() => { this.publishDeletionEvent(bitchatWrapped.id, 1059); }, 600000);
+                        setTimeout(() => { this.publishDeletionEvent(bitchatWrapped.id, 1059, claim); }, 600000);
                 }
                 }
             }
@@ -535,24 +538,24 @@ Object.assign(NYM.prototype, {
             if (plan.nym) {
                 const lead = longPieces ? await this._botLongLead(rumor, longPieces, async (part) => {
                     const w = recipientKemPk
-                        ? await this.pqWrapForPeerAsync(plan.pq2, part, this.privkey, recipientPubkey, recipientKemPk, expirationTs, supportWrapTags)
-                        : await this.nip59WrapEventAsync(part, this.privkey, recipientPubkey, expirationTs, supportWrapTags);
+                        ? await this.pqWrapForPeerAsync(plan.pq2, part, me.sk, recipientPubkey, recipientKemPk, expirationTs, supportWrapTags)
+                        : await this.nip59WrapEventAsync(part, me.sk, recipientPubkey, expirationTs, supportWrapTags);
                     this.sendDMToRelays(['EVENT', w]);
                     this._recordGiftWrapId(nymMessageId, w.id);
                     this._depositPMEvent(w);
                     return w;
                 }, async (part) => {
-                    const selfKemPk = this.pqSelfKeyFor();
+                    const selfKemPk = claim && claim.sk ? null : this.pqSelfKeyFor();
                     const w = selfKemPk
-                        ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), part, this.privkey, this.pubkey, selfKemPk, expirationTs, supportWrapTags)
-                        : await this.nip59WrapEventAsync(part, this.privkey, this.pubkey, expirationTs, supportWrapTags);
+                        ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), part, me.sk, me.pubkey, selfKemPk, expirationTs, supportWrapTags)
+                        : await this.nip59WrapEventAsync(part, me.sk, me.pubkey, expirationTs, supportWrapTags);
                     this.sendDMToRelays(['EVENT', w]);
                     this._recordGiftWrapId(nymMessageId, w.id);
                     this._archivePMEvent(w);
                 }) : null;
                 const nymWrapped = recipientKemPk
-                    ? await this.pqWrapForPeerAsync(plan.pq2, rumor, this.privkey, recipientPubkey, recipientKemPk, expirationTs, supportWrapTags)
-                    : await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs, supportWrapTags);
+                    ? await this.pqWrapForPeerAsync(plan.pq2, rumor, me.sk, recipientPubkey, recipientKemPk, expirationTs, supportWrapTags)
+                    : await this.nip59WrapEventAsync(rumor, me.sk, recipientPubkey, expirationTs, supportWrapTags);
                 this.sendDMToRelays(['EVENT', nymWrapped]);
                 sentWrappedEvents.push(['EVENT', nymWrapped]);
                 wrapped = nymWrapped;
@@ -563,16 +566,16 @@ Object.assign(NYM.prototype, {
                 this._depositPMEvent(nymWrapped);
 
                 if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                    setTimeout(() => { this.publishDeletionEvent(nymWrapped.id, 1059); }, 600000);
+                    setTimeout(() => { this.publishDeletionEvent(nymWrapped.id, 1059, claim); }, 600000);
                 }
             }
 
-            if (recipientPubkey !== this.pubkey) {
+            if (recipientPubkey !== me.pubkey) {
                 // Post-quantum when possible so the archive isn't the weakest link.
-                const selfKemPk = this.pqSelfKeyFor();
+                const selfKemPk = claim && claim.sk ? null : this.pqSelfKeyFor();
                 const selfWrapped = selfKemPk
-                    ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), rumor, this.privkey, this.pubkey, selfKemPk, expirationTs, supportWrapTags)
-                    : await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs, supportWrapTags);
+                    ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), rumor, me.sk, me.pubkey, selfKemPk, expirationTs, supportWrapTags)
+                    : await this.nip59WrapEventAsync(rumor, me.sk, me.pubkey, expirationTs, supportWrapTags);
                 this.sendDMToRelays(['EVENT', selfWrapped]);
                 this._recordGiftWrapId(nymMessageId, selfWrapped.id);
                 // Archive our self-addressed copy so sent messages restore across devices without the relay echo.
@@ -585,8 +588,8 @@ Object.assign(NYM.prototype, {
             const pmList = this.pmMessages.get(conversationKey);
             pmList.push({
                 id: wrapped.id,
-                author: this.nym,
-                pubkey: this.pubkey,
+                author: me.nym,
+                pubkey: me.pubkey,
                 content,
                 created_at: now,
                 _ms: nowMs,
@@ -2250,16 +2253,21 @@ Object.assign(NYM.prototype, {
     },
 
     pmRestoreFromD1(opts) {
-        if (!this._pmArchiveAllowed()) return Promise.resolve();
+        if (!this._pmArchiveAllowed()) {
+            if (typeof this._noteConvRestore === 'function') this._noteConvRestore('d1');
+            return Promise.resolve();
+        }
         const D = (typeof window !== 'undefined' && window.NymD1Cursor) || null;
         if (!D) return this._pmRestoreCold(this.pubkey);
         const pk = this.pubkey;
         if (this._pmPass && this._pmPass.pk === pk) return this._pmPass.promise;
         if (!(opts && opts.force) && this._pmPassDone && this._pmPassDone.pk === pk
             && D.coalesce(this._pmPassDone.at, Date.now())) return Promise.resolve();
+        this._pmD1Missed = false;
         const promise = this._pmRestorePass(pk).finally(() => {
             if (this._pmPass && this._pmPass.promise === promise) this._pmPass = null;
             this._pmPassDone = { pk, at: Date.now() };
+            if (!this._pmD1Missed && this.pubkey === pk && typeof this._noteConvRestore === 'function') this._noteConvRestore('d1');
             if (typeof this._standaloneNymbotSweep === 'function') this._standaloneNymbotSweep().catch(() => { });
         });
         this._pmPass = { pk, promise };
@@ -2357,6 +2365,7 @@ Object.assign(NYM.prototype, {
                 resp = await this._storageApiStream('pm-get', { after, limit: D.PAGE_LIMIT });
                 await this._readNdjsonStream(resp, (ev) => { events.push(ev); });
             } catch (_) {
+                this._pmD1Missed = true;
                 break;
             }
             if (this.pubkey !== pk) return;
@@ -2556,6 +2565,7 @@ Object.assign(NYM.prototype, {
             await this._readNdjsonStream(resp, (ev) => events.push(ev));
         } catch (_) {
             this._pmD1Loading = false;
+            this._pmD1Missed = true;
             return false;
         }
         if (!hasMore || events.length < limit) this._pmD1NoMore = true;
@@ -2589,9 +2599,10 @@ Object.assign(NYM.prototype, {
     },
 
     async sendPM(content, recipientPubkey, options = {}) {
+        if (!options.claim && typeof this._claimChannelKey === 'function') options = Object.assign({}, options, { claim: this._claimChannelKey() });
         if (this.isVerifiedBot(recipientPubkey) &&
             /^\s*\?(help|commands|balance|buy|clear|transfer|gift|model|anon|git|github)\b/i.test(content || '')) {
-            this._handleBotPM(String(content).trim(), null);
+            Promise.resolve(this._handleBotPM(String(content).trim(), null, null, options.claim)).catch(() => { });
             return true;
         }
         if (typeof this.aiConsentNeededForPM === 'function' && this.aiConsentNeededForPM(content, recipientPubkey)
@@ -2632,8 +2643,9 @@ Object.assign(NYM.prototype, {
             }
 
             const wrapped = await this.sendNIP17PM(content, recipientPubkey, options);
-            this.recordOwnActivity();
+            this.recordOwnActivity('send', options.claim);
             if (this.isVerifiedBot(recipientPubkey)) {
+                if (typeof wrapped === 'string') this._botRunAsSet(wrapped, options.claim);
                 this._handleBotPM(content, typeof wrapped === 'string' ? wrapped : null);
             }
             return !!wrapped;
@@ -2641,11 +2653,12 @@ Object.assign(NYM.prototype, {
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
             const failedId = 'failed-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+            const failedBy = (typeof this._claimSender === 'function' ? this._claimSender(options.claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
             const _nowFail = Math.floor(Date.now() / 1000);
             const failedMsg = {
                 id: failedId,
-                author: this.nym,
-                pubkey: this.pubkey,
+                author: failedBy.nym,
+                pubkey: failedBy.pubkey,
                 content,
                 created_at: _nowFail,
                 _ms: Date.now(),
@@ -2681,7 +2694,20 @@ Object.assign(NYM.prototype, {
         return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
     },
 
-    async _signBotAuth(action, endpoint, payloadHash) {
+    _botRunAsSet(id, claim) {
+        if (!id || !claim || !claim.sk) return;
+        if (!(this._botRunAs instanceof Map)) this._botRunAs = new Map();
+        this._botRunAs.set(String(id).toLowerCase(), claim);
+        while (this._botRunAs.size > 64) this._botRunAs.delete(this._botRunAs.keys().next().value);
+    },
+
+    _botRunAsFor(extra) {
+        if (!(this._botRunAs instanceof Map) || !extra) return null;
+        const id = extra.eventId || extra.replyTo;
+        return id ? this._botRunAs.get(String(id).toLowerCase()) || null : null;
+    },
+
+    async _signBotAuth(action, endpoint, payloadHash, as) {
         endpoint = endpoint || 'bot';
         const apiHost = this._getApiHost();
         const url = apiHost ? `https://${apiHost}/api/${endpoint}` : '';
@@ -2694,7 +2720,7 @@ Object.assign(NYM.prototype, {
         const sensitive = !!MONEY[action] || action === 'clear-history' || action === 'account-purge' || action === 'api-ws';
         const cacheKey = (action || '') + '|' + url;
         if (!(this._botAuthCache instanceof Map)) this._botAuthCache = new Map();
-        if (!sensitive && !payloadHash) {
+        if (!sensitive && !payloadHash && !as) {
             const cached = this._botAuthCache.get(cacheKey);
             // Stay well under the worker's 120s window to avoid edge-of-window rejects.
             if (cached && cached.pubkey === this.pubkey && (nowSec - cached.auth.created_at) < 90) {
@@ -2710,18 +2736,19 @@ Object.assign(NYM.prototype, {
             created_at: nowSec,
             tags,
             content: 'nymbot-pm-auth',
-            pubkey: this.pubkey
+            pubkey: as ? as.pubkey : this.pubkey
         };
+        if (as) return window.NostrTools.finalizeEvent(event, as.sk);
         const auth = await this.signEvent(event);
         if (!sensitive && !payloadHash) this._botAuthCache.set(cacheKey, { pubkey: this.pubkey, auth });
         return auth;
     },
 
-    async _clearBotServerThread() {
+    async _clearBotServerThread(claim) {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return;
-            await this._botMoneyRequest('clear-history', {});
+            await this._botMoneyRequest('clear-history', {}, this._botClaimOpts(claim));
         } catch { /* best effort */ }
     },
 
@@ -2939,7 +2966,11 @@ Object.assign(NYM.prototype, {
         if (this._pmArchiveAllowed() && ownIds.size) await send(ownIds, false);
     },
 
-    _clearBotPMHistory() {
+    _botClaimOpts(claim) {
+        return claim && claim.sk ? { as: claim } : undefined;
+    },
+
+    _clearBotPMHistory(claim) {
         const pubkey = this.verifiedBot && this.verifiedBot.pubkey;
         if (!pubkey) return;
         if (this._botAnonPending()) {
@@ -2948,7 +2979,7 @@ Object.assign(NYM.prototype, {
         }
         const conversationKey = this.getPMConversationKey(pubkey);
         this._setBotPmClearedAt(Math.floor(Date.now() / 1000));
-        this._clearBotServerThread();
+        this._clearBotServerThread(claim);
         this._purgeBotPMArchive(conversationKey);
         // Sync the cleared-at marker so other devices filter archived wraps too.
         if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000, { wanted: true });
@@ -2967,7 +2998,7 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage('Nymbot chat cleared — starting fresh. Earlier messages are no longer used as context.', 'system', { feed: true });
     },
 
-    async _handleBotTransferCommand(trimmed) {
+    async _handleBotTransferCommand(trimmed, claim) {
         const raw = trimmed.replace(/^\?transfer\b/i, '').trim();
         const parts = raw.split(/\s+/).filter(Boolean);
         const confirming = parts.length && /^confirm$/i.test(parts[parts.length - 1]);
@@ -2988,7 +3019,7 @@ Object.assign(NYM.prototype, {
         }
         const targetNym = this.stripPubkeySuffix(this.getNymFromPubkey(targetPubkey)) || targetPubkey.slice(0, 8);
         if (!confirming) {
-            const balance = await this._checkBotCredits(false);
+            const balance = await this._checkBotCredits(false, claim);
             const have = typeof balance === 'number' ? balance : (this._lastBotCredits || 0);
             const havePro = this._lastBotProCredits || 0;
             if ((!have || have <= 0) && havePro <= 0) {
@@ -3004,7 +3035,7 @@ Object.assign(NYM.prototype, {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return;
-            const { status, data } = await this._botMoneyRequest('transfer-credits', { targetPubkey });
+            const { status, data } = await this._botMoneyRequest('transfer-credits', { targetPubkey }, this._botClaimOpts(claim));
             if (status >= 400 || !data || data.error) {
                 this.displaySystemMessage(this.uiText('Transfer failed: {error}', { error: (data && data.error) || this.uiText('request failed') }));
                 return;
@@ -3778,7 +3809,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async _handleBotPM(content, wrapId, heldLong) {
+    async _handleBotPM(content, wrapId, heldLong, claim) {
         // Fold a localized leading command back to English before ?command matching.
         const trimmed = this.canonicalizeCommandInput((content || '').trim());
         this._markBotPMReceipts('delivered');
@@ -3789,7 +3820,7 @@ Object.assign(NYM.prototype, {
         }
         if (/^\?balance\b/i.test(trimmed)) {
             this._markBotPMReceipts('read');
-            this._checkBotCredits(true);
+            this._checkBotCredits(true, claim);
             return;
         }
         if (/^\?buy\b/i.test(trimmed)) {
@@ -3814,12 +3845,12 @@ Object.assign(NYM.prototype, {
         }
         if (/^\?clear\b/i.test(trimmed)) {
             this._markBotPMReceipts('read');
-            this._clearBotPMHistory();
+            this._clearBotPMHistory(claim);
             return;
         }
         if (/^\?transfer\b/i.test(trimmed)) {
             this._markBotPMReceipts('read');
-            this._handleBotTransferCommand(trimmed);
+            this._handleBotTransferCommand(trimmed, claim);
             return;
         }
         if (/^\?gift\b/i.test(trimmed)) {
@@ -3864,6 +3895,7 @@ Object.assign(NYM.prototype, {
         if (cmdAlias) reqExtra.cmdAlias = cmdAlias;
         if (proModel) reqExtra.proModel = proModel.key;
         const own = this._botOwnMessageForWrap(wrapId);
+        if (own && own.nymMessageId) this._botRunAsSet(own.nymMessageId, this._botRunAsFor({ eventId: wrapId }));
         const run = this._botRunStart({
             id: (own && own.nymMessageId) || wrapId,
             eventId: wrapId,
@@ -3895,7 +3927,7 @@ Object.assign(NYM.prototype, {
         await this._handleBotPM(entry.content, entry.wrapId, entry.long || null);
     },
 
-    async _checkBotCredits(display) {
+    async _checkBotCredits(display, claim) {
         try {
             const apiHost = this._getApiHost();
             if (!apiHost) return null;
@@ -3904,7 +3936,7 @@ Object.assign(NYM.prototype, {
                 return null;
             }
             const key = this._botChipKey(typeof this.botAnonReady === 'function' && this.botAnonReady());
-            const { status, data } = await this._botMoneyRequest('balance', {});
+            const { status, data } = await this._botMoneyRequest('balance', {}, this._botClaimOpts(claim));
             if (status >= 400 || !data || data.error) {
                 if (display) this.displaySystemMessage(this.uiText('Nymbot: {error}', { error: (data && data.error) || this.uiText('could not check balance') }));
                 return null;
@@ -4452,7 +4484,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         this.hideAutocomplete();
         this.hideChannelAutocomplete();
         this.hideEmojiAutocomplete();
-        this._focusMessageInput();
+        this._focusMessageInput(true);
     },
 
     loadPMMessages(conversationKey, skipBotWelcome = false) {
@@ -4557,7 +4589,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         }
     },
 
-    async sendEditedPM(newContent, originalMessageId, recipientPubkey, originalNymMessageId) {
+    async sendEditedPM(newContent, originalMessageId, recipientPubkey, originalNymMessageId, claim) {
         try {
             if (!this.connected) throw new Error('Not connected to relay');
             if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(recipientPubkey)) {
@@ -4565,6 +4597,8 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
                 return false;
             }
 
+            if (claim && claim.sk && !this._claimHolds(claim)) return false;
+            const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
             const now = Math.floor(Date.now() / 1000);
             const nymMessageId = this._generateSharedEventId();
 
@@ -4577,13 +4611,13 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
                     ['edit', originalNymMessageId || originalMessageId] // Reference the original message
                 ],
                 content: newContent,
-                pubkey: this.pubkey
+                pubkey: me.pubkey
             };
 
             const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
                 ? now + this.settings.dmTTLSeconds : null;
 
-            if (this.privkey) {
+            if (me.sk) {
                 const NT = window.NostrTools;
                 // Same rule as the original send; see pqPmPlan (pq.js).
                 const plan = this.pqPmPlan(recipientPubkey);
@@ -4591,18 +4625,18 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 
                 if (plan.nym) {
                     const nymWrapped = recipientKemPk
-                        ? await this.pqWrapForPeerAsync(plan.pq2, rumor, this.privkey, recipientPubkey, recipientKemPk, expirationTs)
-                        : await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs);
+                        ? await this.pqWrapForPeerAsync(plan.pq2, rumor, me.sk, recipientPubkey, recipientKemPk, expirationTs)
+                        : await this.nip59WrapEventAsync(rumor, me.sk, recipientPubkey, expirationTs);
                     this.sendDMToRelays(['EVENT', nymWrapped]);
                     this._recordGiftWrapId(nymMessageId, nymWrapped.id);
                     this._depositPMEvent(nymWrapped);
                 }
 
-                if (recipientPubkey !== this.pubkey) {
+                if (recipientPubkey !== me.pubkey) {
                     const selfKemPk = this.pqSelfKeyFor();
                     const selfWrapped = selfKemPk
-                        ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), rumor, this.privkey, this.pubkey, selfKemPk, expirationTs)
-                        : await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs);
+                        ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), rumor, me.sk, me.pubkey, selfKemPk, expirationTs)
+                        : await this.nip59WrapEventAsync(rumor, me.sk, me.pubkey, expirationTs);
                     this.sendDMToRelays(['EVENT', selfWrapped]);
                     this._recordGiftWrapId(nymMessageId, selfWrapped.id);
                 }

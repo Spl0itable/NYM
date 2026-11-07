@@ -41,12 +41,19 @@
         var counter = document.getElementById('appDialogCharCount');
         if (!counter || !pending || !pending.maxLength) return;
         var field = promptField();
-        var len = (field && field.value) ? field.value.length : 0;
+        var len = (field && field.value) ? (pending.codePoints ? Array.from(field.value).length : field.value.length) : 0;
         var max = pending.maxLength;
         counter.textContent = len + '/' + max;
         counter.classList.remove('warning', 'limit');
         if (len >= max) counter.classList.add('limit');
         else if (len >= max * 0.8) counter.classList.add('warning');
+    }
+
+    function clipCodePoints() {
+        var field = pending && pending._clipField;
+        if (!field || !pending.maxLength) return;
+        var cps = Array.from(field.value || '');
+        if (cps.length > pending.maxLength) field.value = cps.slice(0, pending.maxLength).join('');
     }
 
     function resultFor(ok) {
@@ -89,6 +96,7 @@
         if (modal) modal.classList.remove('active');
         document.removeEventListener('keydown', onKey, true);
         if (p._countField) { try { p._countField.removeEventListener('input', updateDialogCount); } catch (_) {} }
+        if (p._clipField) { try { p._clipField.removeEventListener('input', clipCodePoints); } catch (_) {} }
         try { p.resolve(result); } catch (_) {}
     }
 
@@ -96,7 +104,7 @@
         ensureModal();
         if (pending) settle(resultFor(false));
         return new Promise(function (resolve) {
-            pending = { resolve: resolve, alertOnly: !!opts.alertOnly, prompt: !!opts.prompt, multiline: !!opts.multiline, maxLength: opts.maxLength || 0, hasCheckbox: !!opts.checkboxLabel, danger: !!opts.danger && !opts.alertOnly && !opts.prompt };
+            pending = { resolve: resolve, alertOnly: !!opts.alertOnly, prompt: !!opts.prompt, multiline: !!opts.multiline, maxLength: opts.maxLength || 0, codePoints: !!opts.countCodePoints, hasCheckbox: !!opts.checkboxLabel, danger: !!opts.danger && !opts.alertOnly && !opts.prompt };
             var cbRow = document.getElementById('appDialogCheckboxRow');
             var cb = document.getElementById('appDialogCheckbox');
             if (opts.checkboxLabel) {
@@ -145,7 +153,11 @@
                 field.classList.remove('nm-hidden');
                 field.value = opts.defaultValue || '';
                 field.placeholder = opts.placeholder || '';
-                if (opts.maxLength) field.maxLength = opts.maxLength; else field.removeAttribute('maxlength');
+                if (opts.maxLength && !opts.countCodePoints) field.maxLength = opts.maxLength; else field.removeAttribute('maxlength');
+                if (opts.maxLength && opts.countCodePoints) {
+                    field.addEventListener('input', clipCodePoints);
+                    pending._clipField = field;
+                }
                 if (opts.maxLength && counter) {
                     counter.classList.remove('nm-hidden');
                     field.addEventListener('input', updateDialogCount);
@@ -215,6 +227,7 @@
             defaultValue: opts.defaultValue,
             placeholder: opts.placeholder,
             maxLength: opts.maxLength,
+            countCodePoints: !!opts.countCodePoints,
             multiline: opts.multiline
         });
     };

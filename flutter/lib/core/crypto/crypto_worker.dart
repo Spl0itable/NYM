@@ -2,9 +2,10 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart'
-    show compute, kIsWeb, visibleForTesting;
+    show kIsWeb, visibleForTesting;
 
 import '../../models/nostr_event.dart';
+import '../utils/isolate_gate.dart';
 import 'gift_wrap.dart' as giftwrap;
 import 'native_schnorr.dart';
 import 'keys.dart' as keys;
@@ -188,7 +189,12 @@ UnwrapResult? _decodeUnwrapResult(Map<String, dynamic>? m) {
 
 /// Batched gift-wrap worker like [IsolateVerifier]; runs inline on web or when the isolate hop fails.
 class CryptoWorker {
-  CryptoWorker({this.maxBatch = 128});
+  CryptoWorker({this.maxBatch = 128, this.maxInFlight = 2, IsolateGate? gate})
+      : _gate = gate ?? IsolateGate.shared;
+
+  final IsolateGate _gate;
+  final int maxInFlight;
+  int _unwrapInFlight = 0;
 
   /// Process-wide instance so inbound and outbound bursts coalesce.
   static final CryptoWorker instance = CryptoWorker();
@@ -224,22 +230,31 @@ class CryptoWorker {
 
   void _flushUnwrap() {
     _unwrapFlushScheduled = false;
-    if (_unwrapPending.isEmpty) return;
-    final batch = List<Map<String, dynamic>>.of(_unwrapPending);
-    final waiters = List<Completer<UnwrapResult?>>.of(_unwrapWaiters);
-    _unwrapPending.clear();
-    _unwrapWaiters.clear();
-
-    compute(unwrapBatchIsolate, batch).then((results) {
-      for (var i = 0; i < waiters.length; i++) {
-        final m = i < results.length ? results[i] : null;
-        if (!waiters[i].isCompleted) {
-          waiters[i].complete(_decodeUnwrapResult(m));
+    if (_unwrapPending.isEmpty || _unwrapInFlight >= maxInFlight) return;
+    _unwrapInFlight++;
+    _gate.hold((spawn) async {
+      if (_unwrapPending.isEmpty) return;
+      final take =
+          _unwrapPending.length <= maxBatch ? _unwrapPending.length : maxBatch;
+      final batch = List<Map<String, dynamic>>.of(_unwrapPending.take(take));
+      final waiters =
+          List<Completer<UnwrapResult?>>.of(_unwrapWaiters.take(take));
+      _unwrapPending.removeRange(0, take);
+      _unwrapWaiters.removeRange(0, take);
+      try {
+        final results = await spawn(unwrapBatchIsolate, batch);
+        for (var i = 0; i < waiters.length; i++) {
+          final m = i < results.length ? results[i] : null;
+          if (!waiters[i].isCompleted) {
+            waiters[i].complete(_decodeUnwrapResult(m));
+          }
         }
+      } catch (_) {
+        _fallbackUnwrap(batch, waiters);
       }
-    }).catchError((Object _) {
-      // Isolate failure: fall back inline so a wrap is never silently dropped.
-      _fallbackUnwrap(batch, waiters);
+    }).whenComplete(() {
+      _unwrapInFlight--;
+      if (_unwrapPending.isNotEmpty) _flushUnwrap();
     });
   }
 
@@ -297,7 +312,7 @@ class CryptoWorker {
       results = await wrapBatchIsolate(jobs);
     } else {
       try {
-        results = await compute(wrapBatchIsolate, jobs);
+        results = await _gate.run(wrapBatchIsolate, jobs);
       } catch (_) {
         // Isolate failure: produce the wraps inline.
         results = await wrapBatchIsolate(jobs);

@@ -938,7 +938,7 @@ Object.assign(NYM.prototype, {
         for (const pk of list) {
             if (!pk || pk === this.pubkey || wanted.has(pk)) continue;
             wanted.add(pk);
-            if (this.users.has(pk) && this.userAvatars && this.userAvatars.has(pk)) continue;
+            if (this.hasResolvedNym(pk) && this.userAvatars && this.userAvatars.has(pk)) continue;
             missing.push(pk);
         }
         if (!missing.length) return;
@@ -986,14 +986,14 @@ Object.assign(NYM.prototype, {
         const user = this.users.get(pubkey);
         if (!user || !user.nym) return false;
         const base = this.parseNymFromDisplay(user.nym);
-        return !!base && base.toLowerCase() !== 'nym';
+        return (!!base && base.toLowerCase() !== 'nym') || this._kind0Seen(pubkey);
     },
 
     resolveDisplayNym(pubkey, storedAuthor) {
         const user = pubkey && this.users.get(pubkey);
         if (user && user.nym) {
             const known = this.parseNymFromDisplay(user.nym);
-            if (known && known.toLowerCase() !== 'nym') return known;
+            if (known && (known.toLowerCase() !== 'nym' || this._isChosenNym(pubkey))) return known;
         }
         const convo = pubkey && this.pmConversations && this.pmConversations.get(pubkey);
         if (convo && convo.nym) {
@@ -1008,31 +1008,102 @@ Object.assign(NYM.prototype, {
         return (ts || 0) > Math.floor(Date.now() / 1000) + 600;
     },
 
-    _nameSourceWins(pubkey, src, ts) {
-        if (this._nameInFuture(ts)) return false;
-        const rec = this._nameSources && this._nameSources.get(pubkey);
-        return !rec || (ts || 0) > rec.ts;
+    _isPlaceholderNym(nym) {
+        const base = this.parseNymFromDisplay(nym == null ? '' : String(nym)).trim();
+        return !base || base.toLowerCase() === 'nym';
     },
 
-    _noteNameSource(pubkey, src, ts) {
+    _hasKind0(pubkey) {
+        return !!(this._kind0Ts && this._kind0Ts.has(pubkey));
+    },
+
+    _kind0Seen(pubkey) {
+        return !!(this._kind0Names && this._kind0Names.has(pubkey));
+    },
+
+    _kind0Named(pubkey) {
+        return this._kind0Seen(pubkey) && !!this._kind0Names.get(pubkey);
+    },
+
+    _kind0GuardsName(pubkey) {
+        return this._hasKind0(pubkey) && (!this._kind0Seen(pubkey) || !this._isPlaceholderNym(this._kind0Names.get(pubkey)));
+    },
+
+    _noteKind0Seen(pubkey, name) {
+        if (!this._kind0Names) this._kind0Names = new Map();
+        this._kind0Names.set(pubkey, name || '');
+    },
+
+    _isChosenNym(pubkey) {
+        const user = this.users && this.users.get(pubkey);
+        return !!user && this._isPlaceholderNym(user.nym) && !!(this._nameSources && this._nameSources.has(pubkey));
+    },
+
+    _kind0Name(profile) {
+        if (!profile) return '';
+        return [profile.name, profile.username, profile.display_name]
+            .find(v => typeof v === 'string' && v.length > 0) || '';
+    },
+
+    _nameSourceWins(pubkey, src, ts, nym) {
+        if (this._nameInFuture(ts)) return false;
+        const placeholder = nym !== undefined && this._isPlaceholderNym(nym);
+        if (src !== 'kind0' && placeholder && this._kind0GuardsName(pubkey)) {
+            if ((ts || 0) > ((this._kind0Ts && this._kind0Ts.get(pubkey)) || 0) && typeof this._refetchKind0 === 'function') this._refetchKind0(pubkey);
+            return false;
+        }
+        const rec = this._nameSources && this._nameSources.get(pubkey);
+        if (!rec) return true;
+        if (src === 'kind0' && rec.ph && !placeholder) return true;
+        return (ts || 0) > rec.ts;
+    },
+
+    _noteNameSource(pubkey, src, ts, nym) {
         if (this._nameInFuture(ts)) return;
         if (!this._nameSources) this._nameSources = new Map();
-        this._nameSources.set(pubkey, { src, ts: ts || 0 });
+        const ph = src !== 'kind0' && nym !== undefined && this._isPlaceholderNym(nym);
+        this._nameSources.set(pubkey, { src, ts: ts || 0, ph });
     },
 
     _propagateNymChange(pubkey, nym, prevBase) {
         const nextBase = this.parseNymFromDisplay(nym);
-        if (!nextBase || nextBase === prevBase || nextBase.toLowerCase() === 'nym') return;
+        if (!nextBase || nextBase === prevBase || (this._isPlaceholderNym(nextBase) && !this._isChosenNym(pubkey))) return;
         this.updateStoredNymsForPubkey(pubkey, nextBase);
         if (typeof this.updatePMNicknameFromProfile === 'function') {
             this.updatePMNicknameFromProfile(pubkey, nextBase);
+        }
+        if (pubkey === this.pubkey) {
+            if (this._isPlaceholderNym(this.nym)) this.nym = nextBase;
+            if (typeof this._paintOwnNym === 'function') this._paintOwnNym();
+        } else if (typeof this.updateGroupMembershipDisplay === 'function') {
+            this.updateGroupMembershipDisplay(pubkey);
+        }
+        if (typeof this.updateRenderedProfileCard === 'function') this.updateRenderedProfileCard(pubkey);
+    },
+
+    _notePresenceName(pubkey, nym, ts) {
+        const user = this.users.get(pubkey);
+        if (!user || !nym || !this._nameSourceWins(pubkey, 'presence', ts, nym)) return;
+        const prevBase = this.parseNymFromDisplay(user.nym);
+        user.nym = nym;
+        this._noteNameSource(pubkey, 'presence', ts, nym);
+        this._propagateNymChange(pubkey, nym, prevBase);
+        this.updateUserList();
+    },
+
+    _propagateFirstName(pubkey, nym) {
+        if (this._isPlaceholderNym(nym) && !this._isChosenNym(pubkey)) return;
+        if (this.pmConversations && this.pmConversations.has(pubkey)) {
+            this._propagateNymChange(pubkey, nym, null);
+        } else if (typeof this.updateGroupMembershipDisplay === 'function') {
+            this.updateGroupMembershipDisplay(pubkey);
         }
     },
 
     updateStoredNymsForPubkey(pubkey, baseNym) {
         if (!pubkey || !baseNym) return;
         const clean = this.parseNymFromDisplay(baseNym).substring(0, 20);
-        if (!clean || clean.toLowerCase() === 'nym') return;
+        if (!clean || (clean.toLowerCase() === 'nym' && !this._isChosenNym(pubkey))) return;
         const display = `${clean}#${this.getPubkeySuffix(pubkey)}`;
         const judge = typeof this.isContentHidden === 'function' && pubkey !== this.pubkey;
         const deltas = new Map();
@@ -1484,19 +1555,16 @@ Object.assign(NYM.prototype, {
 
     getNymFromPubkey(pubkey) {
         const user = this.users.get(pubkey);
-        if (user) {
-            const cleanNym = this.parseNymFromDisplay(user.nym);
-            return `${cleanNym}#${this.getPubkeySuffix(pubkey)}`;
-        }
+        const userNym = user ? this.parseNymFromDisplay(user.nym) : '';
+        if (userNym && (!this._isPlaceholderNym(userNym) || this._isChosenNym(pubkey))) return `${userNym}#${this.getPubkeySuffix(pubkey)}`;
 
-        const pmConvo = Array.from(this.pmConversations.values())
-            .find(conv => conv.pubkey === pubkey);
+        const pmConvo = this.pmConversations && this.pmConversations.get(pubkey);
         if (pmConvo && pmConvo.nym) {
             const cleanNym = this.parseNymFromDisplay(pmConvo.nym);
             return `${cleanNym}#${this.getPubkeySuffix(pubkey)}`;
         }
 
-        return `nym#${this.getPubkeySuffix(pubkey)}`;
+        return `${userNym || 'nym'}#${this.getPubkeySuffix(pubkey)}`;
     },
 
     getNymHtmlFromPubkey(pubkey) {
@@ -1562,10 +1630,10 @@ Object.assign(NYM.prototype, {
             const user = this.users.get(pubkey);
             user.status = status;
             user.lastSeen = seenFrom(user.lastSeen || 0);
-            if (nymTag && this._nameSourceWins(pubkey, 'presence', rumorSec)) {
+            if (nymTag && this._nameSourceWins(pubkey, 'presence', rumorSec, nymTag[1])) {
                 const prevBase = this.parseNymFromDisplay(user.nym);
                 user.nym = this.stripPubkeySuffix(nymTag[1]);
-                this._noteNameSource(pubkey, 'presence', rumorSec);
+                this._noteNameSource(pubkey, 'presence', rumorSec, nymTag[1]);
                 this._propagateNymChange(pubkey, user.nym, prevBase);
             }
         } else {
@@ -1576,7 +1644,8 @@ Object.assign(NYM.prototype, {
                 status,
                 channels: new Set()
             });
-            if (nymTag) this._noteNameSource(pubkey, 'presence', rumorSec);
+            if (nymTag) this._noteNameSource(pubkey, 'presence', rumorSec, nymTag[1]);
+            if (nymTag) this._propagateFirstName(pubkey, this.stripPubkeySuffix(nymTag[1]));
         }
         this.updateUserList();
         if (this.inPMMode && this.currentPM === pubkey && typeof this.refreshPMHeaderStatus === 'function') {
@@ -1602,7 +1671,10 @@ Object.assign(NYM.prototype, {
 
         if (!this.presenceTimestamps) this.presenceTimestamps = new Map();
         const lastTimestamp = this.presenceTimestamps.get(pubkey) || 0;
-        if (eventTime < lastTimestamp) return;
+        if (eventTime < lastTimestamp) {
+            this._notePresenceName(pubkey, nym, eventTime);
+            return;
+        }
         this.presenceTimestamps.set(pubkey, eventTime);
         if (!this.presenceStatuses) this.presenceStatuses = new Map();
         this.presenceStatuses.set(pubkey, status);
@@ -1655,14 +1727,15 @@ Object.assign(NYM.prototype, {
         }
 
         const known = this.users.has(pubkey);
-        const nameWins = !!nym && this._nameSourceWins(pubkey, 'presence', eventTime);
+        const nameWins = !!nym && this._nameSourceWins(pubkey, 'presence', eventTime, nym);
         const L = (typeof self !== 'undefined' && self.NymLastSeen) || null;
         const activeMs = L ? L.presenceActivityMs(status, eventTime * 1000) : 0;
         if (activeMs > 0) {
             this.recordUserActivity(pubkey, activeMs);
             if (!known && nameWins && this.users.has(pubkey)) {
                 this.users.get(pubkey).nym = nym;
-                this._noteNameSource(pubkey, 'presence', eventTime);
+                this._noteNameSource(pubkey, 'presence', eventTime, nym);
+                this._propagateFirstName(pubkey, nym);
             }
         }
 
@@ -1673,7 +1746,7 @@ Object.assign(NYM.prototype, {
             if (nameWins) {
                 const prevBase = this.parseNymFromDisplay(user.nym);
                 user.nym = nym;
-                this._noteNameSource(pubkey, 'presence', eventTime);
+                this._noteNameSource(pubkey, 'presence', eventTime, nym);
                 this._propagateNymChange(pubkey, nym, prevBase);
             }
             this.updateUserList();
@@ -1709,17 +1782,18 @@ Object.assign(NYM.prototype, {
                 channels: new Set([channelKey]),
                 postedIn: new Set([String(channelKey).toLowerCase()])
             });
-            if (named) this._noteNameSource(pubkey, 'message', nameSec);
+            if (named) this._noteNameSource(pubkey, 'message', nameSec, nym);
+            if (named) this._propagateFirstName(pubkey, nym);
         } else {
             const user = this.users.get(pubkey);
             if (eventTime > user.lastSeen) {
                 user.lastSeen = eventTime;
                 user.status = baseStatus;
             }
-            if (named && this._nameSourceWins(pubkey, 'message', nameSec)) {
+            if (named && this._nameSourceWins(pubkey, 'message', nameSec, nym)) {
                 const prevBase = this.parseNymFromDisplay(user.nym);
                 user.nym = nym;
-                this._noteNameSource(pubkey, 'message', nameSec);
+                this._noteNameSource(pubkey, 'message', nameSec, nym);
                 this._propagateNymChange(pubkey, nym, prevBase);
             }
             if (!user.channels) user.channels = new Set();

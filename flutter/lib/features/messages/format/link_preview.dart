@@ -1,6 +1,7 @@
 // Lazy OpenGraph link-preview card via the unfurl proxy; media URLs are skipped and any failure renders nothing.
 
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -56,12 +57,14 @@ bool isInlineMediaUrl(String url) =>
 
 /// Unfurls [url] on mount; renders nothing while loading, on error, or without a title or description.
 class LinkPreviewCard extends StatefulWidget {
-  const LinkPreviewCard({super.key, required this.url, this.api});
+  const LinkPreviewCard(
+      {super.key, required this.url, this.api, this.blur = false});
 
   final String url;
 
   /// Injectable for tests.
   final ApiClient? api;
+  final bool blur;
 
   @override
   State<LinkPreviewCard> createState() => _LinkPreviewCardState();
@@ -71,6 +74,7 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
   late final ApiClient _api = widget.api ?? ApiClient();
   LinkPreviewData? _data;
   bool _failed = false;
+  bool _revealed = false;
   Timer? _dwell;
 
   @override
@@ -117,14 +121,37 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
   Widget build(BuildContext context) {
     final data = _data;
     if (_failed || data == null) return const SizedBox.shrink();
-    return _Card(data: data, api: _api);
+    return _Card(
+        data: data,
+        api: _api,
+        blurred: widget.blur && !_revealed,
+        onReveal: () => setState(() => _revealed = true));
   }
 }
 
 class _Card extends StatelessWidget {
-  const _Card({required this.data, required this.api});
+  const _Card(
+      {required this.data,
+      required this.api,
+      this.blurred = false,
+      this.onReveal});
   final LinkPreviewData data;
   final ApiClient api;
+  final bool blurred;
+  final VoidCallback? onReveal;
+
+  Widget _picture(Widget image) => blurred
+      ? GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onReveal,
+          child: ClipRect(
+            child: ImageFiltered(
+              imageFilter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: image,
+            ),
+          ),
+        )
+      : image;
 
   @override
   Widget build(BuildContext context) {
@@ -153,7 +180,7 @@ class _Card extends StatelessWidget {
                   if (data.image != null)
                     SizedBox(
                       width: narrow ? 80 : 120,
-                      child: CachedNetworkImage(
+                      child: _picture(CachedNetworkImage(
                         imageUrl: api.mediaProxyUrl(data.image!),
                         fit: BoxFit.cover,
                         // og:image is often full-size; decode at the card slot size.
@@ -162,7 +189,7 @@ class _Card extends StatelessWidget {
                                 1.5)
                             .ceil(),
                         errorWidget: (_, _, _) => const SizedBox.shrink(),
-                      ),
+                      )),
                     ),
                   Flexible(
                     child: ConstrainedBox(
@@ -232,7 +259,7 @@ class _Card extends StatelessWidget {
         if (favicon != null) ...[
           ClipRRect(
             borderRadius: const BorderRadius.all(Radius.circular(2)),
-            child: CachedNetworkImage(
+            child: _picture(CachedNetworkImage(
               imageUrl: api.mediaProxyUrl(favicon),
               width: 14,
               height: 14,
@@ -240,7 +267,7 @@ class _Card extends StatelessWidget {
               memCacheWidth:
                   (14 * MediaQuery.devicePixelRatioOf(context) * 1.5).ceil(),
               errorWidget: (_, _, _) => const SizedBox.shrink(),
-            ),
+            )),
           ),
           const SizedBox(width: 4),
         ],

@@ -792,6 +792,7 @@
         },
 
         _sendOnceOpened(el, onceId) {
+            if (typeof this._receiptsOff === 'function' && this._receiptsOff()) return;
             const msg = el.closest('.message');
             if (el.dataset.localId) {
                 const local = this._localMediaFor(el);

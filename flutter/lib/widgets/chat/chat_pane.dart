@@ -816,7 +816,10 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           width: 36,
           height: 36,
           child: NymAvatar(
-              seed: view.id, size: 36, imageUrl: user?.profile?.picture),
+              seed: view.id,
+              size: 36,
+              imageUrl: user?.profile?.picture,
+              backdrop: c.primaryA(0.14)),
         );
         final base = stripPubkeySuffix(title);
         final suffix = getPubkeySuffix(view.id);
@@ -838,10 +841,15 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         }
         final custom = g == null ? null : app.groupAvatar(g);
         avatar = custom != null && custom.isNotEmpty
-            ? SizedBox(
-                width: 36,
-                height: 36,
-                child: NymAvatar(seed: view.id, size: 36, imageUrl: custom))
+            ? _AvatarTile(
+                child: NymAvatar(
+                    seed: view.id,
+                    size: 36,
+                    imageUrl: custom,
+                    placeholder: const SizedBox.shrink(),
+                    fallback: Center(
+                        child: NymSvgIcon(NymIcons.groupGlyph,
+                            size: 18, color: c.primary))))
             : _AvatarTile(
                 child: NymSvgIcon(NymIcons.groupGlyph,
                     size: 18, color: c.primary));
@@ -1045,7 +1053,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         );
         return '#${ch.isGeohash ? ch.geohashKey : ch.channel}';
       case ViewKind.pm:
-        return app.users[view.id]?.nym ?? tr('PM');
+        return app.pmNymFor(view.id) ?? tr('PM');
       case ViewKind.group:
         for (final g in app.groups) {
           if (g.id == view.id) return app.groupLabel(g);

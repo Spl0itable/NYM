@@ -79,7 +79,7 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
         );
       },
       lastRead: (key) =>
-          ref.read(appStateProvider.notifier).channelLastRead[key] ?? 0,
+          ref.read(appStateProvider.notifier).channelReadMark(key),
       badge: (key) {
         final u = ref.read(appStateProvider).unreadCounts;
         final a = u[key] ?? 0;

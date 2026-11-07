@@ -25,6 +25,7 @@ import 'chat_nav_service.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../duo/duo_rail.dart';
+import '../../widgets/nym_svg_bytes.dart';
 
 class ChatNavIcons {
   const ChatNavIcons._();
@@ -124,7 +125,14 @@ class ChatNavListBinding with WidgetsBindingObserver {
   bool _down = true;
   Map<int, List<Message>>? _members;
 
+  bool Function()? onScreen;
+
   ChatNavService get nav => ref.read(chatNavProvider);
+
+  void recheck() {
+    _queue();
+    WidgetsBinding.instance.scheduleFrame();
+  }
 
   String get storageKey => _key;
 
@@ -162,7 +170,8 @@ class ChatNavListBinding with WidgetsBindingObserver {
     dividerIndex = id == null ? null : indexById[id];
   }
 
-  void observeLive(List<Message> messages, {required bool away}) {
+  void observeLive(List<Message> messages,
+      {required bool away, bool shown = true}) {
     if (messages.isEmpty || _key.isEmpty) return;
     final last = messages.last;
     final prevId = _lastId;
@@ -175,7 +184,7 @@ class ChatNavListBinding with WidgetsBindingObserver {
       final m = messages[i];
       if (m.id == prevId || m.createdAt < prevAt) break;
       if (m.isHistorical) continue;
-      n.noteLive(_key, m, away: away);
+      n.noteLive(_key, m, away: away, shown: shown);
     }
   }
 
@@ -323,8 +332,10 @@ class ChatNavListBinding with WidgetsBindingObserver {
         (viewport > 0
             ? atBottom(inset - newest.itemLeadingEdge * viewport)
             : newest.itemLeadingEdge >= -0.01);
+    final shown = onScreen?.call();
     if (bottom) {
-      n.seeAll(_key, _messages);
+      n.seeAll(_key, _messages, shown ?? true);
+      if (shown == true) _markShown(n);
       return;
     }
     final members = _membersByIndex();
@@ -347,7 +358,13 @@ class ChatNavListBinding with WidgetsBindingObserver {
         }
       }
     }
-    if (seen.isEmpty) return;
+    if (seen.isEmpty) {
+      if (shown == true) {
+        n.sweepMentions(_key);
+        _markShown(n);
+      }
+      return;
+    }
     final byId = _posById ??= {
       for (var i = 0; i < _messages.length; i++) _messages[i].id: i,
     };
@@ -367,7 +384,18 @@ class ChatNavListBinding with WidgetsBindingObserver {
         j--) {
       if (n.effAt(_messages[j]) == at) ids.add(_messages[j].id);
     }
-    n.advance(_key, at, ids);
+    n.advance(_key, at, ids, sweep: shown == null);
+    if (shown == null) {
+      ref.read(notificationHistoryProvider.notifier).markShownSeen(_key, at);
+      return;
+    }
+    if (!shown) return;
+    n.sweepMentions(_key);
+    _markShown(n);
+  }
+
+  void _markShown(ChatNavService n) {
+    final at = n.markFor(_key)?.at ?? 0;
     ref.read(notificationHistoryProvider.notifier).markShownSeen(_key, at);
   }
 
@@ -657,12 +685,14 @@ class _JumpPill extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  SvgPicture.string(
-                    down ? ChatNavIcons.pillArrowDown : ChatNavIcons.pillArrowUp,
+                  SvgPicture(
+                    NymSvgLoader(
+                      down ? ChatNavIcons.pillArrowDown : ChatNavIcons.pillArrowUp,
+                      color: c.primary,
+                    ),
                     key: ValueKey(down ? 'chat-nav-jump-down' : 'chat-nav-jump-up'),
                     width: 8.26,
                     height: 10,
-                    theme: SvgTheme(currentColor: c.primary),
                   ),
                   const SizedBox(width: ChatNavIcons.pillGap),
                   Flexible(
@@ -711,12 +741,11 @@ class _MentionFab extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  SvgPicture.string(
-                    ChatNavIcons.pillAt,
+                  SvgPicture(
+                    NymSvgLoader(ChatNavIcons.pillAt, color: c.primary),
                     key: const ValueKey('chat-nav-mention-icon'),
                     width: 10,
                     height: 10,
-                    theme: SvgTheme(currentColor: c.primary),
                   ),
                   const SizedBox(width: ChatNavIcons.pillGap),
                   Text(

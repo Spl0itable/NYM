@@ -286,6 +286,7 @@ class AppState {
     Set<String>? friends,
     Set<String>? blockedUsers,
     Map<String, int>? autoMutedUsers,
+    Map<String, Set<String>>? autoMuteHeld,
     Set<String>? blockedKeywords,
     Set<String>? nymchatPubkeys,
     Set<String>? nymchatVouches,
@@ -304,6 +305,7 @@ class AppState {
         friends = friends ?? <String>{},
         blockedUsers = blockedUsers ?? <String>{},
         autoMutedUsers = autoMutedUsers ?? <String, int>{},
+        autoMuteHeld = autoMuteHeld ?? <String, Set<String>>{},
         blockedKeywords = blockedKeywords ?? <String>{},
         nymchatPubkeys = nymchatPubkeys ?? <String>{},
         nymchatVouches = nymchatVouches ?? <String>{},
@@ -332,6 +334,26 @@ class AppState {
   final Map<String, int> keyRevs;
 
   (int, int) viewRevOf(String key) => (globalRev, keyRevs[key] ?? 0);
+
+  bool hasKind0(String pubkey) => (users[pubkey]?.profile?.kind0Ts ?? 0) > 0;
+
+  String? kind0Name(String pubkey) {
+    final p = users[pubkey]?.profile;
+    if (p == null || p.kind0Ts <= 0) return null;
+    for (final v in [p.name, p.username, p.displayName]) {
+      if (v != null && v.isNotEmpty) return v;
+    }
+    return null;
+  }
+
+  String? pmNymFor(String pubkey) {
+    final live = users[pubkey]?.nym;
+    if (!isPlaceholderNym(live)) return live;
+    for (final c in pmConversations) {
+      if (c.pubkey == pubkey && !isPlaceholderNym(c.nym)) return c.nym;
+    }
+    return live;
+  }
 
   final List<ChannelEntry> channels;
   final List<PMConversation> pmConversations;
@@ -373,6 +395,8 @@ class AppState {
   final Set<String> blockedUsers;
 
   final Map<String, int> autoMutedUsers;
+
+  final Map<String, Set<String>> autoMuteHeld;
 
   bool isAutoMuted(String pubkey) {
     final until = autoMutedUsers[pubkey];
@@ -427,6 +451,8 @@ class AppState {
           return FilterPacks.matches(text, nym: nick.isEmpty ? null : nick);
         },
         muted: (pk) => clientGatesActive && isAutoMuted(pk),
+        deleted: (r) =>
+            r is Message && (autoMuteHeld[r.pubkey]?.contains(r.id) ?? false),
         nymOf: (pk) => users[pk]?.nym ?? '',
         quiet: (r) => r is Message && ServerQuiet.hides(r.pubkey, r.id),
         spam: (r) =>
@@ -780,6 +806,7 @@ class AppState {
         friends: friends,
         blockedUsers: blockedUsers,
         autoMutedUsers: autoMutedUsers,
+        autoMuteHeld: autoMuteHeld,
         blockedKeywords: blockedKeywords,
         nymchatPubkeys: nymchatPubkeys,
         nymchatVouches: nymchatVouches,
@@ -1336,6 +1363,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Fired when a new PM row is created so the critical REQ starts watching the contact's profile.
   void Function(String peerPubkey)? onPMConversationAdded;
 
+  void Function(String pubkey)? onKind0Stale;
+
   /// Fired when the closed-PM set changes so deleted PMs stay deleted across relaunches.
   void Function()? onClosedPmsChanged;
 
@@ -1378,6 +1407,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
   bool Function(ChatView from, ChatView to)? viewGate;
 
   void _dropReadUnread(String key, int tsSec) {
+    if (key.startsWith('#')) {
+      if ((state.unreadCounts[key] ?? 0) > 0) _setChannelUnread(key);
+      return;
+    }
+    if (!key.startsWith('pm-') &&
+        !key.startsWith('group-') &&
+        (state.unreadCounts['#$key'] ?? 0) > 0) {
+      _setChannelUnread('#$key');
+    }
     final cur = state.unreadCounts[key] ?? 0;
     if (cur <= 0) return;
     final msgs = state.messages[key] ?? const <Message>[];
@@ -1404,7 +1442,143 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   /// True when [m] is newer than its conversation's read watermark.
   bool _isUnreadByWatermark(String key, Message m) =>
-      m.createdAt > (_channelLastRead[key] ?? 0);
+      m.createdAt > channelReadMark(key);
+
+  Set<String> Function()? ownKeysGate;
+
+  final Set<String> _unreadRecountPending = <String>{};
+
+  int channelReadMark(String key) {
+    final a = _channelLastRead[key] ?? 0;
+    if (!key.startsWith('#')) return a;
+    final b = _channelLastRead[key.substring(1)] ?? 0;
+    return a > b ? a : b;
+  }
+
+  Set<String> _unreadOwnKeys() {
+    final out = <String>{};
+    if (state.selfPubkey.isNotEmpty) out.add(state.selfPubkey);
+    final gate = ownKeysGate;
+    if (gate != null) {
+      try {
+        out.addAll(gate());
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  @visibleForTesting
+  int unreadScans = 0;
+
+  int channelUnreadShown(String key) {
+    unreadScans++;
+    final list = state.messages[key] ?? const <Message>[];
+    return _shownUnreadIn(key, list, list);
+  }
+
+  int _shownUnreadIn(String key, List<Message> list, Iterable<Message> subset) {
+    final s = state;
+    if (key.startsWith('#') && s.isChannelBlockedKey(key)) return 0;
+    if (list.isEmpty) return 0;
+    final lastRead = channelReadMark(key);
+    final own = _unreadOwnKeys();
+    final canFilter = _canFilter(s);
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    Set<String>? roots;
+    var n = 0;
+    for (final m in subset) {
+      if (m.isSystemRow || m.isOwn || m.slowHeld) continue;
+      if (m.createdAt <= lastRead || own.contains(m.pubkey)) continue;
+      if (!s.countsTowardUnread(m)) continue;
+      if (appThreadsEnabled && m.threadRoot != null) {
+        roots ??= channelThreadRootIds(list);
+      }
+      if (!channelMessageShown(s, m, list,
+          canFilter: canFilter, nowSec: nowSec, rootIds: roots)) {
+        continue;
+      }
+      n++;
+    }
+    return n;
+  }
+
+  bool _setChannelUnread(String key) {
+    final count = _isConversationSeen(key) ? 0 : channelUnreadShown(key);
+    if ((state.unreadCounts[key] ?? 0) == count &&
+        state.unreadCounts.containsKey(key) == count > 0) {
+      return false;
+    }
+    if (count > 0) {
+      state.unreadCounts[key] = count;
+    } else {
+      state.unreadCounts.remove(key);
+    }
+    _scheduleEmit();
+    return true;
+  }
+
+  void _recountChannelUnreads(Iterable<String> keys) {
+    for (final k in keys.toList()) {
+      if (k.startsWith('#')) _setChannelUnread(k);
+    }
+  }
+
+  bool _plainUnreadArrival(String key, Message m) {
+    if (!plainlyVisible(state, m) || state.isChannelBlockedKey(key)) {
+      return false;
+    }
+    final list = state.messages[key] ?? const <Message>[];
+    final id = threadKeyForMessage(m);
+    return !list.any((x) => x.threadRoot != null && x.threadRoot == id);
+  }
+
+  void _countChannelArrival(String key, Message m, [int trimmed = 0]) {
+    if (_unreadRecountPending.contains(key)) return;
+    if (trimmed < 0 || !_plainUnreadArrival(key, m)) {
+      _recountChannelSoon(key);
+      return;
+    }
+    var n = state.unreadCounts[key] ?? 0;
+    if (!m.isOwn &&
+        !m.isSystemRow &&
+        !m.slowHeld &&
+        m.createdAt > channelReadMark(key) &&
+        !_unreadOwnKeys().contains(m.pubkey) &&
+        state.countsTowardUnread(m)) {
+      n++;
+    }
+    _putChannelUnread(key, n - trimmed);
+  }
+
+  void _recountChannelSoon(String key) {
+    if (_batchDepth > 0) {
+      _unreadRecountPending.add(key);
+    } else {
+      _setChannelUnread(key);
+    }
+  }
+
+  void _putChannelUnread(String key, int n) {
+    if (n > 0) {
+      state.unreadCounts[key] = n;
+    } else {
+      state.unreadCounts.remove(key);
+    }
+  }
+
+  void _dropTrimmedUnread(String key, int counted) {
+    if (counted == 0 ||
+        _unreadRecountPending.contains(key) ||
+        _isConversationSeen(key)) {
+      return;
+    }
+    if (counted < 0) {
+      _setChannelUnread(key);
+      return;
+    }
+    _putChannelUnread(key, (state.unreadCounts[key] ?? 0) - counted);
+    _scheduleEmit();
+  }
 
   bool _isLivePmUnreadByWatermark(String key, Message m) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -1591,6 +1765,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void goLive(String pubkey, String nym) {
     _seenIds.clear();
     _nameTimes.clear();
+    _placeholderNameTimes.clear();
     _seenCopyKeys.clear();
     _seenNymMessageIds.clear();
     _pendingEdits.clear();
@@ -1924,6 +2099,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   Set<String> pruneChannelHistoryWindow() {
     final floor = channelWindowFloorSec();
     final dropped = <String>{};
+    final swept = <String>[];
     for (final entry in state.messages.entries) {
       final key = entry.key;
       if (key.startsWith('pm-') || key.startsWith('group-')) continue;
@@ -1960,16 +2136,20 @@ class AppStateNotifier extends StateNotifier<AppState> {
         ..addAll(pinned)
         ..addAll(keep);
       chatNavNoteEdit(list);
+      swept.add(key);
+    }
+    for (final key in swept) {
+      _setChannelUnread(key);
     }
     if (dropped.isNotEmpty) _scheduleEmit();
     return dropped;
   }
 
   /// Trims a channel to the newest [_kChannelHistoryCap] messages; [list] must be oldest-first.
-  void _capChannelHistory(List<Message> list) {
-    if (list.length <= _kChannelHistoryCap) return;
+  int _capChannelHistory(List<Message> list, {String? key}) {
+    if (list.length <= _kChannelHistoryCap) return 0;
     final gone = state.storeOverflow(list, _kChannelHistoryCap).toSet();
-    if (gone.isEmpty) return;
+    if (gone.isEmpty) return 0;
     final wanted = <String>{};
     for (var i = 0; i < list.length; i++) {
       if (gone.contains(i)) continue;
@@ -1980,6 +2160,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       if (!gone.contains(i)) wanted.remove(threadKeyForMessage(list[i]));
     }
     final kept = <Message>[];
+    final removed = <Message>[];
     for (var i = 0; i < list.length; i++) {
       final m = list[i];
       if (!gone.contains(i) ||
@@ -1987,13 +2168,20 @@ class AppStateNotifier extends StateNotifier<AppState> {
         kept.add(m);
       } else {
         _unindexMessage(m);
+        removed.add(m);
       }
     }
-    final dropped = list.length - kept.length;
+    var counted = 0;
+    if (key != null && key.startsWith('#') && removed.isNotEmpty) {
+      counted = removed.any((m) => m.expiresAt != null)
+          ? -1
+          : _shownUnreadIn(key, list, removed);
+    }
     list
       ..clear()
       ..addAll(kept);
-    chatNavNoteTrim(list, dropped);
+    chatNavNoteTrim(list, removed.length);
+    return counted;
   }
 
   // Message id index: event id and nymMessageId → message; stale entries only cost memory, never a wrong match.
@@ -2138,11 +2326,19 @@ class AppStateNotifier extends StateNotifier<AppState> {
       _blockedCapPending.clear();
     }
     if (_channelCapPending.isNotEmpty) {
-      for (final key in _channelCapPending) {
-        final list = state.messages[key];
-        if (list != null) _capChannelHistory(list);
-      }
+      final capped = _channelCapPending.toList();
       _channelCapPending.clear();
+      for (final key in capped) {
+        final list = state.messages[key];
+        if (list != null) {
+          _dropTrimmedUnread(key, _capChannelHistory(list, key: key));
+        }
+      }
+    }
+    if (_unreadRecountPending.isNotEmpty) {
+      final keys = _unreadRecountPending.toList();
+      _unreadRecountPending.clear();
+      _recountChannelUnreads(keys);
     }
   }
 
@@ -2306,11 +2502,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
 
     _insertMessageSorted(key, list, m);
+    var trimmed = 0;
     // Mid-batch the list isn't sorted yet, so defer the trim to [_flushDirtySorts].
     if (_batchDepth > 0) {
       _channelCapPending.add(key);
     } else {
-      _capChannelHistory(list);
+      trimmed = _capChannelHistory(list, key: key);
     }
     if (senderBlocked) _capBlockedSender(key, list, e.pubkey);
 
@@ -2319,17 +2516,17 @@ class AppStateNotifier extends StateNotifier<AppState> {
       e.pubkey,
       () => User(pubkey: e.pubkey, nym: m.author),
     );
-    if (!isPlaceholderNym(m.author)) {
-      if (_messageCarriesName(m) && _nameWins(e.pubkey, e.createdAt)) {
-        final shown = u.nym;
-        _noteNym(e.pubkey, shown, m.author, skip: m);
-        u.nym = m.author;
-        _noteNameTime(e.pubkey, e.createdAt);
-        if (shown != m.author) _syncPmConversationNym(e.pubkey);
-      }
-    } else {
-      _seedAuthorFromStore(m);
+    final placeholder = isPlaceholderNym(m.author);
+    if (!_blankNym(e.tagValue('n')) &&
+        _messageCarriesName(m) &&
+        _nameWins(e.pubkey, e.createdAt, placeholder: placeholder)) {
+      final shown = u.nym;
+      _noteNym(e.pubkey, shown, m.author, skip: m);
+      u.nym = m.author;
+      _noteNameTime(e.pubkey, e.createdAt, placeholder: placeholder);
+      if (shown != m.author) _syncPmConversationNym(e.pubkey);
     }
+    if (placeholder) _seedAuthorFromStore(m);
     u.lastSeen = mergeLastSeen(
           u.lastSeen, m.timestamp, DateTime.now().millisecondsSinceEpoch);
     // Membership uses the bare lowercase key: geohash when present, else the channel name.
@@ -2363,7 +2560,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
     // Bump unread only for unseen messages that count and are newer than the read watermark.
     final seen = _isConversationSeen(key);
-    if (!seen && state.countsTowardUnread(m) && _isUnreadByWatermark(key, m)) {
+    if (!seen && key.startsWith('#')) {
+      _countChannelArrival(key, m, trimmed);
+    } else if (!seen &&
+        state.countsTowardUnread(m) &&
+        _isUnreadByWatermark(key, m)) {
       state.unreadCounts[key] = (state.unreadCounts[key] ?? 0) + 1;
     } else if (seen &&
         columnsReadGate != null &&
@@ -2435,18 +2636,58 @@ class AppStateNotifier extends StateNotifier<AppState> {
   }
 
   final Map<String, int> _nameTimes = {};
+  final Set<String> _placeholderNameTimes = {};
 
   bool _nameInFuture(int ts) =>
       ts > DateTime.now().millisecondsSinceEpoch ~/ 1000 + 600;
 
-  bool _nameWins(String pubkey, int ts) {
+  static bool _blankNym(String? nym) =>
+      nym == null || stripPubkeySuffix(nym).trim().isEmpty;
+
+  bool _nameWins(String pubkey, int ts,
+      {bool kind0 = false, bool placeholder = false}) {
     if (_nameInFuture(ts)) return false;
+    if (placeholder && !kind0 && !isPlaceholderNym(state.kind0Name(pubkey))) {
+      if (ts > (state.users[pubkey]?.profile?.kind0Ts ?? 0)) {
+        onKind0Stale?.call(pubkey);
+      }
+      return false;
+    }
     final rec = _nameTimes[pubkey];
-    return rec == null || ts > rec;
+    if (rec == null) return true;
+    if (kind0 && !placeholder && _placeholderNameTimes.contains(pubkey)) {
+      return true;
+    }
+    return ts > rec;
   }
 
-  void _noteNameTime(String pubkey, int ts) {
-    if (!_nameInFuture(ts)) _nameTimes[pubkey] = ts;
+  void _noteNameTime(String pubkey, int ts, {bool placeholder = false}) {
+    if (_nameInFuture(ts)) return;
+    _nameTimes[pubkey] = ts;
+    if (placeholder) {
+      _placeholderNameTimes.add(pubkey);
+    } else {
+      _placeholderNameTimes.remove(pubkey);
+    }
+  }
+
+  bool _nymChosen(String pubkey) =>
+      isPlaceholderNym(state.users[pubkey]?.nym) &&
+      _nameTimes.containsKey(pubkey);
+
+  void notePresenceName(String pubkey, String? nym, int ts) {
+    final u = state.users[pubkey];
+    if (u == null || _blankNym(nym)) return;
+    final placeholder = isPlaceholderNym(nym);
+    if (!_nameWins(pubkey, ts, placeholder: placeholder)) return;
+    final next = getNymFromPubkey(nym!, pubkey);
+    _noteNameTime(pubkey, ts, placeholder: placeholder);
+    if (u.nym == next) return;
+    _noteNym(pubkey, u.nym, next);
+    u.nym = next;
+    _rewriteStoredAuthors(pubkey);
+    _syncPmConversationNym(pubkey);
+    _scheduleEmit();
   }
 
   bool _messageCarriesName(Message m) =>
@@ -2461,7 +2702,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
     var changed = false;
     if (existing != null) {
       final prev = existing.profile;
-      if (prev == null || p.kind0Ts >= prev.kind0Ts) {
+      if (prev == null ||
+          p.kind0Ts >= prev.kind0Ts ||
+          _nameInFuture(prev.kind0Ts)) {
         // Skip no-op refreshes so periodic re-fetches don't rebuild every user-watching widget.
         if (prev == null ||
             prev.kind0Ts != p.kind0Ts ||
@@ -2475,14 +2718,18 @@ class AppStateNotifier extends StateNotifier<AppState> {
             prev.lud16 != p.lud16 ||
             prev.lud06 != p.lud06) {
           existing.profile = p;
-          if (resolvedName != null &&
-              _nameWins(e.pubkey, p.kind0Ts)) {
-            final next = getNymFromPubkey(resolvedName, e.pubkey);
+          changed = true;
+        }
+        if (resolvedName != null &&
+            _nameWins(e.pubkey, p.kind0Ts,
+                kind0: true, placeholder: isPlaceholderNym(resolvedName))) {
+          final next = getNymFromPubkey(resolvedName, e.pubkey);
+          _noteNameTime(e.pubkey, p.kind0Ts);
+          if (existing.nym != next) {
             _noteNym(e.pubkey, existing.nym, next);
             existing.nym = next;
-            _noteNameTime(e.pubkey, p.kind0Ts);
+            changed = true;
           }
-          changed = true;
         }
       }
     } else {
@@ -2650,7 +2897,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Refreshes a PM row's nym from the users map; returns true if changed; doesn't emit.
   bool _syncPmConversationNym(String pubkey) {
     final known = state.users[pubkey]?.nym;
-    if (known == null || known.isEmpty) return false;
+    if (known == null || (isPlaceholderNym(known) && !_nymChosen(pubkey))) {
+      return false;
+    }
     final base = stripPubkeySuffix(known);
     final clean = base.length > 20 ? base.substring(0, 20) : base;
     if (clean.isEmpty) return false;
@@ -3113,7 +3362,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
 
     _insertMessageSorted(channelKey, list, m);
-    _capChannelHistory(list);
+    final trimmed = _capChannelHistory(list, key: channelKey);
 
     if (!m.isOwn) {
       final u = state.users.putIfAbsent(
@@ -3153,12 +3402,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
       state.channels.add(ChannelEntry(channel: m.channel!));
     }
 
-    final seen = _isConversationSeen(channelKey);
-    if (!seen &&
-        state.countsTowardUnread(m) &&
-        _isUnreadByWatermark(channelKey, m)) {
-      state.unreadCounts[channelKey] =
-          (state.unreadCounts[channelKey] ?? 0) + 1;
+    if (!_isConversationSeen(channelKey)) {
+      _countChannelArrival(channelKey, m, trimmed);
     }
     _scheduleEmit();
     return true;
@@ -3923,13 +4168,17 @@ class AppStateNotifier extends StateNotifier<AppState> {
       () => User(pubkey: pubkey, nym: nym ?? getNymFromPubkey('nym', pubkey)),
     );
     u.status = status;
-    if (nym != null &&
-        nym.isNotEmpty &&
-        (nameTs == null || _nameWins(pubkey, nameTs))) {
-      final next = getNymFromPubkey(nym, pubkey);
+    final placeholder = isPlaceholderNym(nym);
+    if (!_blankNym(nym) &&
+        (nameTs == null
+            ? !placeholder
+            : _nameWins(pubkey, nameTs, placeholder: placeholder))) {
+      final next = getNymFromPubkey(nym!, pubkey);
       _noteNym(pubkey, u.nym, next);
       u.nym = next;
-      if (nameTs != null) _noteNameTime(pubkey, nameTs);
+      if (nameTs != null) {
+        _noteNameTime(pubkey, nameTs, placeholder: placeholder);
+      }
       _rewriteStoredAuthors(pubkey);
       _syncPmConversationNym(pubkey);
     }
@@ -4036,6 +4285,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       _presenceOnly.remove(pk);
       state.users.remove(pk);
       _nameTimes.remove(pk);
+      _placeholderNameTimes.remove(pk);
       removed = true;
     }
     if (removed) _markGeoPresenceDirty();
@@ -4093,21 +4343,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
       state.users[pubkey] = User(pubkey: pubkey, nym: nym);
       if (!placeholder) _noteNameTime(pubkey, nowSec);
       changed = true;
-    } else if (u.nym != nym &&
-        (placeholder
-            ? !_nameTimes.containsKey(pubkey)
-            : _nameWins(pubkey, nowSec))) {
+    } else if (!placeholder && u.nym != nym && _nameWins(pubkey, nowSec)) {
       _noteNym(pubkey, u.nym, nym);
       u.nym = nym;
-      if (!placeholder) _noteNameTime(pubkey, nowSec);
+      _noteNameTime(pubkey, nowSec);
       changed = true;
     }
-    for (final c in state.pmConversations) {
-      if (c.pubkey == pubkey && c.nym != nym) {
-        c.nym = nym;
-        changed = true;
-      }
-    }
+    if (_syncPmConversationNym(pubkey)) changed = true;
     if (changed) _scheduleEmit();
   }
 
@@ -4122,9 +4364,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
       final known = state.users[peerPubkey]?.nym;
       state.pmConversations.add(PMConversation(
         pubkey: peerPubkey,
-        nym: (known != null && known.isNotEmpty)
-            ? known
-            : (nym ?? getNymFromPubkey('nym', peerPubkey)),
+        nym: (!isPlaceholderNym(known) || _nymChosen(peerPubkey))
+            ? known!
+            : (!isPlaceholderNym(nym)
+                ? nym!
+                : (known ?? nym ?? getNymFromPubkey('nym', peerPubkey))),
         lastMessageTime: DateTime.now().millisecondsSinceEpoch,
       ));
       onPMConversationAdded?.call(peerPubkey);
@@ -4300,76 +4544,6 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
   }
 
-  final Map<String, int> _d1Floor = {};
-  final Map<String, int> _d1FloorBasis = {};
-  ContentFilterCtx? _recountPrev;
-
-  ContentFilterCtx _filterSnapshot({bool empty = false}) {
-    final s = state;
-    final cur = s.contentFilter();
-    if (empty) {
-      return ContentFilterCtx(
-        self: s.selfPubkey,
-        bot: cur.bot,
-        quiet: cur.quiet,
-        spam: cur.spam,
-        gated: cur.gated,
-      );
-    }
-    final friends = {...s.friends};
-    final gates = s.clientGatesActive;
-    final muted = {
-      for (final pk in s.autoMutedUsers.keys)
-        if (s.isAutoMuted(pk)) pk,
-    };
-    final spamOn = appSpamFilterEnabled;
-    final spamAggressive = appSpamFilterAggressive;
-    return ContentFilterCtx(
-      self: s.selfPubkey,
-      blockedUsers: {...s.blockedUsers},
-      keywords: [...s.blockedKeywords],
-      blockedChannels: [...s.blockedChannels],
-      hiddenChannels: [...s.hiddenChannels],
-      packs: cur.packs,
-      friend: friends.contains,
-      bot: cur.bot,
-      pack: cur.packs ? cur.pack : null,
-      muted: (pk) => gates && muted.contains(pk),
-      nymOf: cur.nymOf,
-      quiet: cur.quiet,
-      spam: (r) =>
-          r is Message &&
-          (r.isPM || r.isGroup || gates) &&
-          SpamFilter.isSpamMessage(r.content,
-              enabled: spamOn, aggressive: spamAggressive),
-      gated: cur.gated,
-    );
-  }
-
-  int _unreadWith(List<Message> list, int lastRead, ContentFilterCtx ctx) {
-    var n = 0;
-    for (final m in list) {
-      if (m.isSystemRow || m.isOwn || m.slowHeld) continue;
-      if (m.createdAt <= lastRead) continue;
-      if (ContentFilter.hidden(ctx, state._liveItem(m), m)) continue;
-      n++;
-    }
-    return n;
-  }
-
-  int _d1UnreadFloor(String storageKey) {
-    if (state.contentFiltersActive) return 0;
-    final floor = _d1Floor[storageKey] ?? 0;
-    if (floor <= 0) return 0;
-    final bare =
-        storageKey.startsWith('#') ? storageKey.substring(1) : storageKey;
-    final a = _channelLastRead[storageKey] ?? 0;
-    final b = _channelLastRead[bare] ?? 0;
-    final lastRead = a > b ? a : b;
-    final basis = _d1FloorBasis[storageKey];
-    if (basis != null && lastRead > basis) return 0;
-    return floor;
-  }
 
   Future<void> setActiveFilterPacks(Iterable<String> ids) =>
       FilterPacks.setActive(ids);
@@ -4381,8 +4555,6 @@ class AppStateNotifier extends StateNotifier<AppState> {
       return;
     }
     final s = state;
-    final prev = _recountPrev ?? _filterSnapshot(empty: true);
-    _recountPrev = _filterSnapshot();
     s.messages.forEach((key, list) {
       if (list.isEmpty) return;
       final isPm = key.startsWith('pm-');
@@ -4402,11 +4574,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         if (m.createdAt > lastRead) count++;
       }
       if (!isPm && !key.startsWith('group-')) {
-        final standing = s.unreadCounts[unreadKey] ?? 0;
-        final kept = standing + count - _unreadWith(list, lastRead, prev);
-        if (kept > count) count = kept;
-        final floor = _d1UnreadFloor(key);
-        if (floor > count) count = floor;
+        count = channelUnreadShown(key);
       }
       if (count > 0 && !_isConversationSeen(key)) {
         s.unreadCounts[unreadKey] = count;
@@ -4469,6 +4637,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   }
 
   void _dropSenderInfluence(String pubkey) {
+    final channels = <String>[];
     state.messages.forEach((key, list) {
       var counted = 0;
       var senderNewest = 0;
@@ -4484,7 +4653,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
       }
       if (senderNewest == 0) return;
       final unread = state.unreadCounts[unreadKey];
-      if (unread != null && counted > 0) {
+      if (key.startsWith('#')) {
+        channels.add(key);
+      } else if (unread != null && counted > 0) {
         if (unread > counted) {
           state.unreadCounts[unreadKey] = unread - counted;
         } else {
@@ -4500,11 +4671,21 @@ class AppStateNotifier extends StateNotifier<AppState> {
         }
       }
     });
+    _recountChannelUnreads(channels);
+  }
+
+  void _autoMutesLifted() {
+    _visibilityChanged();
+    _recountChannelUnreads(state.messages.keys);
+    _scheduleEmit();
   }
 
   bool unblockUser(String pubkey) {
     final removed = state.blockedUsers.remove(pubkey);
-    if (removed) recountForFilters();
+    if (removed) {
+      state.autoMuteHeld.remove(pubkey);
+      recountForFilters();
+    }
     return removed;
   }
 
@@ -4521,6 +4702,14 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final until = t + autoMuteDuration.inMilliseconds;
     state.autoMutedUsers[pubkey] = until;
     if (!fresh) return false;
+    final held = <String>{
+      for (final list in state.messages.values)
+        for (final m in list)
+          if (m.pubkey == pubkey && !m.isOwn && !m.isSystemRow) m.id,
+    };
+    if (held.isNotEmpty) {
+      (state.autoMuteHeld[pubkey] ??= <String>{}).addAll(held);
+    }
     _visibilityChanged();
     _dropSenderInfluence(pubkey);
     _scheduleEmit();
@@ -4530,11 +4719,18 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   bool clearAutoMute(String pubkey) {
     final removed = state.autoMutedUsers.remove(pubkey) != null;
-    if (removed) {
-      _visibilityChanged();
-      _scheduleEmit();
-    }
+    state.autoMuteHeld.remove(pubkey);
+    if (removed) _autoMutesLifted();
     return removed;
+  }
+
+  bool expireAutoMutes({DateTime? now}) {
+    final t = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    final before = state.autoMutedUsers.length;
+    state.autoMutedUsers.removeWhere((_, until) => until <= t);
+    if (state.autoMutedUsers.length == before) return false;
+    _autoMutesLifted();
+    return true;
   }
 
   void hydrateAutoMuted(Map<String, int> entries, {DateTime? now}) {
@@ -4600,7 +4796,6 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (blockedChannels != null) {
       state.blockedChannels.addAll(blockedChannels.map((k) => k.toLowerCase()));
     }
-    _recountPrev = _filterSnapshot();
     _visibilityChanged();
     _scheduleEmit();
   }
@@ -4609,8 +4804,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
   bool applyLocalEdit(String messageId, String newContent,
       {String? authorPubkey, int editAt = 0}) {
     var changed = false;
-    for (final list in state.messages.values) {
-      for (final m in list) {
+    final touched = <String>{};
+    for (final entry in state.messages.entries) {
+      for (final m in entry.value) {
         if ((m.id == messageId || m.nymMessageId == messageId) &&
             (authorPubkey == null || m.pubkey == authorPubkey)) {
           if (m.content != newContent) {
@@ -4632,11 +4828,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
           _iosBotReply(m);
           m.isEdited = true;
           changed = true;
+          if (entry.key.startsWith('#')) touched.add(entry.key);
         }
       }
     }
     if (changed) {
       _visibilityChanged();
+      for (final key in touched) {
+        _recountChannelSoon(key);
+      }
       _scheduleEmit();
     }
     return changed;
@@ -4920,6 +5120,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     });
     if (touched.isNotEmpty) {
       _visibilityChanged();
+      _recountChannelUnreads(touched);
       for (final k in touched) {
         onPmMessageIngested?.call(k);
       }
@@ -4948,21 +5149,27 @@ class AppStateNotifier extends StateNotifier<AppState> {
       return true;
     }
 
+    bool sweepKey(String key, List<Message> list) {
+      if (!sweep(list)) return false;
+      if (key.startsWith('#')) _setChannelUnread(key);
+      return true;
+    }
+
     if (storageKey != null) {
       final list = state.messages[storageKey];
-      if (list != null && sweep(list)) changed = true;
+      if (list != null && sweepKey(storageKey, list)) changed = true;
       if (changed) _scheduleEmit();
       return changed;
     }
     final convKey = _convKeyByAnyId[messageId];
     if (convKey != null) {
       final list = state.messages[convKey];
-      if (list != null && sweep(list)) changed = true;
+      if (list != null && sweepKey(convKey, list)) changed = true;
     }
     if (convKey == null || (!changed && author != null)) {
       // Fall back to a full scan so a deletion is never skipped.
-      for (final list in state.messages.values) {
-        if (sweep(list)) changed = true;
+      for (final e in state.messages.entries.toList()) {
+        if (sweepKey(e.key, e.value)) changed = true;
       }
     }
     if (changed) _scheduleEmit();
@@ -5177,6 +5384,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         changed = true;
       }
     });
+    _recountChannelUnreads(byKey.keys);
     // Rebuild PM sidebar rows from hydrated threads; groups are skipped and closed PMs stay closed.
     for (final entry in state.messages.entries) {
       final msgs = entry.value;
@@ -5326,6 +5534,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   void hydrateProfiles(Map<String, UserProfile> profiles) {
     final touched = <String>[];
+    var renamed = false;
     profiles.forEach((pubkey, hydrated) {
       final p = pinVerifiedBotMedia(pubkey, hydrated);
       touched.add(pubkey);
@@ -5334,12 +5543,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
       final resolvedName = _kind0DisplayName(p);
       if (existing != null) {
         if (existing.profile == null ||
-            p.kind0Ts >= existing.profile!.kind0Ts) {
+            p.kind0Ts >= existing.profile!.kind0Ts ||
+            _nameInFuture(existing.profile!.kind0Ts)) {
           existing.profile = p;
           if (resolvedName != null &&
-              _nameWins(pubkey, p.kind0Ts)) {
+              _nameWins(pubkey, p.kind0Ts,
+                  kind0: true, placeholder: isPlaceholderNym(resolvedName))) {
             final next = getNymFromPubkey(resolvedName, pubkey);
             _noteNym(pubkey, existing.nym, next);
+            if (existing.nym != next) renamed = true;
             existing.nym = next;
             _noteNameTime(pubkey, p.kind0Ts);
           }
@@ -5355,8 +5567,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
       }
     });
     for (final pubkey in touched) {
-      _rewriteStoredAuthors(pubkey);
-      _syncPmConversationNym(pubkey);
+      if (_rewriteStoredAuthors(pubkey)) renamed = true;
+      if (_syncPmConversationNym(pubkey)) renamed = true;
     }
     // Restore the header nym from the cached self profile before a live kind-0 (which the no-op guard may skip).
     String? selfNym;
@@ -5369,6 +5581,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       }
     }
     state = state.copyWith(selfNym: selfNym);
+    if (renamed || selfNym != null) _scheduleEmit();
   }
 
   /// Hydrates cached reactions (`[[emoji,[[reactor,nym]]]]`) and recomputes tallies.
@@ -5419,7 +5632,6 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _scheduleEmit();
   }
 
-  /// Seeds sidebar discovery, last activity and (with [seedUnread]) unread floors from a D1 activity probe.
   void applyChannelActivity(
     Map<String, List<int>> activity,
     Map<String, int> last, {
@@ -5487,14 +5699,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
       }
     }
 
-    // Unread floors only for listed, non-active channels on spam-aware passes.
-    if (seedUnread && !state.contentFiltersActive) {
-      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      activity.forEach((rawKey, buckets) {
+    if (seedUnread) {
+      activity.forEach((rawKey, _) {
         final key = rawKey.toLowerCase();
         if (key.isEmpty) return;
         final storageKey = '#$key';
-        // Never seed the open view or a blocked channel.
         if (state.view.kind == ViewKind.channel &&
             state.view.storageKey == storageKey) {
           return;
@@ -5504,33 +5713,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
           return;
         }
         if (!state.channels.any((c) => c.key == key)) return;
-        // Sum only buckets after the newest of the '#key' and bare-key watermarks.
-        final byStorage = _channelLastRead[storageKey] ?? 0;
-        final byBare = _channelLastRead[key] ?? 0;
-        final lastRead = byStorage > byBare ? byStorage : byBare;
-        // Prorate the boundary bucket so read messages don't count; nothing is unread if D1's newest predates the watermark.
-        final newest = last[key] ?? last[rawKey] ?? 0;
-        if (lastRead > 0 && newest > 0 && newest <= lastRead) return;
-        final windowSec =
-            lastRead > 0 ? (nowSec - lastRead).clamp(0, 24 * 3600) : 24 * 3600;
-        final whole = (windowSec ~/ 3600).clamp(0, 24);
-        var count = 0;
-        for (var h = 0; h < whole && h < buckets.length; h++) {
-          if (buckets[h] > 0) count += buckets[h];
-        }
-        if (whole < 24 && whole < buckets.length && buckets[whole] > 0) {
-          final fraction = (windowSec - whole * 3600) / 3600;
-          if (fraction > 0) count += (buckets[whole] * fraction).floor();
-        }
-        if (count <= 0 && lastRead > 0 && newest > lastRead) count = 1;
-        if (count <= 0) return;
-        // D1 is a floor: only raise the badge.
-        _d1Floor[storageKey] = count;
-        _d1FloorBasis[storageKey] = lastRead;
-        if (count > (state.unreadCounts[storageKey] ?? 0)) {
-          state.unreadCounts[storageKey] = count;
-          changed = true;
-        }
+        if (_setChannelUnread(storageKey)) changed = true;
       });
     }
 
@@ -5953,35 +6136,44 @@ List<Message> visibleMessagesFor(AppState s, String storageKey) {
     return <Message>[];
   }
   final list = s.messages[storageKey] ?? const <Message>[];
-  // Fast path only when nothing can filter; the spam filter is on by default.
   final canFilter = _canFilter(s);
-  var visible = canFilter
-      ? list.where((m) => !s.isMessageFiltered(m)).toList()
-      : [...list];
-  if (visible.any((m) => m.expiresAt != null)) {
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    visible = visible.where((m) => !chatToolsHidden(m, nowSec)).toList();
-  }
-  // Thread replies are hidden from the flat view only when their root is present locally.
-  if (appThreadsEnabled && visible.any((m) => m.threadRoot != null)) {
-    final rootIds = <String>{
-      for (final m in list)
-        if (m.threadRoot == null) threadKeyForMessage(m),
-    }..remove('');
-    visible = visible
-        .where((m) => m.threadRoot == null || !rootIds.contains(m.threadRoot))
-        .toList();
-  }
-  if (visible.any((m) => m.threadRoot != null)) {
-    visible = visible.where((m) => !botThreadForeign(m, list)).toList();
-  }
+  final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  final roots = appThreadsEnabled && list.any((m) => m.threadRoot != null)
+      ? channelThreadRootIds(list)
+      : null;
+  final visible = [
+    for (final m in list)
+      if (channelMessageShown(s, m, list,
+          canFilter: canFilter, nowSec: nowSec, rootIds: roots))
+        m,
+  ];
   visible.sort(compareMessages);
   return visible;
 }
 
+Set<String> channelThreadRootIds(List<Message> list) => <String>{
+      for (final m in list)
+        if (m.threadRoot == null) threadKeyForMessage(m),
+    }..remove('');
+
+bool channelMessageShown(AppState s, Message m, List<Message> list,
+    {required bool canFilter, required int nowSec, Set<String>? rootIds}) {
+  if (canFilter && s.isMessageFiltered(m)) return false;
+  if (m.expiresAt != null && chatToolsHidden(m, nowSec)) return false;
+  final root = m.threadRoot;
+  if (root == null) return true;
+  if (appThreadsEnabled && rootIds != null && rootIds.contains(root)) {
+    return false;
+  }
+  return !botThreadForeign(m, list);
+}
+
+bool channelFilterActive(AppState s) => _canFilter(s);
+
 bool _canFilter(AppState s) =>
     appSpamFilterEnabled ||
     s.autoMutedUsers.isNotEmpty ||
+    s.autoMuteHeld.isNotEmpty ||
     ServerQuiet.keys.isNotEmpty ||
     s.contentFiltersActive;
 
@@ -6387,6 +6579,7 @@ class NotificationEntry {
     this.subject,
     this.channel,
     this.quoted = const <String>[],
+    this.source,
   }) : receivedAt = (receivedAt != null && receivedAt > 0) ? receivedAt : ts;
 
   /// `'message' | 'mention' | 'reaction' | 'call' | 'pm' | 'group' | …`.
@@ -6427,6 +6620,8 @@ class NotificationEntry {
 
   final List<String> quoted;
 
+  final String? source;
+
   int get readTs => NotifyView.readTs(ts, receivedAt, live);
 
   NotifyAlertKey get alertKey {
@@ -6456,6 +6651,7 @@ class NotificationEntry {
     String? subject,
     String? channel,
     List<String>? quoted,
+    String? source,
   }) =>
       NotificationEntry(
         type: type ?? this.type,
@@ -6475,6 +6671,7 @@ class NotificationEntry {
         subject: subject ?? this.subject,
         channel: channel ?? this.channel,
         quoted: quoted ?? this.quoted,
+        source: source ?? this.source,
       );
 
   /// Copy with [ts] clamped to [receivedAt], never to `now`, so re-running is idempotent.
@@ -6496,6 +6693,7 @@ class NotificationEntry {
         subject: subject,
         channel: channel,
         quoted: quoted,
+        source: source,
       );
 
   /// `timestamp` is the PWA field name so either client's blob round-trips; nulls are omitted.
@@ -6517,6 +6715,7 @@ class NotificationEntry {
         if (subject != null && subject!.isNotEmpty) 'subject': subject,
         if (channel != null && channel!.isNotEmpty) 'channel': channel,
         if (quoted.isNotEmpty) 'quoted': quoted,
+        if (source != null && source!.isNotEmpty) 'source': source,
       };
 
   /// Rebuilds an entry from native JSON or a PWA `channelInfo` record; null when required fields are missing.
@@ -6534,6 +6733,7 @@ class NotificationEntry {
     var ciStable = false;
     String? ciSubject;
     String? ciChannel;
+    String? ciSource;
     final ci = raw['channelInfo'];
     if (ci is Map) {
       if (ci['subject'] is String) ciSubject = ci['subject'] as String;
@@ -6574,6 +6774,14 @@ class NotificationEntry {
             'geohash' => str('sourceChannel') ?? str('sourceGeohash'),
             _ => null,
           };
+          final src = ciRoute ?? '';
+          if (src.isNotEmpty) {
+            ciSource = switch (ci['sourceType']) {
+              'pm' => 'pm-$src',
+              'group' => 'group-$src',
+              _ => ciChannel != null ? '#$ciChannel' : '#$src',
+            };
+          }
         case 'call':
           ciType = 'call';
           ciRoute = ci['isGroup'] == true ? str('groupId') : ciPubkey;
@@ -6611,6 +6819,7 @@ class NotificationEntry {
       quoted: Message.quotedKeys(raw['quoted'] is List
           ? raw['quoted']
           : (ci is Map ? ci['quoted'] : null)),
+      source: raw['source'] is String ? raw['source'] as String : ciSource,
     );
   }
 }
@@ -6833,6 +7042,7 @@ class NotificationHistoryNotifier
               locked: true,
               subject: e.subject,
               channel: e.channel,
+              source: e.source,
             );
           })()
         else
@@ -7124,6 +7334,7 @@ class NotificationHistoryNotifier
     String? subject,
     String? channel,
     List<String> quoted = const <String>[],
+    String? source,
   }) {
     // Channel digests never enter the bell history, on any path.
     if (body.contains('10 recent messages:')) return;
@@ -7148,6 +7359,7 @@ class NotificationHistoryNotifier
         subject: subject,
         channel: channel,
         quoted: quoted,
+        source: source,
       ));
       _pendingRecords.add(() => record(
             type: type,
@@ -7166,6 +7378,7 @@ class NotificationHistoryNotifier
             subject: subject,
             channel: channel,
             quoted: quoted,
+            source: source,
           ));
       return;
     }
@@ -7194,6 +7407,7 @@ class NotificationHistoryNotifier
       subject: subject,
       channel: channel,
       quoted: quoted,
+      source: source,
     );
     if (_absorb(entry)) return;
     // Land pre-viewed when seen on another device or under a read watermark; remember newly viewed keys.
@@ -7564,6 +7778,9 @@ class NotificationHistoryNotifier
       base = base.copyWith(
           subject: (base.subject ?? '').isEmpty ? other.subject : null,
           channel: (base.channel ?? '').isEmpty ? other.channel : null);
+    }
+    if ((base.source ?? '').isEmpty && (other.source ?? '').isNotEmpty) {
+      base = base.copyWith(source: other.source);
     }
     if (pick.eventId.isNotEmpty) base.eventId = pick.eventId;
     base.stableId = pick.stable;

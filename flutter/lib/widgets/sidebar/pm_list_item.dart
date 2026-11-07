@@ -33,6 +33,7 @@ class PMListItem extends ConsumerWidget {
     required this.textSize,
     required this.onTap,
     this.mesh = false,
+    this.reorder = true,
   });
 
   final String nym;
@@ -43,6 +44,8 @@ class PMListItem extends ConsumerWidget {
   final VoidCallback onTap;
 
   final bool mesh;
+
+  final bool reorder;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -225,6 +228,7 @@ class PMListItem extends ConsumerWidget {
         ),
       ),
     );
+    if (!reorder) return row;
     return PinnedReorder(
       storageKey: 'pm-${pubkey.toLowerCase()}',
       onHoldMenu: (pos) {

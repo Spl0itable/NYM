@@ -169,6 +169,17 @@ Object.assign(NYM.prototype, {
         this.setupSwipeToReply(strip);
         this.setupDoubleClickToReply(strip);
 
+        strip.addEventListener('scroll', () => {
+            if (this._cvStrip === strip) this._cvRecheckShown();
+        }, { passive: true });
+        if (typeof ResizeObserver === 'function') {
+            const sized = new ResizeObserver(() => {
+                if (this._cvStrip !== strip) { sized.disconnect(); return; }
+                this._cvRecheckShown();
+            });
+            sized.observe(strip);
+        }
+
         strip.addEventListener('click', (e) => {
             const move = e.target.closest('.cv-col-move');
             if (move) {
@@ -320,6 +331,19 @@ Object.assign(NYM.prototype, {
         }
         this._cvSaveLayout();
         this._cvRebuildHeaderDots();
+        this._cvRecheckShown();
+    },
+
+    _cvRecheckShown() {
+        if (this._cvRecheckPending || typeof requestAnimationFrame !== 'function') return;
+        this._cvRecheckPending = true;
+        requestAnimationFrame(() => {
+            this._cvRecheckPending = false;
+            if (!this._cvStrip || typeof this._cnUpdateFabs !== 'function') return;
+            for (const c of this._cvColumns || []) {
+                if (c && c.key && this._notifColumnOnScreen(c)) this._cnUpdateFabs(c.key);
+            }
+        });
     },
 
     // Mirrors single-view nav history so back/forward drive column navigation too.
@@ -408,6 +432,7 @@ Object.assign(NYM.prototype, {
         this._cvSaveLayout();
         this._cvRebuildHeaderDots();
         this._cvScrollToCol(moved);
+        this._cvRecheckShown();
     },
 
     cvResetColumns() {
@@ -575,6 +600,8 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _cvRowSelector: '.message[data-message-id], .me-message[data-message-id], .group-notice[data-message-id]',
+
     // Columns are painted once then only appended to, so store fills that bypass displayMessage need reconciling.
     _cvColumnBehind(col) {
         if (!col || !col.listEl) return false;
@@ -584,7 +611,7 @@ Object.assign(NYM.prototype, {
             : this.getFilteredMessages(col.key);
         const pageSize = isPM ? this.pmPageSize : this.channelPageSize;
         const expected = Math.min(store.length, pageSize);
-        const rows = col.listEl.querySelectorAll('.message[data-message-id]');
+        const rows = col.listEl.querySelectorAll(this._cvRowSelector);
         if (rows.length < expected) return true;
         if (!rows.length || !store.length) return false;
         // Only repaint when pinned to the bottom so reconciling never yanks a column the user is reading.
@@ -617,10 +644,35 @@ Object.assign(NYM.prototype, {
     _cvRenderColumn(col) {
         if (!col.listEl) return;
         const isPM = col.type !== 'channel';
+        const place = col._atBottom === false ? this._cvReadingPlace(col) : null;
         this.renderMessagesWithVirtualScroll(col.listEl, col.key, false, isPM);
+        if (place && this._cvRestoreReadingPlace(col, place)) return;
         if (col.scrollerEl) col.scrollerEl.scrollTop = 0;
         col._atBottom = true;
         this._cvMarkColumnRead(col.key);
+    },
+
+    _cvReadingPlace(col) {
+        const sc = col.scrollerEl;
+        if (!sc || typeof sc.getBoundingClientRect !== 'function') return null;
+        const top = sc.getBoundingClientRect().top;
+        for (const row of col.listEl.querySelectorAll(this._cvRowSelector)) {
+            const r = row.getBoundingClientRect();
+            if (r.bottom > top) return { id: row.dataset.messageId, y: r.top - top };
+        }
+        return null;
+    },
+
+    _cvRestoreReadingPlace(col, place) {
+        const sc = col.scrollerEl;
+        let row = null;
+        for (const r of col.listEl.querySelectorAll(this._cvRowSelector)) {
+            if (r.dataset.messageId === place.id) { row = r; break; }
+        }
+        if (!row) return false;
+        sc.scrollTop += (row.getBoundingClientRect().top - sc.getBoundingClientRect().top) - place.y;
+        col._atBottom = false;
+        return true;
     },
 
     _cvRenderAll() {

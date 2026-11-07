@@ -2700,8 +2700,21 @@ async function onRandomKeypairChange(el) {
     applyKeypairMode(mode);
     el.dataset.prevValue = mode;
     showWarning(mode);
+    syncReadReceiptsControl();
 }
 window.onRandomKeypairChange = onRandomKeypairChange;
+
+function syncReadReceiptsControl() {
+    const sel = document.getElementById('readReceiptsSelect');
+    if (!sel || typeof nym === 'undefined' || !nym) return;
+    const off = typeof nym._receiptsOff === 'function' && nym._receiptsOff();
+    const scope = nym.settings && nym.settings.readReceiptsScope;
+    sel.disabled = off;
+    sel.value = off ? 'disabled' : (['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'].includes(scope) ? scope : 'everywhere');
+    const hint = document.getElementById('readReceiptsHardcoreHint');
+    if (hint) hint.classList.toggle('nm-hidden', !off);
+}
+window.syncReadReceiptsControl = syncReadReceiptsControl;
 
 function onTransparencyChange(value) {
     const enabled = value === 'true' || value === true;
@@ -4272,6 +4285,7 @@ async function showSettings() {
     if (readReceiptsSel) {
         const scope = nym.settings.readReceiptsScope;
         readReceiptsSel.value = VALID_INDICATOR_SCOPES.includes(scope) ? scope : 'everywhere';
+        syncReadReceiptsControl();
     }
 
     const typingIndicatorsSel = document.getElementById('typingIndicatorsSelect');
@@ -4735,7 +4749,7 @@ function initWallpaperUI() {
 }
 
 const NYMCHAT_VERSION = 'v3.75.545';
-const NYMCHAT_BUILD = 877;
+const NYMCHAT_BUILD = 930;
 
 function nymUiArgs(template, args) {
     if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);
@@ -5015,6 +5029,7 @@ async function checkSavedConnection() {
                 await _nip46RestoreSession();
             }
 
+            const bootView = bootViewMark();
             const setupModal = document.getElementById('setupModal');
             setupModal.classList.remove('active');
 
@@ -5065,24 +5080,11 @@ async function checkSavedConnection() {
             // Wait for synced settings so a returning user isn't re-prompted.
             startOnboardingWhenHydrated();
 
-            const restoredView = !window.pendingChannel && typeof nym._restoreLastView === 'function' && nym._restoreLastView();
-            if (!restoredView && nym.settings.groupChatPMOnlyMode) {
-                setTimeout(() => nym.navigateToLatestPMOrGroup(), 500);
-            } else if (!restoredView) {
-                const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
-                if (savedChannel) {
-                    try {
-                        const { channel, geohash } = JSON.parse(savedChannel);
-                        if (channel && channel !== nym.currentChannel) {
-                            if (geohash) nym.addChannel(channel, geohash);
-                            nym.switchChannel(channel, geohash || '');
-                        }
-                    } catch (e) { }
-                }
-            }
+            restoreBootView(bootView);
 
             // A URL channel overrides the saved one.
             await routeToUrlChannel();
+            if (typeof nym._notifTapsReady === 'function') nym._notifTapsReady();
 
             return;
         } catch (error) {
@@ -5093,6 +5095,7 @@ async function checkSavedConnection() {
     const autoEphemeral = localStorage.getItem('nym_auto_ephemeral');
     if (autoEphemeral === 'true') {
         try {
+            const bootView = bootViewMark();
             const setupModal = document.getElementById('setupModal');
             setupModal.classList.remove('active');
 
@@ -5163,6 +5166,7 @@ async function checkSavedConnection() {
 
             nym._loadGroupConversations();
             nym._loadEphemeralKeys();
+            if (typeof nym._sfLoad === 'function') nym._sfLoad();
             nym._loadBotAnonState();
             nym._loadLastPMSyncTime();
             nym._refreshPmSupportBadges();
@@ -5210,26 +5214,11 @@ async function checkSavedConnection() {
             // Wait for synced settings so a returning user isn't re-prompted.
             startOnboardingWhenHydrated();
 
-            const restoredView = !window.pendingChannel && typeof nym._restoreLastView === 'function' && nym._restoreLastView();
-            if (!restoredView && nym.settings.groupChatPMOnlyMode) {
-                setTimeout(() => nym.navigateToLatestPMOrGroup(), 500);
-            } else if (!restoredView) {
-                const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
-                if (savedChannel) {
-                    try {
-                        const { channel, geohash } = JSON.parse(savedChannel);
-                        if (channel && channel !== nym.currentChannel) {
-                            if (geohash) {
-                                nym.addChannel(channel, geohash);
-                            }
-                            nym.switchChannel(channel, geohash || '');
-                        }
-                    } catch (e) { }
-                }
-            }
+            restoreBootView(bootView);
 
             // A URL channel overrides the saved one.
             await routeToUrlChannel();
+            if (typeof nym._notifTapsReady === 'function') nym._notifTapsReady();
 
             return;
         } catch (error) {
@@ -5357,6 +5346,7 @@ async function initializeNym() {
 
         nym._loadGroupConversations();
         nym._loadEphemeralKeys();
+        if (typeof nym._sfLoad === 'function') nym._sfLoad();
         nym._loadBotAnonState();
         nym._loadLastPMSyncTime();
         nym._refreshPmSupportBadges();
@@ -5433,6 +5423,7 @@ async function initializeNym() {
         }
 
         await routeToUrlChannel();
+        if (typeof nym._notifTapsReady === 'function') nym._notifTapsReady();
 
         // Wait for synced settings so a returning user isn't re-prompted.
         startOnboardingWhenHydrated();
@@ -6343,6 +6334,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Restore groups and ephemeral keys before relay history arrives.
     nym._loadGroupConversations();
     nym._loadEphemeralKeys();
+    if (typeof nym._sfLoad === 'function') nym._sfLoad();
     nym._loadBotAnonState();
     nym._loadLastPMSyncTime();
     nym._refreshPmSupportBadges();
@@ -6550,6 +6542,7 @@ async function applyNostrSettingsAdditive(s) {
     // Depth counter, not save/restore: these applies run concurrently.
     nym._applyRemoteDepth = (nym._applyRemoteDepth || 0) + 1;
     nym._applyingRemoteSettings = true;
+    let awayRun = null;
     try {
 
     if (typeof nym._applySyncExtras === 'function') {
@@ -6644,23 +6637,8 @@ async function applyNostrSettingsAdditive(s) {
         try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(nym.leftGroupTimes))); } catch (_) { }
     }
 
-    if (s.channelLastRead && typeof s.channelLastRead === 'object') {
-        if (!nym.channelLastRead) nym.channelLastRead = new Map();
-        let lrChanged = false;
-        const lrAdvanced = [];
-        for (const [ch, v] of Object.entries(s.channelLastRead)) {
-            if (typeof v !== 'number' || v <= 0) continue;
-            const cur = nym.channelLastRead.get(ch) || 0;
-            if (v > cur) { nym.channelLastRead.set(ch, v); lrChanged = true; lrAdvanced.push([ch, v]); }
-        }
-        if (lrAdvanced.length && typeof nym._cnPruneRemoteRead === 'function') {
-            try { nym._cnPruneRemoteRead(lrAdvanced); } catch (_) { }
-        }
-        if (lrChanged && typeof nym._persistUnreadCounts === 'function') {
-            nym._persistUnreadCounts(true);
-            if (typeof nym._seedUnreadFromD1Activity === 'function') nym._seedUnreadFromD1Activity();
-            if (typeof nym.recomputeAllUnreadCounts === 'function') nym.recomputeAllUnreadCounts();
-        }
+    if (s.channelLastRead && typeof s.channelLastRead === 'object' && typeof nym._applySyncedLastRead === 'function') {
+        nym._applySyncedLastRead(s.channelLastRead);
     }
 
     const applyGroupData = (groupData) => {
@@ -6773,7 +6751,7 @@ async function applyNostrSettingsAdditive(s) {
     }
 
     if (s.awayStatus && typeof nym.applySyncedAway === 'function') {
-        try { await nym.applySyncedAway(s.awayStatus); } catch (_) { }
+        try { awayRun = Promise.resolve(nym.applySyncedAway(s.awayStatus)).catch(() => { }); } catch (_) { }
     }
     if (s.savedMessages && typeof s.savedMessages === 'object' && typeof nym.applySyncedSaved === 'function') {
         try { nym.applySyncedSaved(s.savedMessages); } catch (_) { }
@@ -6781,6 +6759,10 @@ async function applyNostrSettingsAdditive(s) {
 
     if (s.pinnedChats && typeof s.pinnedChats === 'object' && typeof nym.applySyncedPinned === 'function') {
         try { nym.applySyncedPinned(s.pinnedChats); } catch (_) { }
+    }
+
+    if (s.sidebarFolders && typeof s.sidebarFolders === 'object' && typeof nym.applySyncedFolders === 'function') {
+        try { nym.applySyncedFolders(s.sidebarFolders); } catch (_) { }
     }
 
     if (s.lockedChats && typeof s.lockedChats === 'object' && typeof nym.applySyncedLocked === 'function') {
@@ -6858,6 +6840,7 @@ async function applyNostrSettingsAdditive(s) {
         }
         if (!nym._applyingRemoteSettings && typeof nym._flushHeldSettingsSave === 'function') nym._flushHeldSettingsSave();
     }
+    if (awayRun) await awayRun;
 }
 
 const SWIPE_REACT_SHORTCODE_RE = /^:[A-Za-z0-9_]{1,48}:$/;
@@ -7404,23 +7387,8 @@ async function applyNostrSettings(s, opts) {
     }
 
     // Keep the later timestamp per channel so badges don't resurface messages read elsewhere.
-    if (s.channelLastRead && typeof s.channelLastRead === 'object') {
-        if (!nym.channelLastRead) nym.channelLastRead = new Map();
-        let lrChanged = false;
-        const lrAdvanced = [];
-        for (const [ch, v] of Object.entries(s.channelLastRead)) {
-            if (typeof v !== 'number' || v <= 0) continue;
-            const cur = nym.channelLastRead.get(ch) || 0;
-            if (v > cur) { nym.channelLastRead.set(ch, v); lrChanged = true; lrAdvanced.push([ch, v]); }
-        }
-        if (lrAdvanced.length && typeof nym._cnPruneRemoteRead === 'function') {
-            try { nym._cnPruneRemoteRead(lrAdvanced); } catch (_) { }
-        }
-        if (lrChanged && typeof nym._persistUnreadCounts === 'function') {
-            nym._persistUnreadCounts(true);
-            if (typeof nym._seedUnreadFromD1Activity === 'function') nym._seedUnreadFromD1Activity();
-            if (typeof nym.recomputeAllUnreadCounts === 'function') nym.recomputeAllUnreadCounts();
-        }
+    if (s.channelLastRead && typeof s.channelLastRead === 'object' && typeof nym._applySyncedLastRead === 'function') {
+        nym._applySyncedLastRead(s.channelLastRead);
     }
 
     const applyGroupData = (groupData) => {
@@ -7640,6 +7608,7 @@ async function signOut() {
     const ask = [uiVars('Sign out of {nym} and disconnect from Nymchat?', { nym: who }), keys, uiVars('You will return to the welcome screen.')].join('\n\n');
     if (!(await window.showAppConfirm(ask, { okLabel: uiVars('Sign out'), danger: true }))) return;
     if (nym && typeof nym._stopAllAnonPresence === 'function') nym._stopAllAnonPresence();
+    if (nym && typeof nym._notifOwnerReset === 'function') await Promise.race([nym._notifOwnerReset(), new Promise((r) => setTimeout(r, 1000))]);
     localStorage.removeItem('nym_auto_ephemeral');
     localStorage.removeItem('nym_auto_ephemeral_nick');
     localStorage.removeItem('nym_auto_ephemeral_channel');
@@ -8108,6 +8077,33 @@ function parseUrlChannel() {
 
         window.pendingChannel = channelFromUrl;
     }
+}
+
+function bootViewMark() {
+    let saved = null;
+    let lastView = null;
+    try { saved = JSON.parse(localStorage.getItem('nym_auto_ephemeral_channel') || 'null'); } catch (_) { }
+    try { lastView = localStorage.getItem('nym_last_view'); } catch (_) { }
+    return { nav: nym._navSeq || 0, taps: nym._notifTapSeq || 0, saved, lastView };
+}
+
+function bootViewMoved(mark) {
+    if ((nym._notifTapSeq || 0) !== mark.taps) return true;
+    const nav = nym._navSeq || 0;
+    return nav !== mark.nav && nav !== nym._landingNavSeq;
+}
+
+function restoreBootView(mark) {
+    if (bootViewMoved(mark)) return;
+    const restoredView = !window.pendingChannel && typeof nym._restoreLastView === 'function' && nym._restoreLastView(mark.lastView);
+    if (!restoredView && nym.settings.groupChatPMOnlyMode) {
+        setTimeout(() => { if (!nym._notifTapSeq && !bootViewMoved(mark)) nym.navigateToLatestPMOrGroup(); }, 500);
+        return;
+    }
+    const saved = mark.saved;
+    if (restoredView || !saved || !saved.channel || saved.channel === nym.currentChannel) return;
+    if (saved.geohash) nym.addChannel(saved.channel, saved.geohash);
+    nym.switchChannel(saved.channel, saved.geohash || '');
 }
 
 async function routeToUrlChannel() {

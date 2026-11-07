@@ -90,10 +90,18 @@ window.filterSettings = function (query) {
 };
 
 (function () {
+    var dims = new Map();
+    window.NymImgDims = dims;
     function markImgLoaded(e) {
         var t = e.target;
         if (t && t.tagName === 'IMG' && t.classList && t.classList.contains('msg-img')) {
             t.classList.add('img-loaded');
+            if (e.type !== 'load' || !(t.naturalWidth > 0) || !(t.naturalHeight > 0)) return;
+            var key = t._nymDimKey || t.getAttribute('src');
+            if (!key || /^(blob|data):/i.test(key)) return;
+            dims.delete(key);
+            dims.set(key, [t.naturalWidth, t.naturalHeight]);
+            if (dims.size > 500) dims.delete(dims.keys().next().value);
         }
     }
     document.addEventListener('load', markImgLoaded, true);
@@ -388,6 +396,7 @@ window.nymHaptic = function (kind) {
         'toggleSearch':               function (_e, t) { window.toggleSearch(t.dataset.searchTarget); },
         'clearSearch':                function (_e, t) { window.clearSearch(t.dataset.searchTarget); },
         'toggleSectionCollapse':      function (e, t) { e.stopPropagation(); window.toggleSectionCollapse(t.dataset.sectionTarget); },
+        'setPublicMode':              function (_e, t) { nym().setPublicMode(t.dataset.psMode); },
         'channelSearchInput':         function (_e, t) {
             t.value = t.value.toLowerCase();
             nym().handleChannelSearch(t.value);

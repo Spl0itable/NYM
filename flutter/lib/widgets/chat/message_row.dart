@@ -35,6 +35,7 @@ import '../../features/i18n/i18n.dart';
 import '../../features/nymbot/long_text.dart';
 import '../../features/messages/flood_tracker.dart';
 import '../../features/messages/format/message_content.dart';
+import '../../features/messages/picture_blur.dart';
 import '../../features/messages/inline_network_image.dart';
 import '../../features/settings/about_screen.dart';
 import '../../features/p2p/p2p_models.dart';
@@ -65,7 +66,6 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../services/relay/queued_sends.dart';
 import '../../services/storage/mesh_file_store.dart';
-import '../../state/settings_provider.dart';
 import '../common/nym_avatar.dart';
 import '../../features/accounts/account_host.dart' show accountsProvider;
 import '../nym_icons.dart';
@@ -843,24 +843,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
       : ref.watch(userCosmeticsProvider(message.pubkey));
 
   /// The supporter gold treatment composes over an active style, as the PWA applies both classes.
-  MessageStyleDecoration? _styleDecoration(BuildContext context) {
-    final cos = _cosmetics;
-    final c = context.nym;
-    final isLight = c.isLight;
-    final solidUi = c.solidUi;
-    final styled =
-        messageStyleDecoration(cos.styleId, isLight: isLight, solidUi: solidUi);
-    if (styled != null) {
-      return cos.supporter
-          ? composeSupporterStyle(styled, cos.styleId!,
-              isLight: isLight, solidUi: solidUi)
-          : styled;
-    }
-    if (cos.supporter) {
-      return supporterStyleDecorationFor(isLight: isLight, solidUi: solidUi);
-    }
-    return null;
-  }
+  MessageStyleDecoration? _styleDecoration(BuildContext context) =>
+      messageStyleDecorationFor(_cosmetics, context.nym);
 
   /// Aura cosmetics resolved for the current brightness and solid-ui.
   List<CosmeticAura> _resolveAuras(BuildContext context) =>
@@ -902,7 +886,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
     bool brackets = false,
   }) {
     final base = _authorStyle(c, self: self, size: size);
-    final style = context.highContrast && base.color != null
+    final hue = self || _cosmetics.isRedacted ? null : _bitchatColor(c);
+    final style = context.highContrast && base.color != null && hue == null
         ? base.copyWith(
             color: legibleOnAll(base.color!, [bubbleBgFor(c), c.bg]))
         : base;
@@ -957,19 +942,18 @@ class _MessageRowState extends ConsumerState<MessageRow>
   }
 
   /// Per-user color for a non-self author in the Bitchat theme only; applied to both nym and body.
-  bool get _hasTextFlair {
-    final cos = _cosmetics;
-    return cos.styleId != null || cos.supporter || cos.cosmetics.isNotEmpty;
-  }
-
-  Color _bodyColor(NymColors c) => settings.colorfulMessages || _hasTextFlair
-      ? (_bitchatColor(c) ?? c.text)
-      : c.messageText;
+  Color _bodyColor(NymColors c) => channelBodyColor(c,
+      cosmetics: _cosmetics,
+      own: message.isOwn,
+      pubkey: message.pubkey,
+      bitchatTheme: settings.theme == NymThemeKey.bitchat,
+      colorful: settings.colorfulMessages,
+      contrast: context.highContrast);
 
   Color? _bitchatColor(NymColors c) {
     if (message.isOwn) return null;
     if (settings.theme != NymThemeKey.bitchat) return null;
-    return bitchatUserColor(message.pubkey, isLight: c.isLight);
+    return bitchatUserColor(message.pubkey, isLight: c.isLight, contrast: context.highContrast);
   }
 
   Widget _bodyContent(
@@ -1027,6 +1011,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
         mime: message.localMediaMime,
         name: message.localMediaName,
         colors: context.nym,
+        blur: _shouldBlurImages(),
       );
     }
     if (gtHasCard(message)) return GtMessageCard(message: message);
@@ -1358,6 +1343,47 @@ class _MessageRowState extends ConsumerState<MessageRow>
 
   /// `/me` emote as an italic `* author action *` line in a pill.
   Widget _buildActionMessage(BuildContext context) {
+    final pill = _buildActionPill(context);
+    if (!_isMentionedRow()) return pill;
+    final c = context.nym;
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: c.isLight ? const Color(0x08000000) : c.secondaryA(0.06),
+        borderRadius: NymRadius.rsm,
+      ),
+      child: Stack(
+        children: [
+          pill,
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: FractionallySizedBox(
+                heightFactor: 0.6,
+                child: Container(
+                  width: 3,
+                  decoration: BoxDecoration(
+                    color: c.secondary,
+                    borderRadius: const BorderRadius.only(
+                      topRight: Radius.circular(3),
+                      bottomRight: Radius.circular(3),
+                    ),
+                    boxShadow: [
+                      BoxShadow(color: c.secondaryA(0.4), blurRadius: 8),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionPill(BuildContext context) {
     final c = context.nym;
     final fontSize = settings.textSize.toDouble() - 3;
     final action = message.content.startsWith('/me ')
@@ -2664,16 +2690,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
     );
   }
 
-  /// Never for own messages; otherwise per `blurOthersImages` (always, or only non-friends).
-  bool _shouldBlurImages() {
-    if (message.isOwn) return false;
-    final setting = ref.read(settingsProvider.notifier).blurImages;
-    if (setting == 'true') return true;
-    if (setting == 'friends') {
-      return !ref.read(appStateProvider).isFriend(message.pubkey);
-    }
-    return false;
-  }
+  bool _shouldBlurImages() =>
+      !message.isOwn && blursPicturesFrom(ref, message.pubkey);
 
   Widget _content(
     BuildContext context,
@@ -5459,12 +5477,14 @@ class _LocalMediaBody extends StatelessWidget {
     required this.mime,
     required this.name,
     required this.colors,
+    this.blur = false,
   });
 
   final String path;
   final String? mime;
   final String? name;
   final NymColors colors;
+  final bool blur;
 
   bool get _isImage => mime?.startsWith('image/') ?? false;
 
@@ -5490,23 +5510,35 @@ class _LocalMediaBody extends StatelessWidget {
           }
           final bytes = snap.data;
           if (bytes == null || bytes.isEmpty) return _fileCard(context);
+          Widget tile(bool blurred) {
+            final Widget image = ConstrainedBox(
+              constraints: const BoxConstraints(
+                  maxWidth: 260, maxHeight: 320, minWidth: 80),
+              child: Image.memory(bytes,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  // Decode at tile size; the full bytes are kept for fullscreen.
+                  cacheWidth: (260 *
+                          MediaQuery.devicePixelRatioOf(context) *
+                          1.5)
+                      .ceil()),
+            );
+            return ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: blurred ? blurPicture(image) : image,
+            );
+          }
+          if (blur) {
+            return blurReveal(
+              key: ValueKey(path),
+              onRevealedTap: () => _openFullscreen(context, bytes),
+              blurred: tile(true),
+              child: tile(false),
+            );
+          }
           return GestureDetector(
             onTap: () => _openFullscreen(context, bytes),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(
-                    maxWidth: 260, maxHeight: 320, minWidth: 80),
-                child: Image.memory(bytes,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                    // Decode at tile size; the full bytes are kept for fullscreen.
-                    cacheWidth: (260 *
-                            MediaQuery.devicePixelRatioOf(context) *
-                            1.5)
-                        .ceil()),
-              ),
-            ),
+            child: tile(false),
           );
         },
       );
@@ -5810,3 +5842,54 @@ class _CopyMenuRoute extends OverlayRoute<void> {
     onGone(this);
   }
 }
+
+MessageStyleDecoration? messageStyleDecorationFor(
+    UserCosmetics cos, NymColors c) {
+  final isLight = c.isLight;
+  final solidUi = c.solidUi;
+  final styled =
+      messageStyleDecoration(cos.styleId, isLight: isLight, solidUi: solidUi);
+  if (styled != null) {
+    return cos.supporter
+        ? composeSupporterStyle(styled, cos.styleId!,
+            isLight: isLight, solidUi: solidUi)
+        : styled;
+  }
+  if (cos.supporter) {
+    return supporterStyleDecorationFor(isLight: isLight, solidUi: solidUi);
+  }
+  return null;
+}
+
+Color channelBodyColor(NymColors c,
+    {required UserCosmetics cosmetics,
+    required bool own,
+    required String pubkey,
+    required bool bitchatTheme,
+    required bool colorful,
+    required bool contrast}) {
+  final flair = cosmetics.styleId != null ||
+      cosmetics.supporter ||
+      cosmetics.cosmetics.isNotEmpty;
+  if (!colorful && !flair) return c.messageText;
+  final hue =
+      own || !bitchatTheme ? null : bitchatUserColor(pubkey, isLight: c.isLight, contrast: contrast);
+  return hue ?? c.text;
+}
+
+Color channelBodyTextColor(NymColors c,
+        {required UserCosmetics cosmetics,
+        required bool own,
+        required String pubkey,
+        required bool bitchatTheme,
+        required bool colorful,
+        required bool contrast,
+        required bool bubbles}) =>
+    messageStyleDecorationFor(cosmetics, c)?.textColorFor(bubble: bubbles) ??
+    channelBodyColor(c,
+        cosmetics: cosmetics,
+        own: own,
+        pubkey: pubkey,
+        bitchatTheme: bitchatTheme,
+        colorful: colorful,
+        contrast: contrast);

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import '../../models/group.dart';
 import '../../models/nostr_event.dart';
 import '../../services/nostr/nostr_service.dart';
+import '../../services/nostr/event_signer.dart';
 import 'control_answers.dart';
 import 'group_logic.dart';
 
@@ -462,10 +463,12 @@ class GroupManager {
     required String selfPubkey,
     required UnsignedEvent rumor,
     required List<String> recipients,
+    EventSigner? signerOverride,
   }) async {
     if (!_service.canSign || recipients.isEmpty) return false;
     final ek = keysFor(group.id);
     return _service.publishGroupMessage(
+      signerOverride: signerOverride,
       rumor: rumor,
       onWrap: _depositFor(rumor),
       recipients: recipients,

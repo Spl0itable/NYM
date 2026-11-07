@@ -98,6 +98,7 @@
             this.onPrivateMessage = opts.onPrivateMessage || (() => { });
             this.onNymShare = opts.onNymShare || (() => { });
             this.acksPrivateMessage = opts.acksPrivateMessage || null;
+            this.dropsQueued = opts.dropsQueued || null;
             this.onReceipt = opts.onReceipt || (() => { });
             this.onFile = opts.onFile || (() => { });
             this.onPeersChanged = opts.onPeersChanged || (() => { });
@@ -858,7 +859,10 @@
             const queue = this.pendingPlaintext.get(peerID);
             if (!queue) return;
             this.pendingPlaintext.delete(peerID);
-            for (const plaintext of queue) await this._sendOrQueueEncrypted(peerID, plaintext);
+            for (const plaintext of queue) {
+                if (typeof this.dropsQueued === 'function' && this.dropsQueued(plaintext)) continue;
+                await this._sendOrQueueEncrypted(peerID, plaintext);
+            }
         }
 
         // receiving

@@ -1,15 +1,20 @@
 import 'dart:async';
 import 'dart:collection';
 
-import 'package:flutter/foundation.dart' show compute, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../models/nostr_event.dart';
+import '../utils/isolate_gate.dart';
 import 'native_schnorr.dart';
 import 'schnorr.dart' as schnorr;
 
 /// Off-main BIP340 verification that batches a turn's events into one `compute`; per-event verdicts, fails closed.
 class IsolateVerifier {
-  IsolateVerifier({this.maxBatch = 256, this.verifiedCacheCap = 100000});
+  IsolateVerifier(
+      {this.maxBatch = 256, this.verifiedCacheCap = 100000, IsolateGate? gate})
+      : _gate = gate ?? IsolateGate.shared;
+
+  final IsolateGate _gate;
 
   /// Max events per `compute` payload; the buffer flushes early at this size.
   final int maxBatch;
@@ -105,6 +110,15 @@ class IsolateVerifier {
     _flushScheduled = false;
     // Single-flight: later arrivals buffer and are re-flushed on completion.
     if (_inFlight || _pending.isEmpty) return;
+    _inFlight = true;
+    _gate.hold(_runBatch).whenComplete(() {
+      _inFlight = false;
+      if (_pending.isNotEmpty) _flush();
+    });
+  }
+
+  Future<void> _runBatch(IsolateSpawner spawn) {
+    if (_pending.isEmpty) return Future<void>.value();
     // Take at most [maxBatch] so a backlog crosses the isolate in bounded messages.
     final take = _pending.length <= maxBatch ? _pending.length : maxBatch;
     final batch = List<NostrEvent>.of(_pending.take(take));
@@ -117,8 +131,7 @@ class IsolateVerifier {
     final payload = <Map<String, dynamic>>[
       for (final e in batch) e.toJson(),
     ];
-    _inFlight = true;
-    compute(verifyEventsBatch, payload).then((results) {
+    return spawn(verifyEventsBatch, payload).then((results) {
       // Guard positional alignment so a bad result length can never resolve to `true`.
       var anyNew = false;
       for (var i = 0; i < waiters.length; i++) {
@@ -135,9 +148,6 @@ class IsolateVerifier {
       for (final w in waiters) {
         if (!w.isCompleted) w.complete(false);
       }
-    }).whenComplete(() {
-      _inFlight = false;
-      if (_pending.isNotEmpty) _flush();
     });
   }
 }

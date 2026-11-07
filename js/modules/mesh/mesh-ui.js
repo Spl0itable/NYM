@@ -87,6 +87,7 @@
                 onPrivateMessage: (m) => this._onMeshPrivateMessage(m),
                 onNymShare: (m) => { if (typeof this._nearbyReceive === 'function') this._nearbyReceive(m); },
                 acksPrivateMessage: (m) => this._meshAcksPrivate(m),
+                dropsQueued: (p) => this._meshDropsQueued(p),
                 onReceipt: (r) => { if (typeof this.onMeshReceipt === 'function') this.onMeshReceipt(r); },
                 onFile: (f) => { if (typeof this.onMeshFile === 'function') this.onMeshFile(f); },
                 onPeersChanged: () => { this._renderMeshPanel(); this._renderMeshStatusRow(); },
@@ -300,7 +301,17 @@
             });
         },
 
+        _meshDropsQueued(p) {
+            if (!p || !p.length || typeof this._receiptsOff !== 'function' || !this._receiptsOff()) return false;
+            const NP = window.NymMeshProtocol.NoisePayloadType;
+            if (p[0] === NP.delivered) return true;
+            if (p[0] !== NP.readReceipt) return false;
+            const id = new TextDecoder().decode(p.subarray(1));
+            return !(window.NymChatTools && window.NymChatTools.parseMeshKeepId(id));
+        },
+
         _meshAcksPrivate(m) {
+            if (typeof this._receiptsOff === 'function' && this._receiptsOff()) return false;
             if (!m) return true;
             const pubkey = typeof m.senderNostrPubkey === 'string' ? m.senderNostrPubkey : '';
             if (pubkey && pubkey !== this.pubkey) {
@@ -389,7 +400,7 @@
         },
 
         // Nothing comes back from the mesh for our own packet, so echo locally.
-        async _sendChannelOverMesh(content, channel) {
+        async _sendChannelOverMesh(content, channel, claim) {
             const mesh = this._meshService();
             let meshId = null;
             try {
@@ -406,8 +417,8 @@
             const localId = '_optim_mesh' + now.toString(36) + (this._msgSeq || 0);
             this.displayMessage({
                 id: localId,
-                author: this.nym,
-                pubkey: this.pubkey,
+                author: claim && claim.pubkey ? claim.nym : this.nym,
+                pubkey: claim && claim.pubkey ? claim.pubkey : this.pubkey,
                 content,
                 created_at: Math.floor(now / 1000),
                 _ms: now,
@@ -430,24 +441,28 @@
                 createdAt: Math.floor(now / 1000),
                 localId,
                 meshMessageId: meshId || null,
+                ...(claim && claim.pubkey ? { owner: claim.pubkey } : {}),
             };
+            if (claim && claim.chain) (claim.chain.queued || (claim.chain.queued = new Set())).add(localId);
             // Sign once so gateway and outbox publish identical bytes and relays dedup the second.
             let signed = null;
-            try { signed = await this._meshBuildOutboxEvent(entry); } catch (_) { }
+            try { signed = await this._meshBuildOutboxEvent(entry, claim); } catch (_) { }
             if (signed) entry.signedEvent = signed;
-            if (typeof this.meshOutboxQueue === 'function') this.meshOutboxQueue(entry);
+            if (typeof this.meshOutboxQueue === 'function') this.meshOutboxQueue(entry, claim);
+            if (this.connected && typeof this.flushMeshOutbox === 'function') this.flushMeshOutbox().catch(() => { });
             // A gateway shortcut; the entry stays queued since nothing confirms gateway success.
             if (signed) this.meshCarryToGateway(channel, signed).catch(() => { });
         },
 
         // Signed by us, so a carrying gateway can't alter or forge it.
-        async _meshBuildOutboxEvent(entry) {
+        async _meshBuildOutboxEvent(entry, claim) {
             if (!entry || entry.kind !== 'channel') return null;
             if (typeof this.publishMessage !== 'function') return null;
             const event = await this.publishMessage(
                 entry.content, entry.target, entry.target, null, entry.threadRoot || null,
                 {
                     buildOnly: true,
+                    ...(claim ? { claim } : {}),
                     createdAt: entry.createdAt,
                     localId: entry.localId,
                     extraTags: entry.meshMessageId ? [['nymmesh', entry.meshMessageId]] : [],

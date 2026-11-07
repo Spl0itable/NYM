@@ -497,7 +497,7 @@
             }
             const name = key.replace(/^#/, '');
             if (!name) return false;
-            this.switchChannel(name, this.isValidGeohash(name) && key.startsWith('#') ? name : '');
+            this.switchChannel(name, key.startsWith('#') ? name : '');
             return true;
         },
 

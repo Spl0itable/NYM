@@ -168,10 +168,11 @@
             const signed = (m) => Array.isArray(m) && m[0] === 'EVENT' && m[1] && typeof m[1].id === 'string' && typeof m[1].sig === 'string' && m[1].sig.length > 0;
             const events = [];
             const seen = new Set();
+            const receipt = (ev) => ev.kind === 24421 || !!(this._receiptWrapIds && this._receiptWrapIds.has(ev.id));
             const add = (m, dm) => {
                 if (!signed(m) || seen.has(m[1].id)) return;
                 seen.add(m[1].id);
-                events.push({ m, dm: !!dm });
+                events.push(receipt(m[1]) ? { m, dm: !!dm, rc: true } : { m, dm: !!dm });
             };
             for (const q of this._dmOutbox || []) for (const e of q || []) add(e && e.message, true);
             for (const h of this._heldEvents || []) add(h && h.message, h && h.kind === 'dm');
@@ -231,6 +232,10 @@
             for (const e of Array.isArray(carry.events) ? carry.events : []) {
                 if (!e || !Array.isArray(e.m)) continue;
                 const ev = e.m[1];
+                if (e.rc) {
+                    if (typeof this._receiptsOff === 'function' && this._receiptsOff()) continue;
+                    if (ev && typeof this._noteReceiptWrap === 'function') this._noteReceiptWrap(ev.id);
+                }
                 if (!e.dm && ev && typeof ev.pubkey === 'string' && ev.pubkey !== this.pubkey && (ev.kind === 20000 || ev.kind === 23333)) {
                     if (!strays.has(ev.pubkey)) strays.set(ev.pubkey, []);
                     strays.get(ev.pubkey).push(ev);
@@ -339,6 +344,7 @@
                 }
                 if (wipes.length) { try { await caches.delete(MEDIA_CACHE); } catch (_) { } }
                 if (typeof this._resetAppBadge === 'function') this._resetAppBadge();
+                if (typeof this._notifCloseShown === 'function') await Promise.race([this._notifCloseShown(), new Promise((r) => setTimeout(r, 1000))]);
                 try { history.replaceState(null, '', this._acctReturnUrl()); } catch (_) { }
                 location.reload();
                 return true;

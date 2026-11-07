@@ -76,7 +76,9 @@
         return mac ? row.mac.join('') : row.other.join('+');
     }
 
-    G.NymShortcuts = { match, navTarget, sheet, isMac, keyLabel };
+    let parked = null;
+
+    G.NymShortcuts = { match, navTarget, sheet, isMac, keyLabel, chatOrder: () => sidebarRows().map(rowKey), park: (el) => { parked = el || null; } };
 
     if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
 
@@ -104,14 +106,23 @@
     }
 
     function rowKey(el) {
+        const ref = el.dataset.folderRef;
+        if (ref) return ref[0] === 'd' ? 'p:' + ref.slice(2) : ref;
         if (el.dataset.groupId) return 'g:' + el.dataset.groupId;
         if (el.dataset.pubkey) return 'p:' + el.dataset.pubkey;
         return 'c:' + (el.dataset.geohash || el.dataset.channel || '');
     }
 
     function sidebarRows() {
-        return Array.from(document.querySelectorAll('.sidebar .channel-item, .sidebar .pm-item'))
-            .filter((el) => el.offsetParent && !el.closest('.nm-hidden'));
+        const seen = new Set();
+        return Array.from(document.querySelectorAll('.sidebar .channel-item, .sidebar .pm-item, .sidebar .sb-frow'))
+            .filter((el) => {
+                if (!el.offsetParent || el.closest('.nm-hidden')) return false;
+                const k = rowKey(el);
+                if (seen.has(k)) return false;
+                seen.add(k);
+                return true;
+            });
     }
 
     function rowUnread(el) {
@@ -237,17 +248,29 @@
         }
     }
 
+    const NAV = ['prevChat', 'nextChat', 'nextUnread', 'back', 'forward'];
+
     function onKey(e) {
         if (e.defaultPrevented || e.isComposing) return;
         const t = e.target;
         const comp = composerOf(t);
-        const action = match({
+        const x = {
             key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey, shift: e.shiftKey, mac: isMac(),
             inText: editable(t), inComposer: !!comp, composerEmpty: composerEmpty(comp),
-        });
+        };
+        let action = match(x);
+        if (!action && parked && t === parked) {
+            const a = match(Object.assign({}, x, { inText: false }));
+            if (NAV.indexOf(a) >= 0) action = a;
+        }
+        if (!/^(Alt|AltGraph|Shift|Control|Meta)$/.test(e.key) && NAV.indexOf(action) < 0) parked = null;
         if (!action || action === 'search') return;
         if (document.querySelector('.modal.active')) return;
         if (run(action)) e.preventDefault();
+    }
+
+    function unpark(e) {
+        if (parked && e.isTrusted && (e.type !== 'focusout' || e.target === parked) && parked.contains(e.target)) parked = null;
     }
 
     function tagTips() {
@@ -263,6 +286,7 @@
     }
 
     document.addEventListener('keydown', onKey);
+    for (const type of ['input', 'pointerdown', 'focusout']) document.addEventListener(type, unpark, true);
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tagTips);
     else tagTips();
 })();

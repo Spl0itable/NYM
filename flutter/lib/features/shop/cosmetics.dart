@@ -15,6 +15,7 @@ import 'shop_catalog.dart';
 import 'shop_controller.dart';
 import 'shop_models.dart';
 import 'shop_widgets.dart';
+import '../../widgets/nym_svg_bytes.dart';
 
 /// Resolved shop cosmetics for a user: live shop state for self, presence/shop-status fields for others.
 class UserCosmetics {
@@ -1326,8 +1327,8 @@ class _TiledSvg extends StatelessWidget {
                   width: tile.width,
                   height: tile.height,
                   // A widget can't appear twice in the tree, so each cell gets its own picture.
-                  child: SvgPicture.string(
-                    svg,
+                  child: SvgPicture(
+                    NymSvgLoader(svg),
                     width: tile.width,
                     height: tile.height,
                     fit: BoxFit.fill,
@@ -1365,8 +1366,8 @@ class _EdgeTiledSvg extends StatelessWidget {
               top: top,
               width: tile.width,
               height: tile.height,
-              child: SvgPicture.string(
-                svg,
+              child: SvgPicture(
+                NymSvgLoader(svg),
                 width: tile.width,
                 height: tile.height,
                 fit: BoxFit.fill,

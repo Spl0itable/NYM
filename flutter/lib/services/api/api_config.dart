@@ -10,7 +10,7 @@ class ApiConfig {
   /// Keep in sync with pubspec `version`.
   static const String appVersion = '3.75.545';
 
-  static const int appBuild = 877;
+  static const int appBuild = 930;
 
   /// Matches the backend's `/Nym(?:chat|bot)App\//i` client gate.
   static const String appUserAgent = 'NymchatApp/$appVersion';

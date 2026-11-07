@@ -220,6 +220,7 @@
             const avatar = this.getAvatarUrl(ctx.pubkey);
             const fallback = this.generateAvatarSvg(ctx.pubkey);
             const suffix = ctx.pubkey ? this.getPubkeySuffix(ctx.pubkey) : '';
+            const thumbBlur = !!preview.thumb && this._blursImagesFrom(ctx.pubkey, !!(msgEl && msgEl.classList && msgEl.classList.contains('self')));
             modal.innerHTML =
                 '<div class="modal-content msg-sheet">' +
                 `<button type="button" class="modal-close msg-sheet-close" data-sheet-close aria-label="${esc(tr('Close'))}">✕</button>` +
@@ -229,7 +230,7 @@
                 `<div class="msg-sheet-head"><span class="msg-sheet-author" data-no-i18n><span class="msg-sheet-nym">${window.NymSuffix.html(ctx.baseNym, suffix)}</span></span><span class="msg-sheet-time">${esc(this._msgSheetTime(msgEl))}</span></div>` +
                 `<div class="msg-sheet-text" data-no-i18n>${this.mentionSuffixHtml(preview.text)}</div>` +
                 '</div>' +
-                (preview.thumb ? `<img class="msg-sheet-thumb" alt="" src="${esc(typeof this.getProxiedMediaUrl === 'function' ? this.getProxiedMediaUrl(preview.thumb) : preview.thumb)}">` : '') +
+                (preview.thumb ? `<img class="msg-sheet-thumb${thumbBlur ? ' blurred' : ''}" alt="" src="${esc(typeof this.getProxiedMediaUrl === 'function' ? this.getProxiedMediaUrl(preview.thumb) : preview.thumb)}">` : '') +
                 '</div>' +
                 '<div class="msg-sheet-react">' +
                 emojis.filter((e) => !(typeof this._emojiStringBlocked === 'function' && this._emojiStringBlocked(e))).map((e) => `<button type="button" class="msg-sheet-emoji" data-emoji="${esc(e)}">${this._msgSheetEmojiHtml(e)}</button>`).join('') +

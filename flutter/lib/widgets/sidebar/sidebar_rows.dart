@@ -4,11 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/channels/channel_manager.dart';
 import '../../features/chat_lock/chat_lock_providers.dart';
 import '../../core/utils/nym_utils.dart';
-import '../../features/chat_nav/chat_nav.dart' show pinSort;
+import '../../features/chat_nav/chat_nav.dart' show pinKey, pinList, pinSort;
 import '../../features/chat_nav/chat_nav_providers.dart';
 import '../../features/groups/group_logic.dart';
 import '../../features/mesh/mesh_controller.dart';
 import '../../features/presence/nyms_online.dart';
+import '../../features/sidebar_folders/folders.dart';
+import '../../features/sidebar_folders/folders_providers.dart';
 import '../../models/channel.dart';
 import '../../models/group.dart';
 import '../../models/pm_conversation.dart';
@@ -436,3 +438,160 @@ class NymListOrder {
     return s.row = SidebarRow(u, sig);
   }
 }
+
+@immutable
+class SidebarFolderSlice {
+  const SidebarFolderSlice(this.id, this.name, this.rows, this.unread, this.label);
+
+  final String id;
+  final String name;
+  final SidebarRows<Object> rows;
+  final int unread;
+  final String label;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SidebarFolderSlice &&
+      other.id == id &&
+      other.name == name &&
+      other.unread == unread &&
+      other.label == label &&
+      other.rows == rows;
+
+  @override
+  int get hashCode => Object.hash(id, name, unread, label, rows);
+}
+
+@immutable
+class SidebarFolderSplit {
+  const SidebarFolderSplit(this.folders);
+
+  static const SidebarFolderSplit none = SidebarFolderSplit({});
+
+  final Map<String, SidebarFolderSlice> folders;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SidebarFolderSplit && mapEquals(other.folders, folders);
+
+  @override
+  int get hashCode => Object.hashAllUnordered(folders.values);
+}
+
+int _folderActivity(int? v) {
+  final x = v ?? 0;
+  return x > 100000000000 ? x ~/ 1000 : x;
+}
+
+final sidebarFolderSplitProvider = Provider<SidebarFolderSplit>((ref) {
+  ref.watch(sidebarFoldersRevisionProvider);
+  ref.watch(appStateProvider.select((s) => s.selfPubkey));
+  final service = ref.watch(sidebarFoldersProvider);
+  if (!service.ready) return SidebarFolderSplit.none;
+  final state = service.state;
+  if (state.folders.isEmpty) return SidebarFolderSplit.none;
+  ref.watch(_channelInputsProvider);
+  ref.watch(_pmInputsProvider);
+  final app = ref.read(appStateProvider);
+  final view = ref.watch(currentViewProvider);
+  final meshOpen = ref.watch(meshScreenOpenProvider);
+  final pmOnly =
+      ref.watch(settingsProvider.select((s) => s.groupChatPMOnlyMode));
+  final meshPmPubkeys =
+      ref.watch(meshControllerProvider.select((s) => s.meshPmPubkeys));
+  ref.watch(chatLockRevisionProvider);
+  final chatLock = ref.read(chatLockProvider);
+  ref.watch(chatNavRevisionProvider);
+  final pins = pinList(ref.read(chatNavProvider).pinState());
+  final users = ref.read(usersProvider);
+  final wanted = <String>{
+    for (final f in state.folders.values) ...f.items.keys,
+  };
+  final exists = <String>{};
+  final hidden = <String>{};
+  final blocked = <String>{};
+  final locked = <String>{};
+  final rowOf = <String, SidebarRow<Object>>{};
+  final unreadOf = <String, int>{};
+  final activity = <String, int>{};
+  final unread = app.unreadCounts;
+  final activeChannelKey = (!meshOpen && view.kind == ViewKind.channel)
+      ? view.id.toLowerCase()
+      : '';
+  for (final ch in app.channels) {
+    final r = pinKey('channel', ch.key);
+    if (!wanted.contains(r) || exists.contains(r)) continue;
+    final storageKey = ch.storageKey;
+    exists.add(r);
+    if (app.hiddenChannels.contains(ch.key)) hidden.add(r);
+    if (app.blockedChannels.contains(ch.key)) blocked.add(r);
+    if (chatLock.isConversationLocked(storageKey)) locked.add(r);
+    final n = unread[storageKey] ?? 0;
+    unreadOf[r] = n;
+    activity[r] = _folderActivity(app.channelLastActivity[storageKey]);
+    rowOf[r] = SidebarRow<Object>(ch, (
+      entry: ch,
+      active: !meshOpen && view.kind == ViewKind.channel && view.id == ch.key,
+      pinned: app.pinnedChannels.contains(ch.key),
+      unread: n,
+    ));
+  }
+  for (final pm in ref.read(pmListProvider)) {
+    final r = pinKey('dm', pm.pubkey);
+    if (!wanted.contains(r) || exists.contains(r)) continue;
+    exists.add(r);
+    final e = SidebarPmEntry.pm(pm);
+    if (chatLock.isConversationLocked(e.key)) locked.add(r);
+    e
+      ..active = !meshOpen && view.kind == ViewKind.pm && view.id == pm.pubkey
+      ..unread = unread[pm.pubkey] ?? 0
+      ..mesh = meshPmPubkeys.contains(pm.pubkey.toLowerCase());
+    unreadOf[r] = e.unread;
+    activity[r] = _folderActivity(pm.lastMessageTime);
+    rowOf[r] = SidebarRow<Object>(e, (pm.pubkey, pm.nym, e.active, e.unread, e.mesh));
+  }
+  for (final g in ref.read(groupsProvider)) {
+    final r = pinKey('group', g.id);
+    if (!wanted.contains(r) || exists.contains(r)) continue;
+    exists.add(r);
+    final e = SidebarPmEntry.group(g);
+    if (chatLock.isConversationLocked(e.key)) locked.add(r);
+    e
+      ..active = !meshOpen && view.kind == ViewKind.group && view.id == g.id
+      ..unread = unread[GroupLogic.groupStorageKey(g.id)] ?? 0;
+    unreadOf[r] = e.unread;
+    activity[r] = _folderActivity(g.lastMessageTime);
+    rowOf[r] = SidebarRow<Object>(e, (
+      g,
+      app.groupLabel(g),
+      g.members.length,
+      g.avatar,
+      _shownMembers(app, g, users),
+      e.active,
+      e.unread,
+      app.selfPubkey,
+    ));
+  }
+  final vis = FolderVisibility(
+    exists: exists,
+    hidden: hidden,
+    blocked: blocked,
+    locked: locked,
+    active: activeChannelKey.isEmpty ? '' : pinKey('channel', activeChannelKey),
+    pmOnly: pmOnly,
+  );
+  final ctx = {'pins': pins, 'activity': activity};
+  final out = <String, SidebarFolderSlice>{};
+  for (final f in folderList(state)) {
+    final order = folderSort(visibleRefs(f.refs, vis), ctx);
+    final total = folderUnread([for (final r in order) unreadOf[r] ?? 0]);
+    out[f.id] = SidebarFolderSlice(
+      f.id,
+      f.name,
+      SidebarRows<Object>(List.unmodifiable([for (final r in order) rowOf[r]!])),
+      total.n,
+      total.label,
+    );
+  }
+  return SidebarFolderSplit(Map.unmodifiable(out));
+});

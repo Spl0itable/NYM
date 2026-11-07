@@ -28,6 +28,7 @@ import '../i18n/i18n.dart';
 import '../media_notes/media_notes.dart' show parseMeshFileName;
 import '../messages/format/message_content.dart';
 import '../messages/inline_network_image.dart';
+import '../messages/picture_blur.dart';
 import '../toasts/toast_center.dart';
 import 'chat_tools.dart';
 import 'chat_tools_providers.dart';
@@ -850,6 +851,7 @@ class ChatMediaPanel extends ConsumerStatefulWidget {
 class _ChatMediaPanelState extends ConsumerState<ChatMediaPanel> {
   String _tab = 'media';
   final Set<String> _revealed = <String>{};
+  final Set<String> _unblurred = <String>{};
   bool _loading = false;
 
   @override
@@ -874,6 +876,7 @@ class _ChatMediaPanelState extends ConsumerState<ChatMediaPanel> {
           onPressed: () => setState(() {
             _tab = id;
             _revealed.clear();
+            _unblurred.clear();
           }),
           style: TextButton.styleFrom(
             foregroundColor: active ? c.primary : c.textDim,
@@ -884,9 +887,18 @@ class _ChatMediaPanelState extends ConsumerState<ChatMediaPanel> {
       );
     }
 
+    bool blurs(GalleryItem it, String key) =>
+        it.kind == 'image' &&
+        !_unblurred.contains(key) &&
+        blursPicturesFrom(ref, it.pubkey);
+
     void open(GalleryItem it, String key) {
       if (it.spoiler && !_revealed.contains(key)) {
         setState(() => _revealed.add(key));
+        return;
+      }
+      if (blurs(it, key)) {
+        setState(() => _unblurred.add(key));
         return;
       }
       if (_tab == 'media') {
@@ -948,9 +960,14 @@ class _ChatMediaPanelState extends ConsumerState<ChatMediaPanel> {
           Widget thumb;
           if (it.kind == 'image') {
             final path = src.localPaths[it.url];
+            final blurred = blurs(it, key);
             thumb = path != null
                 ? Image.file(File(path), fit: BoxFit.cover)
-                : InlineNetworkImage(url: proxiedMedia(it.url), fit: BoxFit.cover);
+                : InlineNetworkImage(
+                    url: proxiedMedia(it.url),
+                    fit: BoxFit.cover,
+                    blurSigma: blurred ? 20 : null);
+            if (path != null && blurred) thumb = blurPicture(thumb);
           } else {
             thumb = Center(
                 child: Text(it.name == 'round' ? tr(ChatToolsStrings.round) : tr('Video'),

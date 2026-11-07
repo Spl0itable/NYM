@@ -175,7 +175,7 @@ Object.assign(NYM.prototype, {
         return Math.max(userPow, floor);
     },
 
-    async saveToNostrProfile() {
+    async saveToNostrProfile(opts) {
         if (!this.pubkey) return;
 
         try {
@@ -183,6 +183,19 @@ Object.assign(NYM.prototype, {
 
             const ownsRealProfile = (typeof isNostrLoggedIn === 'function' && isNostrLoggedIn())
                 || this.isVerifiedDeveloper(this.pubkey);
+            const chosenName = !!(opts && opts.chosenName);
+            if (!chosenName && this._ownNymPending()) {
+                const pendingPubkey = this.pubkey;
+                if (this._ownProfileLookup) {
+                    await Promise.race([this._ownProfileLookup, new Promise((r) => setTimeout(r, 8000))]);
+                }
+                if (this.pubkey !== pendingPubkey) return;
+                if (this._ownNymPending() && !this._ownProfileKnown()) {
+                    this._holdOwnProfileSave();
+                    return;
+                }
+            }
+            const holdName = !chosenName && this._ownNymPending();
 
             if (ownsRealProfile) {
                 // Merge into the existing profile so fields the app doesn't manage (nip05, website, etc.) survive.
@@ -199,7 +212,7 @@ Object.assign(NYM.prototype, {
                 const bannerUrl = this.userBanners.get(this.pubkey);
 
                 // Overwrite fields the app manages, including clearing them.
-                if (this.nym) {
+                if (this.nym && !holdName) {
                     existing.name = this.nym;
                     existing.display_name = this.nym;
                 }
@@ -224,12 +237,9 @@ Object.assign(NYM.prototype, {
                 this._cachedKind0Profile = { ...profileToSave };
             } else {
                 const bio = this.userBios.get(this.pubkey) || '';
-                profileToSave = {
-                    name: this.nym,
-                    display_name: this.nym,
-                    lud16: this.lightningAddress,
-                    about: bio || `Nymchat user`
-                };
+                profileToSave = holdName ? {} : { name: this.nym, display_name: this.nym };
+                profileToSave.lud16 = this.lightningAddress;
+                profileToSave.about = bio || `Nymchat user`;
 
                 const avatarUrl = this.userAvatars.get(this.pubkey);
                 if (avatarUrl) {
@@ -262,6 +272,11 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(profileEvent);
 
             if (signedEvent) {
+                if (!this._kind0Ts) this._kind0Ts = new Map();
+                if (profileTs > (this._kind0Ts.get(this.pubkey) || 0)) this._kind0Ts.set(this.pubkey, profileTs);
+                this._noteKind0Seen(this.pubkey, this._kind0Name(profileToSave));
+                const rec = this._nameSources && this._nameSources.get(this.pubkey);
+                if (this._kind0Name(profileToSave) && (!rec || profileTs > rec.ts)) this._noteNameSource(this.pubkey, 'kind0', profileTs);
                 this.sendToRelay(["EVENT", signedEvent]);
                 // Also publish to DM relays so group chat members see updated profiles.
                 this.sendDMToRelays(["EVENT", signedEvent]);
@@ -783,11 +798,12 @@ Object.assign(NYM.prototype, {
                 const eventTs = (typeof event.created_at === 'number') ? event.created_at : 0;
                 if (!this._kind0Ts) this._kind0Ts = new Map();
                 const lastTs = this._kind0Ts.get(pubkey) || 0;
-                if (eventTs && lastTs && eventTs < lastTs) {
+                const gateTs = this._nameInFuture(lastTs) ? 0 : lastTs;
+                if (eventTs && gateTs && eventTs < gateTs) {
                     this._resolveProfileCallbacks(pubkey);
                     return;
                 }
-                if (eventTs > lastTs) this._kind0Ts.set(pubkey, eventTs);
+                if (eventTs > gateTs) this._kind0Ts.set(pubkey, eventTs);
 
                 // Keep the D1 read cache fresh.
                 this._cacheD1Profile(pubkey, event);
@@ -795,6 +811,7 @@ Object.assign(NYM.prototype, {
                 // Cache our own full kind 0 so saveToNostrProfile can merge without losing unmanaged fields.
                 if (pubkey === this.pubkey) {
                     this._cachedKind0Profile = profile;
+                    this._releaseOwnProfileSave();
                     if (eventTs > (this._lastKind0Ts || 0)) {
                         this._lastKind0Ts = eventTs;
                     }
@@ -873,9 +890,9 @@ Object.assign(NYM.prototype, {
                     }
                 }
 
-                const profileName = [profile.name, profile.username, profile.display_name]
-                    .find(v => typeof v === 'string' && v.length > 0);
-                const kind0NameWins = !this.users.has(pubkey) || this._nameSourceWins(pubkey, 'kind0', eventTs);
+                const profileName = this._kind0Name(profile);
+                this._noteKind0Seen(pubkey, profileName);
+                const kind0NameWins = !this.users.has(pubkey) || this._nameSourceWins(pubkey, 'kind0', eventTs, profileName);
                 if (profileName && !kind0NameWins) this.persistProfile(pubkey);
                 if (profileName && kind0NameWins) {
                     const truncatedName = this._kind0Nym(profileName, pubkey);
@@ -1364,6 +1381,7 @@ Object.assign(NYM.prototype, {
     },
 
     async sendBitchatReceipt(messageId, receiptType, recipientPubkey) {
+        if (this._receiptsOff()) return;
         if (!this.privkey || !this.bitchatUsers.has(recipientPubkey)) return;
 
         if (receiptType === 0x02 && !this.isReadReceiptAllowedFor('pm')) {
@@ -1382,11 +1400,13 @@ Object.assign(NYM.prototype, {
         };
 
         const wrapped = await this.bitchatWrapEventAsync(rumor, this.privkey, recipientPubkey, null);
+        this._noteReceiptWrap(wrapped && wrapped.id);
         this.sendDMToRelays(['EVENT', wrapped], { tier: 2 });
     },
 
     // NIP-17 rumor of custom kind 69420 (not 14, so other clients show no blank DMs) with x and receipt tags.
     async sendNymReceipt(messageId, receiptType, recipientPubkey, context = 'pm', groupId = null) {
+        if (this._receiptsOff()) return;
         if (!this._canSendGiftWraps()) return;
         if (context !== 'group' && this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(recipientPubkey)) return;
 
@@ -1411,23 +1431,24 @@ Object.assign(NYM.prototype, {
 
         // Group receipts go to the ephemeral key so they don't expose the real-pubkey membership set.
         if (context === 'group' && groupId) {
-            await this._sendGiftWrapsAsync([recipientPubkey], rumor, null, groupId);
+            await this._sendGiftWrapsAsync([recipientPubkey], rumor, null, groupId, { receipt: true });
             return;
         }
 
         if (this.privkey) {
             const wrapped = await this._pmSignalWrapAsync(rumor, recipientPubkey);
+            this._noteReceiptWrap(wrapped && wrapped.id);
             this.sendDMToRelays(['EVENT', wrapped], { tier: 2 });
         } else {
             await this._sendGiftWrapsAsync([recipientPubkey], rumor, null);
         }
     },
 
-    async _pmSignalWrapAsync(rumor, recipientPubkey) {
+    async _pmSignalWrapAsync(rumor, recipientPubkey, sk) {
         const plan = typeof this.pqPmPlan === 'function' ? this.pqPmPlan(recipientPubkey) : null;
         return plan && plan.kemPk
-            ? this.pqWrapForPeerAsync(plan.pq2, rumor, this.privkey, recipientPubkey, plan.kemPk, null)
-            : this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, null);
+            ? this.pqWrapForPeerAsync(plan.pq2, rumor, sk || this.privkey, recipientPubkey, plan.kemPk, null)
+            : this.nip59WrapEventAsync(rumor, sk || this.privkey, recipientPubkey, null);
     },
 
     isTypingIndicator(rumor) {
@@ -1582,7 +1603,7 @@ Object.assign(NYM.prototype, {
         }, this._typingStartDebounce);
     },
 
-    sendTypingStop() {
+    sendTypingStop(claim) {
         if (!this._canSendGiftWraps() || !this.inPMMode) return;
         const context = this.currentGroup ? 'group' : 'pm';
         if (!this.isTypingIndicatorAllowedFor(context)) return;
@@ -1592,20 +1613,22 @@ Object.assign(NYM.prototype, {
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingThrottleTime = 0;
         this._pmTypingStartedFor.delete(convKey);
-        this._sendTypingEvent('stop');
+        this._sendTypingEvent('stop', claim);
     },
 
-    async _sendTypingEvent(status) {
+    async _sendTypingEvent(status, claim) {
         const dest = this.currentGroup ? { key: `group:${this.currentGroup}`, group: this.currentGroup }
             : this.currentPM ? { key: `pm:${this.currentPM}`, pm: this.currentPM } : null;
         if (!dest) return;
         const activity = this._chatActivityFor(dest.key);
         if (activity && status === 'stop') return;
-        return this._sendTypingEventTo(dest, status, activity);
+        return this._sendTypingEventTo(dest, status, activity, claim);
     },
 
-    async _sendTypingEventTo(dest, status, activity) {
+    async _sendTypingEventTo(dest, status, activity, claim) {
         if (!this._canSendGiftWraps()) return;
+        if (claim && claim.sk && !this._claimHolds(claim)) return;
+        const me = this._claimSender(claim);
 
         const now = Math.floor(Date.now() / 1000);
         const UA = window.NymUploadActivity;
@@ -1617,18 +1640,18 @@ Object.assign(NYM.prototype, {
             const group = this.groupConversations.get(dest.group);
             if (!group) return;
             tags.push(['g', dest.group]);
-            const otherMembers = group.members.filter(pk => pk !== this.pubkey);
+            const otherMembers = group.members.filter(pk => pk !== me.pubkey);
             if (otherMembers.length === 0) return;
 
-            const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
+            const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: me.pubkey };
             // Ephemeral keys so typing wraps don't expose the real-pubkey membership set to relays.
-            await this._sendGiftWrapsAsync(otherMembers, rumor, null, dest.group);
+            await this._sendGiftWrapsAsync(otherMembers, rumor, null, dest.group, { claim });
         } else if (dest.pm) {
             if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(dest.pm)) return;
             tags.push(['p', dest.pm]);
-            const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
-            if (this.privkey) {
-                const wrapped = await this._pmSignalWrapAsync(rumor, dest.pm);
+            const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: me.pubkey };
+            if (me.sk) {
+                const wrapped = await this._pmSignalWrapAsync(rumor, dest.pm, me.sk);
                 this.sendDMToRelays(['EVENT', wrapped]);
             } else {
                 await this._sendGiftWrapsAsync([dest.pm], rumor, null);
@@ -1843,8 +1866,10 @@ Object.assign(NYM.prototype, {
             || (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected);
     },
 
-    async _sendChannelTypingEvent(status, geohash, activity) {
+    async _sendChannelTypingEvent(status, geohash, activity, claim) {
         if (!geohash || !this._canPublishChannelEvent()) return;
+        const sender = claim && claim.pubkey ? claim : { pubkey: this.pubkey, nym: this.nym, sk: null };
+        if (!sender.sk && sender.pubkey !== this.pubkey) return;
         const wire = this.channelWire(geohash);
         const UA = window.NymUploadActivity;
         const kind = activity === undefined ? this._chatActivityFor(`channel:${geohash}`) : activity;
@@ -1854,16 +1879,16 @@ Object.assign(NYM.prototype, {
         const event = {
             kind: 24420,
             created_at: createdAt,
-            tags: UA ? UA.channelTags(status, kind, wire.tag, geohash, this.nym) : [
+            tags: UA ? UA.channelTags(status, kind, wire.tag, geohash, this._tagNym(sender.pubkey, sender.nym)) : [
                 ['typing', status],
                 [wire.tag, geohash],
-                ['n', this.nym]
+                ...this._nTags(sender.pubkey, sender.nym)
             ],
             content: '',
-            pubkey: this.pubkey
+            pubkey: sender.pubkey
         };
         try {
-            const signed = await this.signEvent(event);
+            const signed = sender.sk ? window.NostrTools.finalizeEvent(event, sender.sk) : await this.signEvent(event);
             this.sendToRelay(["EVENT", signed]);
             if (wire.isGeohash) this.ensureGeoRelayDelivery(signed, geohash);
         } catch (_) { }
@@ -1890,7 +1915,7 @@ Object.assign(NYM.prototype, {
         }, 4000);
     },
 
-    sendChannelTypingStop(geohash) {
+    sendChannelTypingStop(geohash, claim) {
         const targetGeohash = geohash || this.currentGeohash;
         if (!targetGeohash) return;
         // Only emit 'stop' if we emitted a 'start' for this geohash.
@@ -1901,7 +1926,7 @@ Object.assign(NYM.prototype, {
         this._typingThrottleTime = 0;
         this._channelTypingStartedFor.delete(targetGeohash);
         if (this._chatActivityFor(`channel:${targetGeohash}`)) return;
-        this._sendChannelTypingEvent('stop', targetGeohash);
+        this._sendChannelTypingEvent('stop', targetGeohash, undefined, claim);
     },
 
     handleChannelTypingEvent(event) {
@@ -1956,6 +1981,7 @@ Object.assign(NYM.prototype, {
     },
 
     async sendChannelReadReceipt(messageId, authorPubkey, geohash) {
+        if (this._receiptsOff()) return;
         if (!this.isReadReceiptAllowedFor('channel')) return;
         if (!messageId || !authorPubkey || !geohash) return;
         if (authorPubkey === this.pubkey) return;
@@ -1978,7 +2004,7 @@ Object.assign(NYM.prototype, {
                 ['e', messageId],
                 ['p', authorPubkey],
                 [wire.tag, geohash],
-                ['n', this.nym]
+                ...this._nTags(this.pubkey, this.nym)
             ],
             content: '',
             pubkey: this.pubkey
@@ -2133,10 +2159,20 @@ Object.assign(NYM.prototype, {
     async fetchOwnProfileFromRelaysOneShot() {
         const pubkey = this.pubkey;
         if (!pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) return;
+        if (!this._ownProfileLookupDone) {
+            this._ownProfileLookup = new Promise((resolve) => { this._ownProfileLookupDone = resolve; });
+        }
+        const finish = () => {
+            const done = this._ownProfileLookupDone;
+            this._ownProfileLookupDone = null;
+            this._ownProfileLookup = null;
+            if (done) done();
+            this._releaseOwnProfileSave();
+        };
 
         try {
             const found = await this._fetchProfilesFromD1([pubkey]);
-            if (found && found.has(pubkey)) { this._updateOwnSidebarProfile(); return; }
+            if (found && found.has(pubkey)) { this._updateOwnSidebarProfile(); finish(); return; }
         } catch (_) { }
 
         // sendRequestToFewRelays routes through the pool in proxy mode and directly otherwise.
@@ -2144,6 +2180,8 @@ Object.assign(NYM.prototype, {
             if (!this._ownProfileFetchRetries) this._ownProfileFetchRetries = 0;
             if (this._ownProfileFetchRetries++ < 8) {
                 setTimeout(() => { this.fetchOwnProfileFromRelaysOneShot(); }, 1500);
+            } else {
+                finish();
             }
             return;
         }
@@ -2158,6 +2196,7 @@ Object.assign(NYM.prototype, {
             this._subscriptionHandlers.delete(subId);
             try { this.closeFewRelaysSub(subId); } catch (_) { }
             if (typeof this._oneShotReqDone === 'function') this._oneShotReqDone();
+            setTimeout(finish, 0);
         };
 
         const handler = (type, data) => {
@@ -2169,6 +2208,7 @@ Object.assign(NYM.prototype, {
                     cleanup();
                 }
             } else if (type === 'EOSE' && data[0] === subId) {
+                if (!settled) this._ownProfileMiss = pubkey;
                 cleanup();
             }
         };
@@ -2191,15 +2231,17 @@ Object.assign(NYM.prototype, {
         return base + '#' + (own ? pubkey.slice(-4).toLowerCase() : m[2]);
     },
 
+    _paintOwnNym() {
+        const el = this.nym ? document.getElementById('currentNym') : null;
+        if (el) el.innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
+    },
+
     _updateOwnSidebarProfile() {
         const pubkey = this.pubkey;
         if (!pubkey) return;
         const user = this.users.get(pubkey);
         if (user && user.nym) this.nym = user.nym;
-        if (this.nym) {
-            const el = document.getElementById('currentNym');
-            if (el) el.innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
-        }
+        this._paintOwnNym();
         if (typeof this.updateSidebarAvatar === 'function') this.updateSidebarAvatar();
         if (typeof this.loadLightningAddress === 'function') this.loadLightningAddress();
         try {
@@ -2233,11 +2275,16 @@ Object.assign(NYM.prototype, {
 
     // Batched within 150ms, fire-and-forget; the kind 0 handler updates renders retroactively.
     queueProfileFetch(pubkey, opts) {
+        const refetch = !!(opts && opts.refetch);
         const lastFetch = this.profileFetchedAt && this.profileFetchedAt.get(pubkey) || 0;
         const fresh = Date.now() - lastFetch < 5 * 60 * 1000;
         const appliedKind0 = this._kind0Ts && this._kind0Ts.has(pubkey);
-        if (fresh && appliedKind0 && this.userAvatars && this.userAvatars.has(pubkey)
+        if (!refetch && fresh && appliedKind0 && this.userAvatars && this.userAvatars.has(pubkey)
             && this.hasResolvedNym(pubkey)) return;
+        if (refetch) {
+            if (!this._profileRefetch) this._profileRefetch = new Map();
+            this._profileRefetch.set(pubkey, (this._kind0Ts && this._kind0Ts.get(pubkey)) || 0);
+        }
 
         if (this._profileBatchSet && this._profileBatchSet.has(pubkey)) return;
         if (opts && opts.anon) {
@@ -2258,6 +2305,8 @@ Object.assign(NYM.prototype, {
     async _flushProfileBatch() {
         const pubkeys = this._profileBatchQueue || [];
         const relayOnly = this._profileRelayOnly ? Array.from(this._profileRelayOnly).filter(pk => !pubkeys.includes(pk)) : [];
+        const refetch = this._profileRefetch || new Map();
+        this._profileRefetch = null;
         this._profileBatchQueue = [];
         this._profileBatchSet = new Set();
         this._profileRelayOnly = null;
@@ -2270,7 +2319,8 @@ Object.assign(NYM.prototype, {
             try {
                 const found = await this._fetchProfilesFromD1(pubkeys);
                 if (found && found.size) {
-                    missing = pubkeys.filter(pk => !found.has(pk) || !this.hasResolvedNym(pk));
+                    const stale = (pk) => refetch.has(pk) && ((this._kind0Ts && this._kind0Ts.get(pk)) || 0) <= refetch.get(pk);
+                    missing = pubkeys.filter(pk => !found.has(pk) || !this.hasResolvedNym(pk) || stale(pk));
                 }
             } catch (_) { }
         }
@@ -2315,6 +2365,7 @@ Object.assign(NYM.prototype, {
             this.privkey = sk;
             this.pubkey = pk;
             if (switched && typeof this.pqResetIdentityState === 'function') this.pqResetIdentityState();
+            if (switched && typeof this._notifOwnerReset === 'function') this._notifOwnerReset();
 
 
             return { privkey: sk, pubkey: pk };
@@ -2377,8 +2428,10 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    async publishDeletionEvent(messageId, originalKind) {
+    async publishDeletionEvent(messageId, originalKind, claim) {
         try {
+            if (claim && !claim.sk && claim.pubkey !== this.pubkey) return;
+            if (!claim && this._hardcoreRotating()) return;
             const tags = [['e', messageId]];
             if (originalKind) {
                 tags.push(['k', String(originalKind)]);
@@ -2388,10 +2441,10 @@ Object.assign(NYM.prototype, {
                 created_at: Math.floor(Date.now() / 1000),
                 tags: tags,
                 content: '',
-                pubkey: this.pubkey
+                pubkey: claim ? claim.pubkey : this.pubkey
             };
 
-            const signedEvent = await this.signEvent(event);
+            const signedEvent = await (claim ? this._signClaimed(event, claim) : this.signEvent(event));
             this.sendToRelay(['EVENT', signedEvent]);
 
             // Mirror to D1 so the event doesn't resurrect on reload or another device.
@@ -2813,11 +2866,12 @@ Object.assign(NYM.prototype, {
                         const eventTs = (typeof event.created_at === 'number') ? event.created_at : 0;
                         if (!this._kind0Ts) this._kind0Ts = new Map();
                         const lastTs = this._kind0Ts.get(event.pubkey) || 0;
-                        if (eventTs && lastTs && eventTs < lastTs) {
+                        const gateTs = this._nameInFuture(lastTs) ? 0 : lastTs;
+                        if (eventTs && gateTs && eventTs < gateTs) {
                             this._resolveProfileCallbacks(event.pubkey);
                             return;
                         }
-                        if (eventTs > lastTs) this._kind0Ts.set(event.pubkey, eventTs);
+                        if (eventTs > gateTs) this._kind0Ts.set(event.pubkey, eventTs);
 
                         this._cacheD1Profile(event.pubkey, event);
 
@@ -2827,8 +2881,10 @@ Object.assign(NYM.prototype, {
                             this._saveProfileToD1(event);
                         }
 
-                        if (event.pubkey === this.pubkey && (profile.name || profile.username || profile.display_name)) {
-                            const profileName = profile.name || profile.username || profile.display_name;
+                        this._noteKind0Seen(event.pubkey, this._kind0Name(profile));
+
+                        if (event.pubkey === this.pubkey && this._kind0Name(profile)) {
+                            const profileName = this._kind0Name(profile);
                             this.nym = this._kind0Nym(profileName, this.pubkey);
                             const ownUser = this.users.get(this.pubkey);
                             if (ownUser) {
@@ -2876,10 +2932,10 @@ Object.assign(NYM.prototype, {
                             }
                         }
 
-                        if (event.pubkey !== this.pubkey && (profile.name || profile.username || profile.display_name)
-                            && (!this.users.has(event.pubkey) || this._nameSourceWins(event.pubkey, 'kind0', eventTs))) {
+                        if (event.pubkey !== this.pubkey && this._kind0Name(profile)
+                            && (!this.users.has(event.pubkey) || this._nameSourceWins(event.pubkey, 'kind0', eventTs, this._kind0Name(profile)))) {
                             this._noteNameSource(event.pubkey, 'kind0', eventTs);
-                            const profileName = this._kind0Nym(profile.name || profile.username || profile.display_name, event.pubkey);
+                            const profileName = this._kind0Nym(this._kind0Name(profile), event.pubkey);
                             // Always accept the newer kind 0 as authoritative.
                             const existingUser = this.users.get(event.pubkey);
                             if (!existingUser) {
@@ -2973,13 +3029,124 @@ Object.assign(NYM.prototype, {
         };
     },
 
+    _claimChannelKey() {
+        const claim = { pubkey: this.pubkey, nym: this.nym, sk: null, chain: null };
+        if (!this.privkey || !this._geoPresenceRotatingKey()) return claim;
+        const chain = this._keyChain && this._keyChain.head === this.pubkey ? this._keyChain : { head: this.pubkey };
+        claim.sk = this.privkey;
+        claim.chain = chain;
+        this._rotateHardcoreKey();
+        chain.head = this.pubkey;
+        this._keyChain = chain;
+        return claim;
+    },
+
+    _hardcoreRotating() {
+        return !!(this.privkey && this._geoPresenceRotatingKey());
+    },
+
+    _receiptsOff() {
+        return this._geoPresenceRotatingKey();
+    },
+
+    _noteReceiptWrap(id) {
+        if (!id) return;
+        if (!this._receiptWrapIds) this._receiptWrapIds = new Set();
+        this._receiptWrapIds.add(id);
+        if (this._receiptWrapIds.size > 4000) this._receiptWrapIds = new Set(Array.from(this._receiptWrapIds).slice(-3000));
+    },
+
+    _dropsQueuedReceipt(id) {
+        return !!(this._receiptWrapIds && this._receiptWrapIds.has(id) && this._receiptsOff());
+    },
+
+    _takeTypingUnderClaim(claim) {
+        if (!claim || !claim.sk) return;
+        if (this._typingStartTimer) { clearTimeout(this._typingStartTimer); this._typingStartTimer = null; }
+        if (this._typingStopTimer) { clearTimeout(this._typingStopTimer); this._typingStopTimer = null; }
+    },
+
+    _rotateHardcoreKey() {
+        const sk = window.NostrTools.generateSecretKey();
+        this.privkey = sk;
+        this.pubkey = window.NostrTools.getPublicKey(sk);
+        this.nym = this.generateRandomNym();
+        if (typeof this.pqResetIdentityState === 'function') this.pqResetIdentityState();
+        const shown = typeof document !== 'undefined' && document && typeof document.getElementById === 'function'
+            ? document.getElementById('currentNym') : null;
+        if (shown && typeof this.formatNymWithPubkey === 'function') shown.innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
+        if (typeof this.updateSidebarAvatar === 'function') this.updateSidebarAvatar();
+    },
+
+    _ownProfileKnown() {
+        return !!this._cachedKind0Profile || (!!this.pubkey && this._ownProfileMiss === this.pubkey);
+    },
+
+    _holdOwnProfileSave() {
+        this._heldOwnProfileSave = this.pubkey;
+        if (!this._ownProfileLookup) Promise.resolve(this.fetchOwnProfileFromRelaysOneShot()).catch(() => { });
+    },
+
+    _releaseOwnProfileSave() {
+        const pk = this._heldOwnProfileSave;
+        if (!pk) return;
+        if (pk !== this.pubkey) { this._heldOwnProfileSave = null; return; }
+        if (!this._ownProfileKnown()) return;
+        this._heldOwnProfileSave = null;
+        setTimeout(() => { this.saveToNostrProfile(); }, 0);
+    },
+
+    KIND0_REFETCH_MS: 60 * 60 * 1000,
+
+    _refetchKind0(pubkey) {
+        if (!pubkey || pubkey === this.pubkey || typeof this.queueProfileFetch !== 'function') return;
+        if (this.blockedUsers && this.blockedUsers.has(pubkey)) return;
+        if (typeof this._ownOtherKey === 'function' && this._ownOtherKey(pubkey)) return;
+        if (!this._kind0RefetchAt) this._kind0RefetchAt = new Map();
+        const now = Date.now();
+        if (now - (this._kind0RefetchAt.get(pubkey) || 0) < this.KIND0_REFETCH_MS) return;
+        this._kind0RefetchAt.delete(pubkey);
+        this._kind0RefetchAt.set(pubkey, now);
+        while (this._kind0RefetchAt.size > 5000) this._kind0RefetchAt.delete(this._kind0RefetchAt.keys().next().value);
+        this.queueProfileFetch(pubkey, { refetch: true });
+    },
+
+    _ownNymPending() {
+        if (!this.nostrLoginPubkey || this.pubkey !== this.nostrLoginPubkey) return false;
+        return this._isPlaceholderNym(this.nym) && !this._kind0Named(this.pubkey);
+    },
+
+    _tagNym(pubkey, nym) {
+        return pubkey === this.pubkey && this._ownNymPending() ? '' : (nym || '');
+    },
+
+    _nTags(pubkey, nym) {
+        const value = this._tagNym(pubkey, nym);
+        return value ? [['n', value]] : [];
+    },
+
+    _claimSender(claim) {
+        if (claim && claim.sk) return { sk: claim.sk, pubkey: claim.pubkey, nym: claim.nym };
+        return { sk: this.privkey, pubkey: this.pubkey, nym: this.nym };
+    },
+
+    _claimHolds(claim) {
+        if (!claim.chain) return this.pubkey === claim.pubkey;
+        return this._keyChain === claim.chain && this.pubkey === claim.chain.head;
+    },
+
+    _signClaimed(event, claim) {
+        if (claim.sk) return window.NostrTools.finalizeEvent(event, claim.sk);
+        return this.signEvent(event);
+    },
+
     _buildChannelEvent(sender, content, geohash, quoteData, threadRoot, opts) {
         const replayAt = opts && typeof opts.createdAt === 'number' && opts.createdAt > 0
             ? opts.createdAt : 0;
         const nowMs = replayAt ? replayAt * 1000 : Date.now();
         const now = replayAt || Math.floor(nowMs / 1000);
         const tags = [
-            ['n', sender.nym],
+            ...this._nTags(sender.pubkey, sender.nym),
             ['ms', String(nowMs)]
         ];
 
@@ -3036,7 +3203,8 @@ Object.assign(NYM.prototype, {
     async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null, threadRoot = null, opts = null) {
         try {
             const buildOnly = !!(opts && opts.buildOnly);
-            const built = this._buildChannelEvent(this._channelSender(), content, geohash, quoteData, threadRoot, opts);
+            const claim = (opts && opts.claim) || this._claimChannelKey();
+            const built = this._buildChannelEvent({ ...this._channelSender(), pubkey: claim.pubkey, nym: claim.nym }, content, geohash, quoteData, threadRoot, opts);
             const { wire, channelKey, nowMs, now } = built;
             threadRoot = built.threadRoot;
             let event = built.event;
@@ -3049,8 +3217,8 @@ Object.assign(NYM.prototype, {
             const optimisticMessage = {
                 id: tempId,
                 content: content,
-                author: this.nym,
-                pubkey: this.pubkey,
+                author: claim.nym,
+                pubkey: claim.pubkey,
                 created_at: now,
                 _ms: nowMs,
                 _seq: ++this._msgSeq,
@@ -3070,26 +3238,18 @@ Object.assign(NYM.prototype, {
                 if (typeof this.attachAttestTag === 'function') this.attachAttestTag(event);
                 const difficulty = this._effectivePowDifficulty();
                 if (difficulty > 0) event = await this._minePow(event, difficulty);
-                return await this.signEvent(event);
+                if (!this._claimHolds(claim)) throw new Error('identity changed');
+                return await this._signClaimed(event, claim);
             }
 
             // A replay already has its bubble from the mesh send.
             if (!replayId) this.displayMessage(optimisticMessage);
-            this.recordOwnActivity();
+            this.recordOwnActivity('send', claim);
 
             const ahead = this._channelPublishTail || null;
             let releaseTurn = null;
             const turn = new Promise((resolve) => { releaseTurn = resolve; });
             this._channelPublishTail = turn;
-            const typedUnder = this.pubkey;
-            let signedTurn = null;
-            const signing = new Promise((resolve) => { signedTurn = resolve; });
-            if (!this._channelSigns) this._channelSigns = new Set();
-            this._channelSigns.add(signing);
-            const doneSigning = () => {
-                signedTurn();
-                if (this._channelSigns) this._channelSigns.delete(signing);
-            };
 
             (async () => {
                 let held = false;
@@ -3102,13 +3262,12 @@ Object.assign(NYM.prototype, {
                         try { await waiting; } catch (_) { }
                         if (held) { held = false; this._settleQueuedSend(tempId); }
                     }
-                    if (this.pubkey !== typedUnder) throw new Error('identity changed');
+                    if (!this._claimHolds(claim)) throw new Error('identity changed');
                     if (typeof this.attachAttestTag === 'function') this.attachAttestTag(event);
                     const difficulty = this._effectivePowDifficulty();
                     if (difficulty > 0) event = await this._minePow(event, difficulty);
-                    if (this.pubkey !== typedUnder) throw new Error('identity changed');
-                    const signedEvent = await this.signEvent(event);
-                    doneSigning();
+                    if (!this._claimHolds(claim)) throw new Error('identity changed');
+                    const signedEvent = await this._signClaimed(event, claim);
                     if (ahead) await ahead;
                     if (typeof this.recordEventProvenanceSource === 'function') {
                         this.recordEventProvenanceSource(signedEvent, 'THIS CLIENT');
@@ -3120,13 +3279,12 @@ Object.assign(NYM.prototype, {
 
                     if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
                         const eventIdToDelete = signedEvent.id;
-                        setTimeout(() => this.publishDeletionEvent(eventIdToDelete), 600000);
+                        setTimeout(() => this.publishDeletionEvent(eventIdToDelete, undefined, claim), 600000);
                     }
                 } catch (err) {
                     if (held) this._settleQueuedSend(tempId);
                     this._markOptimisticFailed(tempId, storageKey, err);
                 } finally {
-                    doneSigning();
                     releaseTurn();
                     if (this._channelPublishTail === turn) this._channelPublishTail = null;
                 }
@@ -3453,7 +3611,7 @@ Object.assign(NYM.prototype, {
             const tags = [
                 ['d', 'nym-presence'],
                 ['t', 'nym-presence'],
-                ['n', this.nym],
+                ...this._nTags(this.pubkey, this.nym),
                 ['status', publicStatus]
             ];
             if (mode === 'enabled' && status === 'away' && awayMessage) {
@@ -3485,7 +3643,7 @@ Object.assign(NYM.prototype, {
             const recipients = Array.from(this.friends).filter(pk => pk && pk !== this.pubkey);
             if (recipients.length === 0) return;
 
-            const tags = [['status', status], ['n', this.nym]];
+            const tags = [['status', status], ...this._nTags(this.pubkey, this.nym)];
             if (status === 'away' && awayMessage) tags.push(['away', awayMessage]);
             const rumor = {
                 kind: this.FRIEND_PRESENCE_KIND,
@@ -3499,30 +3657,37 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    recordOwnActivity(kind = 'send') {
-        if (!this.pubkey) return;
+    recordOwnActivity(kind = 'send', sender = null) {
+        const pk = sender && sender.pubkey ? sender.pubkey : this.pubkey;
+        if (!pk) return;
+        const nym = sender && sender.pubkey ? sender.nym : this.nym;
         if (typeof this._awayEnsureRestored === 'function') this._awayEnsureRestored();
 
         const now = Date.now();
-        const existing = this.users.get(this.pubkey);
+        const existing = this.users.get(pk);
         if (existing) {
             existing.lastSeen = now;
             // Leave away alone; only /back clears it.
-            if (existing.status !== 'away' && !(this.awayMessages && this.awayMessages.has(this.pubkey))) {
+            if (existing.status !== 'away' && !(this.awayMessages && this.awayMessages.has(pk))) {
                 existing.status = 'online';
             }
         } else {
-            this.users.set(this.pubkey, {
-                nym: this.nym,
-                pubkey: this.pubkey,
+            this.users.set(pk, {
+                nym,
+                pubkey: pk,
                 lastSeen: now,
-                status: (this.awayMessages && this.awayMessages.has(this.pubkey)) ? 'away' : 'online',
+                status: (this.awayMessages && this.awayMessages.has(pk)) ? 'away' : 'online',
                 channels: new Set()
             });
         }
 
         if (typeof this.updateUserList === 'function') this.updateUserList();
 
+        if (pk !== this.pubkey) {
+            const P = (typeof self !== 'undefined' ? self : window).NymPresenceActivity;
+            if (P && P.countsAsActivity(kind)) this._presenceInputAt = now;
+            return;
+        }
         this.notePresenceActivity(kind);
     },
 
@@ -3575,14 +3740,6 @@ Object.assign(NYM.prototype, {
     _geoPresenceGeohash() {
         const ch = this._presenceChannel();
         return ch && ch.type === 'geohash' ? ch.id : null;
-    },
-
-    async _rotateHardcoreAfterSend() {
-        while (this._channelSigns && this._channelSigns.size) {
-            await Promise.all(Array.from(this._channelSigns));
-        }
-        await this.generateKeypair();
-        this.nym = this.generateRandomNym();
     },
 
     _geoPresenceRotatingKey() {
@@ -3867,7 +4024,7 @@ Object.assign(NYM.prototype, {
             const tags = [
                 ['d', 'nym-presence'],
                 ['t', 'nym-presence'],
-                ['n', this.nym],
+                ...this._nTags(this.pubkey, this.nym),
                 ...this._presenceStatusTags(),
                 ['avatar-update', avatarUrl]
             ];
@@ -3894,7 +4051,7 @@ Object.assign(NYM.prototype, {
             const tags = [
                 ['d', 'nym-presence'],
                 ['t', 'nym-presence'],
-                ['n', this.nym],
+                ...this._nTags(this.pubkey, this.nym),
                 ...this._presenceStatusTags(),
                 ['shop-update', '1']
             ];

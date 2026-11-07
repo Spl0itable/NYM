@@ -79,7 +79,7 @@
         return out;
     }
 
-    function trimmed(raw, rank) {
+    function trimmed(raw, rank, keep) {
         let data;
         try { data = JSON.parse(raw); } catch (_) { return null; }
         if (Array.isArray(data)) return data.length > 1 ? JSON.stringify(data.slice(data.length - Math.floor(data.length / 2))) : null;
@@ -87,10 +87,18 @@
         const entries = Object.entries(data);
         if (entries.length < 2) return null;
         const score = rank ? (e) => rank.get(e[0]) || 0 : (e) => recency(e[1]);
-        entries.sort((a, b) => (score(b) - score(a)) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+        const open = keep ? (k) => (keep.has(k) ? 1 : 0) : () => 0;
+        entries.sort((a, b) => (open(b[0]) - open(a[0])) || (score(b) - score(a)) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
         const out = {};
         for (const [k, v] of entries.slice(0, Math.floor(entries.length / 2))) out[k] = v;
         return JSON.stringify(out);
+    }
+
+    function openSet() {
+        try {
+            const s = typeof api.openKeys === 'function' ? api.openKeys() : null;
+            return s && typeof s.has === 'function' ? s : null;
+        } catch (_) { return null; }
     }
 
     function attempt(store, set, k, v) {
@@ -114,13 +122,14 @@
             if (!attempt(store, set, k, v)) return { ok: true, evicted, trimmed: cut };
         }
         if (own === USER) {
+            const keep = openSet();
             for (let round = 0; round < 32; round++) {
                 let changed = false;
                 for (const t of TRIM) {
                     if (t === k) continue;
                     const raw = store.getItem(t);
                     if (raw === null) continue;
-                    const next = trimmed(raw, RANKED.includes(t) ? rankOf(RANK_FROM.map((r) => store.getItem(r))) : undefined);
+                    const next = trimmed(raw, RANKED.includes(t) ? rankOf(RANK_FROM.map((r) => store.getItem(r))) : undefined, keep);
                     if (next === null) remove.call(store, t);
                     else if (attempt(store, set, t, next)) continue;
                     cut.push(t);
@@ -230,6 +239,7 @@
     }
 
     api.install = install;
+    api.openKeys = () => (self.nym && typeof self.nym._unreadOpenKeys === 'function' ? self.nym._unreadOpenKeys() : null);
     api.set = function () { return false; };
     api.held = () => [];
     api.heldEntries = () => [];

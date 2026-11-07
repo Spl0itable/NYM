@@ -164,13 +164,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
   void _openEntry(NotificationEntry entry) {
     // Same routing as an OS notification tap.
     openNotificationRoute(
-      NotificationRoute(
-        type: entry.type,
-        route: entry.route ?? '',
-        senderPubkey: entry.senderPubkey ?? '',
-        // A thread reply's row opens that thread.
-        threadRoot: entry.threadRoot ?? '',
-      ),
+      notificationRouteOfEntry(entry),
       AppNotificationRouteTarget(
         controller: ref.read(nostrControllerProvider),
         appState: ref.read(appStateProvider.notifier),

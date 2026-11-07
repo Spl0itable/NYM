@@ -33,6 +33,15 @@ class OwnEphemeralSubscription {
     }
   }
 
+  bool rearm() {
+    final cur = _current;
+    if (cur == null || cur.isClosed) {
+      refresh();
+      return _current != null;
+    }
+    return ensure();
+  }
+
   bool ensure() {
     final pks = pubkeys();
     if (pks.isEmpty || pks.every(_covered.contains)) return false;

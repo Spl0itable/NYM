@@ -457,6 +457,7 @@
             const container = messageEl.querySelector('.message-content');
             if (!container) return;
             messageEl.dataset.nostrCardsAttached = '1';
+            const gen = messageEl._finishGen;
 
             const seen = new Set();
             const tokens = [];
@@ -472,7 +473,7 @@
             const anon = this._anonLookupContext(message);
 
             const paint = (data) => {
-                if (!data || !container.isConnected) return;
+                if (!data || !container.isConnected || messageEl._finishGen !== gen) return;
                 const html = this._renderNostrRefCard(data);
                 if (!html) return;
                 const el = document.createElement('div');
@@ -603,22 +604,22 @@
                 if (target) this._settleReadMore([target]);
             }
 
+            const pubkey = data.pubkey || '';
+            const isOwn = !!pubkey && pubkey === this.pubkey;
+            bodyEl.dataset.imgAuthor = pubkey;
             if (typeof this._attachLinkPreviews === 'function') {
                 this._attachLinkPreviews(cardEl, {
                     scope: bodyEl,
                     container: bodyEl,
                     flag: 'cardPreviewsAttached',
+                    blur: () => this._blursImagesFrom(pubkey, isOwn),
                 });
             }
             if (typeof this._attachMediaFallbacks === 'function') {
                 this._attachMediaFallbacks(cardEl);
             }
 
-            const pubkey = data.pubkey || '';
-            const isOwn = pubkey && pubkey === this.pubkey;
-            const shouldBlur = !isOwn && (this.blurOthersImages === true ||
-                (this.blurOthersImages === 'friends' && !this.isFriend(pubkey)));
-            if (shouldBlur) {
+            if (this._blursImagesFrom(pubkey, isOwn)) {
                 bodyEl.querySelectorAll('img:not(.avatar-message)')
                     .forEach(img => img.classList.add('blurred'));
             }

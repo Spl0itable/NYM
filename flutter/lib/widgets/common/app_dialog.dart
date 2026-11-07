@@ -115,6 +115,7 @@ Future<String?> showAppPrompt(
   String placeholder = '',
   int? maxLength,
   bool multiline = false,
+  bool countCodePoints = false,
 }) async {
   final res = await showDialog<AppDialogResult>(
     context: context,
@@ -129,6 +130,7 @@ Future<String?> showAppPrompt(
       placeholder: placeholder,
       maxLength: maxLength,
       multiline: multiline,
+      countCodePoints: countCodePoints,
     ),
   );
   if (res == null || !res.confirmed) return null;
@@ -163,6 +165,7 @@ class _AppDialog extends StatefulWidget {
     this.placeholder = '',
     this.maxLength,
     this.multiline = false,
+    this.countCodePoints = false,
     this.copyValue,
     this.copyLabel,
     this.copiedMessage,
@@ -181,6 +184,7 @@ class _AppDialog extends StatefulWidget {
   final String placeholder;
   final int? maxLength;
   final bool multiline;
+  final bool countCodePoints;
   final String? copyValue;
   final String? copyLabel;
   final String? copiedMessage;
@@ -452,7 +456,8 @@ class _AppDialogState extends State<_AppDialog> {
   Widget _promptField(NymColors c) {
     final max = widget.maxLength;
     final focused = _inputFocus.hasFocus;
-    final len = _input.text.length;
+    final points = widget.countCodePoints;
+    final len = points ? _input.text.runes.length : _input.text.length;
     final Color counterColor;
     if (max != null && len >= max) {
       counterColor = c.danger;
@@ -485,7 +490,8 @@ class _AppDialogState extends State<_AppDialog> {
                 controller: _input,
                 focusNode: _inputFocus,
                 autofocus: true,
-                maxLength: max,
+                maxLength: points ? null : max,
+                inputFormatters: points && max != null ? [_CodePointLimit(max)] : null,
                 maxLines: widget.multiline ? null : 1,
                 minLines: widget.multiline ? 4 : 1,
                 expands: false,
@@ -539,6 +545,24 @@ class _AppDialogState extends State<_AppDialog> {
       onTap: _ok,
       role: widget.danger ? DialogButtonRole.danger : DialogButtonRole.primary,
       focusNode: _okFocus,
+    );
+  }
+}
+
+class _CodePointLimit extends TextInputFormatter {
+  const _CodePointLimit(this.max);
+
+  final int max;
+
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final runes = newValue.text.runes;
+    if (runes.length <= max) return newValue;
+    final text = String.fromCharCodes(runes.take(max));
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
     );
   }
 }

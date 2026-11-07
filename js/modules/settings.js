@@ -8,7 +8,8 @@ const NYM_SETTINGS_SECTION_KEYS = {
         'blurOthersImages', 'chatLayout', 'chatViewMode', 'columnsLayout', 'nickStyle', 'colorMode',
         'wallpaperType', 'wallpaperCustomUrl', 'textSize', 'transparencyEnabled', 'columnsWallpaper',
         'sidebarSectionOrder', 'uiLanguage', 'colorfulMessages', 'colorfulMessagesTs', 'pubkeyFormat',
-        'pubkeyFormatTs', 'largeTargets', 'largeTargetsTs', 'highContrast', 'highContrastTs'],
+        'pubkeyFormatTs', 'largeTargets', 'largeTargetsTs', 'highContrast', 'highContrastTs', 'sidebarChannelsMode',
+        'sidebarChannelsModeTs'],
     privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'blockedEmojiPacks', 'blockedRelays', 'addedRelays', 'hiddenChannels',
         'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
         'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
@@ -324,6 +325,8 @@ Object.assign(NYM.prototype, {
             largeTargetsTs: ts.largeTargets || 0,
             highContrast: ls('nym_high_contrast') === '1',
             highContrastTs: ts.highContrast || 0,
+            sidebarChannelsMode: ls('nym_sidebar_channels_mode') === 'stream' ? 'stream' : 'list',
+            sidebarChannelsModeTs: ts.sidebarChannelsMode || 0,
             ...(typeof this._addedRelaysForSync === 'function'
                 ? { addedRelays: this._addedRelaysForSync(), addedRelaysTs: ts.addedRelays || 0 }
                 : {})
@@ -414,6 +417,10 @@ Object.assign(NYM.prototype, {
         stamped('highContrast', ['highContrast'], () => typeof s.highContrast === 'boolean', () => {
             if (window.NymLayout && typeof window.NymLayout.setHighContrast === 'function') window.NymLayout.setHighContrast(s.highContrast);
             else ls('nym_high_contrast', s.highContrast ? '1' : null);
+        });
+        stamped('sidebarChannelsMode', ['sidebarChannelsMode'], () => s.sidebarChannelsMode === 'list' || s.sidebarChannelsMode === 'stream', () => {
+            if (typeof this.setPublicMode === 'function') this.setPublicMode(s.sidebarChannelsMode, { fromSync: true });
+            else ls('nym_sidebar_channels_mode', s.sidebarChannelsMode);
         });
         stamped('addedRelays', ['addedRelays'], () => Array.isArray(s.addedRelays), () => {
             if (typeof this.applySyncedAddedRelays === 'function') this.applySyncedAddedRelays(s.addedRelays);
@@ -994,6 +1001,7 @@ Object.assign(NYM.prototype, {
         if (Object.keys(sections).every((section) => this._publishedSectionJson && this._publishedSectionJson[`nymchat-settings-${section}`])) {
             try { localStorage.removeItem(NYM_SETTINGS_DIRTY_KEY); } catch (_) { }
         }
+        if (typeof this._sfJoinSettingsPing === 'function') await this._sfJoinSettingsPing(changed, now);
         await this._publishSettingsChangedPing(changed, now);
     },
 
@@ -1048,12 +1056,24 @@ Object.assign(NYM.prototype, {
         return M.tsMapNorm(Object.fromEntries(this._threadLastReadMap()), M.CAPS.threadLastRead);
     },
 
+    _threadReadFromSync(key) {
+        const i = typeof key === 'string' ? key.indexOf('|') : -1;
+        if (i < 0 || typeof this._readMarkFromSync !== 'function') return key;
+        return this._readMarkFromSync(key.slice(0, i)) + key.slice(i);
+    },
+
     _applyThreadLastReadSync(raw) {
         const M = window.NymSyncMerge;
         if (!M || typeof this._threadLastReadMap !== 'function') return;
         const cur = this._threadReadsForSync();
         const cutoff = Math.floor(Date.now() / 1000) - 48 * 60 * 60;
-        const merged = M.tsMapMerge(cur, raw, M.CAPS.threadLastRead);
+        const wire = {};
+        for (const [k, v] of Object.entries(raw || {})) {
+            if (typeof v !== 'number') continue;
+            const key = this._threadReadFromSync(k);
+            if (!(wire[key] >= v)) wire[key] = v;
+        }
+        const merged = M.tsMapMerge(cur, wire, M.CAPS.threadLastRead);
         const next = {};
         for (const [k, v] of Object.entries(merged)) if (v > cutoff || cur[k] === v) next[k] = v;
         if (JSON.stringify(M.tsMapNorm(next)) === JSON.stringify(cur)) return;
@@ -1089,12 +1109,23 @@ Object.assign(NYM.prototype, {
         return N.markStoreNorm(this._cnMarkStore());
     },
 
+    _seenMarksFromSync(raw) {
+        const M = window.NymSyncMerge;
+        if (!M) return {};
+        let out = {};
+        for (const [k, v] of Object.entries(M.marksMerge({}, raw))) {
+            const key = typeof this._readMarkFromSync === 'function' ? this._readMarkFromSync(k) : k;
+            out = M.marksMerge(out, { [key]: v });
+        }
+        return out;
+    },
+
     _applySeenMarksSync(raw) {
         const M = window.NymSyncMerge;
         const N = window.NymChatNav;
         if (!M || !N || typeof this._cnMarkStore !== 'function') return;
         const cur = this._seenMarksForSync();
-        const merged = M.marksMerge(cur, raw);
+        const merged = M.marksMerge(cur, this._seenMarksFromSync(raw));
         if (JSON.stringify(merged) === JSON.stringify(cur)) return;
         const store = this._cnMarkStore();
         for (const k of Object.keys(store)) delete store[k];
@@ -1686,8 +1717,11 @@ Object.assign(NYM.prototype, {
             // Bound the payload: keep the most-recently-read conversations.
             const MAX_ENTRIES = 2000;
             if (entries.length > MAX_ENTRIES) {
-                entries.sort((a, b) => b[1] - a[1]);
-                entries.length = MAX_ENTRIES;
+                if (typeof this._readStateKept === 'function') entries = this._readStateKept(entries, MAX_ENTRIES);
+                else {
+                    entries.sort((a, b) => b[1] - a[1]);
+                    entries.length = MAX_ENTRIES;
+                }
             }
             const channelLastRead = {};
             for (const [k, v] of entries) channelLastRead[k] = v;
@@ -2470,17 +2504,13 @@ Object.assign(NYM.prototype, {
     reapplyImageBlur() {
         document.querySelectorAll('.message img').forEach(img => {
             if (img.classList.contains('custom-emoji')) return;
-            // Inline mention/quote avatars are UI chrome, not posted media; never blur them.
-            if (img.classList.contains('avatar-message')) return;
+            if (img.classList.contains('avatar-message') || img.classList.contains('nostr-card-avatar')) return;
             const messageEl = img.closest('.message');
             if (!messageEl) return;
-            const isSelfMessage = messageEl.classList.contains('self');
-            const pubkey = messageEl.dataset.pubkey;
-            const shouldBlur = !isSelfMessage && (
-                this.blurOthersImages === true ||
-                (this.blurOthersImages === 'friends' && !this.isFriend(pubkey))
-            );
-            if (shouldBlur) {
+            const card = img.closest('[data-img-author]');
+            const pubkey = card ? card.dataset.imgAuthor : messageEl.dataset.pubkey;
+            const own = card ? !!pubkey && pubkey === this.pubkey : messageEl.classList.contains('self');
+            if (this._blursImagesFrom(pubkey, own)) {
                 img.classList.add('blurred');
             } else {
                 img.classList.remove('blurred');

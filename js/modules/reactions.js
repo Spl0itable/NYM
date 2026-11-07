@@ -39,14 +39,17 @@ Object.assign(NYM.prototype, {
         if (primary.a === 'remove') tags.push(['action', 'remove']);
         for (const it of q) tags.push(...this.customEmojiTagsForContent(it.c));
         if (rest.length) tags.push(['batch', JSON.stringify(rest)]);
+        const held = this._groupReactionClaims instanceof Map ? this._groupReactionClaims.get(groupId) : null;
+        if (held) this._groupReactionClaims.delete(groupId);
+        const claim = held || (typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null);
         const rumor = {
             kind: 7,
             created_at: Math.floor(Date.now() / 1000),
             tags,
             content: primary.c,
-            pubkey: this.pubkey
+            pubkey: (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym }).pubkey
         };
-        await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
+        await this._sendGiftWrapsAsync(group.members, rumor, null, groupId, { claim });
     },
 
 
@@ -385,19 +388,6 @@ Object.assign(NYM.prototype, {
                 messageId: messageId
             };
             const msgEl = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
-            if (msgEl) {
-                if (this.inPMMode && this.currentPM) {
-                    channelInfo.sourceType = 'pm';
-                    channelInfo.sourcePubkey = this.currentPM;
-                } else if (this.inPMMode && this.currentGroup) {
-                    channelInfo.sourceType = 'group';
-                    channelInfo.sourceGroupId = this.currentGroup;
-                } else if (this.currentGeohash) {
-                    channelInfo.sourceType = 'geohash';
-                    channelInfo.sourceChannel = this.currentGeohash;
-                    channelInfo.sourceGeohash = this.currentGeohash;
-                }
-            }
             if (!channelInfo.sourceType) {
                 for (const [key, msgs] of this.messages.entries()) {
                     if (msgs.some(m => m.id === messageId)) {
@@ -1110,7 +1100,9 @@ ${this._emojiSectionsHtml()}`;
 
             window.nymHaptic && window.nymHaptic('light');
 
-            messageReactions.get(emoji).set(this.pubkey, this.nym);
+            const claim = (typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null);
+            const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
+            messageReactions.get(emoji).set(me.pubkey, me.nym);
             this.persistReactions(messageId);
 
             this.updateMessageReactions(messageId);
@@ -1145,13 +1137,15 @@ ${this._emojiSectionsHtml()}`;
                 created_at: Math.floor(Date.now() / 1000),
                 tags: reactionTags,
                 content: emoji,
-                pubkey: this.pubkey
+                pubkey: me.pubkey
             };
 
             const groupId = messageEl.dataset.groupId;
             if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
                 if (group) {
+                    if (!(this._groupReactionClaims instanceof Map)) this._groupReactionClaims = new Map();
+                    if (claim && claim.sk) this._groupReactionClaims.set(groupId, claim);
                     this._queueGroupReaction(groupId, messageId, emoji, 'add');
                     this.addToRecentEmojis(emoji);
                     return;
@@ -1170,14 +1164,14 @@ ${this._emojiSectionsHtml()}`;
                     tags: [['e', messageId], ['p', targetPubkey], ['k', '1059'],
                         ...this.customEmojiTagsForContent(emoji)],
                     content: emoji,
-                    pubkey: this.pubkey
+                    pubkey: me.pubkey
                 };
-                await this._sendGiftWrapsAsync([this.pubkey, this.currentPM], reactionRumor, null);
+                await this._sendGiftWrapsAsync([me.pubkey, this.currentPM], reactionRumor, null, null, { claim });
                 this.addToRecentEmojis(emoji);
                 return;
             }
 
-            const signedEvent = await this.signEvent(event);
+            const signedEvent = await (claim ? this._signClaimed(event, claim) : this.signEvent(event));
 
             if (signedEvent) {
                 this.sendToRelay(["EVENT", signedEvent]);

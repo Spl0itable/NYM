@@ -93,7 +93,10 @@ class StorageGuard {
     return out;
   }
 
-  static String? trimmed(String raw, {Map<String, num>? rank}) {
+  static bool Function(String key) Function()? openKeys;
+
+  static String? trimmed(String raw,
+      {Map<String, num>? rank, bool Function(String key)? keep}) {
     Object? data;
     try {
       data = jsonDecode(raw);
@@ -109,7 +112,11 @@ class StorageGuard {
     if (entries.length < 2) return null;
     num score(MapEntry<dynamic, dynamic> e) =>
         rank == null ? _recency(e.value) : (rank['${e.key}'] ?? 0);
+    int open(MapEntry<dynamic, dynamic> e) =>
+        keep != null && keep('${e.key}') ? 1 : 0;
     entries.sort((a, b) {
+      final t = open(b) - open(a);
+      if (t != 0) return t;
       final c = score(b).compareTo(score(a));
       if (c != 0) return c;
       return '${a.key}'.compareTo('${b.key}');
@@ -214,6 +221,12 @@ class StorageGuard {
       if (again == _Attempt.ok) return StorageWriteResult(true, evicted);
     }
     if (own != user) return StorageWriteResult(false, evicted);
+    bool Function(String key)? keep;
+    try {
+      keep = openKeys?.call();
+    } catch (_) {
+      keep = null;
+    }
     for (var round = 0; round < 32; round++) {
       var changed = false;
       for (final t in trimKeys) {
@@ -231,7 +244,8 @@ class StorageGuard {
               if (keys().contains(r)) _read(get, r),
           ]);
         }
-        final next = raw == null ? null : trimmed(raw, rank: rank);
+        final next =
+            raw == null ? null : trimmed(raw, rank: rank, keep: keep);
         if (next == null) {
           try {
             await remove(t);

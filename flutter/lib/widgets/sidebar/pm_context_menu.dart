@@ -13,6 +13,7 @@ import '../../models/channel.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import 'sidebar_folders_ui.dart';
 import '../common/app_dialog.dart';
 import '../common/nym_action_sheet.dart';
 import '../context_menu/group_context_menu_panel.dart' show showGroupMenuSheet;
@@ -323,6 +324,7 @@ Future<void> showPmContextMenu(
 
   final items = <SidebarQuickMenuItem>[
     ...chatNavSidebarItems(ref, 'pm-${pubkey.toLowerCase()}'),
+    ...folderSidebarItems(context, ref, 'pm-${pubkey.toLowerCase()}', at: globalPosition),
     ...chatLockSidebarItems(ref, 'pm-${pubkey.toLowerCase()}'),
     ...chatToolSidebarItems(context, PmLogic.pmStorageKey(pubkey)),
     SidebarQuickMenuItem(
@@ -355,6 +357,7 @@ Future<void> showPmContextMenu(
         final view = ref.read(appStateProvider).view;
         final wasViewing = view.kind == ViewKind.pm && view.id == pubkey;
         notifier.closePM(pubkey);
+        controller.dropFolderRefForChat('dm', pubkey);
         if (wasViewing) controller.switchChannel(kDefaultChannel);
         showToast(tr('PM conversation deleted'));
       },

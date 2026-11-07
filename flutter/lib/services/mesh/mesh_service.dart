@@ -72,10 +72,15 @@ class MeshService {
 
   bool Function(MeshPrivateMessage msg)? acksPrivateMessage;
 
+  bool Function(Uint8List plaintext)? dropsQueued;
+
   @visibleForTesting
   Future<void> dispatchNoisePayloadForTest(
           String senderPeerID, Uint8List plaintext) =>
       _dispatchNoisePayload(senderPeerID, plaintext);
+
+  @visibleForTesting
+  Future<void> flushPendingForTest(String peerID) => _flushPending(peerID);
 
   @visibleForTesting
   List<Uint8List> pendingPlaintextForTest(String peerID) =>
@@ -1024,7 +1029,9 @@ class MeshService {
   Future<void> _flushPending(String peerID) async {
     final queued = _pendingPlaintext.remove(peerID);
     if (queued == null) return;
+    final drop = dropsQueued;
     for (final plaintext in queued) {
+      if (drop != null && drop(plaintext)) continue;
       try {
         final ciphertext = await _noise.encrypt(peerID, plaintext);
         await _sendDirected(

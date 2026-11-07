@@ -126,7 +126,8 @@ select,
 .pm-item,
 .user-item,
 .context-menu-item,
-.message-author {
+.message-author,
+.sb-frow {
     touch-action: manipulation;
 }
 
@@ -199,7 +200,8 @@ body::after {
 }
 
 .channel-item:focus-visible,
-.pm-item:focus-visible {
+.pm-item:focus-visible,
+.sb-frow:focus-visible {
     outline-offset: -2px !important;
 }
 

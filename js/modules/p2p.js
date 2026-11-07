@@ -201,7 +201,7 @@ Object.assign(NYM.prototype, {
             kind: wire.kind,
             created_at: now,
             tags: [
-                ['n', this.nym],
+                ...this._nTags(this.pubkey, this.nym),
                 ['offer', JSON.stringify(fileOffer)],
                 ['ms', String(nowMs)],
                 [wire.tag, this.currentGeohash]

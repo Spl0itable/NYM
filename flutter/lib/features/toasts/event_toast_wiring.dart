@@ -100,12 +100,7 @@ void installEventToasts(
       c.read(notificationHistoryProvider.notifier).markEntriesViewed(entries);
     }
     openNotificationRoute(
-      NotificationRoute(
-        type: target.type,
-        route: target.route,
-        senderPubkey: target.senderPubkey,
-        threadRoot: target.threadRoot,
-      ),
+      notificationRouteOfToast(target),
       AppNotificationRouteTarget(
         controller: c.read(nostrControllerProvider),
         appState: c.read(appStateProvider.notifier),

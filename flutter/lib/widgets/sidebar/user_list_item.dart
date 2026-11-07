@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -58,7 +59,7 @@ class _UserListItemState extends ConsumerState<UserListItem> {
     final displayNym = base.length > 20 ? '${base.substring(0, 20)}...' : base;
     final suffix = getPubkeySuffix(user.pubkey);
     final hueColor = bitchatTheme && user.pubkey != selfPubkey
-        ? bitchatUserColor(user.pubkey, isLight: c.isLight)
+        ? bitchatUserColor(user.pubkey, isLight: c.isLight, contrast: context.highContrast)
         : null;
     final nymColor = hueColor ?? (_hover ? c.text : c.textDim);
 

@@ -19,6 +19,7 @@ import 'cosmetics.dart'
 import 'shop_catalog.dart';
 import 'shop_models.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../widgets/nym_svg_bytes.dart';
 
 /// Renders a catalog item's inline SVG tinted to [color] via `currentColor`.
 class ShopSvgIcon extends StatelessWidget {
@@ -36,11 +37,10 @@ class ShopSvgIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // `currentColor` theming avoids the per-icon saveLayer a srcIn colorFilter forces on every row.
-    return SvgPicture.string(
-      svg,
+    return SvgPicture(
+      NymSvgLoader(svg, color: color),
       width: size,
       height: size,
-      theme: SvgTheme(currentColor: color),
     );
   }
 }

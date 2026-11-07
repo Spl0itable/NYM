@@ -30,6 +30,7 @@ class DmPollsHooks {
     this.now,
     this.translate,
     this.personHidden,
+    this.hardcore,
   });
 
   final String Function() selfPubkey;
@@ -49,6 +50,7 @@ class DmPollsHooks {
   final int Function()? now;
   final String Function(String text, [Map<String, String>? vars])? translate;
   final bool Function(String pubkey)? personHidden;
+  final bool Function()? hardcore;
 
   DmPollsHooks copyWith({
     Future<bool> Function(String pubkey, String content)? sendPm,
@@ -60,6 +62,7 @@ class DmPollsHooks {
     )? sendControl,
     void Function(String text)? notice,
     int Function()? now,
+    bool Function()? hardcore,
   }) =>
       DmPollsHooks(
         selfPubkey: selfPubkey,
@@ -75,6 +78,7 @@ class DmPollsHooks {
         now: now ?? this.now,
         translate: translate,
         personHidden: personHidden,
+        hardcore: hardcore ?? this.hardcore,
       );
 }
 
@@ -210,6 +214,18 @@ class DmPollsService {
     ];
   }
 
+  bool _hardcore() => hooks.hardcore?.call() ?? false;
+
+  bool _hardcoreVoteRefused(Message m) {
+    if (!m.isGroup || !_hardcore()) return false;
+    final gid = m.groupId;
+    if (gid == null || hooks.group(gid) == null) return false;
+    return !allowed(m).contains(_self);
+  }
+
+  bool _hardcoreCloseRefused(Message m) =>
+      m.isOwn && m.pubkey != _self && _hardcore();
+
   DmPollTally tallyFor(Message m, DmPoll poll) => DmPolls.tally(
         store()[m.nymMessageId],
         options: poll.options.length,
@@ -230,7 +246,8 @@ class DmPollsService {
       poll: poll,
       tally: t,
       mine: t.choices[self],
-      canVote: !t.closed && allowed(m).contains(self),
+      canVote: !t.closed &&
+          (allowed(m).contains(self) || _hardcoreVoteRefused(m)),
       canClose: m.pubkey == self && !t.closed,
     );
   }
@@ -303,7 +320,10 @@ class DmPollsService {
     final poll = loc.poll;
     if (optionIndex < 0 || optionIndex >= poll.options.length) return;
     final self = _self;
-    if (!allowed(m).contains(self)) return;
+    if (!allowed(m).contains(self)) {
+      if (_hardcoreVoteRefused(m)) _notice(DmPollStrings.hardcoreVoteRefused);
+      return;
+    }
     final t = tallyFor(m, poll);
     if (t.closed) {
       _notice(DmPollStrings.closedNotice);
@@ -328,7 +348,13 @@ class DmPollsService {
   Future<void> close(String pollId) async {
     final loc = _locate(pollId);
     final self = _self;
-    if (loc == null || loc.msg.pubkey != self) return;
+    if (loc == null) return;
+    if (loc.msg.pubkey != self) {
+      if (_hardcoreCloseRefused(loc.msg)) {
+        _notice(DmPollStrings.hardcoreCloseRefused);
+      }
+      return;
+    }
     final m = loc.msg;
     if (tallyFor(m, loc.poll).closed) return;
     final s = store();

@@ -33,7 +33,7 @@ const REPORT_DDL = [
 ];
 
 function emptySet() {
-  return { p: new Map(), e: new Map(), m: [], d: [], t: [], k: new Set(), kp: new Set(), n: 0, at: 0 };
+  return { p: new Map(), e: new Map(), m: [], d: [], t: [], k: new Set(), kp: new Set(), n: 0, at: 0, ok: false };
 }
 
 let cache = emptySet();
@@ -74,9 +74,10 @@ async function readSet(env) {
   const db = env && env.DB_NOPE;
   const out = emptySet();
   out.at = Date.now();
-  if (!hasD1(db)) return out;
+  if (!hasD1(db)) { out.ok = true; return out; }
   let rows;
   try { rows = await readRows(db); } catch (e) { return out; }
+  out.ok = true;
   const now = Date.now();
   for (const r of rows) {
     if (r.expires_at && r.expires_at > 0 && r.expires_at < now) continue;

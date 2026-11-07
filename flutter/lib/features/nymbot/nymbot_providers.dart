@@ -319,9 +319,21 @@ class BotChatController extends StateNotifier<BotChatState> {
     setMaxRuns: (n) => setMaxRuns(n),
   );
 
+  final Map<String, AnonBotIdentity> _hardcoreRunAs = {};
+
+  AnonBotIdentity? _hardcoreAskFor(Map<String, dynamic> body) {
+    final key = (body['eventId'] ?? body['replyTo'])?.toString();
+    return key == null ? null : _hardcoreRunAs[key];
+  }
+
+  String? _askPubkeyFor(Map<String, dynamic> body) =>
+      _hardcoreAskFor(body)?.pk ?? _pubkey;
+
+  String? askPubkeyFor(Map<String, dynamic> body) => _askPubkeyFor(body);
+
   Future<BotRunResponse> _runsTransport(String action, Map<String, dynamic> body,
       {Duration? timeout, bool? asAnon}) {
-    final pk = _pubkey;
+    final pk = _askPubkeyFor(body);
     if (pk == null) {
       return Future.value(
           (status: 0, data: const <String, dynamic>{}));
@@ -337,13 +349,19 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
     final anonId = wantAnon ? anon.identity : null;
     final key = anonId?.pk ?? pk;
+    final claimed = anonId == null ? _hardcoreAskFor(body) : null;
+    final claimedSigner = claimed == null ? null : LocalSigner(claimed.sk);
     return _service.botAction(
       action,
       body,
       pubkey: key,
       anon: anonId != null,
+      direct: claimedSigner != null,
       timeout: timeout,
       signedFor: (payload) async {
+        if (claimedSigner != null) {
+          return _authWith(claimedSigner, action, payload);
+        }
         if (action == 'pm') {
           return anonId != null
               ? await anon.authFor('pm', payload)
@@ -609,8 +627,9 @@ class BotChatController extends StateNotifier<BotChatState> {
     Map<String, dynamic>? auth,
     Uint8List? privkey,
     EventSigner? signer,
+    bool refreshOnSwitch = true,
   }) {
-    final switched = _pubkey != null && _pubkey != pubkey;
+    final switched = refreshOnSwitch && _pubkey != null && _pubkey != pubkey;
     _pubkey = pubkey;
     _auth = auth;
     _privkey = privkey;
@@ -669,7 +688,13 @@ class BotChatController extends StateNotifier<BotChatState> {
   /// NIP-98 auth via the signer: money actions fresh, routine ones from the 90s cache; falls back to [_auth].
   Future<Map<String, dynamic>?> _authFor(String action,
       [String? payload]) async {
-    final signer = _signer;
+    final auth = await _authWith(_signer, action, payload);
+    if (auth != null) return auth;
+    return payload == null ? _auth : null;
+  }
+
+  Future<Map<String, dynamic>?> _authWith(EventSigner? signer, String action,
+      [String? payload]) async {
     if (signer != null) {
       final auth = await Nip98Auth.buildSigned(
         action: action,
@@ -684,7 +709,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       );
       if (auth != null) return auth;
     }
-    return payload == null ? _auth : null;
+    return null;
   }
 
   /// The bot conversation's storage key (`pm-<botPubkey>`).
@@ -922,7 +947,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       state.copyWith(balance: b, balanceKnown: true, balanceUnavailable: false);
 
   /// Runs a `?` control command on-device; never published or billed.
-  Future<void> handleBotPMCommand(String content) async {
+  Future<void> handleBotPMCommand(String content, {({String pk, Uint8List sk})? hardcore}) async {
     // Fold localized commands back to canonical English first.
     final trimmed = canonicalizeCommandInput(content.trim());
     _markBotPMReceipts('delivered');
@@ -933,7 +958,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       return;
     }
     if (RegExp(r'^\?balance\b', caseSensitive: false).hasMatch(trimmed)) {
-      await checkBotCredits(display: true);
+      await checkBotCredits(display: true, hardcore: hardcore);
       return;
     }
     if (RegExp(r'^\?buy\b', caseSensitive: false).hasMatch(trimmed)) {
@@ -956,11 +981,11 @@ class BotChatController extends StateNotifier<BotChatState> {
       return;
     }
     if (RegExp(r'^\?clear\b', caseSensitive: false).hasMatch(trimmed)) {
-      await clearBotPMHistory();
+      await clearBotPMHistory(hardcore: hardcore);
       return;
     }
     if (RegExp(r'^\?transfer\b', caseSensitive: false).hasMatch(trimmed)) {
-      await handleTransferCommand(trimmed);
+      await handleTransferCommand(trimmed, hardcore: hardcore);
       return;
     }
     if (RegExp(r'^\?gift\b', caseSensitive: false).hasMatch(trimmed)) {
@@ -970,11 +995,12 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 
   /// Control commands run on-device; everything else goes out as a real NIP-17 PM and to the worker by wrap id.
-  Future<void> sendUserBotPM(String content, {String? threadRoot}) async {
+  Future<void> sendUserBotPM(String content,
+      {String? threadRoot, ({String pk, Uint8List sk})? hardcore}) async {
     final trimmed = content.trim();
     if (trimmed.isEmpty) return;
     if (botPMCommandRe.hasMatch(trimmed)) {
-      await handleBotPMCommand(trimmed);
+      await handleBotPMCommand(trimmed, hardcore: hardcore);
       return;
     }
     if (!await AiConsent.instance.ensure()) {
@@ -999,7 +1025,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       } else if (chunks != null) {
         for (var i = 0; i < chunks.length; i++) {
           await _sendUserBotPMOnce(
-              '[Part ${i + 1} of ${chunks.length}]\n${chunks[i]}', thread);
+              '[Part ${i + 1} of ${chunks.length}]\n${chunks[i]}', thread, hardcore);
         }
         return;
       } else if (!choice.go) {
@@ -1009,15 +1035,19 @@ class BotChatController extends StateNotifier<BotChatState> {
     final guardKey = '${thread ?? ''}|$content';
     if (!runsEngine.guardTake(guardKey)) return;
     try {
-      await _sendUserBotPMOnce(content, thread);
+      await _sendUserBotPMOnce(content, thread, hardcore);
     } finally {
       runsEngine.guardRelease(guardKey);
     }
   }
 
-  Future<void> _sendUserBotPMOnce(String content, String? threadRoot) async {
+  Future<void> _sendUserBotPMOnce(String content, String? threadRoot,
+      [({String pk, Uint8List sk})? hardcore]) async {
     final app = _appState;
-    final selfPubkey = _pubkey ?? app.selfPubkey;
+    final claimed = hardcore == null
+        ? null
+        : AnonBotIdentity(sk: hardcore.sk, pk: hardcore.pk, root: Uint8List(0), createdAt: 0);
+    final selfPubkey = claimed?.pk ?? _pubkey ?? app.selfPubkey;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final nymMessageId = PmLogic.generateSharedEventId();
 
@@ -1052,7 +1082,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       if (pieces != null) {
         for (var i = 0; i < pieces.length - 1; i++) {
           final r = partRumor(pieces[i], i + 1, pieces.length);
-          final w = await _wrapRumor(r, kNymbotPubkey, sender: anonSender);
+          final w = await _wrapRumor(r, kNymbotPubkey, sender: anonSender ?? claimed);
           if (w == null || !_publishDmEvent(w.toJson(), anon: anonSender != null)) {
             _system('Nymbot: could not publish every part of your message. Please try again.');
             return;
@@ -1061,7 +1091,7 @@ class BotChatController extends StateNotifier<BotChatState> {
           leadWraps.add(w.toJson());
           final sw = anonSender != null
               ? await _wrapRumor(r, anonSender.pk, sender: anonSender, recipientKem: anon.kemFor(anonSender)?.publicKey)
-              : await _wrapRumor(r, selfPubkey);
+              : await _wrapRumor(r, selfPubkey, sender: claimed);
           if (sw != null) _publishDmEvent(sw.toJson(), anon: anonSender != null);
         }
       }
@@ -1080,7 +1110,7 @@ class BotChatController extends StateNotifier<BotChatState> {
               ],
               nowMs: nowMs,
             );
-      botWrap = await _wrapRumor(rumor, kNymbotPubkey, sender: anonSender);
+      botWrap = await _wrapRumor(rumor, kNymbotPubkey, sender: anonSender ?? claimed);
       if (botWrap != null &&
           !_publishDmEvent(botWrap.toJson(), anon: anonSender != null)) {
         botWrap = null;
@@ -1090,7 +1120,7 @@ class BotChatController extends StateNotifier<BotChatState> {
             ? await _wrapRumor(rumor, anonSender.pk,
                 sender: anonSender,
                 recipientKem: anon.kemFor(anonSender)?.publicKey)
-            : await _wrapRumor(rumor, selfPubkey);
+            : await _wrapRumor(rumor, selfPubkey, sender: claimed);
         if (selfWrap != null) {
           _publishDmEvent(selfWrap.toJson(), anon: anonSender != null);
         }
@@ -1122,6 +1152,13 @@ class BotChatController extends StateNotifier<BotChatState> {
     );
     _handledIds.add(msg.id);
     _app.ingestPMMessage(msg);
+    if (claimed != null && anonSender == null && botWrap != null) {
+      _hardcoreRunAs[botWrap.id] = claimed;
+      _hardcoreRunAs[nymMessageId] = claimed;
+      while (_hardcoreRunAs.length > 64) {
+        _hardcoreRunAs.remove(_hardcoreRunAs.keys.first);
+      }
+    }
     if (pieces != null && botWrap != null) {
       _longParts[botWrap.id] = (parts: [...leadIds, botWrap.id], wraps: [...leadWraps, botWrap.toJson()]);
     }
@@ -1435,7 +1472,7 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 
   /// Refreshes the balance; with [display] it also posts a balance bubble.
-  Future<void> checkBotCredits({required bool display}) async {
+  Future<void> checkBotCredits({required bool display, ({String pk, Uint8List sk})? hardcore}) async {
     if (_pubkey == null) return;
     if (_anonPending) {
       if (display) _anonNotReady();
@@ -1443,12 +1480,18 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
     try {
       final anonId = anon.ready ? anon.identity : null;
-      final key = anonId?.pk ?? _pubkey!;
+      final claimed =
+          anonId == null && hardcore != null ? LocalSigner(hardcore.sk) : null;
+      final key = anonId?.pk ?? (claimed != null ? hardcore!.pk : _pubkey!);
       final b = await _service.balance(
-          pubkey: anonId?.pk ?? _pubkey!,
+          pubkey: key,
           anon: anonId != null,
-          auth: () =>
-              anonId != null ? anon.authFor('balance') : _authFor('balance'));
+          direct: claimed != null,
+          auth: () => anonId != null
+              ? anon.authFor('balance')
+              : claimed != null
+                  ? _authWith(claimed, 'balance')
+                  : _authFor('balance'));
       if (!mounted) return;
       state = state.copyWith(
           balance: b, balanceKnown: true, balanceUnavailable: false);
@@ -1588,7 +1631,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         {'model': picked.label, 'price': _price(picked)});
   }
 
-  Future<void> clearBotPMHistory() async {
+  Future<void> clearBotPMHistory({({String pk, Uint8List sk})? hardcore}) async {
     if (_anonPending) {
       _anonNotReady();
       return;
@@ -1599,14 +1642,19 @@ class BotChatController extends StateNotifier<BotChatState> {
     // Best-effort server-side context wipe.
     if (_pubkey != null) {
       final anonId = anon.ready ? anon.identity : null;
-      final pk = anonId?.pk ?? _pubkey!;
+      final claimed =
+          anonId == null && hardcore != null ? LocalSigner(hardcore.sk) : null;
+      final pk = anonId?.pk ?? (claimed != null ? hardcore!.pk : _pubkey!);
       unawaited(_service
           .clearHistory(
               pubkey: pk,
               anon: anonId != null,
+              direct: claimed != null,
               signedFor: (payload) async => anonId != null
                   ? await anon.authFor('clear-history', payload)
-                  : (await _authFor('clear-history', payload) ?? _auth))
+                  : claimed != null
+                      ? await _authWith(claimed, 'clear-history', payload)
+                      : (await _authFor('clear-history', payload) ?? _auth))
           .catchError((_) => <String, dynamic>{}));
     }
     // Purge the thread's wraps from the D1 archive so no device restores them.
@@ -1714,7 +1762,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         .request(pubkey: giftPubkey, nym: giftNym);
   }
 
-  Future<void> handleTransferCommand(String trimmed) async {
+  Future<void> handleTransferCommand(String trimmed, {({String pk, Uint8List sk})? hardcore}) async {
     final raw = trimmed
         .replaceFirst(RegExp(r'^\?transfer\b', caseSensitive: false), '')
         .trim();
@@ -1748,7 +1796,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         _appState.users[targetPubkey]?.nym ?? targetPubkey.substring(0, 8));
 
     if (!confirming) {
-      await checkBotCredits(display: false);
+      await checkBotCredits(display: false, hardcore: hardcore);
       final have = state.balance.balance;
       final havePro = state.balance.proBalance;
       if (have <= 0 && havePro <= 0) {
@@ -1773,7 +1821,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
 
     try {
-      final res = await transferCredits(targetPubkey);
+      final res = await transferCredits(targetPubkey, hardcore: hardcore);
       if (res == null || res['error'] != null) {
         final error = res?['error'];
         if (error == null) {
@@ -1890,12 +1938,17 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 
   /// Transfers all credits to [targetPubkey], zeroing local balances on success; null if unbound.
-  Future<Map<String, dynamic>?> transferCredits(String targetPubkey) async {
+  Future<Map<String, dynamic>?> transferCredits(String targetPubkey,
+      {({String pk, Uint8List sk})? hardcore}) async {
     if (_pubkey == null) return null;
+    final claimed = hardcore == null ? null : LocalSigner(hardcore.sk);
     final res = await _service.transfer(
-        pubkey: _pubkey!,
+        pubkey: claimed != null ? hardcore!.pk : _pubkey!,
         targetPubkey: targetPubkey,
-        signedFor: (payload) => _authFor('transfer-credits', payload));
+        direct: claimed != null,
+        signedFor: (payload) => claimed != null
+            ? _authWith(claimed, 'transfer-credits', payload)
+            : _authFor('transfer-credits', payload));
     if (res['error'] == null) {
       final b = state.balance;
       state = state.copyWith(

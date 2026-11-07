@@ -14,6 +14,7 @@ import '../../models/message.dart';
 import '../../models/nostr_event.dart';
 import '../../services/relay/relay_message.dart';
 import '../../state/app_state.dart';
+import 'picture_blur.dart';
 import '../../state/nostr_controller.dart';
 import '../../widgets/chat/message_row.dart' show formatRelativeTime;
 import 'format/message_content.dart';
@@ -251,7 +252,6 @@ class NostrRefCard extends ConsumerStatefulWidget {
     required this.token,
     this.onJump,
     this.onOpenProfile,
-    this.blurImages = false,
   });
 
   /// The pasted reference, scheme already stripped.
@@ -262,9 +262,6 @@ class NostrRefCard extends ConsumerStatefulWidget {
 
   /// Called when tapping a profile card, to open that person's context menu.
   final void Function(String pubkey, String nym)? onOpenProfile;
-
-  /// Blur media in the referenced body under the same setting as the surrounding message.
-  final bool blurImages;
 
   @override
   ConsumerState<NostrRefCard> createState() => _NostrRefCardState();
@@ -448,7 +445,7 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
               quoted: data.quoted,
               hostMessageId: data.id.isNotEmpty ? 'nostrcard-${data.id}' : null,
               fontSize: 12,
-              blurImages: widget.blurImages,
+              blurImages: blursPicturesFrom(ref, data.pubkey),
               nostrRefCards: false,
             ),
         ],

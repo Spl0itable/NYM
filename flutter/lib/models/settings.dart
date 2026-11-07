@@ -62,6 +62,7 @@ class Settings {
     this.colorfulMessages = false,
     this.largeTargets = false,
     this.highContrast = false,
+    this.sidebarChannelsMode = 'list',
     this.infoPanelOpen = false,
     this.columnsResetTick = 0,
   });
@@ -123,6 +124,8 @@ class Settings {
   final bool colorfulMessages;
   final bool largeTargets;
   final bool highContrast;
+
+  final String sidebarChannelsMode;
 
   final bool infoPanelOpen;
 
@@ -192,6 +195,7 @@ class Settings {
     bool? colorfulMessages,
     bool? largeTargets,
     bool? highContrast,
+    String? sidebarChannelsMode,
     bool? infoPanelOpen,
     int? columnsResetTick,
   }) {
@@ -243,6 +247,7 @@ class Settings {
       colorfulMessages: colorfulMessages ?? this.colorfulMessages,
       largeTargets: largeTargets ?? this.largeTargets,
       highContrast: highContrast ?? this.highContrast,
+      sidebarChannelsMode: sidebarChannelsMode ?? this.sidebarChannelsMode,
       infoPanelOpen: infoPanelOpen ?? this.infoPanelOpen,
       columnsResetTick: columnsResetTick ?? this.columnsResetTick,
     );
@@ -350,6 +355,10 @@ class Settings {
       colorfulMessages: kv.getBool(StorageKeys.colorfulMessages, defaultValue: false),
       largeTargets: kv.getBool(StorageKeys.largeTargets, defaultValue: false),
       highContrast: kv.getBool(StorageKeys.highContrast, defaultValue: false),
+      sidebarChannelsMode:
+          kv.getString(StorageKeys.sidebarChannelsMode) == 'stream'
+              ? 'stream'
+              : 'list',
       infoPanelOpen: kv.getBool(StorageKeys.infoPanelOpen, defaultValue: false),
     );
   }

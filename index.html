@@ -588,6 +588,10 @@
                         <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
                 </div>
+                <div class="ps-mode" role="radiogroup" aria-label="Public section view">
+                    <button type="button" class="ps-mode-opt" role="radio" data-action="setPublicMode" data-ps-mode="list" aria-checked="true" tabindex="0">Channel list</button>
+                    <button type="button" class="ps-mode-opt" role="radio" data-action="setPublicMode" data-ps-mode="stream" aria-checked="false" tabindex="-1">Stream</button>
+                </div>
                 <div class="search-input-wrapper" id="channelSearchWrapper">
                     <input type="text" class="search-input" id="channelSearch" placeholder="Search channels..."
                         data-on-input="channelSearchInput"
@@ -607,6 +611,12 @@
                     <div class="sidebar-skeleton ssk-channel ssk-w1" aria-hidden="true"><span class="sk-bar"></span></div>
                     <div class="sidebar-skeleton ssk-channel ssk-w4" aria-hidden="true"><span class="sk-bar"></span></div>
                     <div class="sidebar-skeleton ssk-channel ssk-w2" aria-hidden="true"><span class="sk-bar"></span></div>
+                </div>
+                <div class="ps-stream" id="publicStream" hidden>
+                    <div class="ps-new-wrap"><button type="button" class="ps-new" hidden></button></div>
+                    <ul class="ps-list" aria-label="Public stream, newest first, read only"></ul>
+                    <button type="button" class="view-more-btn ps-more" hidden></button>
+                    <div class="ps-note" hidden>No public messages in the last 24 hours.</div>
                 </div>
             </div>
 
@@ -696,6 +706,10 @@
                             <span id="meshStatusLinks" class="mesh-status-links"></span>
                         </button>
                 </div>
+                <button type="button" class="sidebar-newfolder-btn" id="sidebarNewFolderBtn">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><line x1="12" y1="10" x2="12" y2="16"></line><line x1="9" y1="13" x2="15" y2="13"></line></svg>
+                    <span>New folder</span>
+                </button>
                 <button type="button" class="sidebar-edit-btn" id="sidebarEditBtn" data-action="toggleSidebarEdit" aria-pressed="false" aria-label="Edit sidebar">
                     <svg class="sidebar-edit-pencil" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
                     <svg class="sidebar-edit-check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
@@ -2280,6 +2294,7 @@
                         </select>
                         <div class="form-hint">Choose where senders can see when you've read their messages (✓✓). "Enabled everywhere" includes PMs, group chats, and public channels.
                         </div>
+                        <div id="readReceiptsHardcoreHint" class="form-hint nm-hidden nm-h-59">Hardcore mode sends no read or delivery receipts.</div>
                     </div>
 
                     <div class="form-group">
@@ -3172,6 +3187,10 @@
     <script defer src="js/modules/chat-lock-ui.js"></script>
     <script defer src="js/modules/unified-search.js"></script>
     <script defer src="js/modules/unified-search-ui.js"></script>
+    <script defer src="js/modules/public-stream.js"></script>
+    <script defer src="js/modules/public-stream-ui.js"></script>
+    <script defer src="js/modules/sidebar-folders.js"></script>
+    <script defer src="js/modules/sidebar-folders-ui.js"></script>
     <script defer src="js/modules/shortcuts.js"></script>
     <script defer src="js/modules/accounts-ui.js"></script>
     <script defer src="js/modules/send-as.js"></script>

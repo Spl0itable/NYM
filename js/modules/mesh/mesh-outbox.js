@@ -74,26 +74,30 @@ Object.assign(NYM.prototype, {
     },
 
     // Only offline sends belong here (`_sendChannelOverMesh` checks); `#mesh` is a real kind-20000 channel.
-    meshOutboxQueue(entry) {
+    meshOutboxQueue(entry, claim) {
         if (!entry || !entry.localId || !entry.target || !entry.content) return;
         if (entry.kind !== 'channel') return;
         const list = this._meshOutboxLoad();
         // One echo, one entry: a retry must not publish the same message twice.
         if (list.some(e => e.localId === entry.localId)) return;
-        list.push({
+        const record = {
             kind: entry.kind,
             target: entry.target,
             content: entry.content,
             // Original send time, so the message keeps its place in the conversation.
             createdAt: entry.createdAt || Math.floor(Date.now() / 1000),
             localId: entry.localId,
-            ...(this.pubkey ? { owner: this.pubkey } : {}),
+            ...((entry.owner || this.pubkey) ? { owner: entry.owner || this.pubkey } : {}),
             ...(entry.threadRoot ? { threadRoot: entry.threadRoot } : {}),
             ...(entry.meshMessageId ? { meshMessageId: entry.meshMessageId } : {}),
             // Reusing the send-time event means a gateway's copy shares the id and relays dedup it.
             ...(entry.signedEvent ? { signedEvent: entry.signedEvent } : {}),
             attempts: 0,
-        });
+        };
+        list.push(record);
+        if (claim && claim.sk && claim.pubkey === record.owner) {
+            (this._meshOutboxClaims || (this._meshOutboxClaims = new WeakMap())).set(record, claim);
+        }
         while (list.length > MESH_OUTBOX_CAP) this._meshOutboxDropped(list.shift());
         this._meshOutboxSave();
     },
@@ -107,9 +111,9 @@ Object.assign(NYM.prototype, {
         if (!this.connected) return;
         this._meshOutboxFlushing = true;
         try {
-            // Snapshot: publishing mutates the live array.
-            for (const entry of list.slice()) {
-                if (!this._meshOutbox.includes(entry)) continue;
+            const visited = new Set();
+            for (let entry; (entry = this._meshOutbox.find((e) => !visited.has(e)));) {
+                visited.add(entry);
                 if (!this._meshOutboxWho(entry)) {
                     this._meshOutbox = this._meshOutbox.filter(e => e !== entry);
                     this._meshOutboxDropped(entry);
@@ -122,6 +126,7 @@ Object.assign(NYM.prototype, {
                 } catch (_) { sent = false; }
                 if (sent) {
                     this._meshOutbox = this._meshOutbox.filter(e => e !== entry);
+                    if (this._keyChain && this._keyChain.queued) this._keyChain.queued.delete(entry.localId);
                 } else {
                     entry.attempts = (entry.attempts || 0) + 1;
                     if (entry.attempts >= MESH_OUTBOX_MAX_ATTEMPTS) {
@@ -144,7 +149,10 @@ Object.assign(NYM.prototype, {
 
     _meshOutboxMine(entry) {
         const who = this._meshOutboxWho(entry);
-        return !!who && who === this.pubkey;
+        if (!who) return false;
+        if (who === this.pubkey) return true;
+        const chain = this._keyChain;
+        return !!(chain && chain.head === this.pubkey && chain.queued && chain.queued.has(entry.localId));
     },
 
     // Channels only (offline PMs are refused in `sendMessage`); the relay proxy archives it to D1.
@@ -164,10 +172,13 @@ Object.assign(NYM.prototype, {
             }
         }
         if (typeof this.publishMessage !== 'function') return false;
+        const claim = this._meshOutboxClaims ? this._meshOutboxClaims.get(entry) : null;
+        if (!claim && this._meshOutboxWho(entry) !== this.pubkey) return false;
         // The `nymmesh` tag lets radio recipients drop the Nostr copy.
         return !!await this.publishMessage(
             entry.content, entry.target, entry.target, null, entry.threadRoot || null,
             {
+                ...(claim ? { claim } : {}),
                 createdAt: entry.createdAt,
                 localId: entry.localId,
                 extraTags: entry.meshMessageId ? [['nymmesh', entry.meshMessageId]] : [],

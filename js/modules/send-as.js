@@ -104,7 +104,7 @@
             const N = window.NymAnonNymbot;
             if (!N) return false;
             const q = quotes || this._sendAsBotQuotes();
-            return !!N.triggers({ body: text, quoteAuthor: q.botQuote ? q.botQuote.author : '', threadBot: !!q.threadBotQuote });
+            return !!N.triggers({ body: text.replace(/^>.*$/gm, '>'), quoteAuthor: q.botQuote ? q.botQuote.author : '', threadBot: !!q.threadBotQuote });
         },
 
         _sendAsUnsent(m) {

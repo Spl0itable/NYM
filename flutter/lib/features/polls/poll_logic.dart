@@ -37,7 +37,7 @@ class PollLogic {
     final tags = <List<String>>[
       ['d', 'nym-poll-$id8'],
       ['t', AppDataTopic.poll],
-      ['n', nym],
+      ...nymTags(nym),
       ['g', geohash],
       ['poll_question', question],
     ];
@@ -71,7 +71,7 @@ class PollLogic {
         ['d', 'nym-poll-vote-$pollId'],
         ['t', AppDataTopic.pollVote],
         ['e', pollId],
-        ['n', nym],
+        ...nymTags(nym),
         ['g', geohash],
         ['response', '$optionIndex'],
       ],

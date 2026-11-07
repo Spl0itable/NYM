@@ -179,24 +179,31 @@ class IdentityService {
 
   /// Hardcore mode: fresh keypair and random nym per message; durable logins are returned unchanged.
   Future<Identity> rotateEphemeral(Identity current) async {
+    final next = nextEphemeral(current);
+    if (identical(next, current)) return current;
+    await keepEphemeral(next);
+    return next;
+  }
+
+  Identity nextEphemeral(Identity current) {
     if (current.loginMethod != null) return current;
-
-    final randomPerSession =
-        _kv.getBool(StorageKeys.randomKeypairPerSession, defaultValue: false);
     final nickStyle = _kv.getString(StorageKeys.nickStyle) ?? 'fancy';
-
-    // Fresh keypair and always-random nym.
     final sk = generatePrivateKey();
     final pubkey = getPublicKeyHex(sk);
-    final nym = _nymGen.generate(pubkey, style: nickStyle);
+    return Identity(
+        pubkey: pubkey,
+        privkey: sk,
+        nym: _nymGen.generate(pubkey, style: nickStyle));
+  }
 
-    if (!randomPerSession) {
-      // Persist for a same-session reconnect, as [bootEphemeral] does.
-      await _secretSet(SecretKeys.sessionNsec, bech32.encodeNsecBytes(sk));
-      await _kv.setString(StorageKeys.autoEphemeralNick, nym);
+  Future<void> keepEphemeral(Identity next) async {
+    final sk = next.privkey;
+    if (sk == null ||
+        _kv.getBool(StorageKeys.randomKeypairPerSession, defaultValue: false)) {
+      return;
     }
-
-    return Identity(pubkey: pubkey, privkey: sk, nym: nym);
+    await _secretSet(SecretKeys.sessionNsec, bech32.encodeNsecBytes(sk));
+    await _kv.setString(StorageKeys.autoEphemeralNick, next.nym);
   }
 
   Future<void> setNym(Identity identity, String nym) async {

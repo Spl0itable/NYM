@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart'
@@ -105,6 +106,8 @@ NostrEvent minePow(UnsignedEvent ev, int difficulty, Uint8List privkey) {
 Future<UnsignedEvent> mineNonce(UnsignedEvent ev, int difficulty,
     {int? lanes, bool Function()? abort}) async {
   if (difficulty <= 0) return ev;
+  final hold = powMineHold;
+  if (hold != null) await hold(ev);
   final args = <String, Object?>{
     'pubkey': ev.pubkey,
     'createdAt': ev.createdAt,
@@ -114,15 +117,19 @@ Future<UnsignedEvent> mineNonce(UnsignedEvent ev, int difficulty,
     'difficulty': difficulty,
   };
   final width = lanes ?? powLanes();
-  const chunk = 1 << 18;
+  final chunk = powChunkSize;
   var next = 0;
   final found = Completer<List<List<String>>>();
-  Future<void> lane() async {
+  final isolates = <Isolate>[];
+  bool aborted() {
+    if (abort == null || !abort()) return false;
+    if (!found.isCompleted) found.completeError(StateError('mine aborted'));
+    return true;
+  }
+
+  Future<void> webLane() async {
     while (!found.isCompleted) {
-      if (abort != null && abort()) {
-        if (!found.isCompleted) found.completeError(StateError('mine aborted'));
-        return;
-      }
+      if (aborted()) return;
       final start = next;
       next += chunk;
       final hit = await compute(_powGrindRange, <String, Object?>{
@@ -134,20 +141,94 @@ Future<UnsignedEvent> mineNonce(UnsignedEvent ev, int difficulty,
     }
   }
 
+  Map<String, Object?> nextJob() {
+    final start = next;
+    next += chunk;
+    return <String, Object?>{...args, 'start': start, 'count': chunk};
+  }
+
+  Future<void> lane() async {
+    if (aborted()) return;
+    final port = ReceivePort();
+    final inbox = StreamIterator<Object?>(port);
+    try {
+      powLaneSpawns++;
+      final iso = await Isolate.spawn(
+          _powLaneMain, <Object?>[port.sendPort, nextJob()],
+          onError: port.sendPort,
+          onExit: port.sendPort,
+          debugName: 'pow-lane');
+      if (found.isCompleted) {
+        iso.kill(priority: Isolate.immediate);
+        return;
+      }
+      isolates.add(iso);
+      SendPort? commands;
+      while (true) {
+        if (!await inbox.moveNext()) throw StateError('pow lane closed');
+        final reply = inbox.current;
+        if (reply is! Map) throw StateError('pow lane failed');
+        final lanePort = reply['p'];
+        if (lanePort is SendPort) commands = lanePort;
+        final hit = reply['h'];
+        if (hit is List && !found.isCompleted) {
+          found.complete(
+              [for (final t in hit) (t as List).cast<String>().toList()]);
+        }
+        if (found.isCompleted || aborted()) return;
+        if (commands == null) throw StateError('pow lane failed');
+        commands.send(nextJob());
+      }
+    } finally {
+      await inbox.cancel();
+      port.close();
+    }
+  }
+
   for (var i = 0; i < width; i++) {
-    unawaited(lane().catchError((Object e, StackTrace st) {
+    final run = kIsWeb ? webLane() : lane();
+    unawaited(run.catchError((Object e, StackTrace st) {
       if (!found.isCompleted) found.completeError(e, st);
     }));
   }
-  final tags = await found.future;
-  return UnsignedEvent(
-    pubkey: ev.pubkey,
-    createdAt: ev.createdAt,
-    kind: ev.kind,
-    tags: tags,
-    content: ev.content,
-  );
+  try {
+    final tags = await found.future;
+    return UnsignedEvent(
+      pubkey: ev.pubkey,
+      createdAt: ev.createdAt,
+      kind: ev.kind,
+      tags: tags,
+      content: ev.content,
+    );
+  } finally {
+    for (final iso in isolates) {
+      iso.kill(priority: Isolate.immediate);
+    }
+  }
 }
+
+void _powLaneMain(List<Object?> init) {
+  final out = init[0] as SendPort;
+  final inbox = ReceivePort();
+  out.send(<String, Object?>{
+    'p': inbox.sendPort,
+    'h': _powGrindRange((init[1] as Map).cast<String, Object?>()),
+  });
+  inbox.listen((Object? msg) {
+    out.send(<String, Object?>{
+      'h': _powGrindRange((msg as Map).cast<String, Object?>()),
+    });
+  });
+}
+
+@visibleForTesting
+int powChunkSize = 1 << 18;
+
+@visibleForTesting
+int powLaneSpawns = 0;
+
+@visibleForTesting
+Future<void> Function(UnsignedEvent ev)? powMineHold;
 
 int powLanes() {
   if (kIsWeb) return 1;

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -34,6 +33,7 @@ import 'group_tools_service.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/dialog_button.dart';
+import '../../core/utils/isolate_gate.dart';
 
 class GroupToolIcons {
   const GroupToolIcons._();
@@ -441,7 +441,7 @@ Future<List<GeoFeature>> gtWorldFeatures() {
   return _worldFuture ??= () async {
     try {
       final raw = await rootBundle.loadString(kWorldTopoAsset);
-      return await compute(decodeWorldTopoJson, raw);
+      return await gatedCompute(decodeWorldTopoJson, raw);
     } catch (_) {
       return const <GeoFeature>[];
     }
@@ -1067,10 +1067,19 @@ class _InvitePreviewBodyState extends State<_InvitePreviewBody> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                NymAvatar(
-                  seed: p.name,
-                  size: 56,
-                  imageUrl: p.avatar.isNotEmpty ? p.avatar : null,
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: c.bgTertiary,
+                    border: Border.all(color: c.glassBorder, width: 2),
+                  ),
+                  child: NymAvatar(
+                    seed: p.name,
+                    size: 52,
+                    imageUrl: p.avatar.isNotEmpty ? p.avatar : null,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(

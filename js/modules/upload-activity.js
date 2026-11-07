@@ -48,7 +48,7 @@
         const tags = [['typing', status]];
         if (status === 'start' && isKind(activity)) tags.push(['activity', activity]);
         tags.push([wireTag, channel]);
-        tags.push(['n', nym]);
+        if (nym) tags.push(['n', nym]);
         return tags;
     }
 

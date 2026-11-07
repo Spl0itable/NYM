@@ -54,9 +54,10 @@ class NymbotService {
     Future<Map<String, dynamic>?> Function(String payload)? signedFor,
     Duration timeout = _defaultTimeout,
     bool anon = false,
+    bool direct = false,
   }) async {
     if (kAiConsentBotActions.contains(action)) await AiConsent.instance.guard();
-    final ws = anon ? null : _apiSocketRequest;
+    final ws = anon || direct ? null : _apiSocketRequest;
     if (ws != null) {
       // The socket is authed once, so frames omit pubkey/auth; null falls back to HTTP.
       final res = await ws(action, extra, timeout: timeout);
@@ -182,6 +183,7 @@ class NymbotService {
     Future<Map<String, dynamic>?> Function(String payload)? signedFor,
     Duration? timeout,
     bool anon = false,
+    bool direct = false,
   }) =>
       _botRequest(
         action,
@@ -190,6 +192,7 @@ class NymbotService {
         signedFor: signedFor,
         timeout: timeout ?? _defaultTimeout,
         anon: anon,
+        direct: direct,
       );
 
   /// Standard and Pro credit balances.
@@ -197,6 +200,7 @@ class NymbotService {
     required String pubkey,
     Future<Map<String, dynamic>?> Function()? auth,
     bool anon = false,
+    bool direct = false,
   }) async {
     final res = await _botRequest(
       'balance',
@@ -204,6 +208,7 @@ class NymbotService {
       pubkey: pubkey,
       auth: auth,
       anon: anon,
+      direct: direct,
     );
     // Never zero-fill from an error body.
     _throwOnError(res);
@@ -353,6 +358,7 @@ class NymbotService {
     required String targetPubkey,
     Future<Map<String, dynamic>?> Function(String payload)? signedFor,
     bool anon = false,
+    bool direct = false,
   }) async {
     final res = await _botRequest(
       'transfer-credits',
@@ -360,6 +366,7 @@ class NymbotService {
       pubkey: pubkey,
       signedFor: signedFor,
       anon: anon,
+      direct: direct,
     );
     _throwOnStatus(res);
     return res.data;
@@ -370,6 +377,7 @@ class NymbotService {
     Future<Map<String, dynamic>?> Function()? auth,
     Future<Map<String, dynamic>?> Function(String payload)? signedFor,
     bool anon = false,
+    bool direct = false,
   }) async {
     final res = await _botRequest(
       'clear-history',
@@ -378,6 +386,7 @@ class NymbotService {
       auth: auth,
       signedFor: signedFor,
       anon: anon,
+      direct: direct,
     );
     _throwOnStatus(res);
     return res.data;

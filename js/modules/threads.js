@@ -274,13 +274,12 @@ Object.assign(NYM.prototype, {
         return [...head, ...this._threadRepliesFor(root)];
     },
 
-    // Null unless Nymbot is the root or last speaker; call before publishing the outgoing message.
+    // Null unless the thread is rooted on a Nymbot message; call before publishing the outgoing message.
     _threadBotQuoteContext(rootId, storageKey) {
         const chain = this._threadChannelChain(rootId, storageKey)
             .filter(m => String(m.content || '').trim());
         if (!chain.length) return null;
-        const last = chain[chain.length - 1];
-        if (!chain[0].isBot && !last.isBot) return null;
+        if (chain[0].id !== rootId || !chain[0].isBot) return null;
         const botMsgs = chain.filter(m => m.isBot);
         if (!botMsgs.length) return null;
         // An unfinished game lives in the newest [gc:] token; quoting without it would drop the game.

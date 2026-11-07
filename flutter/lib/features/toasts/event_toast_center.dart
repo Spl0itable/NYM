@@ -13,6 +13,7 @@ class EventToastTarget {
     this.senderPubkey = '',
     this.threadRoot = '',
     this.eventId = '',
+    this.source = '',
   });
 
   final String type;
@@ -20,6 +21,7 @@ class EventToastTarget {
   final String senderPubkey;
   final String threadRoot;
   final String eventId;
+  final String source;
 }
 
 class EventToastRouteObserver extends NavigatorObserver {

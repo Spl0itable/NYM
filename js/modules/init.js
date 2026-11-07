@@ -63,6 +63,7 @@ Object.assign(NYM.prototype, {
             this._maybeFirstRunLanguagePicker();
             this.setupSidebarSectionReorder();
             this.setupSidebarSectionCollapse();
+            if (typeof this.setupPublicStream === 'function') this.setupPublicStream();
             this.setupSidebarItemMenus();
             this.bindNymPanicGesture();
 
@@ -77,6 +78,7 @@ Object.assign(NYM.prototype, {
             if (typeof this._awaitReadState === 'function' && typeof this._getApiHost === 'function' && this._getApiHost()) {
                 this._awaitReadState(20000);
             }
+            if (typeof this._awaitConvRestore === 'function') this._awaitConvRestore();
             if (typeof this._hydrateUnreadCounts === 'function') this._hydrateUnreadCounts();
             if (typeof this.initMeshUI === 'function') this.initMeshUI();
             // Returning to the app is when to retry place names that failed earlier, including abandoned ones.

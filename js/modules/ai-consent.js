@@ -64,7 +64,8 @@
         aiConsentNeededForChannel(rawInput, botQuote) {
             const text = String(rawInput || '');
             if (text.startsWith('/')) return false;
-            if (text.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(text)) return true;
+            const own = text.replace(/^>.*$/gm, '>');
+            if (text.startsWith('?') || /(^|[^A-Za-z0-9_])@nymbot(?:#[0-9a-f]{4})?(?![A-Za-z0-9_])/i.test(own)) return true;
             return !!(botQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(botQuote.author || ''));
         },
 

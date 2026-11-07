@@ -22,20 +22,33 @@ function _nymNotifRoute(info, nym) {
     return r;
 }
 
-function _nymOpenRouteWhenReady(route, tries) {
+let _nymNotifTap = null;
+
+function _nymNotifTapPump() {
+    const t = _nymNotifTap;
+    if (!t) return;
+    if (t.timer) { clearTimeout(t.timer); t.timer = 0; }
+    if (Date.now() - t.at > 30000) { _nymNotifTap = null; return; }
     const n = typeof window !== 'undefined' ? window.nym : null;
-    if (n && n.pubkey && typeof n._notifOpenRoute === 'function') {
-        n._notifOpenRoute(route);
+    if (n && n.pubkey && typeof n._notifTapReady === 'function' && n._notifTapReady(t.route)) {
+        _nymNotifTap = null;
+        n._notifOpenClick(t.route, t.owner);
         return;
     }
-    if (tries < 60) setTimeout(() => _nymOpenRouteWhenReady(route, tries + 1), 500);
+    t.timer = setTimeout(_nymNotifTapPump, 500);
+}
+
+function _nymNotifTapHold(route, owner) {
+    if (_nymNotifTap && _nymNotifTap.timer) clearTimeout(_nymNotifTap.timer);
+    _nymNotifTap = { route, owner: typeof owner === 'string' ? owner : '', at: Date.now(), timer: 0 };
+    _nymNotifTapPump();
 }
 
 if (typeof navigator !== 'undefined' && navigator.serviceWorker && typeof navigator.serviceWorker.addEventListener === 'function') {
     navigator.serviceWorker.addEventListener('message', (e) => {
         const d = e && e.data;
         if (!d || d.type !== 'nym-notification-click' || !d.route) return;
-        _nymOpenRouteWhenReady(d.route, 0);
+        _nymNotifTapHold(d.route, d.owner);
     });
 }
 
@@ -129,13 +142,14 @@ Object.assign(NYM.prototype, {
             entry.osRef = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
             this._saveNotificationHistorySoon();
             const posted = entry.osRef;
+            const owner = this._notifOwner(true);
             this._notifSystemShow(this._notifSystemTitle(entry), {
                 body: this._notifSystemBody(entry),
                 icon: NYM_NOTIFICATION_ICON,
                 tag: this._notifTag(channelInfo),
                 renotify: true,
                 requireInteraction: false,
-                data: route ? { nymRoute: route, nymEntry: posted } : { nymEntry: posted }
+                data: route ? { nymRoute: route, nymEntry: posted, nymOwner: owner } : { nymEntry: posted, nymOwner: owner }
             }, route, nymFilter);
         }
 
@@ -155,6 +169,35 @@ Object.assign(NYM.prototype, {
             case 'reaction': return { type: 'reaction' };
             case 'call': return { type: 'call', isGroup: !!route && !peer, groupId: route && !peer ? route : null };
             default: return null;
+        }
+    },
+
+    _notifSyncedTarget(n) {
+        if (!n || n.channelInfo) return null;
+        const hex = (s) => typeof s === 'string' && /^[0-9a-f]{64}$/i.test(s);
+        const route = typeof n.route === 'string' ? n.route : '';
+        const sender = hex(n.senderPubkey) ? n.senderPubkey : '';
+        const source = typeof n.source === 'string' ? n.source : '';
+        const thread = typeof n.threadRoot === 'string' && n.threadRoot ? { threadRoot: n.threadRoot } : {};
+        const channel = (c) => Object.assign({ type: 'geohash', channel: c, geohash: c }, thread);
+        switch (n.type) {
+            case 'group': return route ? Object.assign({ type: 'group', groupId: route }, thread) : null;
+            case 'channel':
+            case 'geohash': return route ? channel(route) : null;
+            case 'mention': return route && !hex(route) ? channel(route) : null;
+            case 'call':
+                if (hex(route)) return { type: 'call', pubkey: route };
+                if (route) return { type: 'call', isGroup: true, groupId: route };
+                return sender ? { type: 'call', pubkey: sender } : null;
+            case 'reaction':
+                if (source.startsWith('group-') && source.length > 6) return { type: 'reaction', sourceType: 'group', sourceGroupId: source.slice(6) };
+                if (source.startsWith('pm-') && hex(source.slice(3))) return { type: 'reaction', sourceType: 'pm', sourcePubkey: source.slice(3) };
+                if (source.startsWith('#') && source.length > 1) return { type: 'reaction', sourceType: 'geohash', sourceChannel: source.slice(1), sourceGeohash: source.slice(1) };
+                return route && !hex(route) ? { type: 'reaction', sourceType: 'group', sourceGroupId: route } : null;
+            default: {
+                const peer = sender || (hex(route) ? route : '');
+                return typeof n.type === 'string' && n.type && peer ? Object.assign({ type: 'pm', pubkey: peer }, thread) : null;
+            }
         }
     },
 
@@ -290,6 +333,57 @@ Object.assign(NYM.prototype, {
             .catch(page);
     },
 
+    _notifOwner(make) {
+        let v = null;
+        try { v = localStorage.getItem('nym_notif_owner'); } catch (_) { }
+        if (!v) v = this._notifOwnerMem || null;
+        if (!v && make) {
+            const b = new Uint8Array(12);
+            if (typeof crypto !== 'undefined' && crypto && typeof crypto.getRandomValues === 'function') crypto.getRandomValues(b);
+            else for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256);
+            v = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+            try { localStorage.setItem('nym_notif_owner', v); } catch (_) { }
+        }
+        if (v) this._notifOwnerMem = v;
+        return v || '';
+    },
+
+    _notifOwnerReset() {
+        try { localStorage.removeItem('nym_notif_owner'); } catch (_) { }
+        this._notifOwnerMem = null;
+        return this._notifCloseShown();
+    },
+
+    _notifTapsReady() {
+        this._notifTapsOpen = true;
+        _nymNotifTapPump();
+    },
+
+    _notifTapReady(r) {
+        if (this._notifTapsOpen !== true || !r || typeof r !== 'object') return false;
+        const g = r.type === 'reaction' ? (r.sourceType === 'group' ? r.sourceGroupId : '') : (r.type === 'group' || r.type === 'call' ? r.groupId : '');
+        return !g || !!(this.groupConversations && this.groupConversations.has(g));
+    },
+
+    _notifOpenClick(route, owner) {
+        const mine = this._notifOwner(false);
+        if (!mine || owner !== mine) return;
+        this._notifTapSeq = (this._notifTapSeq || 0) + 1;
+        this._notifOpenRoute(route);
+    },
+
+    _notifCloseShown() {
+        for (const n of this._postedNotifications || []) { try { n.close(); } catch (_) { } }
+        this._postedNotifications = [];
+        const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : null;
+        if (!sw || typeof sw.getRegistration !== 'function') return Promise.resolve();
+        return Promise.resolve()
+            .then(() => sw.getRegistration())
+            .then((reg) => (reg && typeof reg.getNotifications === 'function' ? reg.getNotifications() : []))
+            .then((list) => { for (const n of list || []) { try { n.close(); } catch (_) { } } })
+            .catch(() => { });
+    },
+
     _notifOpenRoute(r) {
         if (!r || typeof r !== 'object') return;
         const nymOf = (pk) => (typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pk) : '');
@@ -299,6 +393,9 @@ Object.assign(NYM.prototype, {
             this.openGroup(r.groupId);
         } else if (r.type === 'geohash') {
             this.switchChannel(r.channel, r.geohash);
+        } else if (r.type === 'call') {
+            if (r.groupId) this.openGroup(r.groupId);
+            else if (r.pubkey) this.openUserPM(nymOf(r.pubkey), r.pubkey);
         } else if (r.type === 'reaction') {
             if (r.sourceType === 'pm' && r.sourcePubkey) {
                 this.openUserPM(nymOf(r.sourcePubkey), r.sourcePubkey);
@@ -582,7 +679,7 @@ Object.assign(NYM.prototype, {
                 eventId: evId || undefined
             };
             if (!entry.channelInfo) {
-                for (const k of ['type', 'route', 'threadRoot']) if (typeof n[k] === 'string' && n[k]) entry[k] = n[k];
+                for (const k of ['type', 'route', 'threadRoot', 'source']) if (typeof n[k] === 'string' && n[k]) entry[k] = n[k];
                 const keys = this._notifQuoted(n);
                 if (keys.length) entry.quoted = keys;
             }
@@ -615,7 +712,7 @@ Object.assign(NYM.prototype, {
     },
 
     _openNotificationTarget(n) {
-        const info = n && n.channelInfo;
+        const info = n && (n.channelInfo || this._notifSyncedTarget(n));
         if (!info) return;
         if (info.type === 'pm') {
             this.openUserPM(info.nym || n.senderNym || n.title, info.pubkey);
@@ -635,7 +732,7 @@ Object.assign(NYM.prototype, {
             if (info.isGroup && info.groupId) {
                 this.openGroup(info.groupId);
             } else if (info.pubkey) {
-                this.openUserPM(info.nym || n.senderNym || n.title, info.pubkey);
+                this.openUserPM(info.nym || this.getNymFromPubkey(info.pubkey), info.pubkey);
             }
         }
         if (info.threadRoot && typeof this.openThreadFromNotification === 'function') {
@@ -1219,7 +1316,8 @@ Object.assign(NYM.prototype, {
                 item.className = 'notification-item';
                 item._notif = n;
                 if (newKeys.has(this._notifNewKey(n))) item.classList.add('notification-item-unread');
-                if (n.channelInfo) item.style.cursor = 'pointer';
+                const target = n.channelInfo || this._notifSyncedTarget(n);
+                if (target) item.style.cursor = 'pointer';
                 const dt = new Date(n.timestamp);
                 const time = dt.toLocaleString([], {
                     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
@@ -1309,7 +1407,7 @@ Object.assign(NYM.prototype, {
                         </div>
                     </div>
                 `;
-                if (n.channelInfo) {
+                if (target) {
                     item.onclick = () => this._openNotificationTarget(n);
                 }
                 body.appendChild(item);

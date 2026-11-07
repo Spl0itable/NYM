@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
@@ -14,6 +15,7 @@ import '../layout/layout_model.dart' show mentionSuffixRanges;
 import '../media_notes/media_notes.dart' as notes;
 import '../messages/format/message_content.dart';
 import '../messages/inline_network_image.dart';
+import '../messages/picture_blur.dart';
 import 'quick_react_popup.dart';
 import '../../core/theme/nym_a11y.dart';
 
@@ -200,7 +202,7 @@ class MessageActionSheet extends StatelessWidget {
   }
 }
 
-class _Preview extends StatelessWidget {
+class _Preview extends ConsumerWidget {
   const _Preview({required this.preview, required this.text, this.thumb});
 
   final MessageSheetPreview preview;
@@ -208,7 +210,7 @@ class _Preview extends StatelessWidget {
   final String? thumb;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final url = thumb;
     return Container(
@@ -270,6 +272,7 @@ class _Preview extends StatelessWidget {
                 width: 44,
                 height: 44,
                 fit: BoxFit.cover,
+                blurSigma: blursPicturesFrom(ref, preview.pubkey) ? 20 : null,
                 errorChild: const SizedBox(width: 44, height: 44),
               ),
             ),

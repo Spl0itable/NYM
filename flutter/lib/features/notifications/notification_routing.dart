@@ -7,6 +7,7 @@ class NotificationRoute {
     this.route = '',
     this.senderPubkey = '',
     this.threadRoot = '',
+    this.source = '',
   });
 
   /// Bell-history category: pm, group, channel, geohash, mention, reaction or call.
@@ -15,18 +16,29 @@ class NotificationRoute {
   /// Tap target: peer pubkey, group id, or bare channel name.
   final String route;
 
-  /// Sender, the fallback target for reactions and mentions.
   final String senderPubkey;
 
   /// Originating thread root, or empty for an ordinary message.
   final String threadRoot;
+
+  final String source;
+
+  NotificationRoute withSource(String value) => NotificationRoute(
+        type: type,
+        route: route,
+        senderPubkey: senderPubkey,
+        threadRoot: threadRoot,
+        source: value,
+      );
 }
+
+const String kLockedNotificationSource = 'locked';
 
 /// Minimal conversation-opening surface so routing is testable without a NostrController.
 abstract class NotificationRouteTarget {
   void openChannel(String channel);
   void openPM(String pubkey);
-  void openGroup(String groupId);
+  bool openGroup(String groupId);
 
   /// Called only after an open above, so the thread's conversation is already current.
   void openThread(String threadRoot);
@@ -41,9 +53,14 @@ String encodeNotificationPayload({
   String? route,
   String? senderPubkey,
   String? threadRoot,
-}) =>
-    '$_kPayloadScheme$type|${route ?? ''}|${senderPubkey ?? ''}'
-    '|${threadRoot ?? ''}';
+  String? source,
+}) {
+  final base = '$_kPayloadScheme$type|${route ?? ''}|${senderPubkey ?? ''}'
+      '|${threadRoot ?? ''}';
+  final src = source ?? '';
+  if (src.isEmpty || src.contains('|')) return base;
+  return '$base|$src';
+}
 
 /// Decodes a payload from [encodeNotificationPayload], or null so the caller falls through to URL handling.
 NotificationRoute? decodeNotificationPayload(String payload) {
@@ -56,6 +73,7 @@ NotificationRoute? decodeNotificationPayload(String payload) {
     senderPubkey: parts.length > 2 ? parts[2] : '',
     // Read positionally because older payloads lack the thread root.
     threadRoot: parts.length > 3 ? parts[3] : '',
+    source: parts.length > 4 ? parts[4] : '',
   );
 }
 
@@ -100,8 +118,7 @@ bool openNotificationRoute(
   switch (target.type) {
     case 'group':
       if (route.isEmpty) return false;
-      into.openGroup(route);
-      return opened(true);
+      return opened(into.openGroup(route));
     case 'channel':
     case 'geohash':
       // Route is the bare channel name; switchChannel detects geohashes.
@@ -114,24 +131,43 @@ bool openNotificationRoute(
         into.openPM(route);
         return true;
       }
-      if (route.isNotEmpty) {
-        into.openGroup(route);
-        return true;
-      }
+      if (route.isNotEmpty) return into.openGroup(route);
       if (sender.isNotEmpty) {
         into.openPM(sender);
         return true;
       }
       return false;
-    case 'pm':
-    case 'mention':
     case 'reaction':
+      if (_openSource(target.source, into)) return true;
+      if (route.isNotEmpty && !isPubkeyRoute(route)) {
+        return into.openGroup(route);
+      }
+      return false;
+    case 'mention':
+      if (route.isEmpty || isPubkeyRoute(route)) return false;
+      into.openChannel(route);
+      return opened(true);
+    case 'pm':
     default:
-      // These route to the sender's PM.
       final peer =
           sender.isNotEmpty ? sender : (isPubkeyRoute(route) ? route : '');
       if (peer.isEmpty) return false;
       into.openPM(peer);
       return opened(true);
   }
+}
+
+bool _openSource(String source, NotificationRouteTarget into) {
+  if (source.startsWith('group-') && source.length > 6) {
+    return into.openGroup(source.substring(6));
+  }
+  if (source.startsWith('pm-') && isPubkeyRoute(source.substring(3))) {
+    into.openPM(source.substring(3));
+    return true;
+  }
+  if (source.startsWith('#') && source.length > 1) {
+    into.openChannel(source.substring(1));
+    return true;
+  }
+  return false;
 }

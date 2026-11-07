@@ -3,10 +3,11 @@ import 'dart:io' show gzip;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/utils/isolate_gate.dart';
 
 const String kGeoPlacesLoAsset = 'assets/data/geo-places-lo.nyp.gz';
 const String kGeoPlacesHiAsset = 'assets/data/geo-places-hi.nyp.gz';
@@ -326,7 +327,7 @@ Future<GeoPlacePack?> loadBundledGeoPlacePack(int pack) =>
       try {
         final data = await rootBundle.load(kGeoPlacesAssets[pack]);
         final bytes = Uint8List.sublistView(data);
-        return await compute(decodeGeoPlacesGz, bytes);
+        return await gatedCompute(decodeGeoPlacesGz, bytes);
       } catch (_) {
         _bundledPacks[pack] = null;
         return null;

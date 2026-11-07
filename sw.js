@@ -220,6 +220,7 @@ function sameOrigin(c) {
 self.addEventListener('notificationclick', (e) => {
     const n = e.notification;
     const route = n && n.data && n.data.nymRoute ? n.data.nymRoute : null;
+    const owner = n && n.data && typeof n.data.nymOwner === 'string' ? n.data.nymOwner : '';
     if (n) n.close();
     e.waitUntil((async () => {
         const all = (await self.clients.matchAll({ type: 'window', includeUncontrolled: true })).filter(sameOrigin);
@@ -229,6 +230,6 @@ self.addEventListener('notificationclick', (e) => {
         } else if (self.clients.openWindow) {
             try { client = await self.clients.openWindow('/'); } catch (_) { client = null; }
         }
-        if (client && route) client.postMessage({ type: 'nym-notification-click', route });
+        if (client && route) client.postMessage({ type: 'nym-notification-click', route, owner });
     })());
 });

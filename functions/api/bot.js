@@ -82,8 +82,8 @@ import {
   CLIENT_CORS_HEADERS,
 } from "./_shared.js";
 import { isNymchatClient, isStandaloneNymbot } from "./_client.js";
-import { hiddenAmong, hiddenSenders } from "./_spam.js";
-import { filterSet, rowHit } from "./_filters.js";
+import { hiddenAmong, hiddenSendersChecked, nymbotPubkeys } from "./_spam.js";
+import { filterSet, rowHit, textHit, pubkeyHit } from "./_filters.js";
 import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runTurnsRecent, runTurnAdd, runResultPut,
   runResultGet, runGet, runCountLive, runStart, runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent,
   runSteerAdd, runSteerList, runSteerMark, runSteerMiss, runSteerStatus, runSweep, runSweepClaim, runSweepRounds, RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS,
@@ -5310,7 +5310,7 @@ async function onRequest(context) {
   }
 
 
-  const refusal = await botPublicRefusal(context, body);
+  const refusal = await botPublicRefusal(context, body, pubkey);
   if (refusal) return refusal;
 
   if (body.stream === true) {
@@ -5499,6 +5499,7 @@ async function onRequest(context) {
   }
   var aboutTags = botAboutTags(context);
   for (var at = 0; at < aboutTags.length; at++) eventTags.push(aboutTags[at]);
+  if (context.botWhoHere === true) eventTags.push(["who", "here"]);
   var event = {
     kind: isGeo ? 20000 : 23333,
     created_at: now,
@@ -5570,7 +5571,43 @@ function botQuoteText(publishedContent, asked) {
   return m && m[1] === asked ? shown : "";
 }
 
-async function botPublicRefusal(context, body) {
+var BOT_THREAD_MENTION_RE = /(^|[^A-Za-z0-9_])@nymbot(?:#[0-9a-f]{4})?(?![A-Za-z0-9_])/i;
+var BOT_THREAD_AUTHOR_RE = /^nymbot(?:#[0-9a-f]{4})?$/i;
+
+async function botThreadRootAuthor(context, root) {
+  try {
+    var env = context && context.env;
+    if (!env || !hasD1(env.DB_CHANNELS)) return "";
+    var row = await replica(env.DB_CHANNELS).prepare("SELECT pubkey FROM events WHERE id = ? LIMIT 1").bind(root).first();
+    return row && typeof row.pubkey === "string" ? row.pubkey.toLowerCase() : "";
+  } catch (e) { return ""; }
+}
+
+async function botThreadAddressed(context, body, command, botPubkey) {
+  var root = typeof body.threadRoot === "string" ? body.threadRoot.trim().toLowerCase() : "";
+  if (!/^[0-9a-f]{64}$/.test(root)) return true;
+  if (command !== "ask" && command !== "guess") return true;
+  var text = body.publishedContent;
+  if (typeof text !== "string" || !text.trim()) return true;
+  var lines = text.split("\n");
+  var own = lines.filter(function (l) { return !/^\s*>/.test(l); });
+  for (var i = 0; i < own.length; i++) {
+    if (BOT_THREAD_MENTION_RE.test(own[i])) return true;
+  }
+  var lead = own.map(function (l) { return l.trim(); }).filter(Boolean)[0] || "";
+  if (lead.charAt(0) === "?") return true;
+  var quote = lines[0].replace(/^\s+/, "").match(/^>\s*@([^:]+):/);
+  if (quote) return BOT_THREAD_AUTHOR_RE.test(quote[1].trim());
+  var conversation = Array.isArray(body.conversation) ? body.conversation : [];
+  if (conversation.length < MAX_CONVERSATION_HISTORY) {
+    var head = conversation[0];
+    return !!(head && typeof head.author === "string" && BOT_THREAD_AUTHOR_RE.test(head.author.trim()));
+  }
+  var author = await botThreadRootAuthor(context, root);
+  return !author || author === String(botPubkey || "").toLowerCase();
+}
+
+async function botPublicRefusal(context, body, botPubkey) {
   var geohash = body ? body.geohash : undefined;
   if (typeof geohash === "string" && geohash !== "" && !isValidChannelTag(geohash)) {
     return botJsonResponse(400, { error: "Invalid channel" });
@@ -5578,6 +5615,7 @@ async function botPublicRefusal(context, body) {
   var command = body && typeof body.command === "string" ? body.command.toLowerCase() : "";
   if (!command) return botJsonResponse(400, { error: "Missing command" });
   if (BOT_PUBLIC_COMMANDS.indexOf(command) === -1) return botJsonResponse(400, { error: "Unknown command" });
+  if (!(await botThreadAddressed(context, body, command, botPubkey))) return botJsonResponse(422, { error: "Not addressed to Nymbot" });
   if (!context.botRateTaken && !(await publicCommandRateOk(context.request))) {
     return botJsonResponse(429, { response: "\u{1F6D1} Whoa, slow down — too many requests. Give me a minute and try again." });
   }
@@ -8758,7 +8796,12 @@ function timeAgo(unixTs) {
 var EFFECTIVE_MS_SQL =
   "(CASE WHEN stored_at > 0 AND stored_at < created_at * 1000 THEN stored_at ELSE created_at * 1000 END)";
 
-async function fetchChannelEventsFromD1(context, kinds, since, limit, channel) {
+function botKeepRow(into, row, drop) {
+  if (drop && into) into.add(String(row.pubkey || "").toLowerCase());
+  return !drop;
+}
+
+async function fetchChannelEventsFromD1(context, kinds, since, limit, channel, hiddenInto) {
   try {
     var env = context && context.env;
     if (!env || !hasD1(env.DB_CHANNELS)) return null;
@@ -8777,10 +8820,10 @@ async function fetchChannelEventsFromD1(context, kinds, since, limit, channel) {
       " ORDER BY " + EFFECTIVE_MS_SQL + " DESC LIMIT ?"
     ).bind(...binds).all()).results || [];
     var gate = await filterSet(env);
-    if (gate.n) rows = rows.filter(function (r) { return !rowHit(gate, r); });
+    if (gate.n) rows = rows.filter(function (r) { return botKeepRow(hiddenInto, r, rowHit(gate, r)); });
     var hidden = await hiddenAmong(env, channel ? [String(channel).toLowerCase()] : [], since * 1000 - 3600000, rows.map(function (r) { return r.id; }));
     if (!hidden.ok) return null;
-    if (hidden.hidden.size) rows = rows.filter(function (r) { return !hidden.hidden.has(r.id); });
+    if (hidden.hidden.size) rows = rows.filter(function (r) { return botKeepRow(hiddenInto, r, hidden.hidden.has(r.id)); });
     var flagged = await botFlaggedSenders(context);
     if (flagged.size) rows = rows.filter(function (r) { return !flagged.has(String(r.pubkey || "").toLowerCase()); });
     var events = [];
@@ -8800,10 +8843,11 @@ var BOT_ABOUT_MAX = 25;
 
 async function botFlaggedSenders(context) {
   if (context && context.botFlagged instanceof Set) return context.botFlagged;
-  var set;
-  try { set = await hiddenSenders(context && context.env, Date.now() - 24 * 3600 * 1000); } catch (_) { set = new Set(); }
-  if (!(set instanceof Set)) set = new Set();
-  if (context) context.botFlagged = set;
+  var read = null;
+  try { read = await hiddenSendersChecked(context && context.env, Date.now() - 24 * 3600 * 1000); } catch (_) { read = null; }
+  var ok = !!(read && read.ok && read.set instanceof Set);
+  var set = ok ? read.set : new Set();
+  if (context) { context.botFlagged = set; context.botFlaggedOk = ok; }
   return set;
 }
 
@@ -8834,6 +8878,86 @@ function botNoteAbout(context, pubkeys) {
 function botAboutTags(context) {
   var list = context && Array.isArray(context.botAbout) ? context.botAbout : [];
   return list.slice(0, BOT_ABOUT_MAX).map(function (pk) { return ["about", pk]; });
+}
+
+var BOT_ROSTER_MAX = 500;
+var BOT_ROSTER_MS = 1000;
+
+async function botPresenceRoster(context, channel) {
+  var bound = context && context.env && context.env.RELAY_PRESENCE;
+  if (!bound || typeof bound.fetch !== "function") return null;
+  var ch = String(channel || "").replace(/[A-Z]/g, function (c) { return c.toLowerCase(); });
+  if (!ch) return null;
+  var ctl = new AbortController();
+  var timer = null;
+  var late = new Promise(function (resolve) {
+    timer = setTimeout(function () { ctl.abort(); resolve(null); }, BOT_ROSTER_MS);
+  });
+  var read = (async function () {
+    var res = await bound.fetch("https://presence/who?ch=" + encodeURIComponent(ch), { signal: ctl.signal });
+    if (!res || res.status !== 200) return null;
+    return botRosterParse(await res.json());
+  })().catch(function () { return null; });
+  try { return await Promise.race([read, late]); } finally { clearTimeout(timer); }
+}
+
+function botRosterParse(body) {
+  if (!body || typeof body !== "object" || body.v !== 1 || !Array.isArray(body.present)) return null;
+  var out = [];
+  var seen = new Set();
+  var list = body.present.slice(0, BOT_ROSTER_MAX);
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    if (!e || typeof e !== "object") continue;
+    if (typeof e.pk !== "string" || !/^[0-9a-f]{64}$/.test(e.pk) || seen.has(e.pk)) continue;
+    if (e.nym !== null && typeof e.nym !== "string") continue;
+    seen.add(e.pk);
+    out.push({ pk: e.pk, nym: e.nym });
+  }
+  return out;
+}
+
+function botSinglePosters(events, into) {
+  var counts = new Map();
+  for (var i = 0; i < events.length; i++) {
+    var pk = events[i].pubkey;
+    if (pk) counts.set(pk, (counts.get(pk) || 0) + 1);
+  }
+  counts.forEach(function (n, pk) { if (n < 2) into.add(String(pk).toLowerCase()); });
+  return into;
+}
+
+function botLurkerNym(gate, nym, pk) {
+  if (typeof nym !== "string" || !nym) return null;
+  var tail = pk.slice(-4);
+  var m = nym.match(/^([\s\S]*)#([0-9a-f]{4})$/i);
+  if (m && m[2].toLowerCase() !== tail) return null;
+  var base = m ? m[1] : nym;
+  var shown = botSenderNym(base + "#" + tail);
+  if (!shown || textHit(gate, base)) return null;
+  return { base: base.toLowerCase(), shown: shown };
+}
+
+async function botWhoLurkers(context, roster, posters, single) {
+  var out = { named: [], unnamed: 0 };
+  if (!roster || !roster.length) return out;
+  var env = context && context.env;
+  var flagged = await botFlaggedSenders(context);
+  var gate = await filterSet(env);
+  if (!(context && context.botFlaggedOk) || !gate || gate.ok !== true) return out;
+  var bots = nymbotPubkeys(env);
+  for (var i = 0; i < roster.length; i++) {
+    var pk = roster[i].pk;
+    if (Object.prototype.hasOwnProperty.call(posters, pk) || flagged.has(pk) || pubkeyHit(gate, pk) || bots.has(pk)) continue;
+    var name = single.has(pk) ? null : botLurkerNym(gate, roster[i].nym, pk);
+    if (name) out.named.push({ pk: pk, base: name.base, nym: name.shown });
+    else out.unnamed++;
+  }
+  out.named.sort(function (a, b) {
+    if (a.base !== b.base) return a.base < b.base ? -1 : 1;
+    return a.pk < b.pk ? -1 : a.pk > b.pk ? 1 : 0;
+  });
+  return out;
 }
 
 function dropSpamFirstMessages(events) {
@@ -9064,8 +9188,14 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
   var since = Math.floor(Date.now() / 1000) - 600; // Last 10 minutes.
   var nymsByPubkey = {};
   var channelKey = "#" + geohash;
+  var single = new Set();
   // Prefer the D1 archive (full, spam-filtered) over the client's partial view.
-  var d1Who = await fetchChannelEventsFromD1(context, isGeohashName(geohash) ? [20000] : [23333], since, 500, geohash);
+  var reads = await Promise.all([
+    fetchChannelEventsFromD1(context, isGeohashName(geohash) ? [20000] : [23333], since, 500, geohash, single),
+    botPresenceRoster(context, geohash)
+  ]);
+  var d1Who = reads[0];
+  if (d1Who) botSinglePosters(d1Who.filter(isHumanMessage), single);
   if (d1Who) channelMessages = eventsToChannelMsgs(dropSpamFirstMessages(d1Who.filter(isHumanMessage)));
   function note(pubkey, nym, at) {
     if (!nymsByPubkey[pubkey]) {
@@ -9088,8 +9218,9 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
     var filter = isGeohashName(geohash)
       ? { kinds: [20000], since: since, limit: 500, "#g": [geohash] }
       : { kinds: [23333], since: since, limit: 500, "#d": [geohash] };
-    var events = await fetchRecentEvents(filter, 6000);
-    events = await botDropFlagged(context, dropSpamFirstMessages(events.filter(isHumanMessage)));
+    var events = (await fetchRecentEvents(filter, 6000)).filter(isHumanMessage);
+    botSinglePosters(events, single);
+    events = await botDropFlagged(context, dropSpamFirstMessages(events));
     for (var j = 0; j < events.length; j++) {
       var nym = extractNym(events[j]);
       var pubkey = botPersonKey(events[j]);
@@ -9097,13 +9228,22 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
       note(pubkey, nym, eventTimeSec(events[j]));
     }
   }
-  if (Object.keys(nymsByPubkey).length === 0) {
+  var lurk = await botWhoLurkers(context, reads[1], nymsByPubkey, single);
+  var lurking = lurk.named.length + lurk.unnamed;
+  if (Object.keys(nymsByPubkey).length === 0 && !lurking) {
     return "No active users in #" + geohash + " in the last 10 minutes.";
   }
   // Dedupe by pubkey, not nym, to match /who.
   var sorted = Object.values(nymsByPubkey).sort(function(a, b) { return b.lastSeen - a.lastSeen; });
   var lines = ["Active in #" + geohash + " (last 10 min): " + sorted.length + " nym" + (sorted.length !== 1 ? "s" : "")];
   var limit = Math.min(sorted.length, 20);
+  var lurkLimit = 0;
+  if (lurking) {
+    var total = sorted.length + lurking;
+    lines = ["Active in #" + geohash + ": " + total + " nym" + (total !== 1 ? "s" : "") + " (" + sorted.length + " posted in the last 10 min, " + lurking + " here now)"];
+    limit = Math.min(sorted.length, 15);
+    lurkLimit = Math.min(lurk.named.length, 20 - limit);
+  }
   var named = [];
   for (var k = 0; k < limit; k++) {
     var info = sorted[k];
@@ -9115,10 +9255,19 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
     lines.push("• " + displayNym + " — " + info.msgCount + " msg" + (info.msgCount !== 1 ? "s" : "") + " (" + timeAgo(info.lastSeen) + ")");
     named.push(info.pubkey);
   }
-  if (sorted.length > 20) {
+  for (var q = 0; q < lurkLimit; q++) {
+    lines.push("• " + lurk.named[q].nym + " — here");
+    named.push(lurk.named[q].pk);
+  }
+  if (lurking) {
+    var morePosted = sorted.length - limit;
+    var moreHere = lurking - lurkLimit;
+    if (morePosted + moreHere > 0) lines.push("...and " + (morePosted + moreHere) + " more (" + morePosted + " posted, " + moreHere + " here)");
+  } else if (sorted.length > 20) {
     lines.push("...and " + (sorted.length - 20) + " more");
   }
   botNoteAbout(context, named);
+  if (context && lurkLimit > 0) context.botWhoHere = true;
   return lines.join("\n");
 }
 

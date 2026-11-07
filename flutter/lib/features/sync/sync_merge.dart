@@ -33,6 +33,7 @@ const Map<String, List<String>> kStampedPrefs = {
   'keepCallHistory': ['keepCallHistory'],
   'largeTargets': ['largeTargets'],
   'highContrast': ['highContrast'],
+  'sidebarChannelsMode': ['sidebarChannelsMode'],
   'theme': ['theme'],
   'colorMode': ['colorMode'],
   'uiLanguage': ['uiLanguage'],

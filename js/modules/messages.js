@@ -1310,7 +1310,13 @@ Object.assign(NYM.prototype, {
     },
 
     _countArrivedUnread(storageKey, message, exists) {
-        if (!message || message.isOwn || exists) return;
+        if (!message || exists) return;
+        if (this._unreadRootLanded(storageKey, message)) {
+            if (typeof this.refreshUnreadCount === 'function') this.refreshUnreadCount(storageKey);
+            return;
+        }
+        if (message.isOwn) return;
+        if (typeof this._unreadOwnKey === 'function' && this._unreadOwnKey(message.pubkey)) return;
         if (this.isContentHidden(message)) return;
         const lastRead = (this.channelLastRead && this.channelLastRead.get(storageKey)) || 0;
         if ((message.created_at || 0) <= lastRead) return;
@@ -1319,6 +1325,17 @@ Object.assign(NYM.prototype, {
             return;
         }
         this.updateUnreadCount(storageKey, message.created_at);
+    },
+
+    _unreadRootLanded(storageKey, message) {
+        if (!message.id || !(typeof this.threadsEnabled === 'function' && this.threadsEnabled())) return false;
+        const list = this.messages && this.messages.get(storageKey);
+        if (!Array.isArray(list) || list.length < 2) return false;
+        const memo = this._unreadMemo ? this._unreadMemo.get(list) : null;
+        const idx = memo && typeof this._msgIndexOf === 'function' ? this._msgIndexOf(list) : null;
+        if (memo && memo.view && idx && memo.idx === idx) return memo.view.track.roots.has(message.id);
+        for (const m of list) if (m && m !== message && m.threadRoot === message.id) return true;
+        return false;
     },
 
     _applyPendingEdit(message) {
@@ -1449,7 +1466,10 @@ Object.assign(NYM.prototype, {
                 if (messages && (messages.length > this.channelMessageLimit || (blockedArrival && this._blockedOverCap(messages)))) {
                     const kept = this._storeTrim(messages, this.channelMessageLimit, m => m.id, true);
                     this.messages.set(storageKey, kept);
-                    if (kept !== messages) this._chWinDropTrimmed(storageKey, messages, kept);
+                    if (kept !== messages) {
+                        this._chWinDropTrimmed(storageKey, messages, kept);
+                        if (typeof this._applyPublicUnread === 'function' && (this.unreadCounts.get(storageKey) || 0) > 0) this._applyPublicUnread(storageKey);
+                    }
                 }
 
                 if (typeof this._maybeRefreshZapNotif === 'function') {
@@ -1465,8 +1485,11 @@ Object.assign(NYM.prototype, {
 
             if (isGated) {
                 message._spamGated = true;
+                if (!exists && this._unreadRootLanded(storageKey, message) && typeof this.refreshUnreadCount === 'function') this.refreshUnreadCount(storageKey);
                 return;
             }
+
+            if (!exists && typeof this._psSchedule === 'function') this._psSchedule();
 
             const arrivedHidden = !message.isOwn && this.isContentHidden(message);
             if (this._cvActive) {
@@ -1621,12 +1644,16 @@ Object.assign(NYM.prototype, {
         const isMentioned = !message.isOwn && this.isMentioned(message.content);
 
         if (message.content.startsWith('/me ')) {
-            messageEl.className = 'system-message me-message';
-            messageEl.dataset.messageId = message.id;
+            const actionMentioned = message.isPM
+                ? (typeof this._gtGroupRowMentioned === 'function' && this._gtGroupRowMentioned(message))
+                : isMentioned;
+            messageEl.className = actionMentioned ? 'system-message me-message mentioned' : 'system-message me-message';
+            messageEl.dataset.messageId = _dedupeId;
             messageEl.dataset.timestamp = displayTimestamp.getTime();
             messageEl.dataset.createdAt = this._orderAt(message);
             messageEl.dataset.ms = this._orderMsForDom(message);
             messageEl.dataset.seq = message._seq || 0;
+            if (message.isGroup && message.groupId) messageEl.dataset.groupId = message.groupId;
 
             const cleanAuthor = this.resolveDisplayNym(message.pubkey, message.author);
             const authorFlairHtml = this.getFlairForUser(message.pubkey);
@@ -1755,13 +1782,7 @@ Object.assign(NYM.prototype, {
             } else {
                 formattedContent = this.formatMessageWithQuotes(_shown, 0, _botAuthored, this._quotedOf(message));
             }
-            if (_botAuthored) {
-                // Show Nymbot's canonical command names in this client's localized vocabulary.
-                formattedContent = window.NymSuffix.dimHtml(this.localizeCommandTokensIn(formattedContent), '*');
-                if (message.thinking) {
-                    formattedContent = this._renderBotThinkingHtml(message.thinking) + formattedContent;
-                }
-            }
+            if (_botAuthored) formattedContent = this._botFinishHtml(formattedContent, message);
 
             const baseNym = this.resolveDisplayNym(message.pubkey, message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
@@ -2105,6 +2126,7 @@ Object.assign(NYM.prototype, {
             let idx = 0;
             img.addEventListener('error', () => {
                 if (idx >= list.length) return;
+                img.classList.remove('img-loaded');
                 img.src = list[idx++];
             });
         });
@@ -2229,14 +2251,11 @@ Object.assign(NYM.prototype, {
         }
 
         this._settleReadMore(truncationTargets);
+        if (truncationTargets.length && !messageEl.isConnected) messageEl.dataset.settleReadMore = '1';
 
-        if (!message.isOwn) {
-            const shouldBlur = this.blurOthersImages === true ||
-                (this.blurOthersImages === 'friends' && !this.isFriend(message.pubkey));
-            if (shouldBlur) {
-                // Blur posted media only, never the inline avatar chips (custom emoji are handled in CSS).
-                messageEl.querySelectorAll('img:not(.avatar-message)').forEach(img => img.classList.add('blurred'));
-            }
+        if (this._blursImagesFrom(message.pubkey, message.isOwn)) {
+            // Blur posted media only, never the inline avatar chips (custom emoji are handled in CSS).
+            messageEl.querySelectorAll('img:not(.avatar-message)').forEach(img => img.classList.add('blurred'));
         }
 
         // iOS Safari: explicitly load videos inserted via innerHTML, with a blob fallback when Range (206) is unsupported.
@@ -2268,9 +2287,36 @@ Object.assign(NYM.prototype, {
             });
         }
 
+        this._settleMessageImages(messageEl);
         this._attachLinkPreviews(messageEl);
         if (typeof this._attachNostrCards === 'function') this._attachNostrCards(messageEl, message);
         this._attachMediaFallbacks(messageEl);
+    },
+
+    _blursImagesFrom(pubkey, own) {
+        if (own) return false;
+        return this.blurOthersImages === true ||
+            (this.blurOthersImages === 'friends' && !(typeof this.isFriend === 'function' && this.isFriend(pubkey)));
+    },
+
+    _settleMessageImages(root) {
+        if (!root || typeof root.querySelectorAll !== 'function') return;
+        const dims = typeof window !== 'undefined' && window.NymImgDims instanceof Map ? window.NymImgDims : null;
+        root.querySelectorAll('img.msg-img:not(.img-loaded):not(.nym-local-media)').forEach(img => {
+            const key = img.getAttribute('src');
+            if (!key) return;
+            img._nymDimKey = key;
+            if (img.complete && img.naturalWidth > 0) {
+                img.classList.add('img-loaded');
+                return;
+            }
+            const d = dims && dims.get(key);
+            if (!d || img.closest('.nostr-card-body')) return;
+            img.style.setProperty('--msg-img-w', d[0] + 'px');
+            img.style.setProperty('--msg-img-h', d[1] + 'px');
+            img.style.setProperty('--msg-img-ar', d[0] + ' / ' + d[1]);
+            img.classList.add('img-sized');
+        });
     },
 
     // Defer to the worker only for live, heavy, sizeable content.
@@ -3179,14 +3225,15 @@ Object.assign(NYM.prototype, {
         this.autoResizeTextarea(input);
     },
 
-    async publishEditedChannelMessage(newContent, originalEventId) {
+    async publishEditedChannelMessage(newContent, originalEventId, claim) {
         try {
+            const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
             const channelKey = this.currentGeohash || 'nymchat';
             const wire = this.channelWire(channelKey);
 
             const now = Math.floor(Date.now() / 1000);
             const tags = [
-                ['n', this.nym],
+                ...this._nTags(me.pubkey, me.nym),
                 [wire.tag, channelKey],
                 ['edit', originalEventId]
             ];
@@ -3196,7 +3243,7 @@ Object.assign(NYM.prototype, {
                 created_at: now,
                 tags: tags,
                 content: newContent,
-                pubkey: this.pubkey
+                pubkey: me.pubkey
             };
 
             const editDifficulty = this._effectivePowDifficulty();
@@ -3204,7 +3251,8 @@ Object.assign(NYM.prototype, {
                 event = await this._minePow(event, editDifficulty);
             }
 
-            const signedEvent = await this.signEvent(event);
+            if (claim && claim.sk && !this._claimHolds(claim)) throw new Error('identity changed');
+            const signedEvent = await this._signClaimed(event, claim || {});
 
             this.editedMessages.set(`${this.pubkey}:${originalEventId}`, {
                 newContent,
@@ -3246,15 +3294,19 @@ Object.assign(NYM.prototype, {
         if (!msgEl) return;
         delete msgEl.dataset.fmtPending;
 
+        const prevRaw = msgEl.dataset.rawContent;
         msgEl.dataset.rawContent = newContent;
 
         const contentEl = msgEl.querySelector('.message-content');
-        if (contentEl) {
+        if (contentEl && contentEl.classList.contains('cosmetic-redacted-message')) {
+            this._dropEditedFinish(msgEl, newContent, prevRaw);
+        } else if (contentEl) {
             const bubbleTimeEl = contentEl.querySelector('.bubble-time-inner');
             const hoverButtonsEl = contentEl.querySelector('.msg-hover-buttons');
-            const editBotAuthored = !!(msgEl.dataset.pubkey && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(msgEl.dataset.pubkey));
             const editedMsg = this._messageIndex().get(messageId);
-            const formattedContent = this.formatMessageWithQuotes(this._shownContent({ content: newContent, quoted: this._quotedOf(editedMsg) }), 0, editBotAuthored, this._quotedOf(editedMsg));
+            const editBotAuthored = !!(msgEl.dataset.pubkey && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(msgEl.dataset.pubkey));
+            let formattedContent = this.formatMessageWithQuotes(this._shownContent({ content: newContent, quoted: this._quotedOf(editedMsg) }), 0, editBotAuthored, this._quotedOf(editedMsg));
+            if (editBotAuthored) formattedContent = this._botFinishHtml(formattedContent, editedMsg);
             if (bubbleTimeEl) {
                 if (!bubbleTimeEl.querySelector('.edited-indicator')) {
                     const bubbleEdited = document.createElement('span');
@@ -3271,6 +3323,7 @@ Object.assign(NYM.prototype, {
             } else {
                 contentEl.innerHTML = formattedContent + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
             }
+            this._refinishEditedContent(msgEl, contentEl, editedMsg, newContent, prevRaw);
         }
 
         if (!msgEl.querySelector('.edited-indicator-irc')) {
@@ -3287,6 +3340,37 @@ Object.assign(NYM.prototype, {
                 msgEl.appendChild(ircIndicator);
             }
         }
+    },
+
+    _refinishEditedContent(msgEl, contentEl, editedMsg, newContent, prevRaw) {
+        contentEl.classList.remove('has-truncation');
+        contentEl.classList.toggle('emoji-only', this.isEmojiOnly(newContent) || this.isCustomEmojiOnly(newContent));
+        this._dropEditedFinish(msgEl, newContent, prevRaw);
+        const author = msgEl.querySelector('.message-author');
+        const base = editedMsg || { pubkey: msgEl.dataset.pubkey, isOwn: !!(author && author.classList.contains('self')) || msgEl.dataset.pubkey === this.pubkey };
+        this._finalizeMessageContent(msgEl, Object.assign({}, base, { content: newContent }));
+    },
+
+    _dropEditedFinish(msgEl, newContent, prevRaw) {
+        delete msgEl.dataset.previewsAttached;
+        delete msgEl.dataset.nostrCardsAttached;
+        msgEl._finishGen = (msgEl._finishGen || 0) + 1;
+        if (prevRaw !== newContent && typeof this._dropManualTranslation === 'function') this._dropManualTranslation(msgEl);
+    },
+
+    _botFinishHtml(html, message) {
+        const out = window.NymSuffix.dimHtml(this.localizeCommandTokensIn(html), '*');
+        return message && message.thinking ? this._renderBotThinkingHtml(message.thinking) + out : out;
+    },
+
+    _readMoreTargetsOf(row) {
+        const targets = [];
+        row.querySelectorAll('.truncated-inner:not(.truncated-expanded)').forEach((inner) => {
+            const host = inner.parentElement;
+            const btn = host && host.querySelector(':scope > .read-more-btn');
+            if (btn) targets.push({ inner, btn, host });
+        });
+        return targets;
     },
 
     _getSwipeActionConfig(action) {
@@ -3623,6 +3707,7 @@ Object.assign(NYM.prototype, {
 
     async sendMessage() {
         const input = document.getElementById('messageInput');
+        let channelClaim = null;
         let content = input.value.trim();
         if (typeof this.stripBlockedEmoji === 'function') content = this.stripBlockedEmoji(content).trim();
 
@@ -3666,6 +3751,10 @@ Object.assign(NYM.prototype, {
                 return;
             }
             content = edited;
+            if (typeof this._hardcoreRotating === 'function' && this._hardcoreRotating()) {
+                this.displaySystemMessage(this.uiText('Editing is off in hardcore mode, since your key changes after every message. Send a new message instead.'));
+                return;
+            }
 
             if (edit.isGroup && edit.groupId) {
                 await this.sendEditedGroupMessage(content, edit.messageId, edit.groupId, edit.nymMessageId);
@@ -3693,7 +3782,7 @@ Object.assign(NYM.prototype, {
 
         const threadRoot = (typeof this._threadRootForSend === 'function')
             ? this._threadRootForSend() : null;
-        // A plain reply in a Nymbot thread continues that conversation; captured while the bot is still last speaker.
+        // A plain reply in a thread rooted on a Nymbot message continues that conversation.
         const threadBotQuote = (!savedQuote && threadRoot && !this.inPMMode &&
             typeof this._threadBotQuoteContext === 'function')
             ? this._threadBotQuoteContext(threadRoot, this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel)
@@ -3725,24 +3814,30 @@ Object.assign(NYM.prototype, {
             this.handleCommand(content);
         } else {
             if (this.inPMMode && this.currentGroup) {
-                await this.sendGroupMessage(content, this.currentGroup, { threadRoot });
+                channelClaim = typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null;
+                this._takeTypingUnderClaim(channelClaim);
+                await this.sendGroupMessage(content, this.currentGroup, { threadRoot, claim: channelClaim });
             } else if (this.inPMMode && this.currentPM && meshPm) {
                 await this.sendPMOverMesh(content, this.currentPM, meshPm);
             } else if (this.inPMMode && this.currentPM) {
-                await this.sendPM(content, this.currentPM, { threadRoot });
+                channelClaim = typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null;
+                this._takeTypingUnderClaim(channelClaim);
+                await this.sendPM(content, this.currentPM, { threadRoot, claim: channelClaim });
             } else if (this.currentGeohash) {
+                channelClaim = typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null;
                 // The Bluetooth mesh carries #mesh always, and any channel when the internet route is down.
                 if (meshOnly) {
-                    await this._sendChannelOverMesh(content, this.currentGeohash);
+                    await this._sendChannelOverMesh(content, this.currentGeohash, channelClaim);
                 } else {
-                    await this.publishMessage(content, this.currentGeohash, this.currentGeohash, quoteData, threadRoot);
+                    await this.publishMessage(content, this.currentGeohash, this.currentGeohash, quoteData, threadRoot, channelClaim ? { claim: channelClaim } : null);
                 }
                 // Use rawInput for trigger detection, since the quote prepend may hide the prefix.
-                const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
+                const ownInput = rawInput.replace(/^>.*$/gm, '>');
+                const isBotCmd = rawInput.startsWith('?') || /(^|[^A-Za-z0-9_])@nymbot(?:#[0-9a-f]{4})?(?![A-Za-z0-9_])/i.test(ownInput);
                 const botQuote = savedQuote || threadBotQuote;
                 const isNymbotReply = botQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(botQuote.author);
                 if (isBotCmd || isNymbotReply) {
-                    this._handleBotCommand(rawInput, this.currentGeohash, botQuote, content, threadRoot);
+                    this._handleBotCommand(rawInput, this.currentGeohash, botQuote, content, threadRoot, undefined, undefined, channelClaim);
                 }
             }
         }
@@ -3753,15 +3848,13 @@ Object.assign(NYM.prototype, {
         this.hideCommandPalette();
         this.hideAutocomplete();
         this.hideEmojiAutocomplete();
-        this.sendTypingStop();
-        this.sendChannelTypingStop();
+        this.sendTypingStop(channelClaim);
+        this.sendChannelTypingStop(undefined, channelClaim);
         input.focus();
 
         // Hardcore mode: rotate keypair after every sent message.
         if (this.connectionMode === 'ephemeral' && localStorage.getItem('nym_keypair_mode') === 'hardcore') {
-            await this._rotateHardcoreAfterSend();
-            document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
-            this.updateSidebarAvatar();
+            if (!channelClaim || !channelClaim.sk) this._claimChannelKey();
         }
     },
 
@@ -3799,7 +3892,7 @@ Object.assign(NYM.prototype, {
         const botQuote = savedQuote || threadBotQuote;
         const anonModel = window.NymAnonNymbot;
         const askBot = !!(anonModel && !rawInput.startsWith('/') && anonModel.triggers({
-            body: rawInput,
+            body: rawInput.replace(/^>.*$/gm, '>'),
             quoteAuthor: botQuote ? botQuote.author : '',
             threadBot: !!threadBotQuote
         }));
@@ -4374,6 +4467,10 @@ Object.assign(NYM.prototype, {
         container.innerHTML = '';
         container.appendChild(cached.fragment);
         this.channelDOMCache.delete(storageKey);
+        container.querySelectorAll('[data-settle-read-more]').forEach((row) => {
+            delete row.dataset.settleReadMore;
+            this._settleReadMore(this._readMoreTargetsOf(row));
+        });
 
         if (cached.virtualScrollState) {
             this.virtualScroll.currentStartIndex = cached.virtualScrollState.currentStartIndex;
@@ -4429,17 +4526,25 @@ Object.assign(NYM.prototype, {
         const _threadsOn = typeof this.threadsEnabled === 'function' && this.threadsEnabled();
 
         const clientGates = this._clientGatesActive();
-        return (Array.isArray(subset) ? subset : messages).filter(msg => {
-            if (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(msg)) return false;
-            if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
-            if (WOT_SPAM_GATE && clientGates && !msg.isOwn && !this.isFriend(msg.pubkey) &&
-                !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
-                return false;
-            }
-            if (this.isContentHidden(msg)) return false;
-            if (_threadsOn && msg.threadRoot && this._hasLocalThreadRoot(messages, msg.threadRoot)) return false;
-            return true;
-        }).sort((a, b) => this._compareMessages(a, b));
+        return (Array.isArray(subset) ? subset : messages).filter(msg => this._channelMsgVisible(msg, messages, _threadsOn, clientGates))
+            .sort((a, b) => this._compareMessages(a, b));
+    },
+
+    _channelMsgVisible(msg, list, threadsOn, gates) {
+        if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
+        if (!this._channelDrawn(msg, list, threadsOn, gates)) return false;
+        return !this.isContentHidden(msg);
+    },
+
+    _channelDrawn(msg, messages, threadsOn, clientGates) {
+        if (!msg || msg.blocked) return false;
+        if (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(msg)) return false;
+        if (typeof this._ctHidden === 'function' && this._ctHidden(msg)) return false;
+        if (WOT_SPAM_GATE && clientGates && !msg.isOwn && !this.isFriend(msg.pubkey) &&
+            !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
+            return false;
+        }
+        return !(threadsOn && msg.threadRoot && this._hasLocalThreadRoot(messages, msg.threadRoot));
     },
 
     _buildMessageSkeleton() {
@@ -5191,7 +5296,7 @@ Object.assign(NYM.prototype, {
                     : (this.currentPM ? this.getPMConversationKey(this.currentPM) : null);
                 if (!key) return;
                 const stored = (this.pmMessages.get(key) || []).length;
-                const domCount = container.querySelectorAll('.message[data-message-id]').length;
+                const domCount = container.querySelectorAll('.message[data-message-id], .me-message[data-message-id], .group-notice[data-message-id]').length;
                 if (stored > domCount) {
                     container.dataset.lastChannel = '';
                     this.channelDOMCache.delete(key);
@@ -5200,7 +5305,7 @@ Object.assign(NYM.prototype, {
             } else if (this.currentChannel || this.currentGeohash) {
                 const key = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
                 const stored = this.getFilteredMessages(key).length;
-                const domCount = container.querySelectorAll('.message[data-message-id]').length;
+                const domCount = container.querySelectorAll('.message[data-message-id], .me-message[data-message-id], .group-notice[data-message-id]').length;
                 const short = !this.userScrolledUp && !this._chWinDetached(key) && domCount < Math.min(stored, this.channelPageSize || 50);
                 if (stored > domCount && (domCount === 0 || short)) {
                     container.dataset.lastChannel = '';

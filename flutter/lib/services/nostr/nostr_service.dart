@@ -43,6 +43,7 @@ import '../../features/presence/geo_presence.dart';
 import 'event_mapper.dart';
 import 'event_signer.dart';
 import 'identity_service.dart';
+import '../../core/utils/isolate_gate.dart';
 
 enum RelaySwitchOutcome { done, proxyUnreachable, offline, busy, failed }
 
@@ -198,7 +199,7 @@ class PresencePayload {
     final out = <List<String>>[
       ['d', AppDataTopic.presence],
       ['t', AppDataTopic.presence],
-      ['n', nym],
+      ...nymTags(nym),
       ['status', publicStatus],
     ];
     // Away message only when fully enabled and actually away.
@@ -534,7 +535,32 @@ class NostrService {
   /// The current pool after any swap.
   PoolTransport get pool => _quietHeld ? _QuietPool(_pool) : _pool;
 
-  late final DmOutbox _dmOutbox = DmOutbox(send: _sendDm);
+  late final DmOutbox _dmOutbox = DmOutbox(send: _sendDm, drop: dropsQueued);
+
+  bool Function()? receiptsOff;
+
+  static final LinkedHashSet<String> _receiptWrapIds = LinkedHashSet<String>();
+
+  static void noteReceiptWrap(String id) {
+    _receiptWrapIds.remove(id);
+    _receiptWrapIds.add(id);
+    while (_receiptWrapIds.length > 4000) {
+      _receiptWrapIds.remove(_receiptWrapIds.first);
+    }
+  }
+
+  static bool isReceiptWrap(String id) => _receiptWrapIds.contains(id);
+
+  @visibleForTesting
+  static int get receiptWrapCountForTest => _receiptWrapIds.length;
+
+  @visibleForTesting
+  static void forgetReceiptWrapsForTest() => _receiptWrapIds.clear();
+
+  bool dropsQueued(NostrEvent event) =>
+      (event.kind == EventKind.channelReceipt ||
+          _receiptWrapIds.contains(event.id)) &&
+      (receiptsOff?.call() ?? false);
 
   Future<int> _sendDm(NostrEvent e) async {
     final via = pool;
@@ -596,7 +622,9 @@ class NostrService {
   }
 
   void _wireOutbox(PoolTransport p) {
+    if (p is RelayPool) p.heldDrops = dropsQueued;
     if (p is RelayPoolProxy) {
+      p.heldDrops = dropsQueued;
       p.onPublishCharge = _dmOutbox.charge;
       p.onPublishRateLimited = (id) => _dmOutbox.refused(id);
       p.onPublishAccepted = _dmOutbox.confirm;
@@ -1120,7 +1148,7 @@ class NostrService {
     _foreground = true;
     RelayConnection.backgrounded = false;
     _link.resumed(relayClock());
-    if (wake) networkChanged();
+    if (wake) _wakePools(network: false);
   }
 
   bool _networkUp = true;
@@ -1132,15 +1160,17 @@ class NostrService {
     _downTicks = 0;
   }
 
-  void networkChanged() {
+  void networkChanged() => _wakePools(network: true);
+
+  void _wakePools({required bool network}) {
     _networkUp = true;
     RelayConnection.offline = false;
     _downTicks = 0;
     _link.onlineAgain(relayClock());
     if (_stopped || _switchHold) return;
     final p = _pool;
-    if (p is RelayPoolProxy) p.wake();
-    _restoreProbe?.wake();
+    if (p is RelayPoolProxy) p.wake(network: network);
+    _restoreProbe?.wake(network: network);
     if (_poolFallbackActive && !_userDirect) {
       _bgRestoreAttempts = 0;
       retryProxyNow();
@@ -2124,17 +2154,25 @@ class NostrService {
   }
 
   /// Requests recent kind-0s for [pubkeys]; best-effort, auto-closing.
-  void fetchProfiles(List<String> pubkeys) {
-    if (pubkeys.isEmpty) return;
+  Future<Set<String>?> fetchProfiles(List<String> pubkeys) {
+    if (pubkeys.isEmpty) return Future.value(null);
     final sub = pool.subscribe([
       NostrFilter(
           kinds: [EventKind.profile], authors: pubkeys, limit: pubkeys.length),
     ]);
+    final seen = <String>{};
     // Route through [_routeInbound] so a fetched self kind-0 advances the watermark.
-    final s = sub.events.listen(_routeInbound);
-    sub.eose.then((_) {
+    final s = sub.events.listen((event) {
+      seen.add(event.pubkey);
+      _routeInbound(event);
+    });
+    return sub.eose.then((_) async {
+      final answered = sub.answered;
+      await sub.drained;
+      await Future<void>.delayed(Duration.zero);
       s.cancel();
       sub.close();
+      return answered ? seen : null;
     });
   }
 
@@ -2224,7 +2262,7 @@ class NostrService {
     final nowMs =
         hasStamp ? createdAtSec * 1000 : DateTime.now().millisecondsSinceEpoch;
     final tags = <List<String>>[
-      ['n', nym],
+      ...nymTags(nym),
       ['ms', '$nowMs'],
       [isGeo ? 'g' : 'd', isGeo ? geohash : channelKey],
       if (badge != null && badge.isNotEmpty) ['nymattest', badge],
@@ -2258,8 +2296,9 @@ class NostrService {
     String? channel,
     bool remove = false,
     List<List<String>> emojiTags = const [],
+    EventSigner? signerOverride,
   }) async {
-    final sig = signer;
+    final sig = signerOverride ?? signer;
     if (sig == null) return null;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final tags = <List<String>>[
@@ -2280,7 +2319,7 @@ class NostrService {
     }
     final signed = await sig.sign(
       UnsignedEvent(
-        pubkey: identity.pubkey,
+        pubkey: sig.pubkey,
         createdAt: nowSec,
         kind: EventKind.reaction,
         tags: tags,
@@ -2292,10 +2331,18 @@ class NostrService {
   }
 
   /// Publishes a prebuilt kind-30078 poll create or vote.
-  Future<NostrEvent?> publishPollEvent(UnsignedEvent rumor) async {
-    final sig = signer;
+  Future<NostrEvent?> publishPollEvent(UnsignedEvent rumor,
+      {EventSigner? signerOverride}) async {
+    final sig = signerOverride ?? signer;
     if (sig == null) return null;
-    final signed = await sig.sign(rumor);
+    final signed = await sig.sign(signerOverride == null
+        ? rumor
+        : UnsignedEvent(
+            pubkey: sig.pubkey,
+            createdAt: rumor.createdAt,
+            kind: rumor.kind,
+            tags: rumor.tags,
+            content: rumor.content));
     await pool.publish(signed);
     return signed;
   }
@@ -2406,10 +2453,18 @@ class NostrService {
   }
 
   /// Publishes a prebuilt NIP-57 zap request and returns it for the LNURL `nostr` param.
-  Future<NostrEvent?> publishZapRequest(UnsignedEvent rumor) async {
-    final sig = signer;
+  Future<NostrEvent?> publishZapRequest(UnsignedEvent rumor,
+      {EventSigner? signerOverride}) async {
+    final sig = signerOverride ?? signer;
     if (sig == null) return null;
-    final signed = await sig.sign(rumor);
+    final signed = await sig.sign(signerOverride == null
+        ? rumor
+        : UnsignedEvent(
+            pubkey: sig.pubkey,
+            createdAt: rumor.createdAt,
+            kind: rumor.kind,
+            tags: rumor.tags,
+            content: rumor.content));
     await pool.publish(signed);
     return signed;
   }
@@ -2470,8 +2525,9 @@ class NostrService {
     String Function(String memberPubkey)? encryptTo,
     int? expiration,
     void Function(NostrEvent wrap)? onWrap,
+    EventSigner? signerOverride,
   }) async {
-    if (signer == null || recipients.isEmpty) return false;
+    if ((signerOverride ?? signer) == null || recipients.isEmpty) return false;
     var any = false;
     for (final pk in recipients) {
       final pq = _pqTarget(pk);
@@ -2482,6 +2538,7 @@ class NostrService {
         recipientKemPublicKey: pq.kem,
         layered: pq.layered,
         tier: rumorTier(rumor, recipients.length),
+        signerOverride: signerOverride,
       );
       if (wrap != null) onWrap?.call(wrap);
       any = any || wrap != null;
@@ -2524,8 +2581,9 @@ class NostrService {
     Uint8List? recipientKemPublicKey,
     bool layered = false,
     List<List<String>> extraTags = const [],
+    EventSigner? signerOverride,
   }) async {
-    final sig = signer;
+    final sig = signerOverride ?? signer;
     if (sig == null) return null;
     if (sig is LocalSigner) {
       return _cryptoWorker.wrapOne(
@@ -2555,8 +2613,9 @@ class NostrService {
     UnsignedEvent rumor,
     String recipientPubkey, {
     int? expiration,
+    EventSigner? signerOverride,
   }) async {
-    final sig = signer;
+    final sig = signerOverride ?? signer;
     if (sig is! LocalSigner) return null;
     return giftwrap.bitchatWrap(
       rumor: rumor,
@@ -2576,14 +2635,18 @@ class NostrService {
     List<List<String>> extraTags = const [],
     int? tier,
     String? queuedKey,
+    EventSigner? signerOverride,
+    bool receipt = false,
   }) async {
     final wrap = await _buildWrap(rumor, recipientPubkey,
         expiration: expiration,
         recipientKemPublicKey: recipientKemPublicKey,
         layered: layered,
-        extraTags: extraTags);
+        extraTags: extraTags,
+        signerOverride: signerOverride);
     if (wrap == null) return null;
     if (queuedKey != null) QueuedSends.instance.register(wrap.id, queuedKey);
+    if (receipt) noteReceiptWrap(wrap.id);
     // Gift wraps publish via DM_EVENT so the proxy prioritizes default relays.
     publishDmQueued(wrap, tier: tier ?? rumorTier(rumor, 1));
     return wrap;
@@ -2603,15 +2666,18 @@ class NostrService {
     bool selfLayered = false,
     List<List<String>> wrapTags = const [],
     String? queuedKey,
+    EventSigner? signerOverride,
   }) async {
-    if (signer == null) return false;
+    if ((signerOverride ?? signer) == null) return false;
+    final self = signerOverride?.pubkey ?? identity.pubkey;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final expiration = settings.expirationFor(nowSec);
 
     // bitchat wrap: relay-only, never deposited, and no expiration tag since bitchat rejects extra tags.
-    if (bitchatRumors.isNotEmpty && recipientPubkey != identity.pubkey) {
+    if (bitchatRumors.isNotEmpty && recipientPubkey != self) {
       for (final r in bitchatRumors) {
-        final bwrap = await _buildBitchatWrap(r, recipientPubkey);
+        final bwrap = await _buildBitchatWrap(r, recipientPubkey,
+            signerOverride: signerOverride);
         if (bwrap != null) publishDmQueued(bwrap, tier: rumorTier(r, 1));
       }
     }
@@ -2623,16 +2689,18 @@ class NostrService {
           recipientKemPublicKey: recipientKemPublicKey,
           layered: recipientLayered,
           extraTags: wrapTags,
-          queuedKey: queuedKey);
+          queuedKey: queuedKey,
+          signerOverride: signerOverride);
       if (recipientWrap != null) onWrap?.call(recipientWrap);
     }
-    if (recipientPubkey != identity.pubkey) {
+    if (recipientPubkey != self) {
       // Self-copy is post-quantum whenever we are, so the archive isn't the weak link.
-      final selfWrap = await _wrapAndPublish(rumor, identity.pubkey,
+      final selfWrap = await _wrapAndPublish(rumor, self,
           expiration: expiration,
           recipientKemPublicKey: selfKemPublicKey,
           layered: selfLayered,
-          extraTags: wrapTags);
+          extraTags: wrapTags,
+          signerOverride: signerOverride);
       if (selfWrap != null) onWrap?.call(selfWrap);
     }
     return true;
@@ -2651,9 +2719,11 @@ class NostrService {
     void Function(int pqCount, int total, int rootCount)? onCoverage,
     Iterable<String> newMembers = const [],
     String? queuedKey,
+    EventSigner? signerOverride,
   }) async {
-    final sig = signer;
+    final sig = signerOverride ?? signer;
     if (sig == null) return false;
+    final self = sig.pubkey;
     final fresh = {
       for (final pk in newMembers)
         if (recipients.contains(pk)) pk
@@ -2672,8 +2742,8 @@ class NostrService {
     final memberKem = kemKeyFor;
     final Uint8List? Function(String)? kemOf = memberKem == null
         ? null
-        : (pk) => pk == identity.pubkey ? _pqTarget(pk).kem : memberKem(pk);
-    bool layeredOf(String pk) => pk == identity.pubkey
+        : (pk) => pk == self ? _pqTarget(pk).kem : memberKem(pk);
+    bool layeredOf(String pk) => pk == self
         ? _pqTarget(pk).layered
         : (layeredFor?.call(pk) ?? false);
 
@@ -2736,7 +2806,8 @@ class NostrService {
           recipientKemPublicKey: kem,
           layered: kem != null && layeredOf(pk),
           tier: tierFor(pk),
-          queuedKey: queuedKey);
+          queuedKey: queuedKey,
+          signerOverride: signerOverride);
       if (wrap != null) onWrap?.call(wrap);
     }
     onCoverage?.call(remotePq, recipients.length, remoteRoot);
@@ -2750,12 +2821,13 @@ class NostrService {
     required String receiptType, // 'delivered' | 'read'
     required String recipientPubkey,
     String? encryptToPubkey,
+    EventSigner? signerOverride,
   }) async {
     final ids = messageIds ?? (messageId == null ? const <String>[] : [messageId]);
     if (ids.isEmpty) return false;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final rumor = UnsignedEvent(
-      pubkey: identity.pubkey,
+      pubkey: signerOverride?.pubkey ?? identity.pubkey,
       createdAt: nowSec,
       kind: EventKind.nymReceiptRumor,
       tags: [
@@ -2767,7 +2839,10 @@ class NostrService {
     );
     final pq = _pqTarget(recipientPubkey);
     final wrap = await _wrapAndPublish(rumor, encryptToPubkey ?? recipientPubkey,
-        recipientKemPublicKey: pq.kem, layered: pq.layered);
+        recipientKemPublicKey: pq.kem,
+        layered: pq.layered,
+        signerOverride: signerOverride,
+        receipt: true);
     return wrap != null;
   }
 
@@ -2776,9 +2851,10 @@ class NostrService {
     required String recipientPubkey,
     String? encryptToPubkey,
     int? createdAt,
+    EventSigner? signerOverride,
   }) async {
     final rumor = UnsignedEvent(
-      pubkey: identity.pubkey,
+      pubkey: signerOverride?.pubkey ?? identity.pubkey,
       createdAt: createdAt ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
       kind: EventKind.nymReceiptRumor,
       tags: tags,
@@ -2786,7 +2862,9 @@ class NostrService {
     );
     final pq = _pqTarget(recipientPubkey);
     final wrap = await _wrapAndPublish(rumor, encryptToPubkey ?? recipientPubkey,
-        recipientKemPublicKey: pq.kem, layered: pq.layered);
+        recipientKemPublicKey: pq.kem,
+        layered: pq.layered,
+        signerOverride: signerOverride);
     return wrap != null;
   }
 
@@ -2798,6 +2876,7 @@ class NostrService {
     int ttlSec = 0,
     String? activity,
     String Function(String memberPubkey)? encryptTo,
+    EventSigner? signerOverride,
   }) async {
     if (recipients.isEmpty) return false;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -2808,7 +2887,7 @@ class NostrService {
     var any = false;
     for (final pk in recipients) {
       final rumor = UnsignedEvent(
-        pubkey: identity.pubkey,
+        pubkey: signerOverride?.pubkey ?? identity.pubkey,
         createdAt: nowSec,
         kind: EventKind.nymReceiptRumor,
         tags: [
@@ -2819,7 +2898,9 @@ class NostrService {
       );
       final pq = _pqTarget(pk);
       final wrap = await _wrapAndPublish(rumor, encryptTo?.call(pk) ?? pk,
-          recipientKemPublicKey: pq.kem, layered: pq.layered);
+          recipientKemPublicKey: pq.kem,
+          layered: pq.layered,
+          signerOverride: signerOverride);
       any = any || wrap != null;
     }
     return any;
@@ -2874,7 +2955,7 @@ class NostrService {
           ['e', messageId],
           ['p', authorPubkey],
           [isGeohash ? 'g' : 'd', channelKey],
-          ['n', nym],
+          ...nymTags(nym),
         ],
         content: '',
       ),
@@ -2956,7 +3037,7 @@ class NostrService {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final tags = <List<String>>[
       ['status', status],
-      ['n', nym],
+      ...nymTags(nym),
       if (status == 'away' && awayMessage.isNotEmpty) ['away', awayMessage],
     ];
     final rumor = UnsignedEvent(
@@ -3037,7 +3118,7 @@ class NostrService {
       try {
         json = kIsWeb
             ? await wrapNymSyncSealIsolate(job)
-            : await compute(wrapNymSyncSealIsolate, job);
+            : await gatedCompute(wrapNymSyncSealIsolate, job);
       } catch (_) {
         json = await wrapNymSyncSealIsolate(job);
       }
@@ -3059,7 +3140,7 @@ class NostrService {
         };
         final json = kIsWeb
             ? await buildNymSyncWrapIsolate(job)
-            : await compute(buildNymSyncWrapIsolate, job);
+            : await gatedCompute(buildNymSyncWrapIsolate, job);
         if (json == null) return null;
         final wrapped = NostrEvent.fromJson(json);
         publishDmQueued(wrapped, tier: WrapTier.normal);

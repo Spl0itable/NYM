@@ -1022,6 +1022,18 @@ Object.assign(NYM.prototype, {
         </a>`;
     },
 
+    _finishPreviewImages(el, blur) {
+        el.querySelectorAll('img').forEach((img) => {
+            if (blur) img.classList.add('blurred');
+            img.addEventListener('click', (ev) => {
+                if (!img.classList.contains('blurred')) return;
+                ev.preventDefault();
+                ev.stopPropagation();
+                this.expandImage(img.currentSrc || img.src);
+            });
+        });
+    },
+
     // Idempotent; opts.scope/container/flag let Nostr reference cards unfurl their own body's links.
     _attachLinkPreviews(messageEl, opts = {}) {
         const flag = opts.flag || 'previewsAttached';
@@ -1034,6 +1046,7 @@ Object.assign(NYM.prototype, {
         const container = opts.container || messageEl.querySelector('.message-content');
         if (!container) return;
         messageEl.dataset[flag] = '1';
+        const gen = messageEl._finishGen;
 
         const seen = new Set();
         const hrefs = [];
@@ -1051,10 +1064,13 @@ Object.assign(NYM.prototype, {
         const paint = (meta) => {
             if (!meta || (!meta.title && !meta.description)) return;
             const html = this._renderLinkPreview(meta);
-            if (!html || !container.isConnected) return;
+            if (!html || !container.isConnected || messageEl._finishGen !== gen) return;
             const el = document.createElement('div');
             el.className = 'link-preview-container';
             el.innerHTML = html;
+            const blur = typeof opts.blur === 'function' ? opts.blur()
+                : this._blursImagesFrom(messageEl.dataset.pubkey, messageEl.classList.contains('self'));
+            this._finishPreviewImages(el, blur);
             container.appendChild(el);
         };
 
@@ -1253,6 +1269,8 @@ Object.assign(NYM.prototype, {
                 } else if (e.key === 'Backspace' || e.key === 'Delete') {
                     // Hidden markers have no caret position, so delete the whole marker (nymRichMarkerDelete).
                     if (this._deleteRichMarker(input, e.key === 'Delete')) e.preventDefault();
+                } else if (e.altKey || e.ctrlKey || e.metaKey) {
+                    return;
                 } else if (e.key === 'ArrowUp' && input.value === '') {
                     e.preventDefault();
                     if (!(typeof this.editLastOwnMessage === 'function' && this.editLastOwnMessage())) this.navigateHistory(-1);
@@ -1296,15 +1314,7 @@ Object.assign(NYM.prototype, {
                     return;
                 }
 
-                // Debounce double-clicks.
-                if (channelItem.dataset.clicking === 'true') return;
-                channelItem.dataset.clicking = 'true';
-
                 nym.switchChannel(channel, geohash);
-
-                setTimeout(() => {
-                    delete channelItem.dataset.clicking;
-                }, 1000);
             }
         });
 

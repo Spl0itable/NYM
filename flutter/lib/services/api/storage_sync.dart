@@ -5,7 +5,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart'
-    show compute, kIsWeb, visibleForTesting;
+    show kIsWeb, visibleForTesting;
 
 import '../../core/constants/relays.dart';
 import '../../core/constants/storage_keys.dart';
@@ -17,6 +17,8 @@ import '../../features/chat_tools/chat_tools.dart'
     show ChatToolsKeys, trimSavedPayload;
 import '../../features/chat_nav/chat_nav.dart'
     show ChatNavKeys, markStoreNorm, trimPinnedPayload;
+import '../../features/sidebar_folders/folders.dart'
+    show FoldersKeys, trimFoldersPayload;
 import '../../features/sync/sync_merge.dart'
     show SyncMergeCaps, kStampedPrefs, prefFp, prefRowStamp, tsMapNorm;
 import '../../features/away/away_sync.dart';
@@ -44,6 +46,7 @@ import 'api_client.dart';
 import 'api_config.dart';
 import 'd1_cursor.dart';
 import '../../features/emoji/emoji_block.dart';
+import '../../core/utils/isolate_gate.dart';
 
 const int kPmDepositRetryBaseMs = 2000;
 
@@ -186,6 +189,8 @@ class StorageSync {
       'largeTargetsTs',
       'highContrast',
       'highContrastTs',
+      'sidebarChannelsMode',
+      'sidebarChannelsModeTs',
     ],
     'privacy': [
       'blockedUsers',
@@ -370,6 +375,7 @@ class StorageSync {
       'colorfulMessages': s.colorfulMessages,
       'largeTargets': s.largeTargets,
       'highContrast': s.highContrast,
+      'sidebarChannelsMode': s.sidebarChannelsMode,
     };
 
     if (kv != null) {
@@ -462,6 +468,7 @@ class StorageSync {
       flat['colorfulMessagesTs'] = stamps['colorfulMessages'] ?? 0;
       flat['largeTargetsTs'] = stamps['largeTargets'] ?? 0;
       flat['highContrastTs'] = stamps['highContrast'] ?? 0;
+      flat['sidebarChannelsModeTs'] = stamps['sidebarChannelsMode'] ?? 0;
       flat['pubkeyFormat'] =
           kv.getString(StorageKeys.pubkeyFormat) == 'hex' ? 'hex' : 'npub';
       flat['pubkeyFormatTs'] = stamps['pubkeyFormat'] ?? 0;
@@ -663,7 +670,14 @@ class StorageSync {
       if (ok) sent.add(entry.key);
       if (_lastRowResult == _rowFailed) settingsFailed.add(entry.key);
     }
-    await publishSettingsChangedPing(sent.toList());
+    final ping = sent.toList();
+    final join = onJoinSettingsPing;
+    if (join != null) {
+      try {
+        if (await join()) ping.add(FoldersKeys.section);
+      } catch (_) {}
+    }
+    await publishSettingsChangedPing(ping);
     return sent;
   }
 
@@ -1082,20 +1096,12 @@ class StorageSync {
     Map<String, int> channelLastRead, {
     Map<String, int> threadLastRead = const {},
     Map<String, dynamic> seenMarks = const {},
+    bool Function(String key)? keep,
   }) async {
-    final entries = <MapEntry<String, int>>[
-      for (final e in channelLastRead.entries)
-        if (e.value > 0) MapEntry(e.key, e.value),
-    ];
-    if (entries.isEmpty && threadLastRead.isEmpty && seenMarks.isEmpty) {
+    final map = readStateCapped(channelLastRead, keep: keep);
+    if (map.isEmpty && threadLastRead.isEmpty && seenMarks.isEmpty) {
       return false;
     }
-    // Keep the most recently read conversations.
-    entries.sort((a, b) => b.value.compareTo(a.value));
-    const maxEntries = 2000;
-    final capped =
-        entries.length > maxEntries ? entries.sublist(0, maxEntries) : entries;
-    final map = <String, dynamic>{for (final e in capped) e.key: e.value};
     const dTag = 'nymchat-readstate';
     // Bare `{channelLastRead}` as in the PWA; `__cat` keeps the D1 column opaque.
     final payload = _mergeUnknownSectionKeys(dTag, <String, dynamic>{
@@ -1116,6 +1122,25 @@ class StorageSync {
   }
 
   String? _readStateJson;
+
+  static Map<String, int> readStateCapped(Map<String, int> channelLastRead,
+      {bool Function(String key)? keep}) {
+    var entries = <MapEntry<String, int>>[
+      for (final e in channelLastRead.entries)
+        if (e.value > 0) MapEntry(e.key, e.value),
+    ];
+    entries.sort((a, b) => b.value.compareTo(a.value));
+    const maxEntries = 2000;
+    if (keep != null && entries.length > maxEntries) {
+      entries = [
+        ...entries.where((e) => keep(e.key)),
+        ...entries.where((e) => !keep(e.key)),
+      ];
+    }
+    final capped =
+        entries.length > maxEntries ? entries.sublist(0, maxEntries) : entries;
+    return <String, int>{for (final e in capped) e.key: e.value};
+  }
 
   // Per-group sync categories, on the same hashed-column path; applied in [settingsGet].
 
@@ -1176,6 +1201,33 @@ class StorageSync {
       return false;
     }
   }
+
+  Future<({bool ok, bool changed})> foldersSyncSet(Map<String, dynamic> state,
+      {bool ping = true}) async {
+    const dTag = FoldersKeys.dTag;
+    final payload = <String, dynamic>{FoldersKeys.payload: state};
+    try {
+      final changed =
+          await _publishCategoryWrap(payload, dTag, trim: trimFoldersPayload);
+      if (changed) {
+        if (ping) {
+          try {
+            await publishSettingsChangedPing(const [FoldersKeys.section]);
+          } catch (_) {}
+        }
+        return (ok: true, changed: true);
+      }
+      return (
+        ok: _publishedSectionJson[dTag] ==
+            jsonEncode(_mergeUnknownSectionKeys(dTag, payload)),
+        changed: false,
+      );
+    } catch (_) {
+      return (ok: false, changed: false);
+    }
+  }
+
+  Future<bool> Function()? onJoinSettingsPing;
 
   Future<bool> awaySyncSet(Map<String, dynamic> payload) async {
     const dTag = AwaySync.dTag;
@@ -2065,6 +2117,7 @@ class StorageSync {
     Map<String, dynamic>? botAnon;
     Map<String, dynamic>? savedMessages;
     Map<String, dynamic>? pinnedChats;
+    Map<String, dynamic>? sidebarFolders;
     Map<String, dynamic>? lockedChats;
     Map<String, dynamic>? callHistory;
     Map<String, dynamic>? groupTools;
@@ -2099,6 +2152,9 @@ class StorageSync {
       } else if (c == ChatNavKeys.pinnedDTag) {
         final pinned = d.payload['pinnedChats'];
         if (pinned is Map) pinnedChats = pinned.cast<String, dynamic>();
+      } else if (c == FoldersKeys.dTag) {
+        final folders = d.payload[FoldersKeys.payload];
+        if (folders is Map) sidebarFolders = folders.cast<String, dynamic>();
       } else if (c == ChatLockKeys.lockedDTag) {
         final locked = d.payload['lockedChats'];
         if (locked is Map) lockedChats = locked.cast<String, dynamic>();
@@ -2146,6 +2202,7 @@ class StorageSync {
         botAnon != null ||
         savedMessages != null ||
         pinnedChats != null ||
+        sidebarFolders != null ||
         lockedChats != null ||
         callHistory != null ||
         groupTools != null ||
@@ -2170,6 +2227,7 @@ class StorageSync {
               botAnon: botAnon,
               savedMessages: savedMessages,
               pinnedChats: pinnedChats,
+              sidebarFolders: sidebarFolders,
               lockedChats: lockedChats,
               callHistory: callHistory,
               groupTools: groupTools,
@@ -2195,6 +2253,7 @@ class StorageSync {
       botAnon: botAnon,
       savedMessages: savedMessages,
       pinnedChats: pinnedChats,
+      sidebarFolders: sidebarFolders,
       lockedChats: lockedChats,
       callHistory: callHistory,
       groupTools: groupTools,
@@ -2789,6 +2848,7 @@ class StorageSync {
         'auth': await _auth('pm-get'),
       });
     } catch (_) {
+      _pmMissed = true;
       return null;
     }
     onHead?.call(stream.headers['x-cursor-head']);
@@ -2942,6 +3002,10 @@ class StorageSync {
     _inboxCommitNow();
   }
 
+  bool _pmMissed = false;
+
+  bool get pmRestoreReached => _pmPassDoneAt > 0 && !_pmMissed;
+
   Future<void> pmRestore({required ArchiveReplay replay, bool force = false}) {
     if (!_durable) return Future.value();
     final running = _pmPass;
@@ -2950,6 +3014,7 @@ class StorageSync {
       return Future.value();
     }
     late final Future<void> pass;
+    _pmMissed = false;
     pass = _pmRestorePass(replay).whenComplete(() {
       if (identical(_pmPass, pass)) _pmPass = null;
       _pmPassDoneAt = _nowMs();
@@ -3012,6 +3077,7 @@ class StorageSync {
           'auth': await _auth('pm-get'),
         });
       } catch (_) {
+        _pmMissed = true;
         break;
       }
       final events = _freshWraps(stream.items);
@@ -4185,7 +4251,7 @@ class StorageSync {
           };
           final blob = kIsWeb
               ? await encryptToSelfIsolate(job)
-              : await compute(encryptToSelfIsolate, job);
+              : await gatedCompute(encryptToSelfIsolate, job);
           if (blob != null) return blob;
         } catch (_) {
           // Inline below.
@@ -4328,6 +4394,7 @@ class SettingsLoadResult {
     this.botAnon,
     this.savedMessages,
     this.pinnedChats,
+    this.sidebarFolders,
     this.lockedChats,
     this.callHistory,
     this.groupTools,
@@ -4360,6 +4427,8 @@ class SettingsLoadResult {
   final Map<String, dynamic>? savedMessages;
 
   final Map<String, dynamic>? pinnedChats;
+
+  final Map<String, dynamic>? sidebarFolders;
 
   final Map<String, dynamic>? lockedChats;
 

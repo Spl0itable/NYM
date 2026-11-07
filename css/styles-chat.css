@@ -62,13 +62,15 @@
     opacity: 0.2;
 }
 
-.message.mentioned {
+.message.mentioned,
+.me-message.mentioned {
     background: rgb(from var(--secondary) r g b / 0.06);
     border-radius: var(--radius-sm);
     position: relative;
 }
 
-.message.mentioned::before {
+.message.mentioned::before,
+.me-message.mentioned::before {
     content: "";
     position: absolute;
     left: 0;
@@ -1108,10 +1110,18 @@ body.chat-bubbles .read-more-btn {
     transition: all var(--transition);
 }
 
-.message-content img.msg-img:not(.img-loaded) {
+.message-content img.msg-img:not(.img-loaded, .img-sized) {
     width: 300px;
     max-width: 100%;
     aspect-ratio: 4 / 3;
+    object-fit: cover;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.message-content img.msg-img.img-sized:not(.img-loaded) {
+    contain: size;
+    contain-intrinsic-size: var(--msg-img-w) var(--msg-img-h);
+    aspect-ratio: auto var(--msg-img-ar);
     object-fit: cover;
     background: rgba(255, 255, 255, 0.03);
 }
@@ -4689,6 +4699,10 @@ body.chat-bubbles .kept-indicator-irc {
     display: block;
 }
 
+.ct-media-tile img.blurred {
+    filter: blur(20px);
+}
+
 .ct-media-video {
     display: flex;
     align-items: center;
@@ -5301,7 +5315,8 @@ body.chat-bubbles .kept-indicator-irc {
     padding-block: 0.3em;
 }
 
-.message.cn-flash {
+.message.cn-flash,
+.me-message.cn-flash {
     animation: cn-flash 1.6s ease-out;
 }
 

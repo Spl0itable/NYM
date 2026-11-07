@@ -12,6 +12,7 @@
         keepCallHistory: Object.freeze(['keepCallHistory']),
         largeTargets: Object.freeze(['largeTargets']),
         highContrast: Object.freeze(['highContrast']),
+        sidebarChannelsMode: Object.freeze(['sidebarChannelsMode']),
         theme: Object.freeze(['theme']),
         colorMode: Object.freeze(['colorMode']),
         uiLanguage: Object.freeze(['uiLanguage']),

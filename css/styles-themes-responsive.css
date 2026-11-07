@@ -1240,18 +1240,21 @@ body.light-mode .has-banner .avatar-context {
 
 @media (hover: hover) {
     body.light-mode .channel-item:hover,
-    body.light-mode .pm-item:hover {
+    body.light-mode .pm-item:hover,
+    body.light-mode .sb-frow:hover {
         background: rgba(0, 0, 0, 0.04);
     }
 }
 
 body.light-mode .channel-item.active,
-body.light-mode .pm-item.active {
+body.light-mode .pm-item.active,
+body.light-mode .sb-frow.active {
     background: rgba(0, 0, 0, 0.06);
     box-shadow: none;
 }
 
-body.light-mode .message.mentioned {
+body.light-mode .message.mentioned,
+body.light-mode .me-message.mentioned {
     background: rgba(0, 0, 0, 0.03);
 }
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import '../../widgets/sidebar/sidebar_folders_ui.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -36,8 +37,9 @@ class ChannelMenuAction {
 List<ChannelMenuAction> buildChannelMenuActions(
   BuildContext context,
   WidgetRef ref,
-  ChannelEntry entry,
-) {
+  ChannelEntry entry, {
+  Offset? at,
+}) {
   final controller = ref.read(nostrControllerProvider);
   final state = ref.read(appStateProvider);
   final key = entry.key;
@@ -60,6 +62,8 @@ List<ChannelMenuAction> buildChannelMenuActions(
 
   return <ChannelMenuAction>[
     for (final p in chatNavSidebarItems(ref, entry.storageKey))
+      ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
+    for (final p in folderSidebarItems(context, ref, entry.storageKey, at: at))
       ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
     for (final p in chatLockSidebarItems(ref, entry.storageKey))
       ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
@@ -109,7 +113,7 @@ bool maybeShowChannelContextMenu(
   ChannelEntry entry,
   Offset globalPosition,
 ) {
-  final actions = buildChannelMenuActions(context, ref, entry);
+  final actions = buildChannelMenuActions(context, ref, entry, at: globalPosition);
   if (actions.isEmpty) return false;
   final items = [
     for (final a in actions)

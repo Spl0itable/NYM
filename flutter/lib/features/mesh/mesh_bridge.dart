@@ -16,6 +16,8 @@ import '../../services/mesh/mesh_peer.dart';
 import '../../services/mesh/mesh_service.dart';
 import '../../services/mesh/noise/noise_crypto.dart';
 import '../../services/mesh/protocol/mesh_profile.dart';
+import '../../services/mesh/protocol/mesh_message_type.dart';
+import '../../services/mesh/protocol/noise_payload.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../state/settings_provider.dart';
 import '../identity/panic_wipe.dart';
@@ -269,6 +271,7 @@ class MeshBridge {
     _subs.add(_service.onPublicMessage.listen(_onPublic));
     _subs.add(_service.onPrivateMessage.listen(_onPrivate));
     _service.acksPrivateMessage = _acksPrivate;
+    _service.dropsQueued = _dropsQueued;
     _subs.add(_service.onReceipt.listen(_onReceipt));
     _subs.add(_service.onFile.listen(_onFile));
     _subs.add(_service.onTyping.listen(_onTyping));
@@ -301,6 +304,7 @@ class MeshBridge {
 
   /// Acks every not-yet-acked inbound message in [pubkey]'s thread; idempotent.
   void markMeshPmRead(String pubkey) {
+    if (_receiptsOff) return;
     final peerId = peerIdForPubkey(pubkey);
     if (peerId == null) return;
     final list = _appState.messages['pm-${pubkey.toLowerCase()}'];
@@ -448,7 +452,19 @@ class MeshBridge {
     if (landed && !isOwn) _maybeNotifyChannelMention(m, channelName);
   }
 
+  bool get _receiptsOff => _ref.read(nostrControllerProvider).receiptsOff;
+
+  bool _dropsQueued(Uint8List plaintext) {
+    if (!_receiptsOff) return false;
+    final p = NoisePayload.decode(plaintext);
+    if (p == null) return false;
+    if (p.type == NoisePayloadType.delivered) return true;
+    if (p.type != NoisePayloadType.readReceipt) return false;
+    return parseMeshKeepId(p.receiptMessageId()) == null;
+  }
+
   bool _acksPrivate(MeshPrivateMessage msg) {
+    if (_receiptsOff) return false;
     final pubkey = _pubkeyForPeerId(msg.senderPeerID);
     if (_pmRefused(pubkey)) return false;
     final nym = _nymByPubkey[pubkey] ?? 'nym';
@@ -714,6 +730,7 @@ class MeshBridge {
     if (view.kind == ViewKind.channel) {
       final echo = _app.sendLocal(content, threadRoot: threadRoot)
         ?..viaMesh = true;
+      final key = echo == null ? null : _claimChannelKey(echo.id);
       final channel = '#${view.id.toLowerCase()}';
       final meshId = await _service.sendPublicMessage(
         content,
@@ -727,6 +744,7 @@ class MeshBridge {
         threadRoot: threadRoot,
         echo: echo,
         meshMessageId: meshId,
+        key: key,
       );
     } else if (view.kind == ViewKind.pm) {
       _pinIfGhosted(view.id);
@@ -795,6 +813,14 @@ class MeshBridge {
   }
 
   /// Queues a mesh send for Nostr on reconnect, except ghost-pinned PMs, mesh-only peers, and sends made online.
+  MeshChannelKey? _claimChannelKey(String localId) {
+    try {
+      return _ref.read(nostrControllerProvider).claimMeshChannelKey(localId);
+    } catch (_) {
+      return null;
+    }
+  }
+
   void _queueForNostr({
     required MeshOutboxKind kind,
     required String target,
@@ -803,6 +829,7 @@ class MeshBridge {
     String? threadRoot,
     String? meshMessageId,
     String? nymMessageId,
+    MeshChannelKey? key,
   }) {
     if (echo == null) return;
     if (_online) return;
@@ -823,7 +850,9 @@ class MeshBridge {
               threadRoot: threadRoot,
               meshMessageId: meshMessageId,
               nymMessageId: nymMessageId,
+              owner: key?.pubkey,
             ),
+            key: key,
           );
     } catch (_) {
       // Best-effort: a queue failure must never cost the radio send.
@@ -836,6 +865,7 @@ class MeshBridge {
       echo: echo,
       threadRoot: threadRoot,
       meshMessageId: meshMessageId,
+      key: key,
     ));
   }
 
@@ -846,6 +876,7 @@ class MeshBridge {
     required Message echo,
     String? threadRoot,
     String? meshMessageId,
+    MeshChannelKey? key,
   }) async {
     final signed = await _buildOutboxEvent(
       kind: kind,
@@ -854,15 +885,9 @@ class MeshBridge {
       echo: echo,
       threadRoot: threadRoot,
       meshMessageId: meshMessageId,
+      key: key,
     );
     if (signed == null) return;
-    try {
-      _ref
-          .read(nostrControllerProvider)
-          .attachMeshOutboxSignedEvent(echo.id, signed.toJson());
-    } catch (_) {
-      // The entry replays the ordinary way without it.
-    }
     // Gateways may publish sooner; the entry stays queued either way.
     await _askGateways(target, signed);
   }
@@ -875,6 +900,7 @@ class MeshBridge {
     required Message echo,
     String? threadRoot,
     String? meshMessageId,
+    MeshChannelKey? key,
   }) async {
     if (kind != MeshOutboxKind.channel) return null;
     if (_ref.read(ghostModeProvider).enabled) return null;
@@ -885,6 +911,8 @@ class MeshBridge {
           createdAtSec: echo.createdAt,
           threadRoot: threadRoot,
           meshMessageId: meshMessageId,
+          key: key,
+          localId: echo.id,
         );
   }
 
@@ -943,6 +971,7 @@ class MeshBridge {
   }
 
   Future<void> sendOnceOpened(String senderPubkey, String onceId) async {
+    if (_receiptsOff) return;
     final peerId = peerIdForPubkey(senderPubkey);
     if (peerId == null) return;
     await _service.sendReadReceipt(peerId, meshOnceReceiptId(onceId));

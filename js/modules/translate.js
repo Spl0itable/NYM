@@ -90,6 +90,12 @@ Object.assign(NYM.prototype, {
         if (msgId && this._manualTranslations) this._manualTranslations.delete(msgId);
     },
 
+    _dropManualTranslation(messageEl) {
+        const el = messageEl.querySelector('.message-translation');
+        if (el) el.remove();
+        this._forgetManualTranslation(messageEl.getAttribute('data-message-id'));
+    },
+
     // Recomputed from the rebuilt element so an edited message doesn't get its old translation back.
     _manualTrSourceFor(messageEl) {
         const contentEl = messageEl && messageEl.querySelector('.message-content');
@@ -159,11 +165,18 @@ Object.assign(NYM.prototype, {
             return !!row;
         };
 
+        const startRow = rowFor();
+        const startRaw = startRow ? startRow.dataset.rawContent : undefined;
         const hadRow = paint('<span class="translation-loading">Translating...</span>');
 
         try {
             const { translatedText, detectedLanguage: detectedLang } =
                 await this._translatePreservingMentions(plainText, targetLang);
+            const nowRow = rowFor();
+            if (startRow && nowRow && nowRow.dataset.rawContent !== startRaw) {
+                this._forgetManualTranslation(messageId);
+                return;
+            }
 
             // Google returns the input unchanged (or empty) when already in the target language.
             const isNoop = !translatedText || !translatedText.trim() || translatedText.trim() === plainText.trim();

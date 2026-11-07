@@ -45,11 +45,13 @@ bool lastViewStillExists(
 
 class BootViewRestore {
   BootViewRestore(this._appState, this._kv)
-      : _switchesAtStart = _appState.viewSwitchCount;
+      : _switchesAtStart = _appState.viewSwitchCount,
+        _taken = _kv.getString(StorageKeys.lastView);
 
   final AppStateNotifier _appState;
   final KeyValueStore _kv;
   final int _switchesAtStart;
+  final String? _taken;
   int? _switchesAtLive;
   ChatView? _requested;
 
@@ -71,7 +73,7 @@ class BootViewRestore {
       _open(requested, ensurePm: true);
       return requested;
     }
-    final remembered = parseLastView(_kv.getString(StorageKeys.lastView));
+    final remembered = parseLastView(_taken);
     if (remembered == null) return null;
     if (!lastViewStillExists(remembered, _appState.currentState,
         isLeftGroup: _appState.isLeftGroup)) {

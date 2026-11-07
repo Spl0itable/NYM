@@ -968,7 +968,7 @@ GeoPeekSummary summarizeGeoPeek(
       final c = (b['created_at'] as int) - (a['created_at'] as int);
       return c != 0 ? c : _cmp(a['id'] as String, b['id'] as String);
     });
-  final picked = newest.take(limit > 0 ? limit : 5).toList().reversed;
+  final picked = newest.take(limit > 0 ? limit : 5);
   return GeoPeekSummary(
     messages: [
       for (final e in picked)

@@ -1492,26 +1492,38 @@ class GroupSheetHeader extends ConsumerWidget {
     if (group == null) return const SizedBox.shrink();
     final avatarUrl =
         proxiedAvatarUrl(ref.watch(appStateProvider).groupAvatar(group));
+    final lightFill = c.isLight ? Colors.black.withValues(alpha: 0.05) : null;
+    final glyphIcon =
+        NymSvgIcon(NymIcons.groupGlyph, size: 34, color: c.primary);
     final glyph = Container(
       alignment: Alignment.center,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: Colors.white.withValues(alpha: 0.06),
+        color: lightFill ?? Colors.white.withValues(alpha: 0.06),
       ),
-      child: NymSvgIcon(NymIcons.groupGlyph, size: 34, color: c.primary),
+      child: glyphIcon,
     );
+    final hasImage = avatarUrl != null && avatarUrl.isNotEmpty;
+    final picture = hasImage
+        ? ClipOval(
+            child: CachedNetworkImage(
+              imageUrl: avatarUrl,
+              fit: BoxFit.cover,
+              errorWidget: (_, _, _) =>
+                  lightFill == null ? glyph : Center(child: glyphIcon),
+            ),
+          )
+        : glyph;
     final icon = SizedBox(
       width: 64,
       height: 64,
-      child: (avatarUrl != null && avatarUrl.isNotEmpty)
-          ? ClipOval(
-              child: CachedNetworkImage(
-                imageUrl: avatarUrl,
-                fit: BoxFit.cover,
-                errorWidget: (_, _, _) => glyph,
-              ),
+      child: hasImage && lightFill != null
+          ? DecoratedBox(
+              decoration:
+                  BoxDecoration(shape: BoxShape.circle, color: lightFill),
+              child: picture,
             )
-          : glyph,
+          : picture,
     );
     final count = group.members.length;
     final labels = ref.read(appStateProvider);

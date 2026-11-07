@@ -4,7 +4,7 @@ import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake, sha256 }
 import { isNymchatClient, clientOriginAllowed } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport, packHit } from './_filters.js';
-import { spamEngine, ioReserve, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor, nymbotPubkeys } from './_spam.js';
+import { spamEngine, ioReserve, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor, nymbotPubkeys, nymbotWhoHereReply } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
 function bytesHex(b) {
@@ -1055,6 +1055,7 @@ export async function onRequest(context) {
   function archiveRowFrom(buffered, nowSec) {
     const ev = verifiedEventJson(buffered.json, buffered.id);
     if (!ev || ev.created_at > nowSec + ARCHIVE_FUTURE_SKEW_S) return null;
+    if (nymbotWhoHereReply(env, ev)) return null;
     const getTag = evTagReader(ev);
     const channel = archiveChannelOf(ev.kind, getTag);
     if (!channel || channel !== buffered.channel) return null;

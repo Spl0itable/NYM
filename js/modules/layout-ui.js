@@ -279,6 +279,7 @@
         for (var i = 0; i < rows.length; i++) {
             try { paintRow(n, rows[i], now, hide, ui); } catch (_) { }
         }
+        if (typeof n._psSweepTimes === 'function') n._psSweepTimes();
     }
 
     function schedulePreviews() {

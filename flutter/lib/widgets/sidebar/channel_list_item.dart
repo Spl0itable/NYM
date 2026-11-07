@@ -32,6 +32,7 @@ class ChannelListItem extends ConsumerWidget {
     required this.textSize,
     required this.onTap,
     this.mesh = false,
+    this.reorder = true,
   });
 
   final ChannelEntry entry;
@@ -42,6 +43,8 @@ class ChannelListItem extends ConsumerWidget {
   final VoidCallback onTap;
 
   final bool mesh;
+
+  final bool reorder;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -199,6 +202,7 @@ class ChannelListItem extends ConsumerWidget {
         },
       ),
     );
+    if (!reorder) return row;
     return PinnedReorder(
       storageKey: entry.storageKey,
       onHoldMenu: (pos) =>

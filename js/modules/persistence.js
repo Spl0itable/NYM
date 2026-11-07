@@ -638,7 +638,10 @@
             if (this._hydrateGate) return this._hydrateGate;
             let open = null;
             this._hydrateGate = new Promise((r) => { open = r; });
-            try { await this._hydrateFromCacheRun(); } finally { open(); }
+            try { await this._hydrateFromCacheRun(); } finally {
+                open();
+                if (typeof this._noteConvRestore === 'function') this._noteConvRestore('cache');
+            }
         },
 
         async _hydrateFromCacheRun() {
@@ -672,19 +675,34 @@
                     await breathe();
                     if (!p || !p.pubkey) continue;
                     if (profileCount++ >= STORE_LIMITS.profiles) break;
-                    if (!this.users.has(p.pubkey)) {
-                        this.users.set(p.pubkey, p.profile || p);
+                    const cached = p.profile || p;
+                    const shownUser = this.users.get(p.pubkey);
+                    const cachedReal = !!cached.nym && !this._isPlaceholderNym(cached.nym);
+                    const cachedChosen = !cachedReal && !!cached.nym && typeof cached.kind0Name === 'string'
+                        && cached.kind0Name !== '' && this._isPlaceholderNym(cached.kind0Name);
+                    const cachedNamed = cachedReal || cachedChosen;
+                    const takeName = !shownUser || (cachedNamed && this._isPlaceholderNym(shownUser.nym) && !this._isChosenNym(p.pubkey));
+                    if (!shownUser) {
+                        this.users.set(p.pubkey, cached);
+                    } else if (takeName) {
+                        shownUser.nym = cached.nym;
+                    }
+                    if (takeName && cachedNamed) {
                         const restoredTs = p.profile && p.profile.kind0Ts;
-                        if (typeof restoredTs === 'number' && restoredTs > 0 && typeof this._noteNameSource === 'function'
+                        if (typeof restoredTs === 'number' && restoredTs > 0
                             && !(this._nameSources && this._nameSources.has(p.pubkey))) {
                             this._noteNameSource(p.pubkey, 'kind0', restoredTs);
                         }
+                        if (shownUser) this._propagateFirstName(p.pubkey, cached.nym);
                     }
                     // Restore the kind 0 source URL so getAvatarUrl can return it before the blob hydrates.
                     if (p.profile) {
                         if (typeof p.profile.kind0Ts === 'number') {
                             if (!this._kind0Ts) this._kind0Ts = new Map();
                             this._kind0Ts.set(p.pubkey, p.profile.kind0Ts);
+                        }
+                        if (typeof p.profile.kind0Name === 'string' && !this._kind0Seen(p.pubkey)) {
+                            this._noteKind0Seen(p.pubkey, p.profile.kind0Name);
                         }
                         if (p.profile.pictureUrl && !this.userAvatars.has(p.pubkey)) {
                             this.userAvatars.set(p.pubkey, p.profile.pictureUrl);
@@ -773,6 +791,7 @@
                     if (typeof this._unreadStale === 'function') this._unreadStale();
                     if (lastTs > 0) this.channelLastActivity.set(key, lastTs);
                 }
+                if (loadedChannelKeys.length && typeof this._psSchedule === 'function') this._psSchedule();
 
                 // Encrypted records are skipped without the vault key; plaintext ones are re-written encrypted when it's on.
                 if (cachePMsAllowed) {
@@ -1153,6 +1172,8 @@
                     bio: this.userBios && this.userBios.get(pubkey) || null,
                     lnAddress: this.userLightningAddresses && this.userLightningAddresses.get(pubkey) || null,
                     kind0Ts: this._kind0Ts && this._kind0Ts.get(pubkey) || profile.kind0Ts || null,
+                    kind0Name: this._kind0Names && this._kind0Names.has(pubkey) ? this._kind0Names.get(pubkey)
+                        : (typeof profile.kind0Name === 'string' ? profile.kind0Name : null),
                     // Fetch time travels with the profile so a reload doesn't treat every cached profile as stale.
                     fetchedAt: this.profileFetchedAt && this.profileFetchedAt.get(pubkey) || null
                 };
@@ -1222,6 +1243,9 @@
                 this.messages.set(key, kept);
                 if (typeof this.persistChannelMessages === 'function') {
                     this.persistChannelMessages(key);
+                }
+                if (typeof this.refreshUnreadCount === 'function' && this.unreadCounts && (this.unreadCounts.get(key) || 0) > 0) {
+                    this.refreshUnreadCount(key);
                 }
             }
             if (dropped) {
