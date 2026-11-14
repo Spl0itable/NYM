@@ -108,6 +108,10 @@
         return 'join-req-' + str(groupId) + '-' + str(joiner) + '-' + sec(ts);
     }
 
+    function groupInviteId(groupId) {
+        return 'group-invite-' + str(groupId);
+    }
+
     function joinDeclinedId(groupId, createdAt) {
         return 'join-declined-' + str(groupId) + '-' + sec(createdAt);
     }
@@ -221,5 +225,5 @@
         return !str(x.replyTo) || str(x.replyTo) === str(y.replyTo);
     }
 
-    G.NymNotifyView = Object.freeze({ threadOpen, onScreen, sees, outcome, addressed, readTs, shownSeen, sameAlert, samePm, pmChunks, pmOpenPiece, pmPiece, PIECE_HOLD_MS, alertId, reactionId, knockId, joinRequestId, joinDeclinedId, bodyKey, alertScope });
+    G.NymNotifyView = Object.freeze({ threadOpen, onScreen, sees, outcome, addressed, readTs, shownSeen, sameAlert, samePm, pmChunks, pmOpenPiece, pmPiece, PIECE_HOLD_MS, alertId, reactionId, knockId, joinRequestId, joinDeclinedId, groupInviteId, bodyKey, alertScope });
 })();

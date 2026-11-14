@@ -13,6 +13,7 @@ import 'features/calls/ring_setting.dart';
 import 'core/theme/nym_theme.dart';
 import 'features/accounts/account_host.dart';
 import 'features/ai_consent/ai_consent.dart';
+import 'features/groups/group_invites_sheet.dart';
 import 'features/nymbot/long_text_gate.dart';
 import 'features/i18n/app_strings_catalog.dart';
 import 'features/commands/command_i18n.dart';
@@ -78,6 +79,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   void initState() {
     super.initState();
     registerAiConsentPrompter(_navKey);
+    registerGroupInvitesPrompter(_navKey);
     registerBotLongGatePrompter(_navKey);
     _backgroundConnectivity = ref.read(backgroundConnectivityServiceProvider);
     _backgroundConnectivity.onNetworkChanged(() {

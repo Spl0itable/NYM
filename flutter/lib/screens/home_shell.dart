@@ -183,6 +183,24 @@ class HomeShellState extends ConsumerState<HomeShell>
           ? KeyEventResult.handled
           : KeyEventResult.ignored;
 
+  static const _kChatNav = {'prevChat', 'nextChat', 'nextUnread'};
+  static const _kHistoryNav = {'back', 'forward'};
+  static final _kModifierKeys = {
+    LogicalKeyboardKey.alt,
+    LogicalKeyboardKey.altLeft,
+    LogicalKeyboardKey.altRight,
+    LogicalKeyboardKey.altGraph,
+    LogicalKeyboardKey.shift,
+    LogicalKeyboardKey.shiftLeft,
+    LogicalKeyboardKey.shiftRight,
+    LogicalKeyboardKey.control,
+    LogicalKeyboardKey.controlLeft,
+    LogicalKeyboardKey.controlRight,
+    LogicalKeyboardKey.meta,
+    LogicalKeyboardKey.metaLeft,
+    LogicalKeyboardKey.metaRight,
+  };
+
   bool _onKey(KeyEvent e) {
     if (!mounted || e is! KeyDownEvent) return false;
     if (e.logicalKey == LogicalKeyboardKey.browserBack ||
@@ -200,17 +218,33 @@ class HomeShellState extends ConsumerState<HomeShell>
     final composer = ComposerShortcutHooks.focus;
     final inComposer = composer != null && identical(focus, composer);
     final hk = HardwareKeyboard.instance;
-    final action = shortcutAction(
-      key: shortcutKeyName(e) ?? '',
-      ctrl: hk.isControlPressed,
-      meta: hk.isMetaPressed,
-      alt: hk.isAltPressed,
-      shift: hk.isShiftPressed,
-      mac: shortcutsUseMac,
-      inText: inText,
-      inComposer: inComposer,
-      composerEmpty: inComposer,
-    );
+    String? match(bool text) => shortcutAction(
+          key: shortcutKeyName(e) ?? '',
+          ctrl: hk.isControlPressed,
+          meta: hk.isMetaPressed,
+          alt: hk.isAltPressed,
+          shift: hk.isShiftPressed,
+          mac: shortcutsUseMac,
+          inText: text,
+          inComposer: inComposer,
+          composerEmpty: inComposer,
+        );
+    var action = match(inText);
+    if (action == null &&
+        inComposer &&
+        identical(ComposerShortcutHooks.parked, focus)) {
+      final a = match(false);
+      if (_kChatNav.contains(a) ||
+          (_kHistoryNav.contains(a) &&
+              (ComposerShortcutHooks.text?.text.trim().isEmpty ?? true))) {
+        action = a;
+      }
+    }
+    if (!_kModifierKeys.contains(e.logicalKey) &&
+        !_kChatNav.contains(action) &&
+        !_kHistoryNav.contains(action)) {
+      ComposerShortcutHooks.parked = null;
+    }
     if (action == null || action == 'editLast') return false;
     if (action == 'search') {
       UnifiedSearchPanel.open(context);

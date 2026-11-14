@@ -545,6 +545,7 @@ body.light-mode {
     color-scheme: light;
     --msg-text: #4a4a4a;
     --bg: #f5f5f2;
+    --avatar-ring: #000;
     --bg-secondary: rgba(255, 255, 255, 0.85);
     --bg-tertiary: rgba(240, 240, 237, 0.9);
     --border: rgba(0, 0, 0, 0.1);
@@ -1049,7 +1050,8 @@ body.light-mode .message.supporter-style .message-header {
     text-shadow: none;
 }
 
-body.light-mode .message .message-author.cosmetic-redacted {
+body.light-mode .message .message-author.cosmetic-redacted,
+body.light-mode .ps-who.cosmetic-redacted {
     color: #1a1a1a !important;
     opacity: 0.75;
 }
@@ -1241,7 +1243,8 @@ body.light-mode .has-banner .avatar-context {
 @media (hover: hover) {
     body.light-mode .channel-item:hover,
     body.light-mode .pm-item:hover,
-    body.light-mode .sb-frow:hover {
+    body.light-mode .sb-frow:hover,
+    body.light-mode .ps-row:hover {
         background: rgba(0, 0, 0, 0.04);
     }
 }

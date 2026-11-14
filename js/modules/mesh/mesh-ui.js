@@ -145,6 +145,7 @@
             const D = window.NymMeshExtras.CARRIER_DIRECTION;
             const event = window.NymMeshExtras.carrierEvent(carrier);
             if (!event || typeof event.id !== 'string' || typeof event.sig !== 'string') return;
+            if (typeof this._encryptedBlobDrop === 'function' && this._encryptedBlobDrop(event)) return;
             let ok = false;
             try { ok = await this._verifyRelayEventAsync(event); } catch (_) { ok = false; }
             if (!ok) {
@@ -625,7 +626,7 @@
                 const display = p.nickname ? p.nickname : String(p.peerID).slice(0, 8);
                 const suffix = pk ? '#' + pk.slice(-4) : '';
                 const avatar = `<img class="mesh-row-avatar" src="${esc(this.getAvatarUrl(pk || p.peerID))}" alt="" aria-hidden="true">`;
-                const name = `${esc(display)}${suffix ? `<span class="nym-suffix">${esc(suffix)}</span>` : ''}`;
+                const name = window.NymSuffix.sqHtml(display, suffix);
                 const attrs = `data-peer-id="${esc(p.peerID)}" title="${esc((p.nickname || display) + ' · ' + p.peerID)}"` +
                     (pk ? ` role="button" tabindex="0" data-action="meshOpenPeer"` : '');
                 const held = this._meshPings && this._meshPings.get(p.peerID);

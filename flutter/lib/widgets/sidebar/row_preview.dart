@@ -38,11 +38,19 @@ typedef RowPreview = ({
   List<int>? sender,
   int bodyAt,
   String time,
-  int ts
+  int ts,
+  String who
 });
 
-const RowPreview kNoRowPreview =
-    (text: '', dim: <List<int>>[], sender: null, bodyAt: 0, time: '', ts: 0);
+const RowPreview kNoRowPreview = (
+  text: '',
+  dim: <List<int>>[],
+  sender: null,
+  bodyAt: 0,
+  time: '',
+  ts: 0,
+  who: ''
+);
 
 RowLast? lastPreviewable(AppState s, List<Message>? list) {
   final m = s.lastVisibleMessage(list);
@@ -105,6 +113,7 @@ RowPreview sidebarRowPreview(WidgetRef ref, String storageKey, String kind) {
     bodyAt: parts.bodyAt,
     time: relativeTime(now, last.ts, _ui),
     ts: last.ts,
+    who: !last.own && parts.bodyAt > 0 ? last.pubkey : '',
   );
 }
 
@@ -131,13 +140,21 @@ TextDirection isolatedDirection(String text, TextDirection ambient) {
 }
 
 Widget rowPreviewLine(BuildContext context, String text, String kind,
-    [List<List<int>> dim = const [], List<int>? sender, int? bodyAt]) {
+    [List<List<int>> dim = const [],
+    List<int>? sender,
+    int? bodyAt,
+    Color? senderColor]) {
   final c = context.nym;
   final style = TextStyle(
       color: c.textDim,
       fontSize: NymType.sm,
       height: kSidebarSubLine / NymType.sm);
   final suffix = nymSuffixStyle(style, contrast: context.highContrast);
+  final nameStyle =
+      senderColor == null ? style : style.copyWith(color: senderColor);
+  final tagSuffix = senderColor == null
+      ? suffix
+      : nymSuffixStyle(nameStyle, contrast: context.highContrast);
   final key = ValueKey('rowPreview-$kind');
   final lead = bodyAt ??
       (sender != null && sender.length == 2 ? sender[1] + 2 : 0);
@@ -162,9 +179,10 @@ Widget rowPreviewLine(BuildContext context, String text, String kind,
         ? _SenderPreview(
             key: key,
             name: text.substring(0, nameEnd),
+            nameStyle: nameStyle,
             tag: TextSpan(
                 style: style,
-                children: _dimSpans(text, dim, nameEnd, at, suffix)),
+                children: _dimSpans(text, dim, nameEnd, at, tagSuffix)),
             body: body,
             bodySpan: TextSpan(
                 style: style,
@@ -299,6 +317,7 @@ class _SenderPreview extends StatelessWidget {
   const _SenderPreview({
     super.key,
     required this.name,
+    required this.nameStyle,
     required this.tag,
     required this.body,
     required this.bodySpan,
@@ -306,6 +325,7 @@ class _SenderPreview extends StatelessWidget {
   });
 
   final String name;
+  final TextStyle nameStyle;
   final TextSpan tag;
   final Widget body;
   final TextSpan bodySpan;
@@ -318,7 +338,11 @@ class _SenderPreview extends StatelessWidget {
     return LayoutBuilder(builder: (context, box) {
       if (!box.hasBoundedWidth) {
         return Text.rich(
-            TextSpan(children: [TextSpan(text: name), tag, bodySpan]),
+            TextSpan(children: [
+              TextSpan(text: name, style: nameStyle),
+              tag,
+              bodySpan
+            ]),
             style: style,
             maxLines: 1,
             softWrap: false);
@@ -337,7 +361,7 @@ class _SenderPreview extends StatelessWidget {
             child: Text(
               name,
               key: const ValueKey('rowPreviewName'),
-              style: style,
+              style: nameStyle,
               textDirection: isolatedDirection(name, dir),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

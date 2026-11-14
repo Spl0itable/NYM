@@ -107,7 +107,7 @@ body.nymchat-app .logo-ascii {
     color: var(--secondary);
     overflow: hidden;
     text-overflow: ellipsis;
-    word-break: break-all;
+    white-space: nowrap;
     font-weight: 600;
     min-width: 0;
 }
@@ -629,7 +629,8 @@ body.a11y-targets .sidebar-newfolder-btn {
 @media (hover: hover) {
     .channel-item:hover,
     .pm-item:hover,
-    .sb-frow:hover {
+    .sb-frow:hover,
+    .ps-row:hover {
         background: rgba(255, 255, 255, 0.06);
     }
 }
@@ -2487,7 +2488,9 @@ body.a11y-targets .ps-row {
 }
 
 .ps-stream[hidden],
+.ps-stream .ps-more-row[hidden],
 .ps-stream .ps-more[hidden],
+.ps-stream .ps-less[hidden],
 .ps-new[hidden],
 .ps-note[hidden] {
     display: none !important;
@@ -2546,10 +2549,6 @@ body.a11y-targets .ps-row {
     font: inherit;
     text-align: start;
     cursor: pointer;
-}
-
-.ps-row:hover {
-    background: rgb(from var(--primary) r g b / 0.08);
 }
 
 .ps-row:focus-visible {
@@ -2626,10 +2625,23 @@ body.a11y-targets .ps-row {
     font-weight: 600;
 }
 
-.ps-stream .ps-more {
-    width: calc(100% - 20px);
+.ps-more-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 6px 10px;
+}
+
+.ps-more-row .view-more-btn {
+    flex: 1 1 auto;
+    min-height: 32px;
+    margin: 0;
     background: transparent;
     font-family: inherit;
+}
+
+body.a11y-targets .ps-more-row .view-more-btn {
+    min-height: 44px;
 }
 
 .ps-note {

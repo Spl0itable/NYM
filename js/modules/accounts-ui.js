@@ -99,9 +99,10 @@
             const method = this._acctLiveMethod();
             const nym = String(this.nym || '');
             const cur = A.activeOf(idx);
-            if (cur && cur.pubkey === this.pubkey && cur.method === method && cur.nym === nym) return 'ok';
+            const pubkey = method === 'ephemeral' && typeof this._settingsSyncLocal === 'function' && this._settingsSyncLocal() ? '' : this.pubkey;
+            if (cur && cur.pubkey === pubkey && cur.method === method && cur.nym === nym) return 'ok';
             const id = A.pageId || A.randomId();
-            const r = A.plan(idx, { type: 'register', id, now: Date.now(), pubkey: this.pubkey, method, nym });
+            const r = A.plan(idx, { type: 'register', id, now: Date.now(), pubkey, method, nym });
             if (r.result === 'duplicate') { this._acctDuplicate(r); return 'duplicate'; }
             if (!r.ok) return 'none';
             const next = Object.assign({}, r.index, { journal: null });
@@ -378,9 +379,9 @@
                 const avatarSrc = active ? ((document.getElementById('sidebarAvatar') || {}).src || a.avatar) : a.avatar;
                 const avatar = avatarSrc
                     ? `<img class="acct-avatar" src="${esc(avatarSrc)}" alt="" width="36" height="36">`
-                    : `<span class="acct-avatar acct-avatar-blank">${esc((a.nym || '?').slice(0, 1).toUpperCase())}</span>`;
+                    : `<span class="acct-avatar acct-avatar-blank">${esc((window.NymSuffix.initial(a.nym) || '?').toUpperCase())}</span>`;
                 const nameHtml = a.pubkey
-                    ? `<bdi class="acct-nym">${window.NymSuffix.pubkeyHtml(a.nym || this._ac('Unnamed'), a.pubkey)}</bdi>`
+                    ? `<bdi class="acct-nym">${window.NymSuffix.sqPubkeyHtml(a.nym || this._ac('Unnamed'), a.pubkey)}</bdi>`
                     : esc(this._ac('New identity'));
                 const badge = BADGE[a.method] ? `<span class="acct-badge">${esc(this._ac(BADGE[a.method]))}</span>` : '';
                 const unread = !active && a.unread > 0 ? `<span class="acct-unread">${a.unread > 99 ? '99+' : a.unread}</span>` : '';
@@ -663,9 +664,7 @@
                 if (!res || !res.seal || !res.rumor) return userFilters;
                 if (typeof nymbotStandaloneRunWrap === 'function'
                     && nymbotStandaloneRunWrap(res.seal, res.rumor, a.pubkey, this.verifiedBot && this.verifiedBot.pubkey)) return true;
-                if (!filtering) return false;
                 const sender = String(res.seal.pubkey || '');
-                if (!sender || sender === a.pubkey) return false;
                 const content = typeof res.rumor.content === 'string' ? res.rumor.content : '';
                 const tags = Array.isArray(res.rumor.tags) ? res.rumor.tags : [];
                 const tag = (k) => {
@@ -673,33 +672,43 @@
                     return t ? t[1] : '';
                 };
                 const gid = tag('g');
-                const knownGroup = !!gid && accept !== 'enabled' && await this._acctKnowsGroup(a, gid);
-                if (packIds.length && typeof this.loadFilterPack === 'function') {
-                    await Promise.all(packIds.map((id) => Promise.resolve(this.loadFilterPack(id)).catch(() => null)));
-                }
-                const ctx = {
-                    self: a.pubkey,
-                    blockedUsers: new Set(blocked),
-                    keywords,
-                    blockedChannels,
-                    friendsOnly,
-                    packs: packIds.length > 0,
-                    friend: (pk) => friends.has(pk),
-                    pack: packIds.length && typeof this.filterPackMatchIn === 'function'
-                        ? (text, nym) => this.filterPackMatchIn(packIds, text, nym) !== '' : undefined,
-                    muted: (pk) => gates && typeof this.isAutoMuted === 'function' && this.isAutoMuted(pk),
-                    spam: (e) => typeof this.isSpamMessage === 'function'
-                        && this.isSpamMessage(e && typeof e.body === 'string' ? e.body : '', { enabled: spamOn, aggressive: spamAggressive })
+                const judge = async () => {
+                    if (!filtering) return false;
+                    const knownGroup = !!gid && accept !== 'enabled' && await this._acctKnowsGroup(a, gid);
+                    if (packIds.length && typeof this.loadFilterPack === 'function') {
+                        await Promise.all(packIds.map((id) => Promise.resolve(this.loadFilterPack(id)).catch(() => null)));
+                    }
+                    const ctx = {
+                        self: a.pubkey,
+                        blockedUsers: new Set(blocked),
+                        keywords,
+                        blockedChannels,
+                        friendsOnly,
+                        packs: packIds.length > 0,
+                        friend: (pk) => friends.has(pk),
+                        pack: packIds.length && typeof this.filterPackMatchIn === 'function'
+                            ? (text, nym) => this.filterPackMatchIn(packIds, text, nym) !== '' : undefined,
+                        muted: (pk) => gates && typeof this.isAutoMuted === 'function' && this.isAutoMuted(pk),
+                        spam: (e) => typeof this.isSpamMessage === 'function'
+                            && this.isSpamMessage(e && typeof e.body === 'string' ? e.body : '', { enabled: spamOn, aggressive: spamAggressive })
+                    };
+                    return F.inboxHidden(ctx, {
+                        sender,
+                        body: content,
+                        nym: '',
+                        channel: gid ? '' : F.inviteChannel(content),
+                        subject: tag('type') === 'group-invite' ? tag('subject') : '',
+                        knownGroup,
+                        quoted: typeof this._quotedFromTags === 'function' ? this._quotedFromTags(tags) : []
+                    }, accept);
                 };
-                return F.inboxHidden(ctx, {
-                    sender,
-                    body: content,
-                    nym: '',
-                    channel: gid ? '' : F.inviteChannel(content),
-                    subject: tag('type') === 'group-invite' ? tag('subject') : '',
-                    knownGroup,
-                    quoted: typeof this._quotedFromTags === 'function' ? this._quotedFromTags(tags) : []
-                }, accept);
+                if (gid && sender && sender !== a.pubkey) {
+                    const g = await this._acctGroupProbe(a, res.rumor, sender, { blocked, friends, accept, judge });
+                    if (g !== null) return g;
+                }
+                if (!filtering) return false;
+                if (!sender || sender === a.pubkey) return false;
+                return judge();
             } catch (_) {
                 return userFilters;
             } finally {
@@ -708,6 +717,68 @@
                 }
                 if (typeof sk.fill === 'function') sk.fill(0);
             }
+        },
+
+        async _acctGroupProbe(a, rumor, sender, f) {
+            const GI = window.NymGroupInvites;
+            const A = M();
+            if (!GI || !A || typeof A.stashKeys !== 'function') return null;
+            const tags = Array.isArray(rumor.tags) ? rumor.tags : [];
+            const tag = (k) => {
+                const t = tags.find((x) => Array.isArray(x) && x[0] === k && typeof x[1] === 'string' && x[1]);
+                return t ? t[1] : null;
+            };
+            const gid = tag('g');
+            const pk = a.pubkey;
+            const keys = { groups: 'nym_groups_' + pk, joins: 'nym_gt_pending_joins_' + pk, left: 'nym_left_groups_' + pk, leftAt: 'nym_left_group_times', store: GI.KEYS.local + pk, probe: GI.KEYS.probe, vault: 'nym_vault_enabled' };
+            let vals = null;
+            try { vals = await A.stashKeys(a.id, Object.values(keys)); } catch (_) { vals = null; }
+            if (!vals) return null;
+            const parse = (k, empty) => {
+                try { const v = JSON.parse(String(vals[k] == null ? empty : vals[k])); return v && typeof v === 'object' ? v : JSON.parse(empty); } catch (_) { return JSON.parse(empty); }
+            };
+            const owns = (o) => !Array.isArray(o) && Object.prototype.hasOwnProperty.call(o, gid);
+            const leftList = parse(keys.left, '[]');
+            const left = Array.isArray(leftList) && leftList.includes(gid);
+            if ((owns(parse(keys.groups, '{}')) && !left) || owns(parse(keys.joins, '{}'))) return null;
+            const now = Math.floor(Date.now() / 1000);
+            const raw = vals[keys.store] == null ? '' : String(vals[keys.store]);
+            const readable = !raw.startsWith('enc:v1:') && String(vals[keys.vault] == null ? '' : vals[keys.vault]) !== '1';
+            let items = [], dec = {}, ns = null;
+            if (readable && raw) {
+                try {
+                    const p = JSON.parse(raw);
+                    items = GI.normalizeItems(p && p.items, now);
+                    dec = GI.normalizeDecisions(p && p.dec, now);
+                    ns = p && p.ns;
+                } catch (_) { items = []; dec = {}; ns = null; }
+            }
+            if (!this._acctGiProbes) this._acctGiProbes = new Map();
+            const saved = readable ? parse(keys.probe, '{}') : {};
+            const st = GI.probeState(this._acctGiProbes.get(a.id) || Object.assign({ ns }, saved), now, items.map((i) => i.gid).concat(Object.keys(dec)));
+            const r = GI.probe({
+                anon: false, own: false, joined: false, started: false,
+                blocked: f.blocked.includes(sender),
+                hidden: !!(await f.judge()),
+                accept: f.accept, friend: f.friends.has(sender),
+                type: tag('type'),
+                genesis: typeof this._verifyGroupGenesis === 'function' ? this._verifyGroupGenesis(gid, tag('gowner'), tag('gnonce')) : null,
+                sender, gowner: tag('gowner'), owner: tag('owner'),
+                pending: items.find((i) => i.gid === gid) || null,
+                it: GI.inviteTime(rumor.created_at, now), now,
+                decision: dec[gid] || null,
+                left, leftAt: left ? Math.floor(Number(parse(keys.leftAt, '{}')[gid]) || 0) : 0,
+                bytes: GI.rumorBytes(rumor),
+                gid, stored: items.length, counted: Object.keys(st.c), ns: st.ns, live: true, readable,
+            });
+            if (r.v === 'route') return null;
+            if (r.v !== 'count') return true;
+            const next = GI.probeKeep(st, r, gid, now);
+            this._acctGiProbes.set(a.id, next);
+            if (readable && typeof A.stashSet === 'function') {
+                try { await A.stashSet(a.id, keys.probe, JSON.stringify(next)); } catch (_) { }
+            }
+            return r.notify ? false : 'locked';
         },
 
         async _acctKnowsGroup(a, gid) {

@@ -7,6 +7,7 @@ import '../../../models/channel.dart' show isValidGeohash;
 import '../../group_tools/group_tools.dart' show GroupTools;
 import '../../media_notes/media_notes.dart';
 import '../../i18n/i18n.dart';
+import '../bitchat_verify.dart';
 import 'discord_timestamp.dart';
 
 /// Characters that can trigger formatting; without any, the fast path applies.
@@ -42,7 +43,7 @@ final RegExp _rxHttpUrl = RegExp(r'^https?://.', caseSensitive: false);
 
 final RegExp _rxBracketedUrl = RegExp('\\[(https?://[^\\s\\[\\]<>"\x01]+)\\](?!\\()');
 
-final RegExp _rxBlockSlot = RegExp('\x01[FM]\\d+\x01');
+final RegExp _rxBlockSlot = RegExp('\x01[FMV]\\d+\x01');
 
 final RegExp _rxAngledUrl = RegExp('<(https?://[^\\s<>"\x01]+)>');
 
@@ -355,6 +356,11 @@ class InlineCodeNode extends InlineNode {
   final String code;
 }
 
+class BitchatVerifyNode extends InlineNode {
+  const BitchatVerifyNode(this.raw);
+  final String raw;
+}
+
 /// A bare `https?://` link that isn't media, a channel link or an invite.
 class LinkNode extends InlineNode {
   const LinkNode(this.url, {this.label, this.children});
@@ -567,7 +573,7 @@ class NymFormat {
     if (text.contains('#nym:')) text = previewText(text, tr);
     return _mapOutsideCode(
         text,
-        (part) => part
+        (part) => labelBitchatVerifyLinks(part, tr(kBitchatVerifyLabel))
                 .replaceAll(_rxSpoiler, kSpoilerMask)
                 .replaceAllMapped(_rxTimestamp, (m) {
               final seconds = parseTimestampSeconds(m[1]!);
@@ -766,6 +772,21 @@ class NymFormat {
       inlineCode.add(m[1] ?? '');
       return 'C$idx';
     });
+    final verify = findBitchatVerifyLinks(s);
+    if (verify.isNotEmpty) {
+      final out = StringBuffer();
+      var last = 0;
+      for (final v in verify) {
+        final idx = inlineCode.length;
+        inlineCode.add(s.substring(v.start, v.end));
+        out
+          ..write(s.substring(last, v.start))
+          ..write('\x01V$idx\x01');
+        last = v.end;
+      }
+      out.write(s.substring(last));
+      s = out.toString();
+    }
     if (s.contains('#nym:')) {
       s = s.replaceAllMapped(_rxMediaNote, (m) {
         final note = parseMediaUrl('${m[2]}#${m[3]}');
@@ -1275,6 +1296,9 @@ class NymFormat {
     // Fenced placeholders are block-level, but handle inline ones.
     tokens = _splitByRegex(tokens, RegExp(r'C(\d+)'),
         (m) => _NodeTok(InlineCodeNode(inlineCode[int.parse(m[1]!)])));
+
+    tokens = _splitByRegex(tokens, RegExp('\x01V(\\d+)\x01'),
+        (m) => _NodeTok(BitchatVerifyNode(inlineCode[int.parse(m[1]!)])));
 
     tokens = _splitByRegex(tokens, RegExp(r'T(\d+)'),
         (m) => _NodeTok(stamps[int.parse(m[1]!)]));

@@ -287,7 +287,6 @@ Object.assign(NYM.prototype, {
   },
 
   async deleteAccountAndWipe(targets) {
-    try { if (typeof this.clearConnectionChanges === 'function') this.clearConnectionChanges(); } catch (e) {}
     if (this._panicking || this._deletingAccount) return;
     this._deletingAccount = true;
     try { if (typeof this._resetAppBadge === 'function') this._resetAppBadge(); } catch (e) {}
@@ -337,7 +336,6 @@ Object.assign(NYM.prototype, {
   async panicWipe(opts) {
     if (this._panicking) return;
     this._panicking = true;
-    try { if (typeof this.clearConnectionChanges === 'function') this.clearConnectionChanges(); } catch (e) {}
     try { if (typeof this._stopAllAnonPresence === 'function') this._stopAllAnonPresence(); } catch (e) {}
     try { if (window.NymGeoStreet && typeof window.NymGeoStreet.halt === 'function') window.NymGeoStreet.halt(); } catch (e) {}
     try { if (typeof this._resetAppBadge === 'function') this._resetAppBadge(); } catch (e) {}

@@ -67,7 +67,34 @@
         return { messages, users };
     }
 
+    function settleKeys(local, incoming, max) {
+        const cap = max > 0 ? max : 4;
+        const norm = (side) => {
+            const cur = str(side && side.current).toLowerCase();
+            const prev = (Array.isArray(side && side.prev) ? side.prev : []).map((p) => str(p).toLowerCase()).filter(Boolean);
+            const at = Number(side && side.createdAt);
+            return { current: cur || null, prev, at: at > 0 ? at : 0 };
+        };
+        const uniq = (list, skip) => {
+            const out = [];
+            for (const pk of list) if (pk && pk !== skip && out.indexOf(pk) < 0) out.push(pk);
+            return out.slice(0, cap);
+        };
+        const L = norm(local);
+        const I = norm(incoming);
+        if (!I.current) return { current: L.current, prev: uniq(L.prev, L.current), loser: null, rule: 'keep' };
+        if (!L.current) return { current: I.current, prev: uniq(I.prev, I.current), loser: null, rule: 'adopt' };
+        if (L.current === I.current) return { current: L.current, prev: uniq(L.prev.concat(I.prev), L.current), loser: null, rule: 'same' };
+        const iNext = I.prev.indexOf(L.current) >= 0;
+        const lNext = L.prev.indexOf(I.current) >= 0;
+        const aged = iNext && lNext && I.at > 0 && L.at > 0 && I.at !== L.at;
+        const takeIncoming = iNext !== lNext ? iNext : (aged ? I.at > L.at : I.current < L.current);
+        const W = takeIncoming ? I : L;
+        const X = takeIncoming ? L : I;
+        return { current: W.current, prev: uniq([X.current].concat(W.prev, X.prev), W.current), loser: X.current, rule: iNext !== lNext ? 'next' : (iNext ? 'newer' : 'lower') };
+    }
+
     G.NymAnonNymbot = Object.freeze({
-        STRINGS, triggers, blocker, outcome, notice, senderNym, scrubContext,
+        STRINGS, triggers, blocker, outcome, notice, senderNym, scrubContext, settleKeys,
     });
 })();

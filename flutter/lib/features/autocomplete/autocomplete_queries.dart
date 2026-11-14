@@ -1,11 +1,13 @@
 // Pure query engines for the four composer autocompletes, each capped at [kAutocompleteMax] results.
 
+import '../../core/utils/channel_name.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/globe/geo_projection.dart' show geohashBounds;
 import '../../models/channel.dart';
 import '../../models/user.dart';
 import '../emoji/custom_emoji.dart';
 import '../emoji/emoji_data.dart';
+import '../search/unified_search.dart' show foldSearchText;
 
 const int kAutocompleteMax = 8;
 
@@ -169,8 +171,6 @@ String geohashLocationLabel(String geohash) {
   return '$latStr, $lngStr';
 }
 
-final RegExp _validChannelRe = RegExp(r'^[\p{L}\p{N}]+$', unicode: true);
-
 /// Sources: channels with messages, joined channels, then seeds; sorted current, joined, message count, name.
 List<ChannelResult> queryChannels({
   required String search,
@@ -178,9 +178,17 @@ List<ChannelResult> queryChannels({
   required Map<String, int> messageChannelCounts,
   required String currentKey,
   Set<String> joinedKeys = const {},
+  String? Function(String geohash)? placeName,
 }) {
   final map = <String, ChannelResult>{};
   final searchLower = search.toLowerCase();
+  final searchFold = foldSearchText(search);
+  String locationOf(String name) =>
+      placeName?.call(name) ?? geohashLocationLabel(name);
+  bool placeHit(ChannelResult ch) {
+    if (searchFold.isEmpty || !ch.isGeohash || placeName == null) return false;
+    return foldSearchText(placeName(ch.name) ?? '').contains(searchFold);
+  }
 
   // Keys are bare channel names here.
   messageChannelCounts.forEach((name, count) {
@@ -191,7 +199,7 @@ List<ChannelResult> queryChannels({
       isJoined: joinedKeys.contains(name) || channels.any((c) => c.key == name),
       isCurrent: name == currentKey,
       isGeohash: geo,
-      location: geo ? geohashLocationLabel(name) : '',
+      location: geo ? locationOf(name) : '',
     );
   });
 
@@ -204,7 +212,7 @@ List<ChannelResult> queryChannels({
       isJoined: true,
       isCurrent: key == currentKey,
       isGeohash: ch.isGeohash,
-      location: ch.isGeohash ? geohashLocationLabel(key) : '',
+      location: ch.isGeohash ? locationOf(key) : '',
     );
   }
 
@@ -217,14 +225,14 @@ List<ChannelResult> queryChannels({
       isJoined: joinedKeys.contains(g) || channels.any((c) => c.key == g),
       isCurrent: g == currentKey,
       isGeohash: geo,
-      location: geo ? geohashLocationLabel(g) : '',
+      location: geo ? locationOf(g) : '',
     );
   }
 
   final matches = map.values
       .where((ch) =>
-          _validChannelRe.hasMatch(ch.name) &&
-          ch.name.toLowerCase().contains(searchLower))
+          isChannelName(ch.name) &&
+          (ch.name.toLowerCase().contains(searchLower) || placeHit(ch)))
       .toList();
 
   matches.sort((a, b) {

@@ -368,6 +368,30 @@
         return s;
     }
 
+    function verifyLabel(ctx) {
+        if (ctx && typeof ctx.verifyLabel === 'string' && ctx.verifyLabel) return ctx.verifyLabel;
+        const BV = G.NymBitchatVerify;
+        const label = (BV && BV.LABEL) || 'bitchat verification link';
+        if (G.nym && typeof G.nym.uiText === 'function') {
+            try { return G.nym.uiText(label) || label; } catch (_) { }
+        }
+        return label;
+    }
+
+    function verifyLinkSpans(text) {
+        const BV = G.NymBitchatVerify;
+        return BV && typeof BV.findBitchatVerifyLinks === 'function' ? BV.findBitchatVerifyLinks(text) : [];
+    }
+
+    function labelVerifyLinks(text) {
+        const spans = verifyLinkSpans(text);
+        if (!spans.length) return text;
+        const label = verifyLabel();
+        let out = text;
+        for (let i = spans.length - 1; i >= 0; i--) out = out.slice(0, spans[i].start) + label + out.slice(spans[i].end);
+        return out;
+    }
+
     function spoilerLabel() {
         if (G.nym && typeof G.nym.uiText === 'function') {
             try { return G.nym.uiText(SPOILER_LABEL) || SPOILER_LABEL; } catch (_) { }
@@ -455,7 +479,7 @@
     function stripForPreview(text, opts) {
         if (typeof text !== 'string' || !text) return text;
         const locale = opts && opts.locale;
-        return mapOutsideCode(text, (part) => part
+        return mapOutsideCode(text, (part) => labelVerifyLinks(part)
             .replace(RX_SPOILER, SPOILER_MASK)
             .replace(RX_TIMESTAMP_RAW, (m, sec, style) => tsValid(sec) ? formatTimestamp(sec, style || 'f', locale) : m)
             .replace(/(^|\n)-# (?=\S)/g, '$1'));
@@ -546,11 +570,20 @@
         let formatted = content;
         formatted = formatted.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
 
-        formatted = formatted
+        const escapeText = (str) => str
             .replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+        const verifyLinks = [];
+        const verifySpans = verifyLinkSpans(formatted);
+        for (let i = verifySpans.length - 1; i >= 0; i--) {
+            verifyLinks[i] = formatted.slice(verifySpans[i].start, verifySpans[i].end);
+            formatted = formatted.slice(0, verifySpans[i].start) + `\uFDD6${i}\uFDD7` + formatted.slice(verifySpans[i].end);
+        }
+        const verifyRaw = (str) => verifyLinks.length ? str.replace(/\uFDD6(\d+)\uFDD7/g, (m, i) => verifyLinks[i] === undefined ? m : escapeText(verifyLinks[i])) : str;
+
+        formatted = escapeText(formatted);
 
         const HL = G.NymHighlight;
         const codePlaceholders = [];
@@ -577,13 +610,13 @@
             codePlaceholders.push(`<div class="code-block-wrapper">${langLabel}<pre><code${langClass}${hc.hlAttr}>${hc.codeHtml}</code></pre><button class="code-copy-btn" data-code="${encodedRaw}" data-action="codeBlockCopy">Copy</button></div>`);
             return `﷐${idx}﷑`;
         };
-        formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => pushCodeBlock(code));
-        formatted = formatted.replace(/```([\s\S]+)$/, (match, code) => pushCodeBlock(code));
+        formatted = formatted.replace(/```([\s\S]*?)```/g, (match, code) => pushCodeBlock(verifyRaw(code)));
+        formatted = formatted.replace(/```([\s\S]+)$/, (match, code) => pushCodeBlock(verifyRaw(code)));
         const inlineSlots = new Set();
         formatted = formatted.replace(/`([^`]+?)`/g, (match, code) => {
             const idx = codePlaceholders.length;
             inlineSlots.add(idx);
-            codePlaceholders.push(`<code>${code}</code>`);
+            codePlaceholders.push(`<code>${verifyRaw(code)}</code>`);
             return `﷐${idx}﷑`;
         });
 
@@ -608,7 +641,7 @@
         if (ctx.commonMark) {
             formatted = formatted.replace(RX_MD_LINK, (match, label, angled, plain) => {
                 const target = angled || plain;
-                if (/[\uFDD0-\uFDD5]/.test(target)) return match;
+                if (/[\uFDD0-\uFDD5]/.test(target) || label.includes('\uFDD6')) return match;
                 const raw = unescapeHtml(target);
                 if (!/^https?:\/\/./i.test(raw) || !safeUrl(raw)) return label;
                 let inlineOnly = true;
@@ -778,7 +811,8 @@
                     const suffixIdx = mentionWithSuffix.search(/#[0-9a-f]{4}$/i);
                     const namePart = mentionWithSuffix.substring(0, suffixIdx);
                     const suffixPart = mentionWithSuffix.substring(suffixIdx);
-                    return `<span class="nm-mention">${namePart}<span class="nym-suffix">${suffixPart}</span></span>`;
+                    const base = G.NymSuffix.capBase(namePart.slice(1).replace(/&(amp|lt|gt|quot|#x27|#39);/g, (e, n) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#x27': "'", '#39': "'" }[n])));
+                    return `<span class="nm-mention">@${escapeHtml(base)}<span class="nym-suffix">${suffixPart}</span></span>`;
                 } else if (simpleMention) {
                     return `<span class="nm-mention">${simpleMention}</span>`;
                 } else if (channel) {
@@ -826,6 +860,10 @@
         );
 
         formatted = formatted.replace(/﷐(\d+)﷑/g, (m, idx) => codePlaceholders[idx]);
+        if (verifyLinks.length) {
+            const labelHtml = `<span class="bitchat-verify-link">${escapeHtml(verifyLabel(ctx))}</span>`;
+            formatted = formatted.replace(/\uFDD6(\d+)\uFDD7/g, (m, i) => verifyLinks[i] === undefined ? m : labelHtml);
+        }
         formatted = formatted.replace(/\n\[gc:([A-Za-z0-9+/=]+)\]/g, '<span class="game-token" aria-hidden="true">[gc:$1]</span>');
         formatted = formatted.replace(/\n/g, '<br>');
 
@@ -881,8 +919,8 @@
                     const avatarHtml = (info && info.avatar) || '';
                     const flairHtml = (info && info.flair) || '';
                     const displayAuthor = suffixMatch
-                        ? `${avatarHtml}${escapeHtml(suffixMatch[1])}<span class="nym-suffix">${escapeHtml(suffixMatch[2])}</span>${flairHtml}`
-                        : `${avatarHtml}${escapeHtml(cleanAuthor)}${flairHtml}`;
+                        ? `${avatarHtml}${escapeHtml(G.NymSuffix.capBase(suffixMatch[1]))}<span class="nym-suffix">${escapeHtml(suffixMatch[2])}</span>${flairHtml}`
+                        : `${avatarHtml}${escapeHtml(G.NymSuffix.capBase(cleanAuthor))}${flairHtml}`;
 
                     html += `<blockquote><span class="quote-author">${displayAuthor}:</span> ${formatWithQuotes(quotedMessage, ctx, depth + 1)}</blockquote>`;
                 } else {

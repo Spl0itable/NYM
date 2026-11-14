@@ -3,6 +3,7 @@
 
     const LIMITS = Object.freeze({
         lockMax: 100,
+        rowBytes: 15360,
         removedMax: 300,
         removedTtlMs: 180 * 24 * 60 * 60 * 1000,
         codeMin: 4,
@@ -57,6 +58,7 @@
         locked: 'Chat locked. Find it in Locked chats.',
         unlocked: 'Chat lock removed.',
         lockCap: 'You can lock up to {n} chats.',
+        lockFull: 'Locked chats are full. Unlock some to make room.',
         defaultLocked: '#nymchat cannot be locked',
         settingsTitle: 'Chat Lock',
         settingsButton: 'Chat lock settings…',
@@ -89,7 +91,7 @@
 
     const RX_HEX64 = /^[0-9a-f]{64}$/;
     const RX_GROUP = /^[0-9a-f]{16,64}$/;
-    const RX_CHANNEL = /^[\p{L}\p{N}]{1,64}$/u;
+    const isChannelName = (s) => G.NymChannelName.isChannelName(s);
 
     function num(v) {
         const n = Number(v);
@@ -118,7 +120,7 @@
         }
         if (kind === 'channel') {
             const c = raw.replace(/^#/, '').toLowerCase();
-            return RX_CHANNEL.test(c) ? 'c:' + c : '';
+            return isChannelName(c) ? 'c:' + c : '';
         }
         return '';
     }
@@ -127,7 +129,7 @@
         const s = String(k || '');
         if (s.indexOf('d:') === 0 && RX_HEX64.test(s.slice(2))) return { kind: 'dm', id: s.slice(2) };
         if (s.indexOf('g:') === 0 && RX_GROUP.test(s.slice(2))) return { kind: 'group', id: s.slice(2) };
-        if (s.indexOf('c:') === 0 && RX_CHANNEL.test(s.slice(2))) return { kind: 'channel', id: s.slice(2) };
+        if (s.indexOf('c:') === 0 && isChannelName(s.slice(2))) return { kind: 'channel', id: s.slice(2) };
         return null;
     }
 
@@ -226,6 +228,12 @@
         return at !== undefined && !(s.removed[k] >= at);
     }
 
+    function lockRowBytes(state) {
+        const s = normalizeLocks(state);
+        const live = { v: s.v, items: s.items, removed: {}, hide: s.hide };
+        return new TextEncoder().encode(JSON.stringify(JSON.stringify({ lockedChats: live }))).length + 256;
+    }
+
     function lockAdd(state, k, nowMs) {
         const s = normalizeLocks(state);
         const p = lockParse(k);
@@ -235,7 +243,9 @@
         if (Object.keys(s.items).length >= LIMITS.lockMax) return { state: s, error: 'cap' };
         s.items[k] = Math.max(Math.floor(num(nowMs)), (s.removed[k] || 0) + 1, (s.items[k] || 0) + 1);
         delete s.removed[k];
-        return { state: finishLocks(s, nowMs), error: null };
+        const next = finishLocks(s, nowMs);
+        if (lockRowBytes(next) > LIMITS.rowBytes) return { state: normalizeLocks(state), error: 'size' };
+        return { state: next, error: null };
     }
 
     function lockRemove(state, k, nowMs) {
@@ -269,19 +279,11 @@
     function trimLockedPayload(p) {
         const s = p && p.lockedChats;
         if (!s || typeof s !== 'object') return false;
-        const rk = s.removed ? Object.keys(s.removed) : [];
-        if (rk.length > 20) {
-            rk.sort((a, b) => (s.removed[a] - s.removed[b]) || cmpStr(a, b));
-            for (const k of rk.slice(0, Math.ceil(rk.length / 4))) delete s.removed[k];
-            return true;
-        }
-        const ik = s.items ? Object.keys(s.items) : [];
-        if (ik.length > 20) {
-            ik.sort((a, b) => (s.items[a] - s.items[b]) || cmpStr(a, b));
-            for (const k of ik.slice(0, Math.ceil(ik.length / 4))) delete s.items[k];
-            return true;
-        }
-        return false;
+        const rk = s.removed && typeof s.removed === 'object' ? Object.keys(s.removed) : [];
+        if (!rk.length) return false;
+        rk.sort((a, b) => (s.removed[a] - s.removed[b]) || cmpStr(a, b));
+        for (const k of rk.slice(0, Math.ceil(rk.length / 4))) delete s.removed[k];
+        return true;
     }
 
     function secretMatches(state, term) {
@@ -546,7 +548,7 @@
     G.NymChatLock = {
         LIMITS, KEYS, STRINGS,
         lockKey, lockParse, lockKeyForChat, normCode,
-        emptyLocks, normalizeLocks, lockList, isLocked, lockAdd, lockRemove, setHidden, mergeLocks, trimLockedPayload,
+        emptyLocks, normalizeLocks, lockList, isLocked, lockAdd, lockRemove, setHidden, mergeLocks, trimLockedPayload, lockRowBytes,
         secretMatches, entryVisible, partition, badges,
         notificationLockKeys, notificationLocked, notificationText,
         sessionIdle, sessionStep, sessionAllows, leavesLocked,

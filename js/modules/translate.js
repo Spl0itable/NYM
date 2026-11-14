@@ -96,6 +96,10 @@ Object.assign(NYM.prototype, {
         this._forgetManualTranslation(messageEl.getAttribute('data-message-id'));
     },
 
+    _redactBlankedRow(messageEl) {
+        return !!(messageEl && messageEl.querySelector(':scope > .message-content.cosmetic-redacted-message'));
+    },
+
     // Recomputed from the rebuilt element so an edited message doesn't get its old translation back.
     _manualTrSourceFor(messageEl) {
         const contentEl = messageEl && messageEl.querySelector('.message-content');
@@ -153,13 +157,16 @@ Object.assign(NYM.prototype, {
         }
 
         // Resolved fresh: a render during the request can replace the row.
-        const rowFor = () => (messageId
-            ? document.querySelector(`[data-message-id="${String(messageId).replace(/"/g, '\\"')}"]`)
-            : null);
+        const rowFor = () => (messageId ? this.findMessageElementAnywhere(messageId) : null);
+
+        if (this._redactBlankedRow(rowFor())) return;
+
+        const req = {};
+        const live = () => !messageId || ((this._manualTranslations && this._manualTranslations.get(messageId)) || {}).req === req;
 
         // Loading state is recorded too so a mid-request rebuild shows "Translating...".
         const paint = (html) => {
-            this._recordManualTranslation(messageId, { lang: targetLang, source: plainText, html });
+            this._recordManualTranslation(messageId, { lang: targetLang, source: plainText, html, req });
             const row = rowFor();
             if (row) this._manualTrElement(row).innerHTML = html;
             return !!row;
@@ -172,6 +179,7 @@ Object.assign(NYM.prototype, {
         try {
             const { translatedText, detectedLanguage: detectedLang } =
                 await this._translatePreservingMentions(plainText, targetLang);
+            if (!live()) return;
             const nowRow = rowFor();
             if (startRow && nowRow && nowRow.dataset.rawContent !== startRaw) {
                 this._forgetManualTranslation(messageId);

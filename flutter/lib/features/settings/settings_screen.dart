@@ -71,6 +71,7 @@ import '../../widgets/wallpaper/wallpaper_cache.dart';
 import '../toasts/toast_center.dart';
 import '../../state/fallback_notice.dart';
 import 'settings_helpers.dart';
+import '../channels/geohash_place_cache.dart' show geohashPlaceCacheProvider;
 import 'settings_widgets.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/common/dialog_button.dart';
@@ -217,6 +218,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   double? _textSizePreview;
 
   late final NostrController _nostr;
+  late final ValueNotifier<int> _placeChanges;
 
   Settings _liveSettings(Settings raw) {
     final kv = ref.read(keyValueStoreProvider);
@@ -257,7 +259,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _nostr = ref.read(nostrControllerProvider);
     _nostr.settingsScreenOpened();
     _landing = readLandingChannel(kv);
-    _landingController.text = _landing.label;
+    _landingController.text = _landingLabel;
+    _placeChanges = ref.read(geohashPlaceCacheProvider).changes
+      ..addListener(_onPlaceNamesChanged);
     // Restore the persisted section collapse layout (`{key: 1}` per collapsed section).
     try {
       final raw = kv.getString(_kSettingsSectionsCollapsedKey);
@@ -306,7 +310,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (!_landingFocus.hasFocus && mounted) {
         setState(() {
           _landingOpen = false;
-          _landingController.text = _landing.label;
+          _landingController.text = _landingLabel;
         });
       }
     });
@@ -353,8 +357,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  void _onPlaceNamesChanged() {
+    if (!mounted) return;
+    setState(() {
+      if (!_landingOpen) _landingController.text = _landingLabel;
+    });
+  }
+
   @override
   void dispose() {
+    _placeChanges.removeListener(_onPlaceNamesChanged);
     _nostr.settingsScreenClosed();
     _nostr.flushPendingSettingsSync();
     _searchController.dispose();
@@ -1642,12 +1654,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           text: tr(
               'Accept Private Messages & Group Chat Requests {options} Control '
               'who can send you PMs and group chat invites. "Friends only" '
-              'filters messages from non-friends.',
+              'filters messages from non-friends. Group invites wait until '
+              'you accept them.',
               {'options': _optText(acceptItems)}),
           child: FormGroup(
             label: tr('Accept Private Messages & Group Chat Requests'),
             hint: tr('Control who can send you PMs and group chat invites. '
-                '"Friends only" filters messages from non-friends.'),
+                '"Friends only" filters messages from non-friends. Group '
+                'invites wait until you accept them.'),
             child: FormSelect<String>(
               key: const ValueKey('setting-acceptPMs'),
               value: s.acceptPMs,
@@ -2396,9 +2410,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ];
   }
 
+  String get _landingLabel => _landing
+      .labelWith(ref.read(geohashPlaceCacheProvider).nameFor(_landing.geohash));
+
   /// `#key (37.77°N, 122.41°W)` for a hidden geohash channel, else `#key`.
   String _hiddenChannelLabel(String key) {
-    final loc = geohashLocationLabel(key);
+    final loc = ref.read(geohashPlaceCacheProvider).nameFor(key) ??
+        geohashLocationLabel(key);
     return loc.isEmpty ? '#$key' : '#$key ($loc)';
   }
 
@@ -2421,10 +2439,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Widget _landingChannelField(List<ChannelEntry> channels) {
     final c = context.nym;
-    final options = buildLandingChannelOptions(channels);
+    final options = buildLandingChannelOptions(channels,
+        placeName: ref.read(geohashPlaceCacheProvider).nameFor);
     final query = _landingController.text;
     final filterLower = query.toLowerCase().replaceFirst(RegExp(r'^#'), '');
-    final filtered = (query.isEmpty || query == _landing.label)
+    final filtered = (query.isEmpty || query == _landingLabel)
         ? options
         : options.where((o) => o.searchText.contains(filterLower)).toList();
 
@@ -2443,7 +2462,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               _commitLanding(filtered.first);
             } else {
               setState(() {
-                _landingController.text = _landing.label;
+                _landingController.text = _landingLabel;
                 _landingOpen = false;
               });
             }

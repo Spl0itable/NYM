@@ -13,6 +13,13 @@ class RelativeTimeTicker extends ChangeNotifier {
 
   static const Duration interval = Duration(seconds: 30);
 
+  DateTime Function()? _debugNow;
+
+  DateTime now() => _debugNow?.call() ?? DateTime.now();
+
+  @visibleForTesting
+  set debugNow(DateTime Function()? now) => _debugNow = now;
+
   @override
   void addListener(VoidCallback listener) {
     super.addListener(listener);

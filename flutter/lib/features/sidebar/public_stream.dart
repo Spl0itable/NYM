@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart' show StringCharacters;
 const int kPsFirst = 20;
 const int kPsStep = 50;
 const int kPsMax = 500;
+const int kPsPendingMax = 99;
 const int kPsClip = 240;
 const int kPsMediaMax = 4;
 const int kPsWindowSec = 86400;
@@ -305,17 +306,19 @@ class PsPage<M> {
     required this.remaining,
     required this.shown,
     required this.held,
-    required this.button,
+    required this.buttons,
+    this.pendingMore = false,
   });
 
   final List<PsRow<M>> rows;
   final List<String> pendingIds;
+  final bool pendingMore;
   final int remaining;
   final int shown;
   final bool held;
-  final PsButton? button;
+  final List<PsButton> buttons;
 
-  int get pending => pendingIds.length;
+  int get pending => pendingIds.length + (pendingMore ? 1 : 0);
 }
 
 class _Cursor<M> {
@@ -336,6 +339,7 @@ void psWalk<M>(
   required bool Function(M, String key) visible,
   required bool Function(PsStamp s, M m) visit,
   int? floorSec,
+  int? Function()? seek,
 }) {
   final cur = <_Cursor<M>>[
     for (final l in lists)
@@ -360,6 +364,20 @@ void psWalk<M>(
     c.m = null;
   }
 
+  int below(_Cursor<M> c, int sec) {
+    var lo = 0;
+    var hi = c.i;
+    while (lo <= hi) {
+      final mid = (lo + hi) >> 1;
+      if (at(c.msgs[mid]) <= sec) {
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return hi;
+  }
+
   cur.forEach(advance);
   var live = cur.where((c) => c.s != null).toList();
   while (live.isNotEmpty) {
@@ -367,7 +385,20 @@ void psWalk<M>(
     for (var j = 1; j < live.length; j++) {
       if (psCompareNewest(live[j].s!, best.s!) < 0) best = live[j];
     }
+    final t = best.s!.t;
     if (!visit(best.s!, best.m as M)) return;
+    final sec = seek?.call();
+    if (sec != null && t > sec) {
+      for (final c in live) {
+        final s = c.s;
+        if (s == null || s.t <= sec) continue;
+        final b = below(c, sec);
+        if (b < c.i) c.i = b;
+        advance(c);
+      }
+      live = live.where((c) => c.s != null).toList();
+      continue;
+    }
     advance(best);
     if (best.s == null) live = live.where((c) => c.s != null).toList();
   }
@@ -392,6 +423,7 @@ PsPage<M> psPage<M>(
   final held = anchor != null;
   final rows = <PsRow<M>>[];
   final pendingIds = <String>[];
+  var pendingMore = false;
   var eligible = 0;
   var pastTail = false;
   psWalk<M>(lists,
@@ -399,12 +431,17 @@ PsPage<M> psPage<M>(
       at: at,
       ms: ms,
       id: id,
+      seek: () => pendingMore ? anchor!.t : null,
       visible: visible, visit: (s, m) {
     if (held && !frozen.contains(s.id)) {
       final older =
           pastTail || (tail != null ? psCompareNewest(s, tail) > 0 : false);
       if (!older) {
-        pendingIds.add(s.id);
+        if (pendingIds.length < kPsPendingMax) {
+          pendingIds.add(s.id);
+        } else {
+          pendingMore = true;
+        }
         return true;
       }
     }
@@ -419,24 +456,25 @@ PsPage<M> psPage<M>(
   return PsPage<M>(
     rows: rows,
     pendingIds: pendingIds,
+    pendingMore: pendingMore,
     remaining: left,
     shown: shown,
     held: held,
-    button: psMoreButton(shown, left, max),
+    buttons: psMoreButton(shown, left, max),
   );
 }
 
-PsButton? psMoreButton(int shown, int remaining, [int max = kPsMax]) {
+List<PsButton> psMoreButton(int shown, int remaining, [int max = kPsMax]) {
+  final out = <PsButton>[];
   if (remaining > 0 && shown <= kPsFirst) {
-    return PsButton('view', remaining,
-        kPsFirst + kPsStep < max ? kPsFirst + kPsStep : max);
+    out.add(PsButton('view', remaining,
+        kPsFirst + kPsStep < max ? kPsFirst + kPsStep : max));
+  } else if (remaining > 0) {
+    out.add(PsButton('show', remaining < kPsStep ? remaining : kPsStep,
+        shown + kPsStep < max ? shown + kPsStep : max));
   }
-  if (remaining > 0) {
-    return PsButton('show', remaining < kPsStep ? remaining : kPsStep,
-        shown + kPsStep < max ? shown + kPsStep : max);
-  }
-  if (shown > kPsFirst) return const PsButton('less', 0, kPsFirst);
-  return null;
+  if (shown > kPsFirst) out.add(const PsButton('less', 0, kPsFirst));
+  return out;
 }
 
 PsHold psHold(List<PsStamp> rows, PsHold? cur) {
@@ -478,6 +516,9 @@ PsLabel psRowLabel({
 
 PsLabel? psPillLabel(int n) {
   if (n <= 0) return null;
+  if (n > kPsPendingMax) {
+    return (template: '99+ new messages', vars: const <String, Object>{});
+  }
   return n == 1
       ? (template: '1 new message', vars: const <String, Object>{})
       : (template: '{n} new messages', vars: <String, Object>{'n': n});

@@ -37,8 +37,12 @@ class LandingChannel {
   String toJsonString() => jsonEncode({'type': type, 'geohash': geohash});
 
   /// `#<geohash>` or `#<geohash> (location)`.
-  String get label {
-    final loc = geohashLocationLabel(geohash);
+  String get label => labelWith(null);
+
+  String labelWith(String? place) {
+    final loc = (place != null && place.isNotEmpty)
+        ? place
+        : geohashLocationLabel(geohash);
     return loc.isEmpty ? '#$geohash' : '#$geohash ($loc)';
   }
 
@@ -68,17 +72,20 @@ class LandingChannelOption {
   const LandingChannelOption({
     required this.group,
     required this.value,
+    this.place,
   });
 
   /// `'Common Geohash Channels'` or `'Joined Geohash Channels'`.
   final String group;
   final LandingChannel value;
 
-  String get label => value.label;
+  final String? place;
+
+  String get label => value.labelWith(place);
 
   /// Lowercased `"<geohash> <location>"` for type-to-filter.
   String get searchText =>
-      ('${value.geohash} ${geohashLocationLabel(value.geohash)}')
+      ('${value.geohash} ${(place != null && place!.isNotEmpty) ? place : geohashLocationLabel(value.geohash)}')
           .trim()
           .toLowerCase();
 }
@@ -109,6 +116,7 @@ List<LandingChannelOption> buildLandingChannelOptions(
     'xn77',
     'tjm5',
   ],
+  String? Function(String geohash)? placeName,
 }) {
   final out = <LandingChannelOption>[];
   final seen = <String>{};
@@ -117,6 +125,7 @@ List<LandingChannelOption> buildLandingChannelOptions(
     out.add(LandingChannelOption(
       group: tr('Common Geohash Channels'),
       value: LandingChannel(geohash: g),
+      place: placeName?.call(g),
     ));
   }
   // `nymchat` is a named channel, so it never double-counts here.
@@ -128,6 +137,7 @@ List<LandingChannelOption> buildLandingChannelOptions(
     out.add(LandingChannelOption(
       group: tr('Joined Geohash Channels'),
       value: LandingChannel(geohash: key),
+      place: placeName?.call(key),
     ));
   }
   return out;

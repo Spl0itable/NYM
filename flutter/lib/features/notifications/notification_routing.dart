@@ -40,6 +40,8 @@ abstract class NotificationRouteTarget {
   void openPM(String pubkey);
   bool openGroup(String groupId);
 
+  bool openGroupInvite(String groupId);
+
   /// Called only after an open above, so the thread's conversation is already current.
   void openThread(String threadRoot);
 }
@@ -116,6 +118,9 @@ bool openNotificationRoute(
   }
 
   switch (target.type) {
+    case 'group-invite':
+      if (route.isEmpty) return false;
+      return into.openGroupInvite(route);
     case 'group':
       if (route.isEmpty) return false;
       return opened(into.openGroup(route));

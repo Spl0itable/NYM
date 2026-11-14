@@ -301,7 +301,7 @@ Object.assign(NYM.prototype, {
         if (this.lightningAddress) return true;
         try {
             const customNick = localStorage.getItem('nym_custom_nick');
-            if (customNick && this.nym && this.parseNymFromDisplay(this.nym) === customNick) return true;
+            if (customNick && this.nym && this.parseNymFromDisplay(this.nym) === window.NymSuffix.capBase(customNick)) return true;
         } catch (_) { }
         return false;
     },
@@ -414,6 +414,7 @@ Object.assign(NYM.prototype, {
         }
 
         if (this.hasBlockedContentPrefix(event.content)) return;
+        if (this._encryptedBlobDrop(event) || this._pointsAtDroppedBlob(event)) return;
         if (typeof event.content === 'string') {
             event.content = this.stripMaliciousDomains(event.content);
         }
@@ -811,6 +812,8 @@ Object.assign(NYM.prototype, {
                 // Cache our own full kind 0 so saveToNostrProfile can merge without losing unmanaged fields.
                 if (pubkey === this.pubkey) {
                     this._cachedKind0Profile = profile;
+                    const ownLn = profile.lud16 || profile.lud06;
+                    if (!this.lightningAddress && typeof ownLn === 'string' && ownLn && this._lnProfileMayFill(eventTs)) this.lightningAddress = ownLn;
                     this._releaseOwnProfileSave();
                     if (eventTs > (this._lastKind0Ts || 0)) {
                         this._lastKind0Ts = eventTs;
@@ -1084,6 +1087,52 @@ Object.assign(NYM.prototype, {
     hasBlockedContentPrefix(content) {
         if (typeof content !== 'string') return false;
         return _RX_BLOCKED_CONTENT_BLOB.test(content.trimStart());
+    },
+
+    _encryptedBlobDrop(ev) {
+        const B = typeof window !== 'undefined' ? window.NymEncryptedBlob : null;
+        const BV = typeof window !== 'undefined' ? window.NymBitchatVerify : null;
+        if (!(B && B.isEncryptedBlobChannelEvent(ev)) && !(BV && BV.isBitchatVerifyChannelEvent(ev))) return false;
+        if (this._blobIdMatches(ev)) this._noteDroppedBlobId(ev.id);
+        return true;
+    },
+
+    _blobIdMatches(ev) {
+        const T = typeof window !== 'undefined' ? window.NostrTools : null;
+        if (!ev || typeof ev.id !== 'string' || !ev.id || !T || typeof T.getEventHash !== 'function') return false;
+        try { return T.getEventHash(ev) === ev.id; } catch (_) { return false; }
+    },
+
+    _noteDroppedBlobId(id) {
+        if (typeof id !== 'string' || !id) return;
+        if (!(this._blobDroppedIds instanceof Set)) this._blobDroppedIds = new Set();
+        if (this._blobDroppedIds.has(id)) return;
+        this._blobDroppedIds.add(id);
+        if (this._blobDroppedIds.size > 5000) this._blobDroppedIds = new Set(Array.from(this._blobDroppedIds).slice(-4000));
+        this._purgeBlobPointers(id);
+    },
+
+    _purgeBlobPointers(id) {
+        const hits = [];
+        if (this.messages) {
+            for (const msgs of this.messages.values()) {
+                if (!Array.isArray(msgs)) continue;
+                for (const m of msgs) if (m && m.id && m.threadRoot === id) hits.push(m);
+            }
+        }
+        if (hits.length && typeof this._applyVerifiedDeletion === 'function') {
+            for (const m of hits) this._applyVerifiedDeletion(m.id, m.pubkey);
+            if (typeof this._psSchedule === 'function') this._psSchedule();
+        }
+        if (this.reactions instanceof Map && this.reactions.delete(id) && typeof this.persistReactions === 'function') this.persistReactions(id);
+        if (this.zaps instanceof Map) this.zaps.delete(id);
+    },
+
+    _pointsAtDroppedBlob(ev) {
+        const ids = this._blobDroppedIds;
+        if (!ids || !ids.size || !ev || !Array.isArray(ev.tags)) return false;
+        if (ev.kind !== 7 && ev.kind !== 9735 && ev.kind !== 20000 && ev.kind !== 23333) return false;
+        return ev.tags.some((t) => Array.isArray(t) && t[0] === 'e' && ids.has(t[1]));
     },
 
     stripMaliciousDomains(content) {
@@ -1404,11 +1453,62 @@ Object.assign(NYM.prototype, {
         this.sendDMToRelays(['EVENT', wrapped], { tier: 2 });
     },
 
+    _anonLaneTyping(pm) {
+        if (!pm || typeof this.isVerifiedBot !== 'function' || !this.isVerifiedBot(pm)) return false;
+        try {
+            const root = typeof this._threadRootForSend === 'function' ? this._threadRootForSend() : null;
+            const quoted = this.pendingQuote && this.pendingQuote.sourceId;
+            if ((root || quoted) && this._anonLaneMessageIds(pm, [root, quoted])) return true;
+            const list = (this.pmMessages && this.pmMessages.get(this.getPMConversationKey(pm))) || [];
+            for (let i = list.length - 1; i >= 0; i--) {
+                const m = list[i];
+                if (!m || !m.pubkey || m.isSystem === true) continue;
+                return !!(m.anonWrap || m.anonSender);
+            }
+            return false;
+        } catch (_) {
+            return true;
+        }
+    },
+
+    _anonLaneMsg(messageId) {
+        const bot = this.verifiedBot && this.verifiedBot.pubkey;
+        return !!(bot && typeof this._anonLaneMessageIds === 'function' && this._anonLaneMessageIds(bot, messageId));
+    },
+
+    _anonLaneMessageIds(peer, messageId) {
+        if (!peer || !this.pmMessages || typeof this.getPMConversationKey !== 'function') return false;
+        const ids = new Set((Array.isArray(messageId) ? messageId : [messageId]).filter(Boolean));
+        if (!ids.size) return false;
+        const list = this.pmMessages.get(this.getPMConversationKey(peer)) || [];
+        return list.some((m) => m && (m.anonWrap || m.anonSender) && (ids.has(m.nymMessageId) || ids.has(m.id)));
+    },
+
+    _botLaneFor(peer, threadRoot, quoteSource) {
+        if (!peer || !this.pmMessages || typeof this.getPMConversationKey !== 'function') return null;
+        const list = this.pmMessages.get(this.getPMConversationKey(peer)) || [];
+        let anonSource = false;
+        let identitySource = false;
+        for (const id of [threadRoot, quoteSource]) {
+            if (!id) continue;
+            const m = list.find((x) => x && (x.nymMessageId === id || x.id === id));
+            if (!m) return null;
+            if (m.anonWrap || m.anonSender) anonSource = true;
+            else identitySource = true;
+        }
+        const on = typeof this.botAnonEnabled === 'function' && this.botAnonEnabled();
+        if (anonSource && identitySource) return null;
+        if (anonSource) return true;
+        if (identitySource) return on ? null : false;
+        return on;
+    },
+
     // NIP-17 rumor of custom kind 69420 (not 14, so other clients show no blank DMs) with x and receipt tags.
     async sendNymReceipt(messageId, receiptType, recipientPubkey, context = 'pm', groupId = null) {
         if (this._receiptsOff()) return;
         if (!this._canSendGiftWraps()) return;
         if (context !== 'group' && this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(recipientPubkey)) return;
+        if (context !== 'group' && typeof this._anonLaneMessageIds === 'function' && this._anonLaneMessageIds(recipientPubkey, messageId)) return;
 
         if (receiptType === 'read' && !this.isReadReceiptAllowedFor(context)) {
             return;
@@ -1640,7 +1740,8 @@ Object.assign(NYM.prototype, {
             const group = this.groupConversations.get(dest.group);
             if (!group) return;
             tags.push(['g', dest.group]);
-            const otherMembers = group.members.filter(pk => pk !== me.pubkey);
+            const roster = typeof this._gnAccepted === 'function' ? this._gnAccepted(dest.group, group.members) : group.members;
+            const otherMembers = roster.filter(pk => pk !== me.pubkey);
             if (otherMembers.length === 0) return;
 
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: me.pubkey };
@@ -1648,6 +1749,7 @@ Object.assign(NYM.prototype, {
             await this._sendGiftWrapsAsync(otherMembers, rumor, null, dest.group, { claim });
         } else if (dest.pm) {
             if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(dest.pm)) return;
+            if (this._anonLaneTyping(dest.pm)) return;
             tags.push(['p', dest.pm]);
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: me.pubkey };
             if (me.sk) {
@@ -1777,7 +1879,7 @@ Object.assign(NYM.prototype, {
             const flair = (typeof this.getFlairForUser === 'function' && this.getFlairForUser(pk)) || '';
             const m = String(nym || '').match(/#([0-9a-f]{4})$/i);
             if (!m) return `${this.escapeHtml(nym || '')}${flair}`;
-            return `${this.escapeHtml(nym.slice(0, -5))}<span class="nym-suffix">#${m[1]}</span>${flair}`;
+            return `${window.NymSuffix.sqHtml(nym.slice(0, -5), m[1])}${flair}`;
         };
         const UA = window.NymUploadActivity;
         const tpl = UA ? UA.label(typers.map(([pk, e]) => ({ activity: e.activity || null, bot: typers.length === 1 && this.isVerifiedBot(pk) })))
@@ -2147,6 +2249,7 @@ Object.assign(NYM.prototype, {
             }
             const timer = setTimeout(() => {
                 this._removeProfileResolver(pubkey, entry);
+                this._noteProfileWaitMiss(pubkey);
                 resolve();
             }, 2500);
             const entry = { resolve, timer };
@@ -2190,6 +2293,8 @@ Object.assign(NYM.prototype, {
         if (!this._subscriptionHandlers) this._subscriptionHandlers = new Map();
 
         let settled = false;
+        let asked = null;
+        const answered = new Set();
         const cleanup = () => {
             if (settled) return;
             settled = true;
@@ -2199,7 +2304,7 @@ Object.assign(NYM.prototype, {
             setTimeout(finish, 0);
         };
 
-        const handler = (type, data) => {
+        const handler = (type, data, relayUrl) => {
             if (type === 'EVENT' && data[0] === subId) {
                 const event = data[1];
                 if (event && event.kind === 0 && event.pubkey === pubkey) {
@@ -2208,6 +2313,9 @@ Object.assign(NYM.prototype, {
                     cleanup();
                 }
             } else if (type === 'EOSE' && data[0] === subId) {
+                if (!asked || !asked.has(relayUrl)) return;
+                answered.add(relayUrl);
+                if (answered.size < asked.size) return;
                 if (!settled) this._ownProfileMiss = pubkey;
                 cleanup();
             }
@@ -2217,6 +2325,8 @@ Object.assign(NYM.prototype, {
         const req = ['REQ', subId, { kinds: [0], authors: [pubkey], limit: 1 }];
         const run = () => {
             try { this.sendRequestToFewRelays(req); } catch (_) { }
+            asked = new Set();
+            if (this.relayPool) this.relayPool.forEach((relay, url) => { if (relay && relay.subscriptions && relay.subscriptions.has(subId)) asked.add(url); });
             setTimeout(cleanup, 3000);
         };
         if (typeof this._oneShotReqAcquire === 'function') this._oneShotReqAcquire(run);
@@ -2225,7 +2335,7 @@ Object.assign(NYM.prototype, {
 
     _kind0Nym(profileName, pubkey) {
         const m = /^([\s\S]*)#([0-9a-f]{4})$/i.exec(profileName);
-        const base = (m ? m[1] : profileName).substring(0, 20);
+        const base = window.NymSuffix.capBase(m ? m[1] : profileName);
         if (!m) return base;
         const own = pubkey === this.pubkey && /^[0-9a-f]{64}$/i.test(pubkey);
         return base + '#' + (own ? pubkey.slice(-4).toLowerCase() : m[2]);
@@ -2263,6 +2373,18 @@ Object.assign(NYM.prototype, {
             clearTimeout(entry.timer);
             entry.resolve();
         }
+    },
+
+    _profileMissedRecently(pubkey) {
+        const missAt = (this._profileWaitMiss instanceof Map && this._profileWaitMiss.get(pubkey)) || 0;
+        return Date.now() - missAt < 5 * 60 * 1000;
+    },
+
+    _noteProfileWaitMiss(pubkey) {
+        if (!(this._profileWaitMiss instanceof Map)) this._profileWaitMiss = new Map();
+        this._profileWaitMiss.delete(pubkey);
+        this._profileWaitMiss.set(pubkey, Date.now());
+        while (this._profileWaitMiss.size > 5000) this._profileWaitMiss.delete(this._profileWaitMiss.keys().next().value);
     },
 
     _removeProfileResolver(pubkey, entry) {
@@ -2364,6 +2486,7 @@ Object.assign(NYM.prototype, {
             const switched = this.pubkey !== pk;
             this.privkey = sk;
             this.pubkey = pk;
+            if (typeof this._throwawayNeedles === 'function') this._throwawayNeedles();
             if (switched && typeof this.pqResetIdentityState === 'function') this.pqResetIdentityState();
             if (switched && typeof this._notifOwnerReset === 'function') this._notifOwnerReset();
 
@@ -2462,6 +2585,7 @@ Object.assign(NYM.prototype, {
                 }
             });
             if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+            if (this.pendingQuote && typeof this._refreshPendingQuote === 'function') this._refreshPendingQuote();
 
             // Delete every gift-wrap event id sent for this shared id so relays drop them from storage.
             if (originalKind === 1059 && this._giftWrapsForSharedId) {
@@ -2618,6 +2742,7 @@ Object.assign(NYM.prototype, {
         }
 
         if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
+        if (this.pendingQuote && typeof this._refreshPendingQuote === 'function') this._refreshPendingQuote();
 
         if (this.deletedEventIds.size > 5000) {
             const arr = Array.from(this.deletedEventIds);
@@ -2694,7 +2819,9 @@ Object.assign(NYM.prototype, {
         const T = window.NymChatTools;
         const existing = this.editedMessages.get(key);
         const mine = existing && existing.senderPubkey === senderPubkey ? existing : null;
-        const cur = mine ? { text: mine.newContent, at: Number(mine.editAt) || 0, id: mine.editEventId || '' } : null;
+        const held = mine ? { text: mine.newContent, at: Number(mine.editAt) || 0, id: mine.editEventId || '' } : null;
+        const head = T && msg ? T.editHead(msg) : null;
+        const cur = held && head && T ? (T.compareEdits(head, held) > 0 ? head : held) : (held || head);
         const verdict = T ? T.editVerdict(cur, cand, msg ? msg.created_at : 0) : 'apply';
         if (verdict === 'apply') {
             const stale = mine && Array.isArray(mine.stale) ? mine.stale.slice() : [];
@@ -2736,15 +2863,19 @@ Object.assign(NYM.prototype, {
         const cand = { text: newContent, at: Number(editAt) || 0, id: editEventId || '' };
         if (!this._takeEdit(`${senderPubkey}:${originalEventId}`, senderPubkey, cand, targets.length ? targets[0][0] : null)) return;
         if (!targets.length) return;
+        if (typeof this._showsEdit === 'function' && targets.every(([m]) => this._showsEdit(m, cand))) return;
 
         const was = targets.map(([msg]) => typeof this.isContentHidden === 'function' && this.isContentHidden(msg));
         for (const [msg, channel] of targets) {
             if (typeof this._noteEdit === 'function') this._noteEdit(msg, newContent, editAt);
             msg.content = newContent;
             msg.isEdited = true;
+            msg.editAt = cand.at;
+            msg.editId = cand.id;
             this.persistChannelMessages(channel);
         }
         this.updateMessageInDOM(originalEventId, newContent);
+        if (typeof this._notifRetext === 'function') this._notifRetext([originalEventId], newContent);
         if (typeof this._applyEditVisibility === 'function') targets.forEach(([msg, channel], i) => this._applyEditVisibility(originalEventId, msg, channel, was[i]));
     },
 
@@ -2757,17 +2888,30 @@ Object.assign(NYM.prototype, {
 
         const cand = { text: newContent, at: Number(editAt) || 0, id: editId || '' };
         if (!this._takeEdit(`${senderPubkey}:${originalId}`, senderPubkey, cand, msg)) return;
-        if (!msg) return;
+        if (!msg) return 'held';
+        if (typeof this._showsEdit === 'function' && this._showsEdit(msg, cand)) return;
 
         if (typeof this._noteEdit === 'function') this._noteEdit(msg, newContent, editAt);
         const wasHidden = typeof this.isContentHidden === 'function' && this.isContentHidden(msg);
         msg.content = newContent;
         msg.isEdited = true;
+        msg.editAt = cand.at;
+        msg.editId = cand.id;
         this.persistPMMessages(conversationKey);
 
         const domId = msg.nymMessageId || msg.id;
         this.updateMessageInDOM(domId, newContent);
+        if (typeof this._notifRetext === 'function') this._notifRetext([msg.id, msg.nymMessageId], newContent);
         if (typeof this._applyEditVisibility === 'function') this._applyEditVisibility(domId, msg, conversationKey, wasHidden);
+    },
+
+    _showsEdit(m, cand) {
+        return !!m && m.isEdited === true && m.content === cand.text && (Number(m.editAt) || 0) === cand.at && String(m.editId || '') === cand.id;
+    },
+
+    _unmarkHeldEditWrap(wrapId) {
+        if (!wrapId || !this.processedPMEventIds || !this.processedPMEventIds.delete(wrapId)) return;
+        if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
     },
 
     _applyEditVisibility(domId, msg, key, wasHidden) {
@@ -2970,10 +3114,10 @@ Object.assign(NYM.prototype, {
                             }
                         }
 
-                        if (event.pubkey === this.pubkey && (profile.lud16 || profile.lud06)) {
+                        if (event.pubkey === this.pubkey && (profile.lud16 || profile.lud06) && this._lnProfileMayFill(eventTs)) {
                             const lnAddress = profile.lud16 || profile.lud06;
                             this.lightningAddress = lnAddress;
-                            localStorage.setItem(`nym_lightning_address_${this.pubkey}`, lnAddress);
+                            this._lnStore(lnAddress);
                             this.updateLightningAddressDisplay();
                         }
                     } catch (e) {
@@ -3070,6 +3214,7 @@ Object.assign(NYM.prototype, {
         const sk = window.NostrTools.generateSecretKey();
         this.privkey = sk;
         this.pubkey = window.NostrTools.getPublicKey(sk);
+        if (typeof this._throwawayNeedles === 'function') this._throwawayNeedles();
         this.nym = this.generateRandomNym();
         if (typeof this.pqResetIdentityState === 'function') this.pqResetIdentityState();
         const shown = typeof document !== 'undefined' && document && typeof document.getElementById === 'function'
@@ -3691,9 +3836,16 @@ Object.assign(NYM.prototype, {
         this.notePresenceActivity(kind);
     },
 
+    _presenceQuietView() {
+        if (!(this.inPMMode && this.currentPM)) return false;
+        if (typeof this._readMarkQuiet === 'function' && this._readMarkQuiet(this.currentPM)) return true;
+        return !!(typeof this._anonLaneTyping === 'function' && this._anonLaneTyping(this.currentPM));
+    },
+
     notePresenceActivity(kind) {
         const P = (typeof self !== 'undefined' ? self : window).NymPresenceActivity;
         if (!P || !P.evaluates(kind)) return;
+        if (kind !== 'connect' && this._presenceQuietView()) return;
         const now = Date.now();
         if (P.countsAsActivity(kind)) this._presenceInputAt = now;
         if (!this.connected) return;

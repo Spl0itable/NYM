@@ -300,8 +300,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     nostr.bindBotChat();
     final engine = ref.read(botChatControllerProvider.notifier);
     engine.attachSigner(nostr.signer);
-    engine.ensureIntro();
-    unawaited(engine.refreshBalance());
+    unawaited(engine.onColumnFocus());
   }
 
   void _step(int delta) {
@@ -552,7 +551,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         }
         // Place name when cached, "Loading location..." while in flight, coordinates only as fallback.
         final ghKey = gh.toLowerCase();
-        final cached = ref.read(geohashPlaceCacheProvider).cached(ghKey);
+        final placeCache = ref.read(geohashPlaceCacheProvider);
+        final cached = placeCache.cached(ghKey);
         final String place;
         if (cached != null) {
           place = cached;
@@ -560,9 +560,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           // Cells with no address (open ocean) get a region description from bundled map data.
           place = _placeRegions[ghKey] ?? geohashLocationLabel(ghKey);
         } else {
+          final stored = placeCache.missLabel(ghKey);
           _resolvePlaceName(ghKey);
-          // Three-dot literal, as the PWA writes it.
-          place = tr('Loading location...');
+          place = stored == null
+              ? tr('Loading location...')
+              : (stored.isNotEmpty ? stored : geohashLocationLabel(ghKey));
         }
         // Distance shown only with a known location and sortByProximity on.
         var dist = '';
@@ -585,7 +587,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           if (g.id == view.id) {
             return (
               text: tr('{count} members',
-                  {'count': _abbreviateCount(g.members.length)}),
+                  {'count': _abbreviateCount(ref.read(appStateProvider.notifier).groupAccepted(g).length)}),
               dist: '',
               geohash: null,
             );
@@ -619,7 +621,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             setState(() => _placeRegions[ghKey] = desc);
           });
         }
-        // Schedule the retry the cache's backoff allows; once attempts run out, app resume retries.
+        // Schedule the retry the cache's backoff allows.
         final at = cache.retryAt(ghKey);
         if (at != null) {
           final wait = at.difference(DateTime.now());
@@ -860,7 +862,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         sub = [
           if (g != null)
             tr('{count} members',
-                {'count': _abbreviateCount(g.members.length)}),
+                {'count': _abbreviateCount(ref.read(appStateProvider.notifier).groupAccepted(g).length)}),
           desc.isNotEmpty ? desc : tr('end-to-end encrypted'),
         ].join(' · ');
     }

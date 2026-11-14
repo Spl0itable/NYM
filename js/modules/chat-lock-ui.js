@@ -126,6 +126,10 @@
                 this._clNotice(this._cl(C.STRINGS.lockCap, { n: C.LIMITS.lockMax }));
                 return false;
             }
+            if (r.error === 'size') {
+                this._clNotice(this._cl(C.STRINGS.lockFull));
+                return false;
+            }
             if (r.error) return false;
             this._clSessionEvent({ t: 'unlock', now });
             this._clCommit(r.state);

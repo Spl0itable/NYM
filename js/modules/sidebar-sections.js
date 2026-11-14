@@ -36,7 +36,7 @@ Object.assign(NYM.prototype, {
     _saveSidebarSectionOrder() {
         const order = this._getSidebarSectionOrder();
         localStorage.setItem('nym_sidebar_section_order', JSON.stringify(order));
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this.notePrefChanged('sidebarSectionOrder');
     },
 
     _moveSidebarSection(sectionEl, direction) {
@@ -203,7 +203,7 @@ Object.assign(NYM.prototype, {
                     action: async () => {
                         const name = geohash || channel;
                         if (!(await window.showAppConfirm(`Block channel #${name}? Messages to it will be dropped.`, { danger: true, okLabel: 'Block' }))) return;
-                        this.blockChannel(channel, geohash);
+                        if (this.blockChannel(channel, geohash) === false) return;
                         this.displaySystemMessage(this.uiText(`Blocked channel #{name}`, { name }));
                         if (typeof this.updateBlockedChannelsList === 'function') this.updateBlockedChannelsList();
                     }

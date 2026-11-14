@@ -41,6 +41,7 @@ class NymAvatar extends StatefulWidget {
     this.imageUrl,
     this.localOnly = false,
     this.backdrop,
+    this.ring,
     this.placeholder,
     this.fallback,
   });
@@ -55,6 +56,8 @@ class NymAvatar extends StatefulWidget {
   final bool localOnly;
 
   final Color? backdrop;
+
+  final Color? ring;
 
   final Widget? placeholder;
 
@@ -79,6 +82,20 @@ class _NymAvatarState extends State<NymAvatar> {
 
   @override
   Widget build(BuildContext context) {
+    final ring = widget.ring;
+    final avatar = _avatar(context);
+    if (ring == null) return avatar;
+    return DecoratedBox(
+      position: DecorationPosition.foreground,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: ring, width: 1.5),
+      ),
+      child: avatar,
+    );
+  }
+
+  Widget _avatar(BuildContext context) {
     // A mesh-transferred avatar wins so Bluetooth-only peers still show their real picture.
     return ValueListenableBuilder<int>(
       valueListenable: MeshAvatarRegistry.instance.revision,

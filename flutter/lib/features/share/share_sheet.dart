@@ -16,6 +16,7 @@ import '../i18n/i18n.dart';
 import '../identity/modal_chrome.dart';
 import 'branded_qr.dart';
 import 'share_actions.dart';
+import 'share_links.dart' show ShareStrings;
 import 'share_target.dart';
 
 typedef LiveShareTarget = ShareTarget? Function(WidgetRef ref);
@@ -155,19 +156,27 @@ class ShareSheetBody extends ConsumerWidget {
           children: [ModalChrome.iconButton(c, tr('Close'), close)],
         ),
       ] else ...[
-        Center(
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: const BoxDecoration(
-              color: Color(0xFFFFFFFF),
-              borderRadius: BorderRadius.all(Radius.circular(12)),
+        if (brandedQrFits(t.codeLink))
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: const BoxDecoration(
+                color: Color(0xFFFFFFFF),
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+              ),
+              child: BrandedQr(
+                data: t.codeLink,
+                semanticLabel: tr('QR code for {title}', {'title': t.title}),
+              ),
             ),
-            child: BrandedQr(
-              data: t.codeLink,
-              semanticLabel: tr('QR code for {title}', {'title': t.title}),
-            ),
+          )
+        else
+          Text(
+            tr(ShareStrings.qrTooLong),
+            key: const ValueKey('share-qr-too-long'),
+            textAlign: TextAlign.center,
+            style: TextStyle(color: c.textDim, fontSize: 13, height: 1.4),
           ),
-        ),
         const SizedBox(height: 14),
         Text(
           t.title,

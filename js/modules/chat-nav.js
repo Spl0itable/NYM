@@ -5,6 +5,8 @@
         pinMax: 10,
         pinHardMax: 50,
         pinChannelMax: 500,
+        rowBytes: 15360,
+        rowBytesClassic: 27648,
         pinRemovedMax: 300,
         pinRemovedTtlMs: 180 * 24 * 60 * 60 * 1000,
         mentionChatsMax: 200,
@@ -24,6 +26,7 @@
         scheduleRetrySec: 60,
         scheduleKeepDoneSec: 7 * 24 * 60 * 60,
         wrapJitterSec: 7200,
+        scheduleOverdueSec: 120,
     });
 
     const KEYS = Object.freeze({
@@ -50,6 +53,7 @@
         unfavorited: 'Unfavorited #{channel}',
         favoriteCap: 'You can have up to {n} favorite channels. Remove one first.',
         favoriteChatCap: 'You can have up to {n} favorite chats. Remove one first.',
+        favoriteFull: 'Favorites are full. Remove some to make room.',
         unfavoritedChat: 'Unfavorited {name}',
         sendLater: 'Send later',
         scheduled: 'Scheduled',
@@ -69,6 +73,9 @@
         sent: 'Sent',
         failed: 'Failed',
         cancelled: 'Cancelled',
+        overdue: 'Not sent yet',
+        overdueDetail: "It didn't go out at its time. Send it now, or cancel it.",
+        failedNotice: "A scheduled message wasn't sent. Open its chat's scheduled list to see why.",
         sendNow: 'Send now',
         editTime: 'Edit time',
         cancel: 'Cancel',
@@ -77,7 +84,7 @@
     const STATUSES = ['pending', 'sending', 'sent', 'failed', 'cancelled'];
     const RX_HEX64 = /^[0-9a-f]{64}$/;
     const RX_GROUP = /^[0-9a-f]{16,64}$/;
-    const RX_CHANNEL = /^[\p{L}\p{N}]{1,64}$/u;
+    const isChannelName = (s) => G.NymChannelName.isChannelName(s);
 
     function num(v) {
         const n = Number(v);
@@ -428,7 +435,7 @@
         }
         if (kind === 'channel') {
             const c = raw.replace(/^#/, '').toLowerCase();
-            return RX_CHANNEL.test(c) ? 'c:' + c : '';
+            return isChannelName(c) ? 'c:' + c : '';
         }
         return '';
     }
@@ -437,7 +444,7 @@
         const s = String(k || '');
         if (s.indexOf('d:') === 0 && RX_HEX64.test(s.slice(2))) return { kind: 'dm', id: s.slice(2) };
         if (s.indexOf('g:') === 0 && RX_GROUP.test(s.slice(2))) return { kind: 'group', id: s.slice(2) };
-        if (s.indexOf('c:') === 0 && RX_CHANNEL.test(s.slice(2))) return { kind: 'channel', id: s.slice(2) };
+        if (s.indexOf('c:') === 0 && isChannelName(s.slice(2))) return { kind: 'channel', id: s.slice(2) };
         return null;
     }
 
@@ -523,6 +530,12 @@
         return p && p.kind === 'channel' ? 'channel' : 'chat';
     }
 
+    function pinRowBytes(state) {
+        const s = normalizePins(state);
+        const live = { v: s.v, order: s.order, ot: s.ot, items: s.items, removed: {} };
+        return new TextEncoder().encode(JSON.stringify(JSON.stringify({ pinnedChats: live }))).length + 256;
+    }
+
     function pinAdd(state, k, nowMs, opts) {
         const s = normalizePins(state);
         if (!pinParse(k)) return { state: s, error: 'invalid' };
@@ -535,7 +548,9 @@
         delete s.removed[k];
         s.order = [k].concat(s.order);
         s.ot = Math.max(num(nowMs), s.ot + 1);
-        return { state: finishPins(s, nowMs), error: null };
+        const next = finishPins(s, nowMs);
+        if (pinRowBytes(next) > (opts && opts.pq2 === false ? LIMITS.rowBytesClassic : LIMITS.rowBytes)) return { state: normalizePins(state), error: 'size' };
+        return { state: next, error: null };
     }
 
     function pinRemove(state, k, nowMs) {
@@ -625,9 +640,9 @@
     function trimPinnedPayload(p) {
         const s = p && p.pinnedChats;
         if (!s || typeof s !== 'object') return false;
-        const rk = s.removed ? Object.keys(s.removed) : [];
-        if (rk.length > 20) {
-            rk.sort((a, b) => s.removed[a] - s.removed[b]);
+        const rk = s.removed && typeof s.removed === 'object' ? Object.keys(s.removed) : [];
+        if (rk.length) {
+            rk.sort((a, b) => (s.removed[a] - s.removed[b]) || (a < b ? -1 : a > b ? 1 : 0));
             for (const k of rk.slice(0, Math.ceil(rk.length / 4))) delete s.removed[k];
             return true;
         }
@@ -796,8 +811,27 @@
 
     function scheduleStatusText(status, t) {
         const tr = (s) => (typeof t === 'function' ? t(s) : s);
-        const map = { pending: STRINGS.pending, sending: STRINGS.sending, sent: STRINGS.sent, failed: STRINGS.failed, cancelled: STRINGS.cancelled };
+        const map = { pending: STRINGS.pending, sending: STRINGS.sending, sent: STRINGS.sent, failed: STRINGS.failed, cancelled: STRINGS.cancelled, overdue: STRINGS.overdue };
         return tr(map[status] || STRINGS.pending);
+    }
+
+    function scheduleItemStatus(it, nowSec) {
+        const s = it && STATUSES.indexOf(it.status) >= 0 ? it.status : 'pending';
+        if (s === 'pending' && num(nowSec) >= num(it && it.at) + LIMITS.scheduleOverdueSec) return 'overdue';
+        return s;
+    }
+
+    function scheduleRefreshWaitMs(items, nowSec) {
+        const open = scheduleNormalize(items).filter((x) => x.status === 'pending' || x.status === 'sending');
+        if (!open.length) return 0;
+        const now = Math.floor(num(nowSec));
+        const raw = Math.min(...open.map((x) => (now < x.at + 15 ? (x.at - now) * 1000 + 15000 : (now - x.at) * 500)));
+        return Math.max(5000, Math.min(60000, raw));
+    }
+
+    function scheduleNewFailures(prev, next) {
+        const was = new Map(scheduleNormalize(prev).map((x) => [x.id, x.status]));
+        return scheduleNormalize(next).filter((x) => x.status === 'failed' && (was.get(x.id) === 'pending' || was.get(x.id) === 'sending')).map((x) => x.id);
     }
 
     function scheduleBlockReason(ctx) {
@@ -888,10 +922,10 @@
         emptyMentions, normalizeMentions, mentionAdd, mentionSeen, mentionMark, mentionClear, mentionPrune, mentionDrop,
         mentionNext, mentionCount, mentionScan,
         pinKey, pinParse, pinKeyForChat, pinSection, emptyPins, normalizePins, pinList, isPinned, pinAdd, pinRemove,
-        pinMove, pinReorderWithin, mergePins, pinImportLegacy, pinChannels, pinSort, trimPinnedPayload,
+        pinMove, pinReorderWithin, mergePins, pinImportLegacy, pinChannels, pinSort, trimPinnedPayload, pinRowBytes,
         scheduleCheck, scheduleErrorText, schedulePresets, scheduleInputValue, scheduleParseInput, wrapTime,
         scheduleRelays, scheduleSizeError, scheduleNoteJson, scheduleNoteParse, scheduleChatKey, scheduleChatOf,
-        scheduleNormalize, scheduleForChat, scheduleOpenCount, scheduleStatusText, scheduleBlockReason, scheduleId, groupSubjectTags,
+        scheduleNormalize, scheduleForChat, scheduleOpenCount, scheduleStatusText, scheduleItemStatus, scheduleRefreshWaitMs, scheduleNewFailures, scheduleBlockReason, scheduleId, groupSubjectTags,
         PIN_GESTURE, pinGestureIdle, pinGestureLocks, pinGestureStep, pinAutoScroll,
     };
 })();

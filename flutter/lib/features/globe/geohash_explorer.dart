@@ -12,7 +12,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/utils/safe_url.dart';
 import '../../models/channel.dart';
-import '../../services/api/api_client.dart';
+import '../../features/channels/geohash_place_cache.dart';
+import '../../features/settings/settings_helpers.dart' show geohashLocationLabel;
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
@@ -35,6 +36,7 @@ import 'geo_projection.dart';
 import 'geohash_channel.dart';
 import 'precision_path.dart';
 import 'street_layer.dart';
+import 'street_pref.dart';
 import 'street_plan.dart';
 import 'topojson.dart';
 import '../shortcuts/escape_layers.dart';
@@ -275,7 +277,6 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   HeatmapInput? _heatInFlight; // the input currently being built
   Timer? _heatDebounce;
 
-  final ApiClient _api = ApiClient();
 
   // Activity re-tally every 30s; terminator repaint every 60s only while day/night is on.
   Timer? _activeWindowTimer;
@@ -311,6 +312,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     _daynight = prefs.daynight;
     _grid = prefs.grid;
     _street = !kIsWeb && _readStreetPref();
+    ref.listenManual<bool>(streetDetailProvider, (_, on) => _streetFromSync(on));
     _lifecycle = AppLifecycleListener(
         onStateChange: (s) =>
             _streetLayer?.setPaused(s != AppLifecycleState.resumed));
@@ -873,28 +875,16 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
       _locationInfo = tr('Loading location...');
       _layersOpen = false;
     });
-    _fetchLocation(point.lat, point.lng, token);
+    _fetchLocation(point.geohash, token);
   }
 
   /// Updates the Location row only if [token] is still current.
-  Future<void> _fetchLocation(double lat, double lng, int token) async {
-    String result;
-    try {
-      final data = await _api.geocode(lat, lng, zoom: 10);
-      final addr = (data['address'] as Map?) ?? const {};
-      String s(Object? v) => v is String ? v : '';
-      final city = [
-        s(addr['city']),
-        s(addr['town']),
-        s(addr['village']),
-        s(addr['county']),
-      ].firstWhere((x) => x.isNotEmpty, orElse: () => '');
-      final country = s(addr['country']);
-      result = [city, country].where((x) => x.isNotEmpty).join(', ');
-      if (result.isEmpty) result = tr('Unknown location');
-    } catch (_) {
-      result = tr('Unknown');
-    }
+  Future<void> _fetchLocation(String geohash, int token) async {
+    final cache = ref.read(geohashPlaceCacheProvider);
+    var result = await cache.resolve(geohash);
+    if (result.isEmpty) result = await cache.describeRegionFor(geohash);
+    if (result.isEmpty) result = geohashLocationLabel(geohash);
+    if (result.isEmpty) result = tr('Unknown location');
     if (!mounted || token != _geocodeToken) return;
     setState(() => _locationInfo = result);
   }
@@ -1329,11 +1319,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   void _toggleStreet() {
     setState(() => _street = !_street);
     _streetLayer?.setEnabled(_street);
-    try {
-      unawaited(ref
-          .read(keyValueStoreProvider)
-          .setString(kStreetPrefKey, _street ? '1' : '0'));
-    } catch (_) {}
+    ref.read(streetDetailProvider.notifier).set(_street);
+  }
+
+  void _streetFromSync(bool on) {
+    if (kIsWeb || !mounted || on == _street) return;
+    setState(() => _street = on);
+    _streetLayer?.setEnabled(on);
   }
 
   void _streetSync(Size size) {

@@ -24,6 +24,8 @@ import '../../services/relay/relay_pool_proxy.dart';
 import '../../services/storage/at_rest_cipher.dart';
 import '../../services/storage/secure_store.dart';
 import '../group_tools/group_tools_service.dart' show GroupToolsKeys;
+import '../groups/group_invites.dart';
+import '../groups/group_logic.dart';
 import '../messages/spam_filter.dart';
 import '../identity/pq_registry.dart';
 import '../identity/pq_root.dart';
@@ -51,6 +53,7 @@ class InactiveProbe {
     this.rootOf,
     this.unseal,
     this.secure,
+    this.seal,
   })  : _transport = transport ?? _defaultTransport,
         _nowSec = nowSec ?? _wallSec,
         _stagger = stagger ?? defaultStagger,
@@ -72,6 +75,7 @@ class InactiveProbe {
   final Future<String?> Function(String id)? secretOf;
   final Future<String?> Function(String id)? rootOf;
   final Future<String?> Function(String raw)? unseal;
+  final Future<String?> Function(String plain)? seal;
   final SecureStore? secure;
   bool Function(String pubkey)? muted;
   Future<void> Function(AccountEntry a, int n)? onLocked;
@@ -193,6 +197,7 @@ class InactiveProbe {
           for (final w in freshWraps) {
             if (judge == null || !await judge.hidden(w)) shown++;
           }
+          locked += judge?.quiet ?? 0;
         }
       } finally {
         judge?.dispose();
@@ -242,10 +247,146 @@ class InactiveProbe {
         await onLocked?.call(a, 1);
         return true;
       }
-      return await judge.hidden(wrap);
+      final hidden = await judge.hidden(wrap);
+      if (judge.quiet > 0) await onLocked?.call(a, judge.quiet);
+      return hidden;
     } finally {
       judge.dispose();
     }
+  }
+
+  final Map<String, Map<String, dynamic>> _giProbes = {};
+
+  Future<void> _storeProbe(AccountEntry a, Map<String, dynamic> st) async {
+    try {
+      final plain = jsonEncode(st);
+      final hook = seal;
+      final sealed = hook != null
+          ? await hook(plain)
+          : await AtRestCipher(_OwnAtRestKey(secure ?? SecureStore(),
+                  AccountLogic.nsKey(a.id, SecureAtRestKeyStore.keyName)))
+              .encryptString(plain);
+      if (sealed == null || !AtRestCipher.isEncryptedString(sealed)) return;
+      await prefs.setString(
+          AccountLogic.nsKey(a.id, GroupInvites.probeKey), sealed);
+    } catch (_) {}
+  }
+
+  Future<Object?> _storedJson(AccountEntry a, String key) async {
+    String? raw = _storedPref(a.id, key);
+    if (raw == null || raw.isEmpty) return null;
+    if (AtRestCipher.isEncryptedString(raw)) {
+      try {
+        raw = await _unsealFor(a, raw);
+      } catch (_) {
+        raw = null;
+      }
+      if (raw == null || raw.isEmpty) return null;
+    }
+    try {
+      return jsonDecode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _groupProbe(AccountEntry a, Map rumor, String sender,
+      ContentFilterCtx ctx, String accept, Future<bool> Function() judge) async {
+    final tags = rumor['tags'];
+    String? tag(String k) {
+      if (tags is! List) return null;
+      for (final t in tags) {
+        if (t is List && t.length > 1 && t[0] == k && t[1] is String && '${t[1]}'.isNotEmpty) {
+          return t[1] as String;
+        }
+      }
+      return null;
+    }
+
+    final gid = tag('g');
+    if (gid == null) return null;
+    final pk = a.pubkey;
+    final groups = await _storedJson(a, StorageKeys.groupStoreFor(pk));
+    final joins = await _storedJson(a, '${GroupToolsKeys.pendingJoins}:$pk');
+    final leftList = await _storedJson(a, StorageKeys.leftGroups);
+    final left = leftList is List && leftList.contains(gid);
+    if ((groups is Map && groups.containsKey(gid) && !left) ||
+        (joins is Map && joins.containsKey(gid))) {
+      return null;
+    }
+    final now = _nowSec();
+    String? raw = _storedPref(a.id, '${StorageKeys.groupInvitesPrefix}$pk');
+    var readable = true;
+    if (raw != null && AtRestCipher.isEncryptedString(raw)) {
+      try {
+        raw = await _unsealFor(a, raw);
+      } catch (_) {
+        raw = null;
+      }
+      readable = raw != null;
+    }
+    var items = <Map<String, dynamic>>[];
+    var dec = <String, Map<String, dynamic>>{};
+    Object? ns;
+    if (readable && raw != null && raw.isNotEmpty) {
+      try {
+        final p = jsonDecode(raw);
+        if (p is Map) {
+          items = GroupInvites.normalizeItems(p['items'], now);
+          dec = GroupInvites.normalizeDecisions(p['dec'], now);
+          ns = p['ns'];
+        }
+      } catch (_) {
+        items = [];
+        dec = {};
+        ns = null;
+      }
+    }
+    final saved = readable ? await _storedJson(a, GroupInvites.probeKey) : null;
+    final st = GroupInvites.probeState(
+        _giProbes[a.id] ??
+            {'ns': ns, if (saved is Map) ...saved.cast<String, Object?>()},
+        now,
+        [for (final i in items) '${i['gid']}', ...dec.keys]);
+    Map<String, dynamic>? pending;
+    for (final i in items) {
+      if (i['gid'] == gid) pending = i;
+    }
+    final leftAt = left ? await _storedJson(a, StorageKeys.leftGroupTimes) : null;
+    final r = GroupInvites.probe({
+      'anon': false,
+      'own': false,
+      'joined': false,
+      'started': false,
+      'blocked': ctx.blockedUsers.contains(sender),
+      'hidden': await judge(),
+      'accept': accept,
+      'friend': ctx.friend?.call(sender) ?? false,
+      'type': tag('type'),
+      'genesis': GroupLogic.verifyGenesis(gid, tag('gowner'), tag('gnonce')),
+      'sender': sender,
+      'gowner': tag('gowner'),
+      'owner': tag('owner'),
+      'pending': pending,
+      'it': GroupInvites.inviteTime(rumor['created_at'], now),
+      'now': now,
+      'decision': dec[gid],
+      'left': left,
+      'leftAt': leftAt is Map ? GroupInvites.toInt(leftAt[gid]) : 0,
+      'bytes': GroupInvites.rumorBytes(rumor),
+      'gid': gid,
+      'stored': items.length,
+      'counted': (st['c'] as Map).keys.toList(),
+      'ns': st['ns'],
+      'live': true,
+      'readable': readable,
+    });
+    if (r['v'] == 'route') return null;
+    if (r['v'] != 'count') return 'hidden';
+    final next = GroupInvites.probeKeep(st, r, gid, now);
+    _giProbes[a.id] = next;
+    if (readable) await _storeProbe(a, next);
+    return r['notify'] == true ? 'notify' : 'quiet';
   }
 
   bool? _storedFlag(String id, String key) {
@@ -351,6 +492,8 @@ class InactiveProbe {
       filtering: filtering,
       kemKeys: key == null ? null : () => _kemKeys(a, key),
       groups: () => _groupsOf(a),
+      groupProbe: (rumor, sender, judge) =>
+          _groupProbe(a, rumor, sender, ctx, accept, judge),
     );
   }
 
@@ -540,7 +683,13 @@ class _WrapJudge {
     required this.kemKeys,
     required this.groups,
     this.filtering = true,
+    this.groupProbe,
   });
+
+  final Future<String?> Function(
+          Map rumor, String sender, Future<bool> Function() judge)?
+      groupProbe;
+  int quiet = 0;
 
   final bool filtering;
 
@@ -581,9 +730,7 @@ class _WrapJudge {
       )) {
         return true;
       }
-      if (!filtering) return false;
       final sender = u.seal.pubkey;
-      if (sender.isEmpty || sender == account.pubkey) return false;
       final raw = u.rumor['content'];
       final content = raw is String ? raw : '';
       final tags = u.rumor['tags'];
@@ -598,27 +745,46 @@ class _WrapJudge {
       }
 
       final gid = tag('g');
-      var known = false;
-      if (gid.isNotEmpty && accept != 'enabled') {
-        known = (_groups ??= await groups()).contains(gid);
+      Future<bool> judge() async {
+        if (!filtering) return false;
+        var known = false;
+        if (gid.isNotEmpty && accept != 'enabled') {
+          known = (_groups ??= await groups()).contains(gid);
+        }
+        return ContentFilter.inboxHidden(
+          ctx,
+          CfEntry(
+            sender: sender,
+            body: content,
+            channel: gid.isEmpty ? ContentFilter.inviteChannel(content) : '',
+            subject: tag('type') == 'group-invite' ? tag('subject') : '',
+            knownGroup: known,
+            quoted: Message.quotedFromTags([
+              if (tags is List)
+                for (final t in tags)
+                  if (t is List && t.length > 1 && t[0] == 'quote_pk' && t[1] is String)
+                    ['quote_pk', t[1] as String],
+            ]),
+          ),
+          accept,
+        );
       }
-      return ContentFilter.inboxHidden(
-        ctx,
-        CfEntry(
-          sender: sender,
-          body: content,
-          channel: gid.isEmpty ? ContentFilter.inviteChannel(content) : '',
-          subject: tag('type') == 'group-invite' ? tag('subject') : '',
-          knownGroup: known,
-          quoted: Message.quotedFromTags([
-            if (tags is List)
-              for (final t in tags)
-                if (t is List && t.length > 1 && t[0] == 'quote_pk' && t[1] is String)
-                  ['quote_pk', t[1] as String],
-          ]),
-        ),
-        accept,
-      );
+
+      final probeOf = groupProbe;
+      if (probeOf != null &&
+          gid.isNotEmpty &&
+          sender.isNotEmpty &&
+          sender != account.pubkey) {
+        final g = await probeOf(u.rumor, sender, judge);
+        if (g == 'quiet') {
+          quiet++;
+          return true;
+        }
+        if (g != null) return g == 'hidden';
+      }
+      if (!filtering) return false;
+      if (sender.isEmpty || sender == account.pubkey) return false;
+      return await judge();
     } catch (_) {
       return unopened;
     }

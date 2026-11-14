@@ -1633,6 +1633,9 @@ body.light-mode {
     font-size: 11px;
     font-weight: 400;
     white-space: nowrap;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .file-input {
@@ -2225,6 +2228,11 @@ body.chat-bubbles .crypto-lock-irc {
     font-weight: 600;
     font-size: 15px;
     overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
 }
 
 .share-detail,

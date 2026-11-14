@@ -1815,7 +1815,7 @@ async function hiddenSince(env, channels, sinceMs) {
   await syncedSettings(env);
   const bucket = Math.floor((Number(sinceMs) || 0) / HIDDEN_SINCE_BUCKET_MS);
   const from = bucket * HIDDEN_SINCE_BUCKET_MS;
-  const listKey = list.map(encodeURIComponent).join(",");
+  const listKey = list.map((c) => encodeURIComponent(c.toWellFormed())).join(",");
   const now = Date.now();
   const memo = state.hiddenSinceMemo.get(listKey);
   if (memo && now - memo.at < HIDDEN_MEMO_MS && memo.from <= from && (!memo.full || from >= memo.floor)) {

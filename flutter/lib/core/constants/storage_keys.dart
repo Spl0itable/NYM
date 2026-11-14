@@ -175,6 +175,7 @@ class StorageKeys {
   // PMs / groups
   static const closedPms = 'nym_closed_pms';
   static const closedPmTimes = 'nym_closed_pm_times';
+  static const pmQuietReopens = 'nym_pm_quiet_reopens';
   static const leftGroups = 'nym_left_groups';
   static const leftGroupTimes = 'nym_left_group_times';
   static String lastPmSyncFor(String pubkey) => 'nym_last_pm_sync_$pubkey';
@@ -224,6 +225,7 @@ class StorageKeys {
   static const botpmClearedAt = 'nym_botpm_cleared_at';
   static const botpmMaxRuns = 'nym_botpm_max_runs';
   static const botpmProModel = 'nym_botpm_pro_model';
+  static const streetDetail = 'nym_street_detail';
   static const purchasesCache = 'nym_purchases_cache';
   static const activeStyle = 'nym_active_style';
   static const activeFlair = 'nym_active_flair';
@@ -237,6 +239,7 @@ class StorageKeys {
   static const tutorialSeen = 'nym_tutorial_seen';
   static const dismissedTransfers = 'nym_dismissed_transfers';
   static const relayStats = 'nym_relay_stats';
+  static const String groupInvitesPrefix = 'nym_group_invites_';
 }
 
 /// Identity secrets, kept in flutter_secure_storage (Keychain/Keystore).

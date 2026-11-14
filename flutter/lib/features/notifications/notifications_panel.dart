@@ -16,10 +16,13 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart';
-import '../../widgets/chat/message_row.dart' show formatTime;
+import '../../widgets/chat/message_row.dart'
+    show formatFullTimestamp, formatRelativeTime;
+import '../../widgets/chat/relative_time_ticker.dart';
 import '../calls/call_nym.dart';
 import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
+import '../groups/group_invites.dart' show GroupInvites;
 import 'notification_route_target.dart';
 import 'notification_routing.dart';
 import '../messages/format/message_content.dart';
@@ -40,7 +43,7 @@ import '../../widgets/common/hit_slop.dart';
 import '../identity/deleted_notice.dart' show dimNymLabel;
 import '../search/unified_search_panel.dart' show nymSuffixStyle;
 import '../../widgets/common/nym_label.dart'
-    show knownNymSuffix, mergeNymRanges, nymSuffixRanges;
+    show NymFitText, knownNymSuffix, mergeNymRanges, nymSuffixRanges;
 import '../../core/theme/nym_a11y.dart';
 
 List<NotificationEntry> listedNotificationEntries(
@@ -222,18 +225,21 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
         child: Row(
           children: [
             Flexible(
-              child: Text.rich(
-                g.key.startsWith('pm:')
-                    ? dimNymLabel(
-                        _groupTitle(g.key, _rows[g.items.first].entry),
-                        nymSuffixStyle(_groupTitleStyle(c),
-                            contrast: context.highContrast))
-                    : TextSpan(
-                        text: _groupTitle(g.key, _rows[g.items.first].entry)),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: _groupTitleStyle(c),
-              ),
+              child: g.key.startsWith('pm:')
+                  ? NymFitText(_groupTitle(g.key, _rows[g.items.first].entry),
+                      style: _groupTitleStyle(c),
+                      span: (l) => dimNymLabel(
+                          l,
+                          nymSuffixStyle(_groupTitleStyle(c),
+                              contrast: context.highContrast)))
+                  : Text.rich(
+                      TextSpan(
+                          text: _groupTitle(
+                              g.key, _rows[g.items.first].entry)),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: _groupTitleStyle(c),
+                    ),
             ),
             if (unread > 0) ...[
               const SizedBox(width: NymSpace.s2),
@@ -479,7 +485,6 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final kv = ref.read(keyValueStoreProvider);
     // Watched so the box reflects it live.
     final enabled =
         ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
@@ -517,10 +522,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             value: enabled,
             spacing: 0,
             onChanged: (v) {
-              final settings = ref.read(settingsProvider.notifier);
-              settings.update((s) => s.copyWith(notificationsEnabled: v));
-              kv.setString(StorageKeys.notificationsEnabled, '$v');
-              settings.notifySyncedChange();
+              ref.read(settingsProvider.notifier).setNotificationsEnabled(v);
               if (v) unawaited(_requestOsPermission());
             },
           ),
@@ -531,8 +533,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             spacing: 0,
             onChanged: (v) {
               setState(() => _mentionsOnly = v);
-              kv.setString(StorageKeys.groupNotifyMentionsOnly, '$v');
-              ref.read(settingsProvider.notifier).notifySyncedChange();
+              ref.read(settingsProvider.notifier).setGroupNotifyMentionsOnly(v);
             },
           ),
           // Thread-scoped twin of the group setting; off, replies in threads the user started also notify.
@@ -543,8 +544,9 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             spacing: 0,
             onChanged: (v) {
               setState(() => _threadMentionsOnly = v);
-              kv.setString(StorageKeys.threadNotifyMentionsOnly, '$v');
-              ref.read(settingsProvider.notifier).notifySyncedChange();
+              ref
+                  .read(settingsProvider.notifier)
+                  .setThreadNotifyMentionsOnly(v);
             },
           ),
           // Notice when the OS refuses to post despite the in-app setting.
@@ -575,8 +577,7 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             spacing: 0,
             onChanged: (v) {
               setState(() => _friendsOnly = v);
-              kv.setString(StorageKeys.notifyFriendsOnly, '$v');
-              ref.read(settingsProvider.notifier).notifySyncedChange();
+              ref.read(settingsProvider.notifier).setNotifyFriendsOnly(v);
             },
           ),
           Padding(
@@ -670,26 +671,6 @@ class _NotificationRow extends ConsumerStatefulWidget {
   final bool isLast;
   final VoidCallback onTap;
 
-  /// `Jun 23, 2:05 PM`, with the clock half honoring `timeFormat`.
-  String _formatTime(int ms, String timeFormat) {
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec'
-    ];
-    final d = DateTime.fromMillisecondsSinceEpoch(ms);
-    return '${months[d.month - 1]} ${d.day}, ${formatTime(d, timeFormat)}';
-  }
-
   String? _contextLabel({
     required String topic,
     required bool textHidden,
@@ -747,6 +728,22 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
   bool _hover = false;
 
   @override
+  void initState() {
+    super.initState();
+    RelativeTimeTicker.instance.addListener(_onRelativeTick);
+  }
+
+  @override
+  void dispose() {
+    RelativeTimeTicker.instance.removeListener(_onRelativeTick);
+    super.dispose();
+  }
+
+  void _onRelativeTick() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
     final c = context.nym;
     final entry = widget.entry;
@@ -758,8 +755,10 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
         ? ''
         : (_isPubkey(sender) ? sender : (_isPubkey(route) ? route : ''));
     final hasPubkey = pubkey.isNotEmpty;
-    final picture =
-        hasPubkey ? ref.watch(usersProvider)[pubkey]?.profile?.picture : null;
+    final picture = hasPubkey
+        ? GroupInvites.bellPicture(
+            entry.eventId, ref.watch(usersProvider)[pubkey]?.profile?.picture)
+        : null;
     final hide = ref.watch(settingsProvider.select((s) => s.hidePreviews));
     final prefs = EventToastPrefs(hidePreviews: hide);
     String etr(String s, [Map<String, Object?>? p]) =>
@@ -889,16 +888,31 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
                       Row(
                         children: [
                           if (label != null) ...[
-                            Text(label,
-                                style:
-                                    TextStyle(color: c.textDim, fontSize: 11)),
+                            Flexible(
+                              child: Text(label,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      color: c.textDim, fontSize: 11)),
+                            ),
                             const SizedBox(width: 6),
                           ],
-                          Text(
-                              widget._formatTime(entry.ts,
-                                  ref.watch(settingsProvider
-                                      .select((s) => s.timeFormat))),
-                              style: TextStyle(color: c.textDim, fontSize: 11)),
+                          Builder(builder: (context) {
+                            final at =
+                                DateTime.fromMillisecondsSinceEpoch(entry.ts);
+                            final (timeFormat, dateFormat) = ref.watch(
+                                settingsProvider.select(
+                                    (s) => (s.timeFormat, s.dateFormat)));
+                            return NymTooltip(
+                              message: formatFullTimestamp(
+                                  at, timeFormat, dateFormat),
+                              triggerMode: TooltipTriggerMode.longPress,
+                              child: Text(formatRelativeTime(at),
+                                  style: TextStyle(
+                                      color: c.textDim, fontSize: 11)),
+                            );
+                          }),
                         ],
                       ),
                     ],
@@ -934,7 +948,9 @@ class _Author extends ConsumerWidget {
     final liveNym = pubkey.isEmpty
         ? ''
         : (ref.watch(usersProvider.select((u) => u[pubkey]?.nym)) ?? '');
-    final shownNym = pickDisplayNym(liveNym, entry.title);
+    final shownNym = pubkey.isEmpty && !isPlaceholderNym(entry.title)
+        ? splitNymSuffix(entry.title).base
+        : pickDisplayNym(liveNym, entry.title);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [

@@ -434,6 +434,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
         await vault.enable(method: 'password', password: password);
       }
       if (!mounted) return;
+      ref.read(settingsProvider.notifier).notePrefChanged('encryptAtRestPreferred');
       Navigator.of(context).pop();
       await showAppAlert(
         context,

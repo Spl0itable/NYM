@@ -448,9 +448,10 @@ List<String> addRecentEmoji(List<String> current, String emoji) {
 
 /// Recents persisted under [kRecentEmojisKey] as a JSON array.
 class EmojiRecentsStore {
-  EmojiRecentsStore(this._prefs);
+  EmojiRecentsStore(this._prefs, {this.onChanged});
 
   final SharedPreferences _prefs;
+  final void Function()? onChanged;
 
   /// Tolerates corrupt JSON.
   List<String> load() {
@@ -467,7 +468,10 @@ class EmojiRecentsStore {
 
   Future<List<String>> add(String emoji) async {
     final next = addRecentEmoji(load(), emoji);
-    await _prefs.setString(kRecentEmojisKey, jsonEncode(next));
+    final json = jsonEncode(next);
+    final changed = _prefs.getString(kRecentEmojisKey) != json;
+    await _prefs.setString(kRecentEmojisKey, json);
+    if (changed) onChanged?.call();
     return next;
   }
 }
@@ -478,10 +482,11 @@ const String kEmojiPackFavoritesKey = 'nym_emoji_pack_favorites';
 
 /// JSON string-array favorites in SharedPreferences, for categories and packs.
 class EmojiFavoritesStore {
-  EmojiFavoritesStore(this._prefs, this._key);
+  EmojiFavoritesStore(this._prefs, this._key, {this.onChanged});
 
   final SharedPreferences _prefs;
   final String _key;
+  final void Function()? onChanged;
 
   /// Favorites in insertion order; tolerates corrupt JSON.
   List<String> load() {
@@ -501,6 +506,7 @@ class EmojiFavoritesStore {
     final list = load();
     if (!list.remove(key)) list.add(key);
     await _prefs.setString(_key, jsonEncode(list));
+    onChanged?.call();
     return list;
   }
 }

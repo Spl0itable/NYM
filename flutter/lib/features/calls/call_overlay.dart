@@ -13,6 +13,7 @@ import '../../core/utils/haptics.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../layout/layout_model.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../widgets/common/nym_label.dart' show NymLabel;
 import '../../state/app_state.dart';
 import '../../widgets/chat/message_row.dart' show abbreviateNumber;
 import '../../widgets/common/nym_avatar.dart';
@@ -1757,6 +1758,12 @@ class _PresenterMenu extends ConsumerWidget {
     String nameOf(String pk) =>
         pk == selfPubkey ? tr('You') : callPersonLabel(app, users, pk);
 
+    String? keyOf(String pk) => pk == selfPubkey ||
+            app.personMaskLabel(pk).isNotEmpty ||
+            users[pk] == null
+        ? null
+        : pk;
+
     return Material(
       color: Colors.transparent,
       child: Container(
@@ -1792,6 +1799,7 @@ class _PresenterMenu extends ConsumerWidget {
                 for (final pk in requests)
                   _PresenterRow(
                     name: nameOf(pk),
+                    pubkey: keyOf(pk),
                     isPresenter: call.presenter == pk,
                     actionLabel: tr('Approve'),
                     onAction: () => onAssign(pk),
@@ -1801,8 +1809,9 @@ class _PresenterMenu extends ConsumerWidget {
               _Head(text: tr('Participants')),
               for (final pk in members)
                 _PresenterRow(
-                  name: nameOf(pk) +
-                      (call.presenter == pk ? tr(' · presenter') : ''),
+                  name: nameOf(pk),
+                  pubkey: keyOf(pk),
+                  note: call.presenter == pk ? tr(' · presenter') : '',
                   isPresenter: call.presenter == pk,
                   actionLabel: tr('Make presenter'),
                   onAction: () => onAssign(pk),
@@ -1841,6 +1850,8 @@ class _Head extends StatelessWidget {
 class _PresenterRow extends StatelessWidget {
   const _PresenterRow({
     required this.name,
+    this.pubkey,
+    this.note = '',
     required this.isPresenter,
     required this.actionLabel,
     required this.onAction,
@@ -1848,6 +1859,8 @@ class _PresenterRow extends StatelessWidget {
   });
 
   final String name;
+  final String? pubkey;
+  final String note;
   final bool isPresenter;
   final String actionLabel;
   final VoidCallback onAction;
@@ -1861,10 +1874,22 @@ class _PresenterRow extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(name,
-                style: TextStyle(color: c.textBright, fontSize: 14),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
+            child: Row(children: [
+              Flexible(
+                child: pubkey == null
+                    ? Text(name,
+                        style: TextStyle(color: c.textBright, fontSize: 14),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis)
+                    : NymLabel(name,
+                        pubkey: pubkey,
+                        style: TextStyle(color: c.textBright, fontSize: 14)),
+              ),
+              if (note.isNotEmpty)
+                Text(note,
+                    style: TextStyle(color: c.textBright, fontSize: 14),
+                    maxLines: 1),
+            ]),
           ),
           const SizedBox(width: 8),
           if (isPresenter)

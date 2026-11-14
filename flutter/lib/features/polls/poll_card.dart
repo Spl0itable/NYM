@@ -141,7 +141,11 @@ class _PollCardState extends ConsumerState<PollCard> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          NymAvatar(seed: poll.pubkey, size: 18, imageUrl: authorPic),
+          NymAvatar(
+              seed: poll.pubkey,
+              size: 18,
+              imageUrl: authorPic,
+              ring: c.avatarRing),
           const SizedBox(width: 4),
           if (brackets)
             Text('<', style: TextStyle(color: authorColor, fontSize: fontSize)),

@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_theme.dart';
 import '../identity/panic_wipe.dart';
 import 'geo_explore.dart';
@@ -19,7 +20,7 @@ import 'street_plan.dart';
 
 const String kStreetAttribution = '© OpenStreetMap contributors';
 const String kStreetCopyrightUrl = 'https://www.openstreetmap.org/copyright';
-const String kStreetPrefKey = 'nym_street_detail';
+const String kStreetPrefKey = StorageKeys.streetDetail;
 
 const int kStreetBlockBytes = 50331648;
 const double kStreetBlockPx = 256;

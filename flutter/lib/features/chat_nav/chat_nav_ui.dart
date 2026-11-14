@@ -105,6 +105,7 @@ class ChatNavListBinding with WidgetsBindingObserver {
   final ItemPositionsListener positions;
   final double inset;
   double viewport = 0;
+  bool Function()? readerAway;
   final ValueNotifier<int> fabs = ValueNotifier(0);
 
   String _key = '';
@@ -281,7 +282,8 @@ class ChatNavListBinding with WidgetsBindingObserver {
   Future<void> _landAt(MessageListScroller scroller, int index, String id,
       {required bool animate}) async {
     final watch = !animate && _watching;
-    if (watch && _userScrolled) {
+    bool stopped() => _userScrolled || (readerAway?.call() ?? false);
+    if (watch && stopped()) {
       _landing = false;
       update();
       return;
@@ -290,10 +292,11 @@ class ChatNavListBinding with WidgetsBindingObserver {
       index: index,
       alignment: 0.45,
       duration: Duration(milliseconds: animate ? 300 : 1),
+      reader: animate,
     );
     for (var i = 0; i < 2 && !_disposed; i++) {
       await WidgetsBinding.instance.endOfFrame;
-      if (watch && _userScrolled) break;
+      if ((watch && _userScrolled) || (readerAway?.call() ?? false)) break;
       final p = _at(index);
       if (p == null) break;
       final shift = _landLine - _topOf(p, id);
@@ -301,7 +304,8 @@ class ChatNavListBinding with WidgetsBindingObserver {
       await scroller.animateTo(
           index: index,
           alignment: p.itemLeadingEdge + shift,
-          duration: const Duration(milliseconds: 1));
+          duration: const Duration(milliseconds: 1),
+          reader: false);
     }
     _landing = false;
     update();
@@ -476,11 +480,14 @@ class ChatNavListBinding with WidgetsBindingObserver {
       await WidgetsBinding.instance.endOfFrame;
       await WidgetsBinding.instance.endOfFrame;
       final shift = _sliceShift(idx, id, group);
-      if (shift != null && shift.$2.abs() > 0.02) {
+      if (shift != null &&
+          shift.$2.abs() > 0.02 &&
+          !(readerAway?.call() ?? false)) {
         await scroller.animateTo(
             index: idx,
             alignment: shift.$1 + shift.$2,
-            duration: const Duration(milliseconds: 1));
+            duration: const Duration(milliseconds: 1),
+            reader: false);
       }
     }
     update();
@@ -1338,6 +1345,7 @@ class _ScheduledRow extends ConsumerWidget {
     final nav = ref.read(chatNavProvider);
     final open = item.status == 'pending' || item.status == 'failed';
     final err = nav.scheduleFailText(item);
+    final itemStatus = nav.scheduledItemStatus(item);
     ButtonStyle style({bool danger = false}) => OutlinedButton.styleFrom(
           foregroundColor: danger ? c.danger : c.text,
           side: BorderSide(color: c.glassBorder),
@@ -1364,9 +1372,11 @@ class _ScheduledRow extends ConsumerWidget {
                   style: TextStyle(color: c.textDim, fontSize: 12)),
               const Spacer(),
               Text(
-                scheduleStatusText(item.status, tr),
+                scheduleStatusText(itemStatus, tr),
                 style: TextStyle(
-                  color: item.status == 'failed' ? c.danger : c.textDim,
+                  color: itemStatus == 'failed' || itemStatus == 'overdue'
+                      ? c.danger
+                      : c.textDim,
                   fontSize: 12,
                 ),
               ),

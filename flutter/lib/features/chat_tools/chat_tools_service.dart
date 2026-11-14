@@ -81,6 +81,7 @@ class ChatToolsHooks {
     this.onChanged,
     this.now,
     this.fetchEditEvents,
+    this.applyEdit,
     this.editFetchTimeout =
         const Duration(milliseconds: ChatToolsLimits.editFetchTimeoutMs),
   });
@@ -106,6 +107,8 @@ class ChatToolsHooks {
   final int Function()? now;
   final Future<List<Map<String, dynamic>>> Function(
       String surface, String id, int at)? fetchEditEvents;
+  final void Function(
+      String id, String text, String pubkey, int at, String editId)? applyEdit;
   final Duration editFetchTimeout;
 }
 
@@ -374,6 +377,22 @@ class ChatToolsService {
       _editsCache = pruneEditStore(store);
       _editsFlushQueued = true;
       flushEdits();
+    }
+    final newest = found.edits.isEmpty ? null : found.edits.last;
+    final apply = hooks.applyEdit;
+    if (newest != null && apply != null && live.pubkey == m.pubkey) {
+      var editId = '';
+      for (final ev in bag) {
+        if (ev['pubkey'] == m.pubkey &&
+            ev['content'] == newest.text &&
+            ev['created_at'] is num &&
+            (ev['created_at'] as num).toInt() == newest.at &&
+            ev['id'] is String) {
+          editId = ev['id'] as String;
+          break;
+        }
+      }
+      apply(domId, newest.text, m.pubkey, newest.at, editId);
     }
     return editHistoryPlan(editHistoryFor(domId), done: true).view;
   }

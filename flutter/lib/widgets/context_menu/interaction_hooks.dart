@@ -48,10 +48,14 @@ class MentionAction extends ComposerAction {
 
 class QuoteAction extends ComposerAction {
   const QuoteAction(
-      {required this.fullNym, required this.content, this.messageId = ''});
+      {required this.fullNym,
+      required this.content,
+      this.messageId = '',
+      this.pubkey = ''});
   final String fullNym;
   final String content;
   final String messageId;
+  final String pubkey;
 }
 
 /// Appends shared text so the user can review it before sending.
@@ -89,9 +93,13 @@ class InteractionHooks extends StateNotifier<ComposerAction?> {
   void requestQuote(
           {required String fullNym,
           required String content,
-          String messageId = ''}) =>
+          String messageId = '',
+          String pubkey = ''}) =>
       state = QuoteAction(
-          fullNym: fullNym, content: content, messageId: messageId);
+          fullNym: fullNym,
+          content: content,
+          messageId: messageId,
+          pubkey: pubkey);
 
   void requestInsertText(String text) => state = InsertTextAction(text);
 

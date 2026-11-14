@@ -15,6 +15,7 @@ import '../../core/crypto/key_format.dart' show normalizePrivkeyInput;
 import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/utils/nym_utils.dart' show NymLengthFormatter;
 import '../../services/platform/deep_links.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
@@ -485,6 +486,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         hint: tr('Leave empty for random nickname'),
         maxLength: 20,
         showCounter: true,
+        nym: true,
       ),
       const SizedBox(height: 4),
       Text(
@@ -851,6 +853,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     int maxLines = 1,
     bool showCounter = false,
     bool obscureText = false,
+    bool nym = false,
   }) {
     // Light mode forces a black@0.04 fill and black@0.1 border.
     final field = TextField(
@@ -859,9 +862,11 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       maxLines: maxLines,
       obscureText: obscureText,
       onChanged: showCounter ? (_) => setState(() {}) : null,
-      inputFormatters: maxLength == null
-          ? null
-          : [LengthLimitingTextInputFormatter(maxLength)],
+      inputFormatters: nym
+          ? const [NymLengthFormatter()]
+          : maxLength == null
+              ? null
+              : [LengthLimitingTextInputFormatter(maxLength)],
       style: TextStyle(
         color: c.inputText,
         fontSize: 15,

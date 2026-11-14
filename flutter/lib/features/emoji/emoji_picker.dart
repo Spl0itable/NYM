@@ -18,6 +18,7 @@ import 'custom_emoji.dart';
 import 'emoji_block.dart';
 import 'emoji_block_ui.dart';
 import 'emoji_data.dart';
+import '../sync/synced_stores.dart';
 import 'modal_close_chip.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
@@ -86,11 +87,11 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
 
   Future<void> _loadFavorites() async {
     try {
-      final prefs = await ref.read(emojiPrefsProvider.future);
+      final stores = await ref.read(syncedStoresProvider.future);
       if (!mounted) return;
       setState(() {
-        _catFavStore = EmojiFavoritesStore(prefs, kEmojiCategoryFavoritesKey);
-        _packFavStore = EmojiFavoritesStore(prefs, kEmojiPackFavoritesKey);
+        _catFavStore = stores.emojiCategories;
+        _packFavStore = stores.emojiPacks;
         _categoryFavorites = _catFavStore!.load();
         _packFavorites = _packFavStore!.load();
       });
@@ -157,6 +158,15 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(syncedStoresRevisionProvider, (_, _) {
+      final cat = _catFavStore;
+      final pack = _packFavStore;
+      if (!mounted || cat == null || pack == null) return;
+      setState(() {
+        _categoryFavorites = cat.load();
+        _packFavorites = pack.load();
+      });
+    });
     final c = context.nym;
     // The live NIP-30 store, hydrated from cache and updated as packs arrive.
     final custom = ref.watch(visibleCustomEmojiProvider);

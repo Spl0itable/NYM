@@ -39,6 +39,7 @@ import '../../emoji/custom_emoji.dart' show noteMissingCustomEmoji;
 import '../../groups/group_invite_confirm.dart';
 import '../../duo/duo_rail.dart';
 import '../../i18n/i18n.dart';
+import '../bitchat_verify.dart';
 import '../../media_notes/media_note_view.dart' show audioOrMediaNote;
 import '../../nymbot/nymbot_threads.dart' show threadChainFor;
 import '../../shop/cosmetics.dart';
@@ -1080,6 +1081,12 @@ class _RichInlineState extends State<_RichInline> {
           baseline: TextBaseline.alphabetic,
           child: TimestampChip(seconds: seconds, style: style, textStyle: base),
         );
+      case BitchatVerifyNode():
+        return TextSpan(
+          text: tr(kBitchatVerifyLabel),
+          style: base.merge(
+              TextStyle(color: c.textDim, fontStyle: FontStyle.italic)),
+        );
       case InlineCodeNode(:final code):
         // Inline code as a padded rounded pill in [kMonoFont]; light mode flips the fill.
         return WidgetSpan(
@@ -1503,7 +1510,7 @@ class _MentionChip extends ConsumerWidget {
       TextSpan(
         children: [
           TextSpan(
-            text: node.base,
+            text: capMentionBase(node.base),
             style: TextStyle(
               color: c.secondary,
               fontSize: size,
@@ -1539,7 +1546,8 @@ class _MentionChip extends ConsumerWidget {
           NymAvatar(
               seed: t.pubkey,
               size: size,
-              imageUrl: users[t.pubkey]?.profile?.picture),
+              imageUrl: users[t.pubkey]?.profile?.picture,
+              ring: context.nym.avatarRing),
           const SizedBox(width: 3),
           text,
           // Flair and supporter badge, hidden when the user has none.
@@ -2944,6 +2952,8 @@ int _inlineTextLength(InlineNode node) {
       return formatDiscordTimestamp(seconds, style).length;
     case InlineCodeNode(:final code):
       return code.length;
+    case BitchatVerifyNode():
+      return tr(kBitchatVerifyLabel).length;
     case LinkNode(:final shown):
       return shown.length;
     case EmojiNode(:final unicode):
@@ -3031,6 +3041,8 @@ void _appendInlineText(StringBuffer buf, InlineNode node) {
       buf.write(raw.isNotEmpty ? raw : '<t:$seconds:$style>');
     case InlineCodeNode(:final code):
       buf.write(code);
+    case BitchatVerifyNode(:final raw):
+      buf.write(raw);
     case LinkNode(:final shown):
       buf.write(shown);
     case EmojiNode(:final unicode):
@@ -3096,7 +3108,8 @@ Message? resolveQuotedMessage(
   if (authorText.isEmpty && block.children.isEmpty) return null;
   final sfx = _rxQuoteSuffix.firstMatch(authorText);
   final quotedSuffix = sfx?.group(1)?.toLowerCase();
-  final quotedName = authorText.replaceAll(_rxQuoteSuffix, '').trim();
+  final quotedName =
+      capNymBase(authorText.replaceAll(_rxQuoteSuffix, '').trim());
 
   final quotedText = _quoteBodyText(block);
   if (quotedText.isEmpty) return null;
@@ -3343,7 +3356,7 @@ class _QuoteBox extends ConsumerWidget {
   Widget _quoteAuthor(
       NymColors c, WidgetRef ref, String author, bool contrast) {
     final split = splitNymSuffix(author);
-    final base = split.base;
+    final base = capMentionBase(split.base);
     final suffix = split.suffix.isEmpty ? null : split.suffix;
     // Resolve the author for a leading avatar and trailing flair; unknown authors render plain.
     final users = ref.watch(usersProvider);
@@ -3361,6 +3374,7 @@ class _QuoteBox extends ConsumerWidget {
                   seed: t.pubkey,
                   size: authorSize,
                   imageUrl: users[t.pubkey]?.profile?.picture,
+                  ring: c.avatarRing,
                 ),
               ),
             ),

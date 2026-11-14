@@ -80,8 +80,11 @@ class MessageListScroller {
 
   int _scrollCount = 0;
   int _inFlight = 0;
+  int _readerJumps = 0;
 
   int get scrollCount => _scrollCount;
+
+  int get readerJumps => _readerJumps;
 
   bool get animating => _inFlight > 0;
 
@@ -90,9 +93,11 @@ class MessageListScroller {
     double alignment = 0,
     Duration duration = NymMotion.transition,
     Curve curve = NymMotion.curve,
+    bool reader = true,
   }) {
     final controller = _controller;
     if (controller == null || !controller.isAttached) return Future.value();
+    if (reader) _readerJumps++;
     if (index < _newest) {
       index = _newest;
       alignment += _newestAlignment?.call() ?? 0;
@@ -166,7 +171,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   }
 
   late final ChatNavListBinding _nav =
-      ChatNavListBinding(ref, _positionsListener, inset: _bottomInset);
+      ChatNavListBinding(ref, _positionsListener, inset: _bottomInset)
+        ..readerAway = (() => _reader.away);
   String? _navBreak;
 
   /// Taken once from the scroller on the first build after a thread handed the list back.
@@ -184,6 +190,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   final AnchoredUnits _anchors = AnchoredUnits();
   late final ListAnchorKeeper _keeper =
       ListAnchorKeeper(controller: _itemScrollController, units: _anchors);
+  final ReaderAway _reader = ReaderAway();
+  final OwnSend _own = OwnSend();
   Map<int, String> _unitByIndex = const {};
   _UnitsBuild? _units;
   int _seenScrolls = 0;
@@ -315,6 +323,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       : _bottomInset / _viewportHeight;
 
   bool _keepQueued = false;
+  bool _ownPin = false;
 
   void _keepAnchor() {
     if (!mounted ||
@@ -326,6 +335,19 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     final app = ref.read(appStateProvider);
     if (app.view.storageKey != _viewKey) return;
     final scroller = ref.read(messageListScrollerProvider(_viewKey));
+    _reader.sync(scroller.readerJumps);
+    if (_own.arrived(ref.read(messagesForCurrentViewProvider)) && !_ownPin) {
+      _reader.reset();
+      _ownPin = true;
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        _ownPin = false;
+        if (!mounted || !_itemScrollController.isAttached) return;
+        final newest = _units?.offset ?? 0;
+        _keeper.reset(target: newest);
+        _itemScrollController.jumpTo(
+            index: newest, alignment: _bottomAlignment(newest));
+      });
+    }
     if (scroller.scrollCount != _seenScrolls) {
       _seenScrolls = scroller.scrollCount;
       _keeper.reset();
@@ -368,7 +390,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         break;
       }
     }
-    final follow = newest != null &&
+    final follow = !_reader.away &&
+        newest != null &&
         _bottomInset - newest.itemLeadingEdge * _viewportHeight <= 150;
     final moved = before == null ||
         before.units.isEmpty ||
@@ -666,6 +689,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         .clamp(m.minScrollExtent, m.maxScrollExtent)
         .toDouble();
     if ((target - m.pixels).abs() < 0.5) return;
+    _reader.keyed();
     unawaited(_offsetController.animateScroll(
         offset: target - m.pixels,
         duration: const Duration(milliseconds: 160),
@@ -678,6 +702,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       if (!mounted || m == null) return;
       final gap = (top ? m.maxScrollExtent : m.minScrollExtent) - m.pixels;
       if (gap.abs() < 0.5) return;
+      _reader.keyed();
       await _offsetController.animateScroll(
           offset: gap,
           duration: Duration(milliseconds: i == 0 ? 200 : 60),
@@ -720,6 +745,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     final historyMissing =
         ref.watch(appStateProvider.select((s) => s.channelHistoryMissing));
     final messages = ref.watch(messagesForCurrentViewProvider);
+    _own.prime(messages);
     final reactions = ref.watch(reactionsProvider);
     final polls = ref.watch(pollsForCurrentViewProvider);
     ref.listen(messagesForCurrentViewProvider, (_, _) => _keepAnchor());
@@ -801,12 +827,16 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       // Switched conversation without remounting, so the remembered anchor is stale.
       scroller.forgetAnchor();
       _keeper.reset();
+      _reader.reset();
     }
     _viewKey = view.storageKey;
     final restore = _restore;
     if (!_listBuilt) {
       _listBuilt = true;
       _seenScrolls = scroller.scrollCount;
+      _reader
+        ..sync(scroller.readerJumps)
+        ..reset();
       _keeper.reset(
         target: restore?.index ?? built.offset,
         anchorUnit: restore == null ? null : built.unitByIndex[restore.index],
@@ -996,6 +1026,11 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   }
 
   bool _onScroll(ScrollNotification n) {
+    if (!_keeper.retargeting) {
+      _reader
+        ..sync(ref.read(messageListScrollerProvider(_viewKey)).readerJumps)
+        ..observe(n);
+    }
     _keeper.observe(n);
     if (n.depth == 0) _dayFloat.observe(n);
     if (n.depth == 0 && n is ScrollStartNotification) _navScrolling = true;

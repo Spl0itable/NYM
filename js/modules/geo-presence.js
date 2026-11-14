@@ -14,7 +14,6 @@
     const LISTING_STATUSES = ['online', 'active'];
     const GEOHASH_RE = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
     const HEX64_RE = /^[0-9a-f]{64}$/;
-    const NAME_RE = /^[\p{L}\p{N}]+$/u;
     const UPPER_OR_TITLE_RE = /[\p{Lu}\p{Lt}]/u;
     const asciiLower = (v) => v.replace(/[A-Z]/g, (c) => c.toLowerCase());
 
@@ -39,10 +38,21 @@
         return typeof g === 'string' && GEOHASH_RE.test(g);
     }
 
+    const utf8Bytes = (v) => {
+        let n = 0;
+        for (const ch of v) {
+            const c = ch.codePointAt(0);
+            n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+        }
+        return n;
+    };
+    const channelRule = () => root.NymChannelName;
+
     function isChannelName(name) {
         if (typeof name !== 'string' || !name) return false;
-        const lower = name.toLowerCase();
-        return NAME_RE.test(lower) && !isGeohash(lower);
+        const rule = channelRule();
+        const lower = rule ? rule.sanitizeChannelName(name) : '';
+        return !!lower && !isGeohash(lower) && utf8Bytes(lower) <= WIDE.maxNameBytes;
     }
 
     function firstTag(tags, name) {
@@ -173,12 +183,12 @@
 
     function namedTemplate(name, createdAt) {
         if (!isChannelName(name)) return null;
-        return { kind: KIND, created_at: createdAt, content: '', tags: [['d', name.toLowerCase()]] };
+        return { kind: KIND, created_at: createdAt, content: '', tags: [['d', channelRule().sanitizeChannelName(name)]] };
     }
 
     function namedFilter(name, nowSec) {
         if (!isChannelName(name)) return null;
-        return { kinds: [KIND], since: nowSec - SINCE_WINDOW_SEC, '#d': [name.toLowerCase()] };
+        return { kinds: [KIND], since: nowSec - SINCE_WINDOW_SEC, '#d': [channelRule().sanitizeChannelName(name)] };
     }
 
     function template(geohash, createdAt) {
@@ -202,7 +212,7 @@
         maxAgeSec: 300,
         decayMs: 300000,
         maxPrecision: MAX_SEND_PRECISION,
-        maxNameLength: 64,
+        maxNameBytes: 1024,
         ratePerMin: 6,
         channelCap: CHANNEL_CAP,
         maxChannels: 1000,
@@ -242,7 +252,7 @@
             if (value.length > WIDE.maxPrecision) return shapeRefuse('precision');
             type = 'geohash';
         } else {
-            if (cased || !isChannelName(value) || value.length > WIDE.maxNameLength) return shapeRefuse('name');
+            if (cased || !isChannelName(value)) return shapeRefuse('name');
             type = 'named';
         }
         const at = ev.created_at;

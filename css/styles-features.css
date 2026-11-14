@@ -1449,9 +1449,42 @@ body:not(.chat-bubbles) .shop-msg-demo .message-content {
     padding: 6px 10px;
 }
 
-.message .message-author.cosmetic-redacted {
+.message .message-author.cosmetic-redacted,
+.ps-who.cosmetic-redacted {
     color: #ffffff !important;
     opacity: 0.8;
+}
+
+body.a11y-contrast:not(.solid-ui) .message-author:not(:where(.shop-preview-message *)),
+body.a11y-contrast:not(.solid-ui) .ps-who {
+    color: var(--nym-hc-other-g, var(--secondary));
+}
+
+body.a11y-contrast.solid-ui .message-author:not(:where(.shop-preview-message *)),
+body.a11y-contrast.solid-ui .ps-who {
+    color: var(--nym-hc-other-s, var(--secondary));
+}
+
+body.a11y-contrast:not(.solid-ui) .message-author.self:not(:where(.shop-preview-message *)),
+body.a11y-contrast:not(.solid-ui) .ps-who.self {
+    color: var(--nym-hc-own-g, var(--primary));
+}
+
+body.a11y-contrast.solid-ui .message-author.self:not(:where(.shop-preview-message *)),
+body.a11y-contrast.solid-ui .ps-who.self {
+    color: var(--nym-hc-own-s, var(--primary));
+}
+
+body.a11y-contrast:not(.solid-ui) .message .message-author.cosmetic-redacted:not(:where(.shop-preview-message *)),
+body.a11y-contrast:not(.solid-ui) .ps-who.cosmetic-redacted {
+    color: var(--nym-hc-red-g, #ffffff) !important;
+    opacity: 1;
+}
+
+body.a11y-contrast.solid-ui .message .message-author.cosmetic-redacted:not(:where(.shop-preview-message *)),
+body.a11y-contrast.solid-ui .ps-who.cosmetic-redacted {
+    color: var(--nym-hc-red-s, #ffffff) !important;
+    opacity: 1;
 }
 
 .message-content.cosmetic-redacted-message {
@@ -2355,6 +2388,16 @@ body:not(.chat-bubbles) .message.supporter-style {
     vertical-align: middle;
 }
 
+.message-author .avatar-message,
+.me-message > .avatar-message,
+.message-group-avatar img.avatar-bubble,
+.group-info-member .avatar-message,
+.user-item .avatar-user-list,
+.pm-item > .avatar-pm,
+.sb-frow > .avatar-pm {
+    border: 1.5px solid var(--avatar-ring);
+}
+
 .pm-header-avatar .avatar-message {
     width: 26px;
     height: 26px;
@@ -2814,7 +2857,7 @@ body:not(.chat-bubbles) .message.supporter-style {
     width: 20px;
     height: 20px;
     margin: 0 4px 0 0;
-    border: none;
+    border: 1.5px solid var(--avatar-ring);
     border-radius: 50%;
     object-fit: cover;
     vertical-align: middle;
@@ -4452,30 +4495,6 @@ body.a11y-contrast.light-mode {
     margin-bottom: 8px;
 }
 
-.relay-stats-changes {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-}
-
-.relay-stats-change {
-    display: flex;
-    gap: 10px;
-    align-items: baseline;
-}
-
-.relay-stats-change-time {
-    color: var(--text-dim);
-    font-family: monospace;
-    font-size: 11px;
-    flex-shrink: 0;
-}
-
-.relay-stats-change-empty {
-    color: var(--text-dim);
-}
-
 .relay-stats-graph-wrap {
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid var(--glass-border);
@@ -5206,7 +5225,7 @@ body.a11y-contrast.light-mode {
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    border: 1.5px solid var(--bg-primary, var(--background, #000));
+    border: 1.5px solid var(--avatar-ring);
     object-fit: cover;
 }
 
@@ -6476,6 +6495,8 @@ body.light-mode .call-tile { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12); }
 .group-ctx-role.owner { color: var(--lightning); background: rgba(247, 147, 26, 0.12); }
 .group-ctx-role.admin { color: var(--primary); background: rgba(0, 255, 0, 0.12); }
 .group-ctx-role.mod { color: var(--secondary); background: rgba(255, 255, 255, 0.08); }
+.group-ctx-role.group-ctx-invited { color: var(--text-dim); background: transparent; border: 1px dashed var(--border); }
+.group-ctx-role.group-ctx-invited.expired { border-style: dotted; }
 
 .group-avatar-wrap {
     width: 26px;

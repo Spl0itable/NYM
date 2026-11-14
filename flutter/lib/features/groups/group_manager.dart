@@ -6,6 +6,10 @@ import '../../services/nostr/nostr_service.dart';
 import '../../services/nostr/event_signer.dart';
 import 'control_answers.dart';
 import 'group_logic.dart';
+import 'group_invited.dart';
+import 'group_invites.dart';
+
+const int kKeyGivenWindowMs = 300000;
 
 /// Owns per-group rotating ephemeral keys and drives gift-wrapped group sends; crypto is delegated to the service.
 class GroupManager {
@@ -84,6 +88,7 @@ class GroupManager {
   /// Deletes a left group's keys and re-arms unwrap candidates so they stop riding subscriptions and sync.
   void removeGroup(String groupId) {
     answerMinted.remove(groupId);
+    answerMintedAt.remove(groupId);
     if (_keys.remove(groupId) == null) return;
     _refreshServiceKeys();
   }
@@ -99,16 +104,79 @@ class GroupManager {
   bool mergeEphemeralKeys(String groupId, Map<String, dynamic> entry) {
     final ek = keysFor(groupId);
     final before = _selfPkCount(ek);
-    final minted = answerMinted[groupId];
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    var minted = answerMinted[groupId];
+    var meta = answerMintedAt[groupId];
+    if (minted != null && meta == null) {
+      meta = {'at': now, 'repaired': false};
+      answerMintedAt[groupId] = meta;
+    }
+    if (minted != null && !GroupInvites.settleOpen(meta, now)) {
+      answerMinted.remove(groupId);
+      answerMintedAt.remove(groupId);
+      minted = null;
+    }
     final settle = minted != null && minted == ek.selfCurrent?.pk;
     ek.mergeSyncJson(entry, settle: settle);
-    if (settle && ek.selfCurrent != null) {
-      answerMinted[groupId] = ek.selfCurrent!.pk;
+    final cur = ek.selfCurrent?.pk;
+    if (settle && cur != null) {
+      answerMinted[groupId] = cur;
+      final self = entry['self'];
+      final row = self is Map && self['current'] is Map
+          ? {
+              'current': (self['current'] as Map)['pk'],
+              'prev': [
+                if (self['prev'] is List)
+                  for (final k in self['prev'] as List)
+                    if (k is Map) k['pk'],
+              ],
+            }
+          : null;
+      if (meta != null && GroupInvites.settleDue(meta, row, minted, cur, now)) {
+        meta['repaired'] = true;
+        repairDue.add(groupId);
+      }
     }
     return _selfPkCount(ek) > before;
   }
 
+  Map<String, Map<String, dynamic>> ephemeralKeysForStore([int? now]) {
+    final t = now ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final out = ephemeralKeysForSync();
+    out.forEach((gid, e) {
+      final pk = answerMinted[gid];
+      if (pk == null) return;
+      final keep =
+          GroupInvites.settleKeep({'pk': pk, ...?answerMintedAt[gid]}, t);
+      if (keep != null) e['settle'] = keep;
+    });
+    return out;
+  }
+
+  void restoreSettle(String groupId, Object? m, [int? now]) {
+    final keep = GroupInvites.settleKeep(
+        m, now ?? DateTime.now().millisecondsSinceEpoch ~/ 1000);
+    if (keep == null || answerMinted.containsKey(groupId)) return;
+    answerMinted[groupId] = keep['pk'] as String;
+    answerMintedAt[groupId] = {
+      'at': keep['at'] as int,
+      'repaired': keep['repaired'] == true,
+    };
+  }
+
+  void noteMinted(String groupId, String pk, {int? at}) {
+    answerMinted[groupId] = pk;
+    answerMintedAt[groupId] = {
+      'at': at ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      'repaired': false,
+    };
+  }
+
   final Map<String, String> answerMinted = {};
+
+  final Map<String, Map<String, Object>> answerMintedAt = {};
+
+  final Set<String> repairDue = {};
 
   final Map<String, ({String current, Set<String> pks})> d1Self = {};
 
@@ -152,6 +220,31 @@ class GroupManager {
   int _selfPkCount(GroupEphemeralKeys ek) =>
       (ek.selfCurrent != null ? 1 : 0) + ek.selfPrev.length;
 
+  final Map<String, ({String eph, String to, int atMs})> _keyGiven = {};
+
+  void noteKeyGiven(String groupId, Iterable<String> pubkeys, String ephPk,
+      String Function(String pk) to,
+      {int? nowMs}) {
+    if (ephPk.isEmpty) return;
+    final at = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    for (final pk in pubkeys) {
+      if (pk.isNotEmpty) {
+        _keyGiven['$groupId:$pk'] = (eph: ephPk, to: to(pk), atMs: at);
+      }
+    }
+  }
+
+  bool keyAlreadyGiven(String groupId, String pubkey,
+      {String? announced, int? nowMs}) {
+    final given = _keyGiven['$groupId:$pubkey'];
+    final cur = _keys[groupId]?.selfCurrent?.pk;
+    if (given == null || cur == null || given.eph != cur) return false;
+    final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    if (now - given.atMs > kKeyGivenWindowMs || now < given.atMs) return false;
+    return given.to == pubkey ||
+        (announced != null && announced.isNotEmpty && given.to == announced);
+  }
+
   bool isOwnEphemeralPk(String groupId, String? pk) {
     if (pk == null || pk.isEmpty) return false;
     final ek = _keys[groupId];
@@ -159,6 +252,9 @@ class GroupManager {
     if (ek.selfCurrent?.pk == pk) return true;
     return ek.selfPrev.any((k) => k.pk == pk);
   }
+
+  Map<String, int> memberKeyTsOf(String groupId) =>
+      _keys[groupId]?.memberKeyTs ?? const <String, int>{};
 
   /// Records a member's advertised ephemeral pubkey, guarding against out-of-order updates.
   void recordMemberKey(
@@ -196,6 +292,7 @@ class GroupManager {
       allowMemberInvites: allowMemberInvites,
       lastMessageTime: DateTime.now().millisecondsSinceEpoch,
       memberAt: {for (final pk in members) pk: nowSec},
+      invited: GroupInvited.mark(null, members, nowSec, selfPubkey),
     );
 
     final eph = keysFor(groupId).ensureSelf();
@@ -211,7 +308,7 @@ class GroupManager {
     );
 
     // The first invite uses real pubkeys; no member keys exist yet.
-    await _service.publishGroupMessage(
+    final sent = await _service.publishGroupMessage(
       rumor: rumor,
       onWrap: _depositFor(rumor),
       recipients: members,
@@ -221,6 +318,7 @@ class GroupManager {
       rootSeededFor: rootSeededFor,
       layeredFor: layeredFor,
     );
+    if (sent) noteKeyGiven(groupId, members, eph.pk, (pk) => pk);
     return group;
   }
 
@@ -246,11 +344,12 @@ class GroupManager {
       ephemeralPk: next.pk,
       extraTags: extraTags,
     );
+    String to(String pk) => ek.encryptionPubkeyFor(pk, selfPubkey);
     final ok = await _service.publishGroupMessage(
       rumor: rumor,
       onWrap: _depositFor(rumor),
       recipients: group.members,
-      encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
+      encryptTo: to,
       settings: settings,
       kemKeyFor: kemKeyFor,
       rootSeededFor: rootSeededFor,
@@ -258,6 +357,7 @@ class GroupManager {
       onCoverage: (pq, total, root) =>
           _recordCoverage(nymMessageId, pq, total, root),
     );
+    if (ok) noteKeyGiven(group.id, group.members, next.pk, to);
     return ok ? nymMessageId : null;
   }
 
@@ -343,17 +443,21 @@ class GroupManager {
       content: content,
       nowSec: nowSec,
     );
-    return _service.publishGroupMessage(
+    String to(String pk) =>
+        newMembers.contains(pk) ? pk : ek.encryptionPubkeyFor(pk, selfPubkey);
+    final ok = await _service.publishGroupMessage(
       rumor: rumor,
       onWrap: _depositFor(rumor),
       recipients: group.members,
-      encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
+      encryptTo: to,
       newMembers: newMembers,
       settings: settings,
       kemKeyFor: kemKeyFor,
       rootSeededFor: rootSeededFor,
       layeredFor: layeredFor,
     );
+    if (ok) noteKeyGiven(group.id, group.members, eph.pk, to);
+    return ok;
   }
 
   /// Key-resync request wrapped to members' real pubkeys, since our stored ephemeral keys are what's suspect.

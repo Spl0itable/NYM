@@ -32,6 +32,9 @@ import '../features/toasts/event_toast_center.dart';
 import '../features/toasts/event_toasts.dart';
 import '../features/toasts/event_toast_settings_store.dart';
 import '../features/toasts/toast_center.dart';
+import '../features/groups/group_invited.dart';
+import '../features/groups/group_invites.dart';
+import '../features/groups/group_invites_service.dart';
 import '../features/toasts/toast_model.dart';
 import '../services/api/api_config.dart';
 import '../features/calls/call_providers.dart';
@@ -48,6 +51,7 @@ import '../features/commands/command_i18n.dart';
 import '../features/commands/command_registry.dart';
 import '../features/emoji/custom_emoji.dart';
 import '../features/emoji/emoji_block.dart';
+import '../features/reports/report_record.dart';
 import '../features/dm_polls/dm_polls_providers.dart';
 import '../features/accounts/account_host.dart';
 import '../features/accounts/switch_outbox_stash.dart';
@@ -64,9 +68,12 @@ import '../features/i18n/localization_service.dart';
 import '../features/messages/format/nym_format.dart' show NymFormat;
 import '../features/globe/geo_explore.dart';
 import '../features/globe/street_cache.dart' show StreetCacheWipe;
+import '../features/globe/street_pref.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart'
     show DefaultCacheManager;
 import '../features/messages/archive_gate.dart';
+import '../features/messages/bitchat_verify.dart' show kBitchatVerifyLabel;
+import '../features/messages/encrypted_blob.dart';
 import '../features/messages/trust_graph.dart';
 import '../features/messages/media_fallbacks.dart';
 import '../features/media_notes/media_note_stores.dart';
@@ -131,12 +138,27 @@ import '../features/chat_nav/chat_nav.dart';
 import '../features/chat_nav/chat_nav_service.dart';
 import '../features/chat_nav/chat_nav_providers.dart';
 import '../features/sidebar_folders/folders_providers.dart';
+import '../features/sidebar_folders/folders.dart';
 import '../features/sync/pref_stamps.dart';
+import '../features/sync/privacy_row.dart';
 import '../features/reactions/hover_actions.dart' show normalizeHoverActions;
 import '../features/sync/sync_rows.dart' show SyncRowMode;
 import '../features/sync/sync_merge.dart'
-    show kStampedPrefs, prefApply, prefGate, prefRowStamp;
+    show
+        colGate,
+        kColWire,
+        kStampedPrefs,
+        kSyncedSets,
+        prefApply,
+        prefGate,
+        prefRowStamp,
+        setGate,
+        setKeys,
+        setRowStamp;
+import '../features/sync/set_stamps.dart';
+import '../features/sync/synced_stores.dart';
 import '../features/chat_lock/chat_lock_providers.dart';
+import '../features/chat_lock/chat_lock.dart';
 import '../features/identity/deleted_notice.dart';
 import '../features/identity/nip46_service.dart';
 import '../features/relays/added_relays.dart';
@@ -205,6 +227,8 @@ class _PendingDm {
 /// Ties identity, relays and crypto to the [AppState] store; composer sends flow through here.
 class NostrController {
   NostrController(this._ref) {
+    _ref.read(appStateProvider.notifier).groupMemberKeyTs =
+        (gid) => _groups?.memberKeyTsOf(gid) ?? const <String, int>{};
     StorageGuard.pruners
       ..clear()
       ..add(() => DefaultCacheManager().emptyCache())
@@ -226,6 +250,7 @@ class NostrController {
       _ref.read(notificationHistoryProvider.notifier).rekey(id, nymId);
       scheduleMicrotask(() => _releasePmPiece(id));
     };
+    _ref.read(appStateProvider.notifier).onEditStored = _onEditStored;
     _ref.read(appStateProvider.notifier).pmPieceHeld =
         (id) => _pmPieceHolds.containsKey(id);
     _ref.read(appStateProvider.notifier).onKind0Stale = _refetchKind0;
@@ -365,7 +390,14 @@ class NostrController {
   }
 
   final Ref _ref;
-  Identity? _identity;
+  Identity? _identityValue;
+  Identity? get _identity => _identityValue;
+  set _identity(Identity? v) {
+    _identityValue = v;
+    try {
+      _throwawayNeedles();
+    } catch (_) {}
+  }
   NostrService? _service;
 
   late final AwayStatusEngine _away = AwayStatusEngine(
@@ -476,12 +508,13 @@ class NostrController {
       String? banner, String? lud16) {
     final prev = _heldProfileSave;
     final keep = prev != null && prev.pubkey == pubkey ? prev : null;
+    String? set(String? v) => v == null || v.isEmpty ? null : v;
     _heldProfileSave = (
       pubkey: pubkey,
-      about: about ?? keep?.about,
-      picture: picture ?? keep?.picture,
-      banner: banner ?? keep?.banner,
-      lud16: lud16 ?? keep?.lud16,
+      about: set(about) ?? keep?.about,
+      picture: set(picture) ?? keep?.picture,
+      banner: set(banner) ?? keep?.banner,
+      lud16: set(lud16) ?? keep?.lud16,
     );
     if (_ownProfileLookup != null) return;
     final lookup = resolveProfiles([pubkey]);
@@ -524,6 +557,10 @@ class NostrController {
         }
         _cachedKind0Profile = profile;
         _cachedKind0Ts = event.createdAt;
+        if (!_lnKind0MayFill(event.createdAt)) {
+          final ln = ownLightningAddress;
+          _adoptSyncedLightning(ln == null || ln.isEmpty ? null : ln);
+        }
         _releaseProfileSave();
       }
     } catch (_) {
@@ -548,7 +585,7 @@ class NostrController {
     final customNick = kv.getString(StorageKeys.customNick);
     if (customNick != null &&
         customNick.isNotEmpty &&
-        stripPubkeySuffix(identity.nym) == customNick) {
+        stripPubkeySuffix(identity.nym) == capNymBase(customNick)) {
       return true;
     }
     return false;
@@ -603,7 +640,7 @@ class NostrController {
       final first = list.first;
       if (first is! Map) return null;
       final ev = NostrEvent.fromJson(Map<String, dynamic>.from(first));
-      if (ev.id != eventId) return null;
+      if (ev.id != eventId || isEncryptedBlobChannelEvent(ev)) return null;
       return await _verifyArchived(ev) ? ev : null;
     } catch (_) {
       return null;
@@ -1028,7 +1065,10 @@ class NostrController {
             .read(keyValueStoreProvider)
             .getBool(StorageKeys.relayDirectMode),
       );
+      service.pmD1Down = _pmD1DownPks.contains(identity.pubkey);
       _service = service;
+      _wireBlobDrops(service);
+      service.onDmAccepted = _onDmAccepted;
       service.receiptsOff = () => receiptsOff;
       service.setBlockedRelays(_ref.read(blockedRelaysProvider));
       service.anonKeys = () => _anonBotPubkeys().toSet();
@@ -1109,6 +1149,13 @@ class NostrController {
         );
       };
 
+      KeyValueStore.holdSessionKeysFor(this, _throwawayNeedles);
+      _dropOtherInflight(identity.pubkey);
+      if (!savedSyncAllowed) {
+        _dropStoredLightningKeys();
+        _dropThrowawayLeftovers(identity.pubkey);
+        unawaited(_dropThrowawayGroupKeys());
+      }
       // Durable (logged-in) identities also use the PM archive; best-effort.
       _initStorageSync(identity, signer);
       // Resolve the seal policy before anything saves; a single-device account must not keep the default.
@@ -1331,7 +1378,7 @@ class NostrController {
 
   Future<void> _catchUpLiveGap() => _liveGap.run((sinceSec) async {
         final d1Only = _service?.d1Backed ?? false;
-        if (!d1Only) _catchUpGiftWraps(sinceSec);
+        if (!(_service?.pmD1Backed ?? false)) _catchUpGiftWraps(sinceSec);
         if (_storageSync == null) return false;
         _lastD1BackfillAt = 0;
         _liveGapSinceSec = sinceSec;
@@ -1432,7 +1479,7 @@ class NostrController {
     if (service == null) return;
     final groups = _groups;
     service.catchUpGiftWraps(
-      [...?groups?.allEphemeralPubkeys()],
+      service.d1Backed ? const <String>[] : [...?groups?.allEphemeralPubkeys()],
       floorSec: floorSec,
       onWrap: (wrap) => _noteGapWrapFloor(wrap.id, floorSec),
     );
@@ -1695,10 +1742,10 @@ class NostrController {
         if (!ok || svc.pubkey.length != 64) return null;
       }
       final pubkey = svc.pubkey;
-      final nym = kv.getString(StorageKeys.customNick) ??
+      final nym = capNym(kv.getString(StorageKeys.customNick) ??
           kv.getString(StorageKeys.autoEphemeralNick) ??
           NymGenerator().generate(pubkey,
-              style: kv.getString(StorageKeys.nickStyle) ?? 'fancy');
+              style: kv.getString(StorageKeys.nickStyle) ?? 'fancy'));
       final identity = Identity(
         pubkey: pubkey,
         privkey: null,
@@ -1797,7 +1844,7 @@ class NostrController {
     var name = profile?.name;
     if (name == null || name.isEmpty) name = profile?.displayName;
     if (name == null || name.isEmpty) return;
-    name = withOwnNymSuffix(clipNymBase(name, 20), identity.pubkey);
+    name = withOwnNymSuffix(capNym(name), identity.pubkey);
     final nym = getNymFromPubkey(name, identity.pubkey);
     if (identity.nym != nym) identity.nym = nym;
     if (_ref.read(appStateProvider).selfNym != nym) {
@@ -1859,9 +1906,15 @@ class NostrController {
     // Flush pending persists before the handles they read are dropped.
     _flushDebouncedPersists();
     _ref.read(appStateProvider.notifier).onDeletedIdsChanged = null;
+    _ref.read(appStateProvider.notifier).onBlobPointersPurged = null;
     _dmRetryTimer?.cancel();
     _dmRetryTimer = null;
     _pendingDms.clear();
+    _service?.onDmAccepted = null;
+    for (final t in _sendOkTimers.values) {
+      t.cancel();
+    }
+    _sendOkTimers.clear();
     _switchOutboxTimer?.cancel();
     _switchOutboxTimer = null;
     _carried.clear();
@@ -1971,6 +2024,8 @@ class NostrController {
     _ref.read(appStateProvider.notifier).onChannelReadMarked = null;
     _ref.read(appStateProvider.notifier).onViewEntering = null;
     _ref.read(appStateProvider.notifier).onNavReadMarked = null;
+    _ref.read(appStateProvider.notifier).readMarkQuiet = null;
+    _ref.read(appStateProvider.notifier).onQuietChannelRead = null;
     _chatNavTimer?.cancel();
     _chatNavTimer = null;
     // The ephemeral gift-wrap REQ captured the old service.
@@ -2002,6 +2057,7 @@ class NostrController {
           ?.savedElsewhere(keys.getPublicKeyHex(candidate));
       if (saved != null) throw AccountAlreadySaved(saved);
     }
+    await _drainQueuedSettingsSave();
     // Throws on an invalid key so the modal shows its error.
     final loggedIn = await identityService.loginWithNsec(nsec);
     await RemotePanicPrefs.noteLogin(kv);
@@ -2049,6 +2105,7 @@ class NostrController {
 
   /// Adopts a NIP-46 session the login modal just established by re-booting the controller onto it.
   Future<void> loginWithNip46() async {
+    await _drainQueuedSettingsSave();
     final kv = _ref.read(keyValueStoreProvider);
     await RemotePanicPrefs.noteLogin(kv);
     await _dropReplacedSessionNym(kv,
@@ -2114,6 +2171,9 @@ class NostrController {
   static PoolTransport Function()? debugPoolFactory;
 
   @visibleForTesting
+  static CacheStore Function()? debugCacheFactory;
+
+  @visibleForTesting
   static AttestService Function(KeyValueStore kv)? debugAttestFactory;
 
   AttestService _newAttest() {
@@ -2132,6 +2192,24 @@ class NostrController {
     } catch (_) {
       return 0;
     }
+  }
+
+  Future<void> _drainQueuedSettingsSave(
+      [Duration budget = const Duration(seconds: 3)]) async {
+    final sync = _storageSync;
+    if (_settingsSyncTimer == null || sync == null || !_settingsHydrated) {
+      return;
+    }
+    final mode = _ref.read(settingsProvider.notifier).keypairMode;
+    if (_identity?.loginMethod == null &&
+        (mode == 'random' || mode == 'hardcore')) {
+      return;
+    }
+    _settingsSyncTimer?.cancel();
+    _settingsSyncTimer = null;
+    try {
+      await _flushSettingsSync(sync).timeout(budget);
+    } catch (_) {}
   }
 
   Future<void> suspendForAccountSwitch({
@@ -2156,19 +2234,7 @@ class NostrController {
           await sync.flushDeposits().timeout(drainBudget);
         } catch (_) {}
       }
-      final mode = _ref.read(settingsProvider.notifier).keypairMode;
-      final throwaway = _identity?.loginMethod == null &&
-          (mode == 'random' || mode == 'hardcore');
-      if (_settingsSyncTimer != null &&
-          sync != null &&
-          _settingsHydrated &&
-          !throwaway) {
-        _settingsSyncTimer?.cancel();
-        _settingsSyncTimer = null;
-        try {
-          await _flushSettingsSync(sync).timeout(drainBudget);
-        } catch (_) {}
-      }
+      await _drainQueuedSettingsSave(drainBudget);
       if (_replayReadStateTimer != null) {
         try {
           await _flushReplayReadState().timeout(drainBudget);
@@ -2205,6 +2271,7 @@ class NostrController {
     // Capture before teardown nulls the identity; the pubkey-scoped lightning address is removed below.
     final pubkey = _identity?.pubkey;
 
+    await _drainQueuedSettingsSave();
     await _teardownLiveSession();
     _forgetLastKeyNotifications();
 
@@ -2324,9 +2391,16 @@ class NostrController {
     });
   }
 
-  void _onEvent(NostrEvent event) {
-    if (_localEchoIds.isNotEmpty) _localEchoIds.remove(event.id);
+  void _wireBlobDrops(NostrService service) {
     final appState = _ref.read(appStateProvider.notifier);
+    service.onEncryptedBlob = appState.noteDroppedBlobId;
+    appState.onBlobPointersPurged = (keys) => keys.forEach(_markDirty);
+  }
+
+  void _onEvent(NostrEvent event) {
+    final appState = _ref.read(appStateProvider.notifier);
+    if (appState.dropsEncryptedBlob(event)) return;
+    if (_localEchoIds.isNotEmpty) _localEchoIds.remove(event.id);
     if (event.kind == EventKind.appData) {
       // Kind 30078 is multiplexed by its `t` topic.
       final topic = event.tagValue('t');
@@ -2644,7 +2718,8 @@ class NostrController {
   void _markOpenThreadSeen() {
     if (!_appInForeground) return;
     final t = _notifyView().thread;
-    if (t == null) return;
+    if (t == null || _anonLaneRef(t.root)) return;
+    if (t.key.startsWith('pm-') && isVerifiedBot(t.key.substring(3)) && _botQuietRef(t.root)) return;
     try {
       _ref.read(notificationHistoryProvider.notifier).markThreadSeen(t.key, t.root);
     } catch (_) {}
@@ -2690,11 +2765,13 @@ class NostrController {
     );
     if (!record) return;
     var quoted = Message.quotedFromTags(e.tags);
+    var shown = e.content;
     if (key != null) {
       if (ContentFilter.channelHidden(appState.contentFilter(), key)) return;
       final stored = _storedMessage(appState, key, e.id);
       if (stored == null || appState.isMessageFiltered(stored)) return;
       quoted = stored.quoted;
+      shown = stored.content;
     }
     // A channel mention routes to the channel, labeled `in #<key>`.
     final channelRoute =
@@ -2703,7 +2780,7 @@ class NostrController {
     _dispatchNotification(
       title: _nymDisplayFor(e.pubkey),
       // Quote replies lead with the quoted message; show the reply itself.
-      body: notificationBodyFor(e.content),
+      body: notificationBodyFor(shown),
       senderPubkey: e.pubkey,
       isFriend: appState.isFriend(e.pubkey),
       isMention: mention,
@@ -3502,6 +3579,12 @@ class NostrController {
     } catch (_) {
       return;
     }
+    if (isEncryptedBlobChannelEvent(parsed)) {
+      if (parsed.id.isNotEmpty && parsed.computeId() == parsed.id) {
+        _ref.read(appStateProvider.notifier).noteDroppedBlobId(parsed.id);
+      }
+      return;
+    }
     if (!await service.verifyEvent(parsed)) {
       debugPrint('[mesh] carried event failed verification — dropped');
       return;
@@ -4122,12 +4205,14 @@ class NostrController {
     _giftWrapDrain = null;
   }
 
-  void _processGiftWrap(GiftWrapUnwrapped u) {
+  void _processGiftWrap(GiftWrapUnwrapped u,
+      {({bool stale, int? cutoffMs})? gapOverride,
+      bool profileChecked = false}) {
     final appState = _ref.read(appStateProvider.notifier);
     final rumor = u.rumor;
     final kind = u.rumorKind;
     final self = _service?.selfPubkey ?? '';
-    final gap = _gapWrapVerdict(u);
+    final gap = gapOverride ?? _gapWrapVerdict(u);
 
     // Track the peer's PM format so replies go out in one they can decrypt.
     final sender = rumor['pubkey'] as String?;
@@ -4158,6 +4243,9 @@ class NostrController {
         _ref.read(appStateProvider).blockedUsers.contains(sender);
     switch (kind) {
       case EventKind.dmRumor: // 14 — PM or group message
+        if (!_groupInviteGate(u, self, senderBlocked, gap, profileChecked)) {
+          return;
+        }
         // Archive durable DM wraps to D1; receipts, typing, signaling, presence and settings wraps are not archived.
         if (senderBlocked && !_keepsBlockedGroupRumor(rumor)) {
           _recordBlockedMemberKey(u, appState, self);
@@ -4170,10 +4258,12 @@ class NostrController {
       case EventKind.reaction: // 7 — gift-wrapped reaction
         // Reactions are durable content and archived too, or they vanish on relaunch.
         if (!u.senderVerified || senderBlocked) return;
+        if (!_groupInviteGate(u, self, senderBlocked, gap, true)) return;
         _archiveGiftWrap(u);
         _onPrivateReaction(rumor, appState, u.wrapId);
       case EventKind.zapReceipt: // 9735 — gift-wrapped private zap announcement
         if (!u.senderVerified || senderBlocked) return;
+        if (!_groupInviteGate(u, self, senderBlocked, gap, true)) return;
         _archiveGiftWrap(u);
         _onPrivateZap(rumor, appState, u.wrapId);
       case EventKind.callSignaling: // 25053 — call signaling transport
@@ -4191,7 +4281,7 @@ class NostrController {
     }
   }
 
-  final Map<String, int> _syncPingSeen = {};
+  final Map<String, ({int ts, int n})> _syncPingSeen = {};
   Timer? _syncPingTimer;
 
   /// Treats a sync ping as a doorbell: ignore our own and non-newer pings, and pull from D1 debounced.
@@ -4214,9 +4304,18 @@ class NostrController {
         ts * 1000 < sync.settingsFullAt - StorageSync.settingsDeltaOverlapMs) {
       return;
     }
-    if (ts != 0 && ts <= (_syncPingSeen[source] ?? 0)) return;
+    final rawSeq = ping['n'];
+    final seq = rawSeq is int && rawSeq > 0 ? rawSeq : 0;
+    final last = _syncPingSeen[source];
+    if (ts != 0 &&
+        last != null &&
+        (seq > 0 && last.n > 0 ? seq <= last.n : ts <= last.ts)) {
+      return;
+    }
     _syncPingSeen.remove(source);
-    _syncPingSeen[source] = ts;
+    _syncPingSeen[source] = last == null
+        ? (ts: ts, n: seq)
+        : (ts: max(ts, last.ts), n: max(seq, last.n));
     while (_syncPingSeen.length > 200) {
       _syncPingSeen.remove(_syncPingSeen.keys.first);
     }
@@ -4324,7 +4423,8 @@ class NostrController {
         if (rumorTs > lastTs) {
           kv.setString(StorageKeys.lastSettingsSyncTs, '$rumorTs');
         }
-        _applySyncedSettings(prefRowStamp(decoded, rumorTs * 1000));
+        _applySyncedSettings(setRowStamp(
+            prefRowStamp(decoded, rumorTs * 1000), rumorTs * 1000));
       }
     }
   }
@@ -4374,7 +4474,7 @@ class NostrController {
       fromNym: fromNym,
       nickname: data['nickname'] as String?,
       avatarUrl: data['avatarUrl'] as String?,
-      settings: Map<String, dynamic>.from(settings),
+      settings: Map<String, dynamic>.from(settings)..remove(kColWire),
       transferredAt: (data['transferredAt'] as num?)?.toInt() ??
           ((rumor['created_at'] as num?)?.toInt() ?? 0),
     ));
@@ -4436,7 +4536,10 @@ class NostrController {
     // Apply through the sync path, then republish our own sync.
     _applySyncedSettings(transfer.settings, userAcceptedTransfer: true);
     final lightning = transfer.settings['lightningAddress'];
-    if (lightning is String && lightning.isNotEmpty && identity != null) {
+    if (lightning is String &&
+        lightning.isNotEmpty &&
+        identity != null &&
+        savedSyncAllowed) {
       _ref.read(keyValueStoreProvider).setString(
           StorageKeys.lightningAddressFor(identity.pubkey), lightning);
     }
@@ -4519,6 +4622,13 @@ class NostrController {
     if (group == null || !GroupLogic.isMember(group, sender)) return;
     final ts = (u.rumor['created_at'] as num?)?.toInt() ?? 0;
     _groups?.recordMemberKey(groupId, sender, ephPk, ts);
+    _invitedSeen(groupId);
+  }
+
+  void _invitedSeen(String groupId) {
+    if (!_ref.read(appStateProvider.notifier).groupInvitedSeen(groupId)) return;
+    _persistGroupStore();
+    syncSettings();
   }
 
   Future<void> _onStrangerGroupMessage(
@@ -4610,6 +4720,7 @@ class NostrController {
       final ts = (rumor['created_at'] as num?)?.toInt() ?? 0;
       if (ephPk != null && senderPubkey != self) {
         _groups?.recordMemberKey(groupId, senderPubkey, ephPk, ts);
+        _invitedSeen(groupId);
       }
     }
 
@@ -4632,11 +4743,15 @@ class NostrController {
     if (editId != null && editId.isNotEmpty) {
       if (!u.senderVerified || nonMember) return;
       final content = rumor['content'] as String? ?? '';
+      final rumorId = rumor['id'] is String ? rumor['id'] as String : '';
       appState.applyEditOrDefer(editId, content,
           editorPubkey: senderPubkey,
           verified: u.senderVerified,
           editAt: (rumor['created_at'] as num?)?.toInt() ?? 0,
-          editId: rumor['id'] is String ? rumor['id'] as String : '');
+          editId: rumorId);
+      if (appState.editHeld(editId, senderPubkey, rumorId)) {
+        _noteHeldEditWrap(u.wrapId, editId, senderPubkey, rumorId);
+      }
       return;
     }
 
@@ -4750,10 +4865,11 @@ class NostrController {
       m.pqRoot = layered && pqSealRootVerdict(peer) == true;
     }
     // The announcement may still be in flight; fill the verdict in later.
-    if (m.pqEncrypted && !blockedSender) {
+    if (m.pqEncrypted && !blockedSender && !m.anonLane) {
       _resolvePqRootVerdict(m.conversationPubkey ?? m.pubkey, m.nymMessageId);
     } else if (m.pqEncrypted &&
         !m.isOwn &&
+        !m.anonLane &&
         pqSealRootVerdict(m.conversationPubkey ?? m.pubkey) == null) {
       m.pqPending = true;
     }
@@ -4761,13 +4877,6 @@ class NostrController {
     if (invited.isNotEmpty &&
         _ref.read(appStateProvider).isChannelBlockedKey(invited)) {
       return;
-    }
-    // A known nym wins over the pure mapper's `nym#xxxx` fallback.
-    if (m.isOwn) {
-      final selfNym = _ref.read(appStateProvider).selfNym;
-      if (selfNym.isNotEmpty) m.author = selfNym;
-    } else {
-      m.author = _nymDisplayFor(m.pubkey);
     }
     // Enforce "Who can PM you"; our own self-copy is always kept.
     if (!m.isOwn) {
@@ -4777,6 +4886,21 @@ class NostrController {
           !_ref.read(appStateProvider).isFriend(m.pubkey)) {
         return;
       }
+    }
+    // A known nym wins over the pure mapper's `nym#xxxx` fallback.
+    if (m.isOwn) {
+      final selfNym = _ref.read(appStateProvider).selfNym;
+      if (selfNym.isNotEmpty) m.author = selfNym;
+    } else {
+      final sentName = _tagValue(tags, 'n');
+      if (sentName != null &&
+          m.pubkey == senderPubkey &&
+          senderPubkey != self &&
+          (u.senderVerified || u.sealBindsSender)) {
+        appState.noteTaggedName(senderPubkey, sentName,
+            (rumor['created_at'] as num?)?.toInt() ?? 0);
+      }
+      m.author = _nymDisplayFor(m.pubkey);
     }
     // Split a verified bot's `<think>` block at ingest so every arrival path renders it the same.
     if (!m.isOwn && isVerifiedBot(m.pubkey)) {
@@ -4810,6 +4934,7 @@ class NostrController {
         !m.isOwn && _ref.read(appStateProvider).isMessageFiltered(m);
     // Delivery receipt back to the sender (not for our own self-copy).
     if (!m.isOwn &&
+        !m.anonLane &&
         !pmHidden &&
         m.nymMessageId != null &&
         !receiptsOff &&
@@ -4931,7 +5056,8 @@ class NostrController {
           !_ref.read(appStateProvider).blockedUsers.contains(senderPubkey)) {
         unawaited(_maybeReplyKeyResync(groupId, senderPubkey,
             ts: (rumor['created_at'] as num?)?.toInt() ?? 0,
-            x: _tagValue(tags, 'x')));
+            x: _tagValue(tags, 'x'),
+            announced: _tagValue(tags, 'ephemeral_pk')));
       }
       return;
     }
@@ -4950,7 +5076,6 @@ class NostrController {
         _ref.read(groupToolsProvider).isPendingJoin(groupId);
     if (type == GroupControlType.invite ||
         type == GroupControlType.addMember) {
-      _ref.read(groupToolsProvider).clearPendingJoin(groupId);
       final controlSelf = _service?.selfPubkey ?? _identity?.pubkey ?? '';
       if (appState.groupById(groupId) == null &&
           senderPubkey != controlSelf &&
@@ -5003,6 +5128,7 @@ class NostrController {
             genesisOwner: genesisOwner);
         final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
         final metaFresh = inviteTs >= existingGroup.metaUpdatedAt;
+        _ref.read(groupToolsProvider).clearPendingJoin(groupId);
         if (trusted) {
           appState.enrichGroupIdentity(groupId,
               createdBy: owner,
@@ -5056,6 +5182,7 @@ class NostrController {
       GroupLogic.noteMetaSetters(
           invited, GroupLogic.metaSnapshot(null), senderPubkey);
       appState.upsertGroup(invited);
+      _ref.read(groupToolsProvider).clearPendingJoin(groupId);
       final createdGroup = appState.groupById(groupId);
       if (createdGroup != null &&
           GroupLogic.applyGroupToolsMeta(createdGroup, tags, inviteTs)) {
@@ -5065,17 +5192,14 @@ class NostrController {
       unawaited(announceGroupEphemeralKey(groupId,
           ts: inviteTs, x: _tagValue(tags, 'x')));
       if (_notificationsEnabled &&
+          !_giAccepting.contains(groupId) &&
           !_ref.read(appStateProvider).blockedUsers.contains(senderPubkey)) {
-        // Invite content, else the PWA's fallback line.
-        final content = rumor['content'];
         final shownGroup = appState.groupById(groupId);
         final shownName = shownGroup == null
             ? name
             : _ref.read(appStateProvider).groupLabel(shownGroup, '');
-        final body = (content is String && content.isNotEmpty)
-            ? content
-            : tr('You\'ve been added to group "{name}"',
-                {'name': shownName.isNotEmpty ? shownName : tr('group')});
+        final body = tr('You\'ve been added to group "{name}"',
+            {'name': shownName.isNotEmpty ? shownName : tr('group')});
         // Fresh invites alert loudly; replays record silently, same rule as other notifications.
         final isHistorical = inviteTs <= 0 ||
             _silentForAlert(inviteTs * 1000, liveWindowMs: 30000);
@@ -5261,6 +5385,7 @@ class NostrController {
               return;
             }
             appState.upsertGroup(joined);
+            _ref.read(groupToolsProvider).clearPendingJoin(groupId);
             final created = appState.groupById(groupId);
             if (created != null &&
                 GroupLogic.applyGroupToolsMeta(created, tags, inviteTs)) {
@@ -5268,6 +5393,7 @@ class NostrController {
             }
           }
         } else {
+          _ref.read(groupToolsProvider).clearPendingJoin(groupId);
           // Backfill a known shell group's owner and appearance; safe since we're already in it.
           final metaFresh = inviteTs >= existing.metaUpdatedAt;
           appState.enrichGroupIdentity(groupId,
@@ -5299,6 +5425,15 @@ class NostrController {
       eventId: u.wrapId,
     );
     if (result == GroupControlResult.applied) {
+      if (groupBefore != null &&
+          type == 'group-remove-member' &&
+          appState.leftGroups.contains(groupId)) {
+        unawaited(_ref.read(groupInvitesProvider).noteLeft(
+            groupId,
+            groupBefore.createdBy,
+            List<String>.of(groupBefore.mods),
+            appState.leftGroups));
+      }
       _emitGroupControlSystemLine(groupId, type, tags, senderPubkey,
           ts: ts, key: _tagValue(tags, 'x') ?? rumor['id'] as String?);
       _maybeNotifyGroupControl(
@@ -5339,6 +5474,7 @@ class NostrController {
     final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
     if (self.isEmpty) return;
     if (senderPubkey == self) return;
+    if (_giAccepting.contains(groupId)) return;
     if (!_notificationsEnabled) return;
     final appState = _ref.read(appStateProvider);
     final mask = appState.personMaskLabel(senderPubkey);
@@ -5602,6 +5738,7 @@ class NostrController {
     // The reacted message's author; group reactions also carry `g` for routing.
     final targetAuthor = _tagValue(tags, 'p') ?? '';
     final groupId = _tagValue(tags, 'g');
+    final kindTag = _tagValue(tags, 'k');
     if (groupId == null) appState.notePeerActivity(pubkey, ts * 1000);
     if (groupId != null) {
       final group = appState.groupById(groupId);
@@ -5614,6 +5751,8 @@ class NostrController {
       tags: [
         ['e', target],
         ['p', targetAuthor.isNotEmpty ? targetAuthor : pubkey],
+        if (kindTag != null) ['k', kindTag],
+        if (groupId != null) ['g', groupId],
         if (action) ['action', 'remove'],
         // Keep the rumor's NIP-30 emoji tags on the synthetic event.
         for (final t in tags)
@@ -5834,7 +5973,7 @@ class NostrController {
   // Outbound: composer send and entry points.
 
   /// Sends [text] to the current view: optimistic echo, then publish.
-  Future<void> sendCurrent(String text) async {
+  Future<void> sendCurrent(String text, {String? quoteSource}) async {
     final trimmed = _stripHiddenEmoji(text).trim();
     if (trimmed.isEmpty) return;
 
@@ -5851,7 +5990,7 @@ class NostrController {
       return;
     }
 
-    await _sendMessageContent(trimmed);
+    await _sendMessageContent(trimmed, quoteSource: quoteSource);
   }
 
   // Anon-nym word lists for pseudonymous sends.
@@ -5986,7 +6125,46 @@ class NostrController {
     unawaited(lane.close());
   }
 
+  AnonLane? _anonDmLane;
+  int _anonDmHolds = 0;
+  Timer? _anonDmIdle;
+
+  bool publishAnonLaneEvent(NostrEvent event) {
+    if (_identity == null) return false;
+    _anonDmIdle?.cancel();
+    _anonDmIdle = null;
+    var lane = _anonDmLane;
+    if (lane == null || lane.closed || !_anonLanes.contains(lane)) {
+      lane = _anonDmLane = _openAnonLane();
+      _anonDmHolds = 0;
+    }
+    final held = lane;
+    _anonDmHolds++;
+    unawaited(held
+        .publish(event)
+        .then<void>((_) {}, onError: (Object _) {})
+        .whenComplete(() => _releaseAnonDmLane(held)));
+    return true;
+  }
+
+  void _releaseAnonDmLane(AnonLane lane) {
+    if (!identical(_anonDmLane, lane)) return;
+    if (_anonDmHolds > 0) _anonDmHolds--;
+    if (_anonDmHolds > 0) return;
+    _anonDmIdle?.cancel();
+    _anonDmIdle = Timer(const Duration(seconds: 10), () {
+      _anonDmIdle = null;
+      if (!identical(_anonDmLane, lane) || _anonDmHolds > 0) return;
+      _anonDmLane = null;
+      _closeAnonLane(lane);
+    });
+  }
+
   void _closeAnonLanes() {
+    _anonDmIdle?.cancel();
+    _anonDmIdle = null;
+    _anonDmLane = null;
+    _anonDmHolds = 0;
     _stopAllAnonPresence();
     final lanes = _anonLanes.toList();
     _anonLanes.clear();
@@ -7295,6 +7473,7 @@ class NostrController {
         .resolve(
       pubkey,
       ingest: (event) => _ingestPqAnnouncementForKey(event, pubkey),
+      workerOnly: isVerifiedBot(pubkey),
       relays: () => service.fetchPqAnnouncement(
         pubkey,
         found: () =>
@@ -7422,6 +7601,17 @@ class NostrController {
 
   bool get pqSelfEnabled => PqPolicy.selfEnabled(
       privkey: _identity?.privkey, root: _pqRoot, mode: _pqMode);
+
+  Uint8List? pqLayeredWrapKeyCached(String pubkey) {
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final pqOn = PqPolicy.enabled(privkey: _identity?.privkey, mode: _pqMode);
+    if (!pqOn) return null;
+    final key = _pqRegistry.keyFor(pubkey, nowSec: nowSec, enabled: pqOn);
+    if (key == null) return null;
+    return _pqRegistry.acceptsLayered(pubkey, nowSec: nowSec, enabled: pqOn)
+        ? key
+        : null;
+  }
 
   /// Layered (`pq2`) key to seal a DM to [pubkey] after one lookup, or null for classical; used by the Nymbot engine.
   Future<Uint8List?> pqLayeredWrapKeyFor(String pubkey) async {
@@ -8522,6 +8712,74 @@ class NostrController {
     _publishPmSupportPeers(store);
   }
 
+  static Duration debugPmSendOkTimeout = const Duration(seconds: 15);
+  final Map<String, String> _sendingWraps = <String, String>{};
+  final Map<String, List<NostrEvent>> _sentPmWraps = <String, List<NostrEvent>>{};
+  final Map<String, Timer> _sendOkTimers = <String, Timer>{};
+
+  void _noteSendingWrap(String nymMessageId, NostrEvent wrap) {
+    _sendingWraps[wrap.id] = nymMessageId;
+    (_sentPmWraps[nymMessageId] ??= <NostrEvent>[]).add(wrap);
+    while (_sendingWraps.length > 600) {
+      _sendingWraps.remove(_sendingWraps.keys.first);
+    }
+    while (_sentPmWraps.length > 200) {
+      _sentPmWraps.remove(_sentPmWraps.keys.first);
+    }
+  }
+
+  void _onDmAccepted(String eventId) {
+    if (_retired) return;
+    final nym = _sendingWraps.remove(eventId);
+    if (nym == null) return;
+    _sendingWraps.removeWhere((_, v) => v == nym);
+    _sendOkTimers.remove(nym)?.cancel();
+    try {
+      _ref
+          .read(appStateProvider.notifier)
+          .markOwnSendState(nym, DeliveryStatus.sent);
+    } catch (_) {}
+  }
+
+  void _armSendOk(String nymMessageId) {
+    _sendOkTimers.remove(nymMessageId)?.cancel();
+    _sendOkTimers[nymMessageId] =
+        Timer(debugPmSendOkTimeout, () => _onSendOkTimeout(nymMessageId));
+  }
+
+  void _onSendOkTimeout(String nymMessageId) {
+    _sendOkTimers.remove(nymMessageId);
+    if (_retired) return;
+    if (_suspended) {
+      _armSendOk(nymMessageId);
+      return;
+    }
+    final app = _ref.read(appStateProvider.notifier);
+    if (app.ownSendStatus(nymMessageId) != DeliveryStatus.sending) return;
+    final service = _service;
+    if (service == null || !service.relayLinked) {
+      _armSendOk(nymMessageId);
+      return;
+    }
+    app.markOwnSendState(nymMessageId, DeliveryStatus.failed);
+  }
+
+  bool retryPmWraps(String? nymMessageId) {
+    if (nymMessageId == null) return false;
+    final wraps = _sentPmWraps[nymMessageId];
+    final service = _service;
+    if (wraps == null || wraps.isEmpty || service == null) return false;
+    _ref
+        .read(appStateProvider.notifier)
+        .markOwnSendState(nymMessageId, DeliveryStatus.sending);
+    for (final w in wraps) {
+      _sendingWraps[w.id] = nymMessageId;
+      service.publishDmQueued(w);
+    }
+    _armSendOk(nymMessageId);
+    return true;
+  }
+
   /// Queues a sent PM for receipt-driven auto-retry and starts the checker if idle.
   void _trackPendingDm({
     required String nymMessageId,
@@ -8718,17 +8976,17 @@ class NostrController {
       _sendMessageContent(content, threadRoot: threadRoot, viewOverride: view);
 
   Future<void> _sendMessageContent(String content,
-      {String? threadRoot, ChatView? viewOverride, bool noThread = false}) async {
+      {String? threadRoot,
+      ChatView? viewOverride,
+      bool noThread = false,
+      String? quoteSource}) async {
     final trimmed = content.trim();
     if (trimmed.isEmpty) return;
-    // Every send marks us active and throttle-broadcasts presence.
-    recordOwnActivity();
     final appState = _ref.read(appStateProvider.notifier);
     final state = _ref.read(appStateProvider);
     final service = _service;
     final identity = _identity;
     final view = viewOverride ?? state.view;
-    _markDirty(view.storageKey);
 
     // In a thread view, reply into the thread only if its root belongs to this conversation.
     if (threadRoot == null && !noThread) {
@@ -8737,6 +8995,11 @@ class NostrController {
         threadRoot = at.rootId;
       }
     }
+    final laneSend = view.kind == ViewKind.pm &&
+        isVerifiedBot(view.id) &&
+        (_botQuietRef(threadRoot) || _botQuietRef(quoteSource));
+    if (!laneSend) recordOwnActivity();
+    _markDirty(view.storageKey);
 
     // Offline sends go over the mesh (and mesh-only peers always do); online everything goes to Nostr.
     final meshBridge = _ref.read(meshControllerProvider.notifier).bridge;
@@ -8823,23 +9086,32 @@ class NostrController {
         if (botPMCommandRe.hasMatch(canonicalizeCommandInput(trimmed))) {
           unawaited(_ref
               .read(botChatControllerProvider.notifier)
-              .handleBotPMCommand(trimmed, hardcore: hardcore));
+              .handleBotPMCommand(trimmed,
+                  hardcore: hardcore, threadRoot: threadRoot, quoteSource: quoteSource));
           return;
         }
         // Route through the engine so exactly one bot-addressed wrap is published and its id rides the paid request.
         unawaited(_ref
             .read(botChatControllerProvider.notifier)
-            .sendUserBotPM(trimmed, hardcore: hardcore));
+            .sendUserBotPM(trimmed, hardcore: hardcore, quoteSource: quoteSource));
+        return;
+      }
+      if (appState.ownSendingWith(view.storageKey, trimmed,
+          threadRoot: threadRoot)) {
         return;
       }
       final nymMessageId = PmLogic.generateSharedEventId();
       final echo = appState.sendLocal(trimmed,
           nymMessageId: nymMessageId,
           threadRoot: threadRoot,
-          viewOverride: view);
+          viewOverride: view,
+          sending: true);
       echo?.expiresAt = _msgSettings
           .expirationFor(DateTime.now().millisecondsSinceEpoch ~/ 1000);
-      if (service == null || identity == null) return;
+      if (service == null || identity == null) {
+        appState.markOwnSendState(nymMessageId, DeliveryStatus.failed);
+        return;
+      }
       final claim = _claimChannelKey(service, identity);
       final typed = _takeTypingUnderClaim(view, claim);
       final base = PmLogic.buildPmRumor(
@@ -8872,11 +9144,17 @@ class NostrController {
           onWrap: (w) {
             _archiveSentWrap(w);
             sentWraps.add(w);
+            _noteSendingWrap(nymMessageId, w);
+            final to = w.tagValue('p');
+            if (view.id == identity.pubkey ? to == view.id : to != view.id) {
+              appState.adoptOwnSendId(nymMessageId, w.id);
+            }
           },
           queuedKey: nymMessageId,
           claim: claim,
           sender: identity,
         );
+        _armSendOk(nymMessageId);
         // Queue for auto-retry until a receipt acks it; the verified bot never sends receipts, so its PMs aren't queued.
         if (!isVerifiedBot(view.id)) {
           _trackPendingDm(
@@ -8935,12 +9213,22 @@ class NostrController {
           ...GroupLogic.groupMetaPiggybackTags(group, identity.pubkey),
         ],
       );
+      String? selfTarget;
       await service.publishGroupMessage(
         rumor: rumor,
         recipients: group.members,
-        encryptTo: (pk) => ek.encryptionPubkeyFor(pk, identity.pubkey),
+        encryptTo: (pk) {
+          final target = ek.encryptionPubkeyFor(pk, identity.pubkey);
+          if (pk == identity.pubkey) selfTarget = target;
+          return target;
+        },
         settings: _msgSettings,
-        onWrap: _archiveSentWrap,
+        onWrap: (w) {
+          _archiveSentWrap(w);
+          if (selfTarget != null && w.tagValue('p') == selfTarget) {
+            appState.adoptOwnSendId(nymMessageId, w.id);
+          }
+        },
         kemKeyFor: _pqGroupKeyFor,
         layeredFor: _pqGroupLayeredFor,
         // Partial PQ coverage must not read as protected, so the badge carries the count.
@@ -8959,6 +9247,7 @@ class NostrController {
 
   /// Random/hardcore removes the saved session nsec; persistent saves the current one if none is stored.
   Future<void> _onKeypairModeChanged(String mode) async {
+    _throwawayNeedles();
     _service?.setAddedRelays(_ref.read(addedRelaysProvider.notifier).inUse);
     final identity = _identity;
     // Durable logins never touch the ephemeral session key.
@@ -8967,7 +9256,9 @@ class NostrController {
     try {
       if (mode == 'random' || mode == 'hardcore') {
         await secure.remove(SecretKeys.sessionNsec);
+        await secure.remove('nym_ephemeral_keys_${identity.pubkey}');
       } else {
+        _persistGroupStore();
         final existing = await secure.get(SecretKeys.sessionNsec);
         if ((existing == null || existing.isEmpty) &&
             identity.privkey != null) {
@@ -9188,7 +9479,7 @@ class NostrController {
       _emitSystemMessage(tr('Usage: /nick newnym'));
       return;
     }
-    final next = trimmed.length > 20 ? trimmed.substring(0, 20) : trimmed;
+    final next = capNymBase(trimmed);
     if (stripPubkeySuffix(_identity?.nym ?? '') == next) {
       _emitSystemMessage(tr('That is already your current nym'));
       return;
@@ -9763,15 +10054,36 @@ class NostrController {
       settings: _msgSettings,
     );
     _afterSelfKeyRotation();
-    if (x != null) {
+    if (x != null || !held) {
       _noteControlAnswered(groups, groupId, x, ts, minted: !held);
-    } else if (!held) {
-      _syncMintedGroupKey(groupId);
     }
   }
 
   bool _holdsGroupKey(String groupId) =>
       _groups?.ephemeralKeysForSync()[groupId]?['self'] != null;
+
+  void _adoptStorageSync(StorageSync sync) {
+    _storageSync = sync..setLocalOnly(_settingsLocalOnly);
+    sync.onRowOversize = _onSyncRowOversize;
+  }
+
+  final Set<String> _oversizeNoticed = <String>{};
+
+  void _onSyncRowOversize(String dTag) {
+    final text = switch (dTag) {
+      FoldersKeys.dTag => FoldersStrings.capSize,
+      ChatLockKeys.lockedDTag => ChatLockStrings.lockFull,
+      _ => null,
+    };
+    if (text == null || !_oversizeNoticed.add(dTag)) return;
+    _emitSystemMessage(tr(text));
+  }
+
+  bool _settingsLocalOnly() {
+    if (_identity?.loginMethod != null) return false;
+    final mode = _ref.read(settingsProvider.notifier).keypairMode;
+    return mode == 'random' || mode == 'hardcore';
+  }
 
   bool _rowUploadAllowed() {
     if (!_settingsHydrated) {
@@ -9809,6 +10121,39 @@ class NostrController {
     } catch (_) {}
   }
 
+  static final RegExp _hex64 = RegExp(r'[0-9a-f]{64}');
+
+  bool _anonBotChatOn() {
+    try {
+      return _ref.read(botChatControllerProvider.notifier).anon.enabled;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _readMarkQuiet(String key) {
+    final self = _identity?.pubkey ?? '';
+    final head = key.split('|').first.toLowerCase();
+    final bots = [
+      for (final m in _hex64.allMatches(head))
+        if (m.group(0) != self && isVerifiedBot(m.group(0)!)) m.group(0)!
+    ];
+    if (bots.isEmpty) return false;
+    if (bots.any(_anonLaneNewest)) return true;
+    return _anonBotChatOn();
+  }
+
+  bool _anonLaneNewest(String peer) {
+    final list = _ref.read(appStateProvider).messages[PmLogic.pmStorageKey(peer)];
+    if (list == null) return false;
+    for (var i = list.length - 1; i >= 0; i--) {
+      final m = list[i];
+      if (m.isSystemRow && !m.anonLane) continue;
+      return m.anonLane;
+    }
+    return false;
+  }
+
   Future<bool> _publishReadState(StorageSync sync) {
     final self = _identity?.pubkey ?? '';
     final open = _readMarkOpen();
@@ -9821,6 +10166,7 @@ class NostrController {
       seenMarks: PmLogic.seenMarksToWire(
           _ref.read(chatNavProvider).marksForSync(), self),
       keep: (k) => open(PmLogic.readMarkFromWire(k, self)),
+      quiet: _anonBotChatOn() ? _readMarkQuiet : null,
     );
   }
 
@@ -9840,14 +10186,23 @@ class NostrController {
       return;
     }
     final groups = _groups;
-    unawaited(sync
-        .groupSyncSet(
-          groupConversations: const {},
-          ephemeralKeysByGroup: {groupId: entry},
-          historyByConvKey: const {},
-        )
-        .then((_) => groups?.noteD1Self(groupId, entry))
-        .catchError((Object _) {}));
+    unawaited(sync.groupKeysRowSet(groupId, entry).then((wrote) {
+      groups?.noteD1Self(groupId, entry);
+      if (wrote) {
+        unawaited(sync.publishSettingsChangedPing(const ['groupKeys']));
+      }
+    }).catchError((Object _) {}));
+  }
+
+  final Set<String> _mintRepairs = {};
+
+  void _repairMintedRowSoon(String groupId) {
+    if (!_mintRepairs.add(groupId)) return;
+    Timer.run(() {
+      _mintRepairs.remove(groupId);
+      if (_answersClosed) return;
+      _syncMintedGroupKey(groupId);
+    });
   }
 
   Future<bool> unbanFromGroup(String groupId, String pubkey) async {
@@ -9938,6 +10293,8 @@ class NostrController {
 
     // Remove the group's ephemeral keys after the leave wrap (which uses them) and before the persist below.
     groups?.removeGroup(groupId);
+    unawaited(_ref.read(groupInvitesProvider).noteLeft(groupId,
+        group.createdBy, List<String>.of(group.mods), {...appState.leftGroups, groupId}));
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final selfModTs = group.modTsByTarget[identity.pubkey] ?? 0;
 
@@ -10322,7 +10679,7 @@ class NostrController {
 
   /// Replies to a key-resync request with our current key, rate-limited to 1h per group and requester.
   Future<void> _maybeReplyKeyResync(String groupId, String requester,
-      {int ts = 0, String? x}) async {
+      {int ts = 0, String? x, String? announced}) async {
     try {
       final identity = _identity;
       final groups = _groups;
@@ -10348,6 +10705,10 @@ class NostrController {
       await _settleBeforeAnswer(groupId);
       if (_answersClosed || _identity != identity || _groups != groups) return;
       if (x != null && groups.wasAnswered(groupId, x)) return;
+      if (groups.keyAlreadyGiven(groupId, requester, announced: announced)) {
+        _keyResyncReplyMs.remove(rlKey);
+        return;
+      }
       if (!answerable()) return;
       final group = _ref.read(appStateProvider.notifier).groupById(groupId)!;
       final held = _holdsGroupKey(groupId);
@@ -10401,7 +10762,8 @@ class NostrController {
       if (!ok || _answersClosed || groups == null || _groups != groups) return;
       final pk = groups.keysFor(groupId).selfCurrent?.pk;
       if (!held && pk != null) {
-        groups.answerMinted[groupId] = pk;
+        groups.noteMinted(groupId, pk);
+        _persistGroupStore();
         unawaited(_settleMintedKey(groups, groupId));
       } else if (x != null) {
         _persistGroupStore();
@@ -10463,7 +10825,7 @@ class NostrController {
       {required bool minted}) {
     if (_groups != groups || _answersClosed) return;
     final pk = groups.keysFor(groupId).selfCurrent?.pk;
-    if (minted && pk != null) groups.answerMinted[groupId] = pk;
+    if (minted && pk != null) groups.noteMinted(groupId, pk);
     if (x != null) {
       groups.noteAnswered(groupId, x, ts > 0 ? ts : _nowSecForAnswers(),
           _nowSecForAnswers());
@@ -10626,6 +10988,7 @@ class NostrController {
         GroupLogic.admitMembers(group, {for (final pk in fit) pk: nowSec});
     final added = admit.added;
     if (added.isEmpty) return false;
+    appState.markGroupInvited(group, added, nowSec);
     (_ownGroupAdds[groupId] ??= <String>{}).addAll(added);
     appState.upsertGroup(group);
 
@@ -10753,8 +11116,29 @@ class NostrController {
 
   // Social / moderation.
 
+  bool _privacyFitsWith(String field, String value) {
+    final st = _ref.read(appStateProvider);
+    final lists = <String, Iterable<String>>{
+      'blockedUsers': st.blockedUsers,
+      'friends': st.friends,
+      'blockedKeywords': st.blockedKeywords,
+      'blockedChannels': st.blockedChannels,
+      'hiddenChannels': st.hiddenChannels,
+    };
+    final cur = lists[field] ?? const <String>[];
+    if (cur.contains(value)) return true;
+    lists[field] = [...cur, value];
+    if (PrivacyRow.listsFit(lists)) return true;
+    _emitSystemMessage(tr(PrivacyRow.full));
+    return false;
+  }
+
   bool toggleFriend(String pubkey) {
     if (pubkey.isEmpty) return false;
+    if (!_ref.read(appStateProvider).friends.contains(pubkey) &&
+        !_privacyFitsWith('friends', pubkey)) {
+      return false;
+    }
     final appState = _ref.read(appStateProvider.notifier);
     final nowFriend = appState.toggleFriend(pubkey);
     _persistSet(StorageKeys.friends, _ref.read(appStateProvider).friends);
@@ -10767,6 +11151,7 @@ class NostrController {
 
   bool blockUser(String pubkey) {
     if (pubkey.isEmpty) return false;
+    if (!_privacyFitsWith('blockedUsers', pubkey)) return false;
     final appState = _ref.read(appStateProvider.notifier);
     final added = appState.blockUser(pubkey);
     if (added) {
@@ -10807,6 +11192,11 @@ class NostrController {
   }
 
   bool addBlockedKeyword(String keyword) {
+    final normalized = keyword.trim().toLowerCase();
+    if (normalized.isNotEmpty &&
+        !_privacyFitsWith('blockedKeywords', normalized)) {
+      return false;
+    }
     final appState = _ref.read(appStateProvider.notifier);
     final kw = appState.addBlockedKeyword(keyword);
     if (kw == null) return false;
@@ -10829,6 +11219,16 @@ class NostrController {
   }
 
   // Message edit / delete.
+
+  void _onEditStored(String storageKey, Message m) {
+    _markDirty(storageKey);
+    final st = _ref.read(appStateProvider);
+    final body = NymFormat.stripForPreview(st.stripBlockedQuotes(
+        _stripHiddenEmoji(notificationBodyFor(m.content)), m.quoted));
+    _ref
+        .read(notificationHistoryProvider.notifier)
+        .retext([m.id, m.nymMessageId ?? ''], body);
+  }
 
   /// Re-publishes [messageId] with an `['edit', originalId]` tag and rewrites it locally; true if attempted.
   Future<bool> editMessage(String messageId, String newContent) async {
@@ -11047,7 +11447,16 @@ class NostrController {
     return _appInForeground;
   }
 
+  @visibleForTesting
+  PresenceActivityGate get presenceGateForTest => _presenceGate;
+
+  bool _presenceQuietView() {
+    final v = _ref.read(appStateProvider).view;
+    return v.kind == ViewKind.pm && (_readMarkQuiet(v.id) || _anonLaneTypingQuiet(v));
+  }
+
   void notePresenceActivity(String kind) {
+    if (kind != 'connect' && _presenceQuietView()) return;
     _presenceGate.note(kind);
     _syncGeoPresenceSend();
   }
@@ -11509,6 +11918,7 @@ class NostrController {
       lastSeenMs: now,
     );
 
+    if (kind != 'connect' && _presenceQuietView()) return;
     _presenceGate.note(kind);
   }
 
@@ -11530,7 +11940,7 @@ class NostrController {
     final identity = sender ?? _identity;
     if (service == null || identity == null) return;
     if (view.kind == ViewKind.pm) {
-      if (anonSuppressSendTo(view.id)) return;
+      if (_anonLaneTypingQuiet(view)) return;
       await service.publishTyping(
           status: 'stop',
           recipients: [view.id],
@@ -11541,7 +11951,11 @@ class NostrController {
     final group = _ref.read(appStateProvider.notifier).groupById(view.id);
     if (group == null) return;
     final ek = _groups!.keysFor(group.id);
-    final others = group.members.where((p) => p != identity.pubkey).toList();
+    final others = _ref
+        .read(appStateProvider.notifier)
+        .groupAccepted(group)
+        .where((p) => p != identity.pubkey)
+        .toList();
     if (others.isEmpty) return;
     await service.publishTyping(
       status: 'stop',
@@ -11579,9 +11993,12 @@ class NostrController {
       _typingStartTimers[key] =
           Timer(const Duration(milliseconds: _typingStartDebounceMs), () {
         _typingStartTimers.remove(key);
+        final current = _ref.read(appStateProvider).view;
+        if (current.storageKey != key) return;
         _typingStartedFor.add(key);
         _typingThrottle[key] = DateTime.now().millisecondsSinceEpoch;
-        unawaited(sendTypingStart());
+        unawaited(
+            _publishTypingSignal(current, 'start', chatActivityFor(key)));
       });
       return;
     }
@@ -11611,7 +12028,7 @@ class NostrController {
     }
 
     if (view.kind == ViewKind.pm) {
-      if (anonSuppressSendTo(view.id)) return;
+      if (_anonLaneTypingQuiet(view)) return;
       await service.publishTyping(
           status: status,
           recipients: [view.id],
@@ -11621,7 +12038,11 @@ class NostrController {
       final group = _ref.read(appStateProvider.notifier).groupById(view.id);
       if (group == null) return;
       final ek = _groups!.keysFor(group.id);
-      final others = group.members.where((p) => p != identity.pubkey).toList();
+      final others = _ref
+          .read(appStateProvider.notifier)
+          .groupAccepted(group)
+          .where((p) => p != identity.pubkey)
+          .toList();
       if (others.isEmpty) return;
       await service.publishTyping(
         status: status,
@@ -11657,7 +12078,7 @@ class NostrController {
         _ref.read(settingsProvider).typingIndicatorsScope, ctx)) {
       return false;
     }
-    if (view.kind == ViewKind.pm && anonSuppressSendTo(view.id)) return false;
+    if (_anonLaneTypingQuiet(view)) return false;
     return true;
   }
 
@@ -11763,7 +12184,7 @@ class NostrController {
     final messages = st.messages[PmLogic.pmStorageKey(peerPubkey)];
     if (messages == null || messages.isEmpty) return;
     for (final m in messages) {
-      if (m.isOwn || m.spamGated || st.isMessageFiltered(m)) continue;
+      if (m.isOwn || m.anonLane || m.spamGated || st.isMessageFiltered(m)) continue;
       final id = m.nymMessageId;
       if (id == null || id.isEmpty) continue;
       unawaited(sendReadReceipt(id, peerPubkey));
@@ -12013,6 +12434,10 @@ class NostrController {
     if (!_checkReactionRateLimit(messageId, emoji)) return false;
 
     final appState = _ref.read(appStateProvider.notifier);
+    final laneMsg = appState.messageById(messageId);
+    if (laneMsg != null && laneMsg.anonLane) {
+      return _anonLaneReaction(laneMsg, emoji);
+    }
     final state = _ref.read(appStateProvider);
     final self = state.selfPubkey;
 
@@ -12045,7 +12470,7 @@ class NostrController {
     if (kind == '1059' || kind == '14') {
       final shareId =
           appState.messageById(messageId)?.nymMessageId ?? messageId;
-      return _sendPrivateReaction(shareId, emoji, target, remove);
+      return _sendPrivateReaction(shareId, emoji, target, remove, row: laneMsg);
     }
 
     // Resolve the channel context from the active view.
@@ -12150,8 +12575,101 @@ class NostrController {
     );
   }
 
+  Future<bool> _anonLaneReaction(Message m, String emoji) async {
+    final bot = _ref.read(botChatControllerProvider.notifier);
+    if (bot.anon.identity == null) {
+      showToast(tr(
+          'Reactions are off on this anonymous Nymbot message: its anonymous key is gone, and a reaction from your nym would link the two.'));
+      return false;
+    }
+    final appState = _ref.read(appStateProvider.notifier);
+    final state = _ref.read(appStateProvider);
+    final remove = (state.reactions[m.id] ?? const [])
+        .any((r) => r.emoji == emoji && r.userReacted);
+    appState.applyReaction(
+      messageId: m.id,
+      emoji: emoji,
+      reactor: state.selfPubkey,
+      removed: remove,
+      reactorNym: state.selfNym,
+    );
+    return bot.publishAnonReaction(
+      messageId: m.nymMessageId ?? m.id,
+      emoji: emoji,
+      remove: remove,
+      own: m.isOwn,
+      emojiTags: _ref
+          .read(liveCustomEmojiProvider.notifier)
+          .emojiTagsForContent(emoji, anon: true),
+    );
+  }
+
+  bool anonLaneRecentsQuiet({String? messageId, ChatView? view}) {
+    if (messageId != null && messageId.isNotEmpty) {
+      final m = _ref.read(appStateProvider.notifier).messageById(messageId);
+      if (m != null && m.anonLane) return true;
+    }
+    return view != null && _anonLaneTypingQuiet(view);
+  }
+
+  bool _anonLaneRef(String? messageId) =>
+      messageId != null &&
+      messageId.isNotEmpty &&
+      (_ref.read(appStateProvider.notifier).messageById(messageId)?.anonLane ?? false);
+
+  final Map<String, String> _composerQuotes = <String, String>{};
+
+  bool anonLaneMessage(String? messageId) => _anonLaneRef(messageId);
+
+  bool _botQuietRef(String? messageId) =>
+      messageId != null &&
+      messageId.isNotEmpty &&
+      (_ref.read(appStateProvider.notifier).messageById(messageId)?.anonLane ?? true);
+
+  String? scheduleLaneRefusal(String key, String? threadRoot) {
+    if (!key.startsWith('pm-') || !isVerifiedBot(key.substring(3))) return null;
+    final lane = _ref.read(botChatControllerProvider.notifier).laneFor(threadRoot, _composerQuotes[key]);
+    return lane == false ? null : tr(kBotLaneLinkRefusal);
+  }
+
+  void noteComposerQuote(ChatView view, String? messageId) {
+    if (messageId == null || messageId.isEmpty) {
+      _composerQuotes.remove(view.storageKey);
+    } else {
+      _composerQuotes[view.storageKey] = messageId;
+    }
+  }
+
+  bool anonLaneZapRefused(String? messageId) {
+    if (!_anonLaneRef(messageId)) return false;
+    showToast(tr(
+        'Zaps are off on anonymous Nymbot messages: a zap is paid from your own wallet and would link the chat to you.'));
+    return true;
+  }
+
+  bool _anonLaneTypingQuiet(ChatView view) {
+    if (view.kind != ViewKind.pm) return false;
+    if (anonSuppressSendTo(view.id)) return true;
+    if (!isVerifiedBot(view.id)) return false;
+    try {
+      final at = _ref.read(activeThreadProvider);
+      if (at != null && at.view == view && _anonLaneRef(at.rootId)) return true;
+      if (_anonLaneRef(_composerQuotes[view.storageKey])) return true;
+      final list = _ref.read(appStateProvider).messages[view.storageKey];
+      if (list == null) return false;
+      for (final m in list.reversed) {
+        if (m.isSystemRow) continue;
+        return m.anonLane;
+      }
+      return false;
+    } catch (_) {
+      return true;
+    }
+  }
+
   Future<bool> _sendPrivateReaction(
-      String messageId, String emoji, String target, bool remove) async {
+      String messageId, String emoji, String target, bool remove,
+      {Message? row}) async {
     final service = _service;
     final identity = _identity;
     if (service == null || identity == null) return false;
@@ -12164,8 +12682,14 @@ class NostrController {
 
     // Group reaction: gift-wrap to all members with ['g', groupId].
     final view = _ref.read(appStateProvider).view;
-    if (view.kind == ViewKind.group) {
-      final group = appState.groupById(view.id);
+    final rowGroup = row?.groupId;
+    final groupId = rowGroup != null && rowGroup.isNotEmpty
+        ? rowGroup
+        : (row == null || row.isGroup) && view.kind == ViewKind.group
+            ? view.id
+            : null;
+    if (groupId != null) {
+      final group = appState.groupById(groupId);
       if (group == null) return false;
       queueGroupReaction(group.id, messageId, emoji, remove);
       return true;
@@ -12173,7 +12697,12 @@ class NostrController {
 
     final reactionClaim = _claimChannelKey(service, identity);
     // 1:1 reaction: gift-wrap to self and peer with ['p', target], ['k', '1059'].
-    final peer = view.kind == ViewKind.pm ? view.id : target;
+    final rowPeer = row != null && row.isPM && !row.isGroup ? row.conversationPubkey : null;
+    final peer = rowPeer != null && rowPeer.isNotEmpty
+        ? rowPeer
+        : view.kind == ViewKind.pm
+            ? view.id
+            : target;
     final rumor = UnsignedEvent(
       pubkey: identity.pubkey,
       createdAt: nowSec,
@@ -12348,6 +12877,7 @@ class NostrController {
 
     final signed = await service.publishProfile(jsonEncode(profile));
     if (signed == null) return false;
+    if (lud16 != null) setOwnLightningAddress(lud16);
     // Keep the kind-0 cache in step with what was published.
     _adoptSelfKind0(signed);
 
@@ -12433,9 +12963,11 @@ class NostrController {
       }
     }
     if (missing.isEmpty) return;
-    final fetched = service?.fetchProfiles(missing);
     final own = _identity?.pubkey;
-    if (fetched == null || own == null || !missing.contains(own)) return;
+    final asksOwn = own != null && missing.contains(own);
+    final fetched = service?.fetchProfiles(missing,
+        everyRelay: asksOwn ? const Duration(seconds: 4) : null);
+    if (fetched == null || !asksOwn) return;
     unawaited(fetched.then((seen) {
       if (seen != null &&
           !seen.contains(own) &&
@@ -12523,11 +13055,12 @@ class NostrController {
           replace: true,
         );
     if (before == channels.join('\n')) return;
-    _persistSet(StorageKeys.pinnedChannels, channels.toSet());
+    _persistSet(StorageKeys.pinnedChannels, channels.toSet(), save: false);
     if (persist) syncSettings();
   }
 
   bool hideChannel(String key) {
+    if (!_privacyFitsWith('hiddenChannels', key)) return false;
     final ok = _ref.read(appStateProvider.notifier).hideChannel(key);
     _persistSet(
         StorageKeys.hiddenChannels, _ref.read(appStateProvider).hiddenChannels);
@@ -12543,6 +13076,7 @@ class NostrController {
 
   /// Blocks [key] (not `#nymchat`) and persists.
   bool blockChannel(String key) {
+    if (!_privacyFitsWith('blockedChannels', key)) return false;
     final ok = _ref.read(appStateProvider.notifier).blockChannel(key);
     if (ok) {
       _persistSet(StorageKeys.blockedChannels,
@@ -12566,17 +13100,25 @@ class NostrController {
   void _persistJoinedChannels() {
     final kv = _ref.read(keyValueStoreProvider);
     final channels = _ref.read(appStateProvider).channels;
-    final keys = channels.map((c) => c.key).toList();
-    kv.setString(StorageKeys.userJoinedChannels, jsonEncode(keys));
+    final keys = jsonEncode(channels.map((c) => c.key).toList());
+    final changed = kv.getString(StorageKeys.userJoinedChannels) != keys;
+    kv.setString(StorageKeys.userJoinedChannels, keys);
     final snapshot = channels.map((c) => c.toJson()).toList();
     kv.setString(StorageKeys.userChannels, jsonEncode(snapshot));
+    if (changed) _syncedListChanged();
   }
 
-  void _persistSet(String key, Set<String> values) {
-    _ref
-        .read(keyValueStoreProvider)
-        .setString(key, jsonEncode(values.toList()));
+  void _persistSet(String key, Set<String> values, {bool save = true}) {
+    final kv = _ref.read(keyValueStoreProvider);
+    final next = jsonEncode(values.toList());
+    final changed = kv.getString(key) != next;
+    kv.setString(key, next);
+    if (changed && save) _syncedListChanged();
   }
+
+  void _syncedListChanged() => syncSettings(delay: prefSyncDebounce);
+
+  bool _privacyOversizeNoticed = false;
 
   /// Applies a synced `channelLastRead` map with a monotonic max per key.
   void _applyChannelLastRead(dynamic raw) {
@@ -12594,6 +13136,21 @@ class NostrController {
   }
 
   /// Merges synced favorite GIFs: dedup by url, local first, capped at 100; entries must be `{url, title}`.
+  void _replaceFavoriteGifs(KeyValueStore kv, List<dynamic> remote) {
+    try {
+      final out = <Map<String, dynamic>>[];
+      final seen = <String>{};
+      for (final g in remote) {
+        if (g is! Map || g['url'] is! String) continue;
+        final url = g['url'] as String;
+        if (url.isEmpty || !seen.add(url)) continue;
+        out.add({'url': url, 'title': g['title'] is String ? g['title'] : ''});
+        if (out.length >= 100) break;
+      }
+      kv.setString(StorageKeys.favoriteGifs, jsonEncode(out));
+    } catch (_) {}
+  }
+
   void _mergeFavoriteGifs(KeyValueStore kv, List<dynamic> remote) {
     try {
       final out = <Map<String, dynamic>>[];
@@ -12717,9 +13274,16 @@ class NostrController {
   /// Persists closed PMs and close times so stale backlog can't re-open them after relaunch.
   void _persistClosedPMs() {
     final appState = _ref.read(appStateProvider.notifier);
-    _persistSet(StorageKeys.closedPms, appState.closedPMs);
-    _ref.read(keyValueStoreProvider).setString(
-        StorageKeys.closedPmTimes, jsonEncode(appState.closedPmTimes));
+    final was = _readSet(StorageKeys.closedPms);
+    final opened = was.difference(appState.closedPMs);
+    final quiet = opened.isNotEmpty &&
+        appState.closedPMs.difference(was).isEmpty &&
+        opened.every(appState.quietReopened);
+    _persistSet(StorageKeys.closedPms, appState.closedPMs, save: !quiet);
+    final kv = _ref.read(keyValueStoreProvider);
+    kv.setString(StorageKeys.closedPmTimes, jsonEncode(appState.closedPmTimes));
+    kv.setString(
+        StorageKeys.pmQuietReopens, jsonEncode(appState.pmQuietReopens));
   }
 
   /// Hydrates closed PMs and close times from KV at boot.
@@ -12739,6 +13303,9 @@ class NostrController {
         }
       } catch (_) {}
     }
+    final stamps = _decodeTimes(
+        _ref.read(keyValueStoreProvider).getString(StorageKeys.pmQuietReopens));
+    if (stamps.isNotEmpty) appState.hydratePmQuietReopens(stamps);
     appState.hydrateClosedPMs(closed, times);
   }
 
@@ -12864,10 +13431,10 @@ class NostrController {
     } catch (_) {}
     try {
       final groups = _groups;
-      if (groups != null) {
+      if (groups != null && savedSyncAllowed) {
         // Ephemeral secret keys go in the platform keystore, not plaintext SharedPreferences.
         unawaited(SecureStore().set('nym_ephemeral_keys_${identity.pubkey}',
-            jsonEncode(groups.ephemeralKeysForSync())));
+            jsonEncode(groups.ephemeralKeysForStore())));
         // Drop the legacy plaintext copy.
         if (kv.getString('nym_ephemeral_keys_${identity.pubkey}') != null) {
           kv.remove('nym_ephemeral_keys_${identity.pubkey}');
@@ -12944,8 +13511,10 @@ class NostrController {
           decoded.forEach((gid, entry) {
             if (entry is Map) {
               try {
-                groups.mergeEphemeralKeys(
-                    '$gid', entry.cast<String, dynamic>());
+                final e = Map<String, dynamic>.of(entry.cast<String, dynamic>());
+                groups.restoreSettle('$gid', e.remove('settle'));
+                groups.mergeEphemeralKeys('$gid', e);
+                _invitedSeen('$gid');
               } catch (_) {
                 // Skip a malformed key entry.
               }
@@ -13231,7 +13800,7 @@ class NostrController {
 
   Future<void> _hydrateFromCache(AppStateNotifier appState) async {
     try {
-      final cache = CacheStore();
+      final cache = debugCacheFactory?.call() ?? CacheStore();
       await cache.open();
       _cache = cache;
       _eventTimeCeilings.onChanged = _schedulePersistEventTimeCeilings;
@@ -13241,7 +13810,7 @@ class NostrController {
       final results = await Future.wait([
         cache.loadAllProfiles(),
         cache.loadAllReactions(),
-        cache.loadAllChannelMessages(),
+        cache.loadAllChannelMessages(onBlob: appState.noteDroppedBlobId),
         cachePms
             ? cache.loadAllPmMessages()
             : Future.value(<String, List<Message>>{}),
@@ -13624,7 +14193,7 @@ class NostrController {
         return cache.loadMetaMap(kPmDepositStoreKey);
       },
     );
-    _storageSync = sync;
+    _adoptStorageSync(sync);
     sync.onJoinSettingsPing = () async {
       try {
         return await _ref.read(sidebarFoldersProvider).joinSettingsPing();
@@ -13695,6 +14264,143 @@ class NostrController {
   @visibleForTesting
   void wireSyncHooksForTest() => _wireSyncHooks();
 
+  String? get ownLightningAddress {
+    if (!savedSyncAllowed) {
+      final ln = _cachedKind0Profile?['lud16'];
+      return ln is String ? ln : null;
+    }
+    final kv = _ref.read(keyValueStoreProvider);
+    final pk = _identity?.pubkey ?? '';
+    final stored = (pk.isEmpty
+            ? null
+            : kv.getString(StorageKeys.lightningAddressFor(pk))) ??
+        kv.getString(StorageKeys.lightningAddressGlobal);
+    if (stored != null) return stored;
+    return PrefStamps.get(kv, 'lightningAddress') > 0 ? '' : null;
+  }
+
+  static final _storedLightningKey =
+      RegExp(r'^nym_lightning_address_(global|[0-9a-f]{64})$');
+
+  static final _sessionScopedKey = RegExp(
+      r'^(nym_ephemeral_keys_|nym_groups_|nym_left_groups_|nym_group_upload_owed_|nym_botpm_inflight_|nym_locked_chats:|nym_locked_pending:|nym_pinned_chats:|nym_pinned_pending:|nym_seen_first:|nym_seen_marks:|nym_unread_mentions:|nym_scheduled_cache:)([0-9a-f]{64})$');
+
+  final Set<String> _throwawayPks = {};
+  final List<String> _throwawayNeedleList = [];
+
+  Iterable<String> _throwawayNeedles() {
+    if (savedSyncAllowed) {
+      if (_throwawayPks.isNotEmpty) {
+        final cur = _identity?.pubkey ?? '';
+        final retired = <String>[
+          for (final p in _throwawayPks)
+            if (p != cur) ...[p, bech32.encodeNpub(p)],
+        ];
+        _throwawayPks.clear();
+        _throwawayNeedleList.clear();
+        _ref.read(keyValueStoreProvider).releaseSession(retired);
+      }
+      return const <String>[];
+    }
+    final pk = _identity?.pubkey ?? '';
+    if (pk.length == 64 && _throwawayPks.add(pk)) {
+      _throwawayNeedleList
+        ..add(pk)
+        ..add(bech32.encodeNpub(pk));
+    }
+    return _throwawayNeedleList;
+  }
+
+  void _dropOtherInflight(String selfPk) {
+    final kv = _ref.read(keyValueStoreProvider);
+    for (final k in kv.keys.toList()) {
+      if (k.startsWith('nym_botpm_inflight_') && k != 'nym_botpm_inflight_$selfPk') {
+        unawaited(kv.remove(k));
+      }
+    }
+  }
+
+  void _dropThrowawayLeftovers(String selfPk) {
+    final kv = _ref.read(keyValueStoreProvider);
+    for (final k in kv.keys.toList()) {
+      final m = _sessionScopedKey.firstMatch(k);
+      if (m != null && m.group(2) != selfPk) unawaited(kv.remove(k));
+    }
+  }
+
+  static final _groupKeysEntry = RegExp(r'^nym_ephemeral_keys_[0-9a-f]{64}$');
+
+  Future<void> _dropThrowawayGroupKeys() async {
+    final secure = SecureStore();
+    try {
+      final all = await secure.readAll();
+      for (final k in all.keys.where(_groupKeysEntry.hasMatch).toList()) {
+        await secure.remove(k);
+      }
+    } catch (_) {}
+  }
+
+  void _dropStoredLightningKeys() {
+    final kv = _ref.read(keyValueStoreProvider);
+    for (final k in kv.keys.where(_storedLightningKey.hasMatch).toList()) {
+      unawaited(kv.remove(k));
+    }
+  }
+
+  bool _lnKind0MayFill(int createdAt) {
+    if (!savedSyncAllowed) return true;
+    final ts =
+        PrefStamps.get(_ref.read(keyValueStoreProvider), 'lightningAddress');
+    return ts <= 0 || (createdAt > 0 && createdAt * 1000 > ts);
+  }
+
+  void _adoptSyncedLightning(String? ln) {
+    final cached = _cachedKind0Profile;
+    if (cached != null) {
+      cached.remove('lud06');
+      if (ln == null) {
+        cached.remove('lud16');
+      } else {
+        cached['lud16'] = ln;
+      }
+    }
+    final pk = _identity?.pubkey;
+    final profile =
+        pk == null ? null : _ref.read(appStateProvider).users[pk]?.profile;
+    if (profile != null) {
+      profile.lud16 = ln;
+      profile.lud06 = null;
+    }
+  }
+
+  void setOwnLightningAddress(String value) {
+    if (!savedSyncAllowed) {
+      _dropStoredLightningKeys();
+      return;
+    }
+    final kv = _ref.read(keyValueStoreProvider);
+    final pk = _identity?.pubkey ?? '';
+    final ln = value.trim();
+    final cur = (pk.isEmpty
+            ? null
+            : kv.getString(StorageKeys.lightningAddressFor(pk))) ??
+        kv.getString(StorageKeys.lightningAddressGlobal) ??
+        '';
+    if (ln == cur) return;
+    if (ln.isEmpty) {
+      unawaited(kv.remove(StorageKeys.lightningAddressGlobal));
+      if (pk.isNotEmpty) {
+        unawaited(kv.remove(StorageKeys.lightningAddressFor(pk)));
+      }
+    } else {
+      unawaited(kv.setString(StorageKeys.lightningAddressGlobal, ln));
+      if (pk.isNotEmpty) {
+        unawaited(kv.setString(StorageKeys.lightningAddressFor(pk), ln));
+      }
+    }
+    _ref.read(settingsProvider.notifier).notePrefChanged('lightningAddress');
+  }
+
   void _wireSyncHooks() {
     // Persist closed PMs so deletions survive relaunch.
     _ref.read(appStateProvider.notifier).onClosedPmsChanged = _persistClosedPMs;
@@ -13703,6 +14409,9 @@ class NostrController {
       _scheduleChannelLastReadPersist();
       _syncReadState();
     };
+    _ref.read(appStateProvider.notifier).readMarkQuiet = _readMarkQuiet;
+    _ref.read(appStateProvider.notifier).onQuietChannelRead =
+        _scheduleChannelLastReadPersist;
     final bell = _ref.read(notificationHistoryProvider.notifier);
     bell.onSeenChanged = syncSettings;
     bell.onHistoryRepaired = syncSettings;
@@ -13877,6 +14586,11 @@ class NostrController {
     // Only when queued, since this also runs on transient `inactive` states.
     if (_settingsSyncTimer != null) flushSettingsSyncNow();
     if (_replayReadStateTimer != null) unawaited(_flushReplayReadState());
+    if (backgrounded && _cache != null && !PanicWipe.inProgress) {
+      _flushTimer?.cancel();
+      _flushScheduled = false;
+      unawaited(_flush());
+    }
   }
 
   /// During a background catch-up, the timestamp a message must beat to notify; null otherwise.
@@ -14142,12 +14856,15 @@ class NostrController {
       );
       if (answered) _archiveRestoredAt[name] = startedAt;
       final selfPk = _identity?.pubkey;
-      final restored = (await verifiedRows(events, _verifyArchived))
-          .where((ev) => !archivedSpam(ev, selfPk,
-              enabled: appSpamFilterEnabled,
-              aggressive: appSpamFilterAggressive))
-          .toList();
       final appState = _ref.read(appStateProvider.notifier);
+      final restored = (await verifiedRows(events, _verifyArchived,
+              onBlob: appState.noteDroppedBlobId))
+          .where((ev) =>
+              !appState.dropsEncryptedBlob(ev) &&
+              !archivedSpam(ev, selfPk,
+                  enabled: appSpamFilterEnabled,
+                  aggressive: appSpamFilterAggressive))
+          .toList();
       // One emit for the whole archive page.
       appState.runBatched(() {
         for (final ev in restored) {
@@ -14230,6 +14947,7 @@ class NostrController {
             u.pubkey,
       ],
       capped: geoPeekCapped(rows),
+      verifyLabel: tr(kBitchatVerifyLabel),
     );
   }
 
@@ -14506,7 +15224,12 @@ class NostrController {
       // Load succeeded: only now open the outbound-save gate.
       _markSettingsHydrated();
       await _snapshotSettingsRows(sync);
-      if (sync.needsReconcile) _reconcileSettingsSync();
+      final soon = _settingsWriteBackSoon;
+      _settingsWriteBackSoon = false;
+      if (sync.needsReconcile) {
+        _reconcileSettingsSync(
+            soon ? prefSyncDebounce : const Duration(seconds: 5));
+      }
     } catch (_) {
       // Best-effort; retried on reconnect with the save gate still closed.
       _settingsGetFailed = true;
@@ -14552,6 +15275,8 @@ class NostrController {
         _ref.read(sidebarFoldersProvider).applyRemote(sidebarFolders);
       } catch (_) {}
     }
+    final groupInvites = result.groupInvites;
+    if (groupInvites != null) _applyRemoteGroupInvites(groupInvites);
     final lockedChats = result.lockedChats;
     if (lockedChats != null) {
       try {
@@ -14631,6 +15356,8 @@ class NostrController {
             if (groups.mergeEphemeralKeys(gid, entry.cast<String, dynamic>())) {
               keysAdded = true;
             }
+            _invitedSeen(gid);
+            if (groups.repairDue.remove(gid)) _repairMintedRowSoon(gid);
           } catch (_) {
             // Skip a malformed key entry.
           }
@@ -14777,11 +15504,16 @@ class NostrController {
     _ownEph.ensure();
   }
 
-  List<String> _ownEphemeralPubkeys() => [
+  List<String> _ownEphemeralPubkeys() {
+    final anon = _anonBotPubkeys().toSet();
+    return [
+      for (final k in [
         ...?_groups?.allEphemeralPubkeys(),
         ..._ref.read(ghostModeProvider).pubkeys,
-        ..._anonBotPubkeys(),
-      ];
+      ])
+        if (!anon.contains(k)) k,
+    ];
+  }
 
   Subscription _openOwnEphemeralSub(List<String> pks) {
     final service = _service!;
@@ -14826,6 +15558,7 @@ class NostrController {
     }
     // Left-group state: KV union plus live-store merge.
     _mergeLeftGroupsFromSync(s['leftGroups'], s['leftGroupTimes']);
+    _mergeLeftRolesFromSync(s['leftGroupRoles']);
     // Per-conversation read watermarks.
     _applyChannelLastRead(s['channelLastRead']);
     _applySyncExtras(s);
@@ -14847,6 +15580,8 @@ class NostrController {
         _ref.read(sidebarFoldersProvider).applyRemote(sidebarFolders);
       } catch (_) {}
     }
+    final groupInvites = s[GroupInvites.payloadKey];
+    if (groupInvites is Map) _applyRemoteGroupInvites(groupInvites);
     final lockedChats = s['lockedChats'];
     if (lockedChats is Map) {
       try {
@@ -14906,6 +15641,14 @@ class NostrController {
   }
 
   /// Merges synced left groups into KV and the live store: union ids, newest leave time, drop now-left groups.
+  void _mergeLeftRolesFromSync(dynamic roles) {
+    if (roles is! Map || roles.isEmpty) return;
+    unawaited(_ref
+        .read(groupInvitesProvider)
+        .mergeLeftRoles(roles, Set<String>.of(_ref.read(appStateProvider.notifier).leftGroups))
+        .catchError((_) {}));
+  }
+
   void _mergeLeftGroupsFromSync(dynamic leftGroups, dynamic rawLeftTimes) {
     final appState = _ref.read(appStateProvider.notifier);
     if (leftGroups is List) {
@@ -14991,6 +15734,11 @@ class NostrController {
 
   void _markSettingsDirty() {
     if (_applyingSynced) return;
+    try {
+      final kv = _ref.read(keyValueStoreProvider);
+      SetStamps.observe(kv, StorageSync.syncedSetLists(kv),
+          DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {}
     final dirty = _dirtySyncedKeys;
     final base = _syncedBaseline;
     final now = _syncedFlat();
@@ -15010,7 +15758,362 @@ class NostrController {
   void markSettingsDirtyForTest() => _markSettingsDirty();
 
   @visibleForTesting
+  void loadPqSettingsForTest() => _loadPqSettings();
+
+  @visibleForTesting
+  void wireViewOpenedForTest() =>
+      _ref.read(appStateProvider.notifier).onViewOpened = _onViewOpened;
+
+  @visibleForTesting
+  void pqIngestForTest(String pubkey, String content) => _pqRegistry.ingest(
+      pubkey, content,
+      nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000);
+
+  @visibleForTesting
   void processGiftWrapForTest(GiftWrapUnwrapped u) => _processGiftWrap(u);
+
+  @visibleForTesting
+  void startChatNavForTest() => _startChatNav();
+
+  @visibleForTesting
+  void hydrateClosedPMsForTest() =>
+      _hydrateClosedPMs(_ref.read(appStateProvider.notifier));
+
+  @visibleForTesting
+  set anonKeysForTest(Set<String> Function() keys) => _anonKeysOverride = keys;
+
+  Set<String> Function()? _anonKeysOverride;
+
+  final Set<String> _giAccepting = <String>{};
+
+  static const int _kHeldCutoffMs = 1 << 52;
+
+  bool _wrapOnAnonKey(GiftWrapUnwrapped u, String self) {
+    final to = u.recipient;
+    if (to == null || to.isEmpty || to == self) return false;
+    final o = _anonKeysOverride;
+    if (o != null && o().contains(to)) return true;
+    if (_isAnonBotPubkey(to) || _anonOwnKeys.contains(to)) return true;
+    try {
+      return _ref.read(ghostModeProvider).pubkeys.contains(to);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _regateGroupRumor(GiftWrapUnwrapped u,
+      ({bool stale, int? cutoffMs}) gap, bool profileChecked) {
+    try {
+      runZoned(
+          () => _processGiftWrap(u,
+              gapOverride: gap, profileChecked: profileChecked),
+          zoneValues: {_replayZoneKey: u.fromArchive});
+    } catch (_) {}
+  }
+
+  Future<void> _groupInviteAfterProfile(GiftWrapUnwrapped u, String sender,
+      ({bool stale, int? cutoffMs}) gap) async {
+    try {
+      await resolveProfiles([sender])
+          .timeout(const Duration(milliseconds: 2500), onTimeout: () {});
+    } catch (_) {}
+    _regateGroupRumor(u, gap, true);
+  }
+
+  bool _groupInviteGate(GiftWrapUnwrapped u, String self, bool senderBlocked,
+      ({bool stale, int? cutoffMs}) gap, bool profileChecked) {
+    final rumor = u.rumor;
+    final tags = _tags(rumor);
+    final gid = _tagValue(tags, 'g');
+    if (gid == null) return true;
+    if (_wrapOnAnonKey(u, self)) return false;
+    final sender = rumor['pubkey'] as String? ?? '';
+    final appState = _ref.read(appStateProvider.notifier);
+    final left = appState.isLeftGroup(gid);
+    if (_giAccepting.contains(gid) ||
+        sender == self ||
+        (appState.groupById(gid) != null && !left) ||
+        _ref.read(groupToolsProvider).isPendingJoin(gid)) {
+      return true;
+    }
+    if (!u.senderVerified) return false;
+    final svc = _ref.read(groupInvitesProvider);
+    if (!svc.ready) {
+      unawaited(svc.load().then((ok) {
+        if (ok) _regateGroupRumor(u, gap, profileChecked);
+      }));
+      return false;
+    }
+    final st = _ref.read(appStateProvider);
+    final type = _tagValue(tags, 'type');
+    final me = self.isNotEmpty ? self : (_identity?.pubkey ?? '');
+    if (type == GroupControlType.unban &&
+        left &&
+        me.isNotEmpty &&
+        _tagValue(tags, 'unban') == me) {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final known = appState.groupById(gid);
+      final d = svc.unbanNotice({
+        'gid': gid,
+        'blocked': senderBlocked,
+        'hidden': st.isPersonHidden(sender),
+        'accept': _ref.read(settingsProvider).acceptPMs,
+        'friend': st.isFriend(sender),
+        'known': known != null,
+        'role': known == null
+            ? svc.leftRole(gid, sender)
+            : (known.createdBy == sender || known.mods.contains(sender)),
+        'it': GroupInvites.inviteTime(rumor['created_at'], now),
+        'leftAt': appState.leftGroupTime(gid),
+        'now': now,
+      });
+      if (d['archive'] == true && !senderBlocked) _archiveGiftWrap(u);
+      if (d['notice'] == true) {
+        _maybeNotifyGroupControl(
+          groupId: gid,
+          groupName: known == null ? tr('Group') : st.groupLabel(known),
+          type: GroupControlType.unban,
+          tags: tags,
+          senderPubkey: sender,
+          ts: (rumor['created_at'] as num?)?.toInt() ?? 0,
+          eventId: u.wrapId,
+        );
+      }
+      return false;
+    }
+    final inviteLike = type == GroupControlType.invite ||
+        type == GroupControlType.addMember;
+    if (inviteLike &&
+        !senderBlocked &&
+        !profileChecked &&
+        st.nymFiltersActive &&
+        isPlaceholderNym(st.users[sender]?.nym)) {
+      unawaited(_groupInviteAfterProfile(u, sender, gap));
+      return false;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final it = GroupInvites.inviteTime(rumor['created_at'], now);
+    final gowner = _tagValue(tags, 'gowner');
+    final verdict = GroupInvites.gate({
+      'anon': false,
+      'own': false,
+      'joined': false,
+      'started': false,
+      'blocked': senderBlocked,
+      'hidden': st.isPersonHidden(sender),
+      'accept': _ref.read(settingsProvider).acceptPMs,
+      'friend': st.isFriend(sender),
+      'type': type,
+      'genesis':
+          GroupLogic.verifyGenesis(gid, gowner, _tagValue(tags, 'gnonce')),
+      'sender': sender,
+      'gowner': gowner,
+      'owner': _tagValue(tags, 'owner'),
+      'pending': svc.item(gid),
+      'it': it,
+      'now': now,
+      'decision': svc.decision(gid),
+      'left': left,
+      'leftAt': left ? appState.leftGroupTime(gid) : 0,
+      'bytes': GroupInvites.rumorBytes(rumor),
+    });
+    final v = verdict['v'];
+    if (v == 'hold') {
+      var bytes = 0;
+      try {
+        bytes = utf8.encode(jsonEncode(rumor)).length;
+      } catch (_) {}
+      svc.holdPut(gid, u.wrapId,
+          (rumor['created_at'] as num?)?.toInt() ?? 0, bytes, u);
+      return false;
+    }
+    if (v != 'pending-new' && v != 'pending-update') return false;
+    final item = GroupInvites.itemFrom({
+      'gid': gid,
+      'it': it,
+      'sender': sender,
+      'type': type,
+      'rumor': rumor,
+      'now': now,
+      'left': verdict['left'],
+      'wrapId': u.wrapId,
+    });
+    final friends = [
+      for (final i in svc.items)
+        if (st.isFriend('${i['by']}')) i['by'],
+    ];
+    final r = svc.apply(verdict, item, friends);
+    if (!r.changed) return false;
+    if (!senderBlocked &&
+        !u.fromArchive &&
+        svc.archiveDecision({
+          'verdict': v,
+          'boot': verdict['boot'] == true,
+          'kept': svc.item(gid) != null,
+          'by': sender,
+          'now': now,
+        })) {
+      _archiveGiftWrap(u);
+    }
+    final backlog = u.fromArchive || gap.stale || _replayed;
+    final nd = svc.notifyDecision({
+      'verdict': v,
+      'now': now,
+      'live': GroupInvites.isLive(it, now, backlog),
+      'toast': true,
+      'by': sender,
+    });
+    final kept = svc.item(gid);
+    if (nd['bell'] == true && kept != null) {
+      _notifyGroupInvite(kept, nd['banner'] == true);
+    }
+    return false;
+  }
+
+  void _notifyGroupInvite(Map<String, dynamic> item, bool banner) {
+    if (!_notificationsEnabled) return;
+    final gid = '${item['gid']}';
+    final by = '${item['by']}';
+    final it = GroupInvites.toInt(item['it']);
+    final name = groupInviteName(item);
+    final nym = groupInviteNym(item);
+    final history = _ref.read(notificationHistoryProvider.notifier);
+    history.removeByEventId(GroupInvites.notifyId(gid));
+    _dispatchNotification(
+      title: tr('Group invite: {name}', {'name': name}),
+      body: item['via'] == 'add'
+          ? tr('{nym} added you. Open Group invites to accept or decline.',
+              {'nym': nym})
+          : tr('{nym} invited you. Open Group invites to accept or decline.',
+              {'nym': nym}),
+      senderPubkey: by,
+      isFriend: _ref.read(appStateProvider).isFriend(by),
+      isMention: false,
+      isGroup: true,
+      historyType: 'group-invite',
+      route: gid,
+      eventId: GroupInvites.notifyId(gid),
+      stableId: true,
+      tsMs: it > 0 ? it * 1000 : null,
+      silent: !banner,
+      toastKind: 'invite',
+    );
+  }
+
+  String groupInviteNym(Map<String, dynamic> item) {
+    final by = '${item['by'] ?? ''}';
+    if (by.isEmpty) return tr('Group');
+    final mask = _ref.read(appStateProvider).personMaskLabel(by);
+    return mask.isNotEmpty ? mask : _nymDisplayFor(by);
+  }
+
+  String groupInviteName(Map<String, dynamic> item) {
+    final st = _ref.read(appStateProvider);
+    final by = '${item['by'] ?? ''}';
+    final masked = by.isNotEmpty &&
+        (st.personMaskLabel(by).isNotEmpty || st.blockedUsers.contains(by));
+    return st.groupNameLabel(masked ? '' : '${item['n'] ?? ''}', tr('Group'));
+  }
+
+  void _applyRemoteGroupInvites(Map remote) {
+    try {
+      final svc = _ref.read(groupInvitesProvider);
+      unawaited(svc.load().then((ok) {
+        if (ok) svc.applyRemote(remote);
+      }));
+    } catch (_) {}
+  }
+
+  Future<bool> publishGroupInvites(Map<String, dynamic> payload) async {
+    final sync = _storageSync;
+    if (sync == null) return false;
+    return sync.groupInvitesSyncSet(payload);
+  }
+
+  Future<bool> acceptGroupInvite(String gid,
+      {bool open = true, bool notice = true}) async {
+    final svc = _ref.read(groupInvitesProvider);
+    await svc.load();
+    final item = svc.item(gid);
+    final rumor = item?['rumor'];
+    if (item == null || rumor is! Map) {
+      if (notice) showToast(tr('This invite is no longer available.'));
+      return false;
+    }
+    final appState = _ref.read(appStateProvider.notifier);
+    final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
+    appState.clearLeftGroup(gid);
+    final it = GroupInvites.toInt(item['it']);
+    svc.decide(gid, 'a', it);
+    _ref
+        .read(notificationHistoryProvider.notifier)
+        .removeByEventId(GroupInvites.notifyId(gid));
+    final held = svc.holdTake(gid);
+    final wrapId = '${item['wrapId'] ?? ''}';
+    final u = GiftWrapUnwrapped(
+      wrapId: wrapId.isNotEmpty ? wrapId : '${rumor['id'] ?? gid}',
+      wrapCreatedAt: it,
+      rumor: Map<String, dynamic>.of(rumor.cast<String, dynamic>()),
+      senderVerified: true,
+      isBitchat: false,
+    );
+    _giAccepting.add(gid);
+    try {
+      runZoned(
+          () => _onRumorMessage(u, appState, self, profileChecked: true),
+          zoneValues: {_replayZoneKey: false});
+      if (appState.groupById(gid) != null) {
+        for (final h in held) {
+          if (h is! GiftWrapUnwrapped) continue;
+          try {
+            runZoned(
+                () => _processGiftWrap(h,
+                    gapOverride: (stale: false, cutoffMs: _kHeldCutoffMs),
+                    profileChecked: true),
+                zoneValues: {_replayZoneKey: h.fromArchive});
+          } catch (_) {}
+        }
+      }
+    } finally {
+      _giAccepting.remove(gid);
+    }
+    final group = appState.groupById(gid);
+    final ok = group != null && !appState.isLeftGroup(gid);
+    if (ok) {
+      syncSettings(delay: const Duration(seconds: 1));
+      if (open) appState.switchView(ChatView.group(gid));
+      if (notice) {
+        showToast(tr('Joined "{name}".',
+            {'name': _ref.read(appStateProvider).groupLabel(group)}));
+      }
+    } else if (notice) {
+      showToast(tr('This invite is no longer available.'));
+    }
+    return ok;
+  }
+
+  bool declineGroupInvite(String gid, {bool block = false}) {
+    final svc = _ref.read(groupInvitesProvider);
+    final item = svc.item(gid);
+    if (item == null) {
+      showToast(tr('This invite is no longer available.'));
+      return false;
+    }
+    svc.decide(gid, 'd', GroupInvites.toInt(item['it']));
+    svc.remove(gid);
+    final by = '${item['by'] ?? ''}';
+    if (block &&
+        by.isNotEmpty &&
+        !_ref.read(appStateProvider).blockedUsers.contains(by)) {
+      final nym = groupInviteNym(item);
+      blockUser(by);
+      showToast(tr('Invite declined. {nym} is blocked.', {'nym': nym}));
+    } else {
+      showToast(tr('Invite declined.'));
+    }
+    return true;
+  }
 
   @visibleForTesting
   void setIdentityForTest(Identity identity) => _identity = identity;
@@ -15062,7 +16165,7 @@ class NostrController {
   ApiClient Function()? anonApiFactory;
 
   @visibleForTesting
-  set storageSyncForTest(StorageSync sync) => _storageSync = sync;
+  set storageSyncForTest(StorageSync sync) => _adoptStorageSync(sync);
 
   @visibleForTesting
   StorageSync? get liveStorageSyncForTest => _storageSync;
@@ -15071,7 +16174,10 @@ class NostrController {
   set zapArchiveForTest(ZapArchive archive) => _zapArchive = archive;
 
   @visibleForTesting
-  set serviceForTest(NostrService service) => _service = service;
+  set serviceForTest(NostrService service) {
+    _service = service;
+    _wireBlobDrops(service);
+  }
 
   @visibleForTesting
   Future<void> restorePmArchiveForTest() async {
@@ -15085,6 +16191,13 @@ class NostrController {
   @visibleForTesting
   void applySyncedForTest(Map<String, dynamic> p) =>
       _applySyncedSettingsNow(p);
+
+  @visibleForTesting
+  void applyGroupSyncForTest(
+          {Map<String, dynamic>? conversations,
+          Map<String, dynamic>? ephemeralKeys}) =>
+      _applyGroupSyncMaps(
+          conversations: conversations, ephemeralKeys: ephemeralKeys);
 
   @visibleForTesting
   Future<bool> Function(String to, List<List<String>> tags, String content)?
@@ -15298,13 +16411,24 @@ class NostrController {
     Map<String, dynamic> pRaw, {
     bool userAcceptedTransfer = false,
   }) {
+    final kv = _ref.read(keyValueStoreProvider);
+    final stores = [for (final k in SyncedStores.keys) kv.getString(k)];
+    final layout = kv.getString(StorageKeys.columnsLayout);
     if (userAcceptedTransfer) {
       _applySyncedSettingsNow(pRaw, userAcceptedTransfer: true);
     } else {
       _quietSyncedApply(() => _applySyncedSettingsNow(pRaw));
     }
+    if (!listEquals(
+        stores, [for (final k in SyncedStores.keys) kv.getString(k)])) {
+      _ref.read(syncedStoresRevisionProvider.notifier).state++;
+    }
+    if (layout != kv.getString(StorageKeys.columnsLayout)) {
+      _ref.read(columnsLayoutRevisionProvider.notifier).state++;
+    }
     if (_stampedPrefsSkipped) {
       _stampedPrefsSkipped = false;
+      _settingsWriteBackSoon = true;
       if (_settingsSyncTimer == null) syncSettings();
     }
   }
@@ -15319,9 +16443,41 @@ class NostrController {
       return;
     }
     final kv = _ref.read(keyValueStoreProvider);
-    final gate = prefGate(pRaw, PrefStamps.read(kv));
-    final p = prefApply(gate, _dirtySyncedKeys);
-    c.applyingRemote(() => _applySyncedSettingsBody(p));
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final cols = colGate(pRaw, ColStamps.read(kv), ColStamps.layout(kv),
+        PrefStamps.read(kv)['columnsLayout'] ?? 0, 0, 0, now);
+    final gate = prefGate(cols.payload, PrefStamps.read(kv));
+    final held = prefApply(
+        gate,
+        _dirtySyncedKeys.where((k) =>
+            !kSyncedSets.containsKey(k) &&
+            !(cols.list != null && k == 'columnsLayout')));
+    final sets = setGate(
+        held, SetStamps.read(kv), StorageSync.syncedSetLists(kv), now);
+    final p = sets.payload;
+    _setsGated = sets.states.isNotEmpty;
+    try {
+      c.applyingRemote(() => _applySyncedSettingsBody(p));
+    } finally {
+      _setsGated = false;
+    }
+    SetStamps.adopt(kv, sets.states, StorageSync.syncedSetLists(kv), now);
+    final colState = cols.state;
+    if (colState != null) ColStamps.write(kv, colState);
+    if (cols.behind) {
+      _storageSync?.forgetPublishedPrefs(const ['columnsLayout']);
+      _stampedPrefsSkipped = true;
+    }
+    final lag = sets.behind
+        ? [
+            for (final n in sets.states.keys)
+              if (!_sameSyncedSet(n, held[n], p[n])) n,
+          ]
+        : const <String>[];
+    if (lag.isNotEmpty) {
+      _storageSync?.forgetPublishedSets(lag);
+      _stampedPrefsSkipped = true;
+    }
     gate.take.forEach((name, ts) => PrefStamps.set(kv, name, ts));
     if (gate.skipped) {
       final kept = kStampedPrefs.keys.where((name) =>
@@ -15505,13 +16661,6 @@ class NostrController {
     }
     boolean('sortByProximity', c.setSortByProximity);
     boolean('lowDataMode', c.setLowDataMode);
-    final remoteKeepAlive = p['backgroundConnectivity'];
-    if (remoteKeepAlive == true ||
-        (remoteKeepAlive == false && p['backgroundConnectivityChosen'] == true)) {
-      try {
-        c.setBackgroundConnectivity(remoteKeepAlive as bool);
-      } catch (_) {}
-    }
     boolean('cachePMs', c.setCachePMs);
     // Replace the favorite lists so an unfavorite propagates.
     final kvStore = _ref.read(keyValueStoreProvider);
@@ -15574,6 +16723,19 @@ class NostrController {
         if (selfPk.isNotEmpty) {
           kvStore.setString(StorageKeys.lightningAddressFor(selfPk), lightning);
         }
+        _adoptSyncedLightning(lightning);
+      } catch (_) {}
+    } else if (p.containsKey('lightningAddress') &&
+        p['lightningAddressFp'] is String &&
+        p['lightningAddressTs'] is num &&
+        (p['lightningAddressTs'] as num) >
+            (PrefStamps.read(kvStore)['lightningAddress'] ?? 0)) {
+      try {
+        unawaited(kvStore.remove(StorageKeys.lightningAddressGlobal));
+        if (selfPk.isNotEmpty) {
+          unawaited(kvStore.remove(StorageKeys.lightningAddressFor(selfPk)));
+        }
+        _adoptSyncedLightning(null);
       } catch (_) {}
     }
     final pow = p['powDifficulty'];
@@ -15653,7 +16815,9 @@ class NostrController {
     }
     // Merge favorite GIFs: dedupe by url, cap 100.
     final favGifs = p['favoriteGifs'];
-    if (favGifs is List && favGifs.isNotEmpty) {
+    if (favGifs is List && _setsGated) {
+      _replaceFavoriteGifs(kvStore, favGifs);
+    } else if (favGifs is List && favGifs.isNotEmpty) {
       _mergeFavoriteGifs(kvStore, favGifs);
     }
     // Merge recent emojis: most recent first, dedupe, cap 24.
@@ -15685,7 +16849,8 @@ class NostrController {
         final incoming =
             blockedUsers.whereType<String>().where((s) => s.isNotEmpty).toSet();
         final current = {..._ref.read(appStateProvider).blockedUsers};
-        for (final pk in incoming.difference(current)) {
+        final added = incoming.difference(current);
+        for (final pk in added) {
           appState.blockUser(pk);
         }
         for (final pk in current.difference(incoming)) {
@@ -15695,6 +16860,13 @@ class NostrController {
         _persistSet(StorageKeys.blocked, blocked);
         // Keep the bell badge's blocked-sender exclusion in sync.
         _ref.read(notificationHistoryProvider.notifier).setBlocked(blocked);
+        for (final pk in added) {
+          if (!blocked.contains(pk)) continue;
+          try {
+            _ref.read(callServiceProvider).onUserBlocked(pk);
+          } catch (_) {}
+          unawaited(_clearOsNotificationsFor(ChatView.pm(pk)));
+        }
       } catch (_) {}
     }
     final blockedRelays = p['blockedRelays'];
@@ -15792,6 +16964,20 @@ class NostrController {
           _persistSet(StorageKeys.blockedChannels,
               _ref.read(appStateProvider).blockedChannels);
         }
+        if (joinedEntries != null && _setsGated) {
+          final keep = {for (final e in joinedEntries) e.key};
+          final st = _ref.read(appStateProvider);
+          final open =
+              st.view.kind == ViewKind.channel ? st.view.id.toLowerCase() : '';
+          for (final ch in [...st.channels]) {
+            if (keep.contains(ch.key) ||
+                ch.key == kDefaultChannel ||
+                ch.key == open) {
+              continue;
+            }
+            appState.removeChannel(ch.key);
+          }
+        }
         if (joinedEntries != null) _persistJoinedChannels();
       } catch (_) {}
     }
@@ -15833,6 +17019,7 @@ class NostrController {
     }
 
     _mergeLeftGroupsFromSync(p['leftGroups'], p['leftGroupTimes']);
+    _mergeLeftRolesFromSync(p['leftGroupRoles']);
 
     // Monotonic max per conversation so a new device doesn't re-surface read history.
     _applyChannelLastRead(p['channelLastRead']);
@@ -15859,6 +17046,22 @@ class NostrController {
         _ref
             .read(botChatControllerProvider.notifier)
             .setMaxRuns(botMaxRuns.toInt(), fromSync: true);
+      } catch (_) {}
+    }
+    final botProModel = p['botProModel'];
+    if (botProModel is String) {
+      try {
+        _ref
+            .read(botChatControllerProvider.notifier)
+            .applySyncedProModel(botProModel);
+      } catch (_) {}
+    }
+    final streetDetail = p['streetDetail'];
+    if (streetDetail is bool) {
+      try {
+        _ref
+            .read(streetDetailProvider.notifier)
+            .set(streetDetail, fromSync: true);
       } catch (_) {}
     }
     // Monotonic, persisted on every inbound apply path.
@@ -15925,6 +17128,7 @@ class NostrController {
       _applyReadStateRow(row);
 
   void _applySyncExtras(Map<String, dynamic> s) {
+    _applyReportedSync(s[ReportRecord.syncField]);
     final threads = s['threadLastRead'];
     if (threads is Map) {
       try {
@@ -15954,6 +17158,21 @@ class NostrController {
   }
 
   bool _stampedPrefsSkipped = false;
+  bool _settingsWriteBackSoon = false;
+
+  bool _setsGated = false;
+
+  static bool _sameSyncedSet(String name, Object? remote, Object? merged) {
+    Set<String> keys(Object? list) => {
+          for (final k in setKeys(name, list))
+            if (name != 'userJoinedChannels' ||
+                (k != kDefaultChannel && k != 'nym'))
+              k,
+        };
+    final a = keys(remote);
+    final b = keys(merged);
+    return a.length == b.length && a.containsAll(b);
+  }
 
   void _applyStampedPrefs(Map<String, dynamic> p) {
     final kv = _ref.read(keyValueStoreProvider);
@@ -16047,7 +17266,8 @@ class NostrController {
       for (final s in ordered) {
         // Additive merge, then replace-style apply per section.
         _applySyncedSettingsAdditive(s.payload);
-        _applySyncedSettings(prefRowStamp(s.payload, s.updatedAt));
+        _applySyncedSettings(
+            setRowStamp(prefRowStamp(s.payload, s.updatedAt), s.updatedAt));
         final sec = s.updatedAt ~/ 1000;
         if (sec > newestSec) newestSec = sec;
       }
@@ -16072,7 +17292,8 @@ class NostrController {
     if (offer == null) return false;
     // Additive merge, then replace-style apply.
     _applySyncedSettingsAdditive(offer.payload);
-    _applySyncedSettings(prefRowStamp(offer.payload, offer.updatedAt));
+    _applySyncedSettings(setRowStamp(
+        prefRowStamp(offer.payload, offer.updatedAt), offer.updatedAt));
     // Advance the sync ts (seconds) so the section isn't re-surfaced.
     final kv = _ref.read(keyValueStoreProvider);
     final lastSec =
@@ -16286,9 +17507,13 @@ class NostrController {
     final nav = _ref.read(chatNavProvider);
     final notifier = _ref.read(appStateProvider.notifier);
     notifier.onViewEntering = (from, to, columns) {
-      if (!columns && from.isNotEmpty && from != to) nav.release(from);
+      if (!columns && from.isNotEmpty && from != to) {
+        nav.release(from,
+            quiet: _readMarkQuiet(to) || notifier.laneOnlyEntry(to));
+      }
       nav.capture(to);
     };
+    nav.quietAdvance = notifier.laneOnlyIds;
     notifier.onNavReadMarked = nav.pruneRemoteRead;
     nav.onMarksChanged = syncSettings;
     nav.afterLegacyChange();
@@ -16299,6 +17524,9 @@ class NostrController {
     });
     try {
       unawaited(_ref.read(sidebarFoldersProvider).load());
+    } catch (_) {}
+    try {
+      unawaited(_ref.read(groupInvitesProvider).load());
     } catch (_) {}
     Timer(const Duration(seconds: 4), () {
       if (_started) unawaited(nav.refreshScheduled());
@@ -16338,6 +17566,8 @@ class NostrController {
   }
 
   bool get savesHydrated => _settingsHydrated;
+
+  bool get selfWrapPq2 => _storageSync?.pqSealToSelf ?? true;
 
   bool get savedSyncAllowed {
     if (_identity?.loginMethod == null) {
@@ -16746,14 +17976,15 @@ class NostrController {
       _applyingSynced ||
       _ref.read(settingsProvider.notifier).isApplyingRemote;
 
-  void _reconcileSettingsSync() {
+  void _reconcileSettingsSync(
+      [Duration delay = const Duration(seconds: 5)]) {
     final sync = _storageSync;
     if (sync == null || !_settingsHydrated) return;
     if (_identity?.loginMethod == null) {
       final mode = _ref.read(settingsProvider.notifier).keypairMode;
       if (mode == 'random' || mode == 'hardcore') return;
     }
-    _queueSettingsFlush(sync, const Duration(seconds: 5));
+    _queueSettingsFlush(sync, delay);
   }
 
   void _queueSettingsFlush(StorageSync sync, Duration delay) {
@@ -16861,11 +18092,19 @@ class NostrController {
         extras: {
           'leftGroups': appState.leftGroups.toList(),
           'leftGroupTimes': Map<String, dynamic>.from(appState.leftGroupTimes),
+          'leftGroupRoles': _ref.read(groupInvitesProvider).leftRolesForSync(
+              appState.leftGroups, Map<String, int>.from(appState.leftGroupTimes)),
         },
         // Lets the channels-section trimmer drop least-recently-active channels first when oversized.
         channelActivity: Map<String, int>.from(
             _ref.read(appStateProvider).channelLastActivity),
       );
+      if (!snapshot &&
+          sync.settingsOversize.contains('privacy') &&
+          !_privacyOversizeNoticed) {
+        _privacyOversizeNoticed = true;
+        _emitSystemMessage(tr(PrivacyRow.tooLarge));
+      }
       final failed = sync.settingsFailed;
       if (!snapshot && failed.isNotEmpty) {
         final back = taken.where(
@@ -16891,6 +18130,14 @@ class NostrController {
           hasData: tools.hasSyncData);
       // Per-group sync (conversations, keys, history); no-op per category when unchanged.
       await _flushGroupSync(sync);
+      try {
+        final anonBot = _ref.read(botChatControllerProvider.notifier).anon;
+        final anonPayload = anonBot.syncPayload();
+        if (anonPayload != null &&
+            await sync.botAnonSyncSet(anonPayload) != null) {
+          anonBot.markSynced((anonPayload['current'] as Map)['pk'] as String);
+        }
+      } catch (_) {}
       done = true;
     } catch (_) {
       // Best-effort.
@@ -16922,11 +18169,6 @@ class NostrController {
       historyByConvKey: history,
       leftGroups: appState.leftGroups,
     );
-    try {
-      final anonPayload =
-          _ref.read(botChatControllerProvider.notifier).anon.syncPayload();
-      if (anonPayload != null) await sync.botAnonSyncSet(anonPayload);
-    } catch (_) {}
   }
 
   @visibleForTesting
@@ -16986,6 +18228,7 @@ class NostrController {
       'modLog': [for (final e in modLog) e.toJson()],
       if (g.memberAt.isNotEmpty) 'memberAt': g.memberAt,
       if (g.memberRemovedAt.isNotEmpty) 'memberRemovedAt': g.memberRemovedAt,
+      if (g.invited.isNotEmpty) GroupInvited.field: Map<String, int>.of(g.invited),
     };
   }
 
@@ -17099,15 +18342,38 @@ class NostrController {
     }
   }
 
+  final Set<String> _pmD1DownPks = <String>{};
+
+  void _notePmD1Restore(String pk, bool ok) {
+    if (ok) {
+      _pmD1DownPks.remove(pk);
+    } else {
+      _pmD1DownPks.add(pk);
+    }
+    final service = _service;
+    if (service == null || service.identity.pubkey != pk) return;
+    final was = service.pmD1Down;
+    service.pmD1Down = !ok;
+    if (!ok && !was && service.d1Backed) service.pmRelayBackfill();
+  }
+
   Future<void> _restorePmArchive(StorageSync sync, {bool force = false}) async {
     if (!sync.durableIdentity) {
       _noteConvRestore('d1');
       return;
     }
+    final pk = _identity?.pubkey;
+    var ok = false;
     try {
       await sync.pmRestore(replay: _replayArchiveAwait, force: force);
-      if (sync.pmRestoreReached) _noteConvRestore('d1');
+      ok = sync.pmRestoreReached;
+      if (ok) _noteConvRestore('d1');
     } catch (_) {}
+    if (pk != null &&
+        _identity?.pubkey == pk &&
+        identical(_storageSync, sync)) {
+      _notePmD1Restore(pk, ok);
+    }
     unawaited(_standaloneNymbotArchiveSweep(sync).catchError((Object _) {}));
   }
 
@@ -17169,12 +18435,41 @@ class NostrController {
     await _awaitGiftWrapIdle();
     final out = <String, String>{};
     for (var i = 0; i < events.length; i++) {
-      if (opened[i]) continue;
+      if (opened[i]) {
+        if (_editWrapStillHeld(events[i].id)) out[events[i].id] = 'hold';
+        continue;
+      }
       final kind = _archivedWrapHold(events[i]);
       if (kind != null) out[events[i].id] = kind;
     }
     return out;
   }
+
+  final Map<String, (String, String, String)> _heldEditWraps =
+      <String, (String, String, String)>{};
+
+  void _noteHeldEditWrap(
+      String wrapId, String originalId, String editor, String rumorId) {
+    if (wrapId.isEmpty) return;
+    _heldEditWraps.remove(wrapId);
+    _heldEditWraps[wrapId] = (originalId, editor, rumorId);
+    while (_heldEditWraps.length > 500) {
+      _heldEditWraps.remove(_heldEditWraps.keys.first);
+    }
+  }
+
+  bool _editWrapStillHeld(String wrapId) {
+    final h = _heldEditWraps[wrapId];
+    if (h == null) return false;
+    if (_ref.read(appStateProvider.notifier).editHeld(h.$1, h.$2, h.$3)) {
+      return true;
+    }
+    _heldEditWraps.remove(wrapId);
+    return false;
+  }
+
+  @visibleForTesting
+  bool editWrapStillHeldForTest(String wrapId) => _editWrapStillHeld(wrapId);
 
   String? _archivedWrapHold(NostrEvent wrap) {
     final c = wrap.content;
@@ -17624,22 +18919,111 @@ class NostrController {
     await service.pool.publish(signed);
   }
 
-  /// Publishes a NIP-56 report for [pubkey] (optionally [messageId]) and surfaces a system message.
-  Future<bool> submitReport({
-    required String pubkey,
-    String? messageId,
-    required String type,
-    String? details,
-  }) async {
+  Map<String, int>? _reported;
+  String? _reportedOwner;
+  final Set<String> _reportSending = {};
+
+  final ValueNotifier<int> reportedRevision = ValueNotifier<int>(0);
+
+  @visibleForTesting
+  Future<void> Function(NostrEvent event)? reportPublishForTest;
+
+  @visibleForTesting
+  set signerForTest(EventSigner s) => _signer = s;
+
+  Map<String, int> _reportRecord() {
+    final local = _settingsLocalOnly();
+    final owner = local ? 'local' : 'id:${_identity?.pubkey ?? ''}';
+    final cur = _reported;
+    if (cur != null && _reportedOwner == owner) return cur;
+    Object? raw;
+    if (!local) {
+      try {
+        final s = _ref.read(keyValueStoreProvider).getString(ReportRecord.storeKey);
+        if (s != null && s.isNotEmpty) raw = jsonDecode(s);
+      } catch (_) {}
+    }
+    _reportedOwner = owner;
+    return _reported = ReportRecord.merge(raw, null);
+  }
+
+  bool isTargetReported(String key) =>
+      key.isNotEmpty && _reportRecord().containsKey(key);
+
+  String reportEntryKey(String pubkey, String? messageId) => ReportRecord.keyFor(
+      pubkey: pubkey,
+      messageId: messageId,
+      includeMessage: (messageId ?? '').isNotEmpty);
+
+  String reportEntryBlocked(String pubkey, String? messageId) {
+    final msg = reportEntryKey(pubkey, messageId);
+    if (!isTargetReported(msg)) return '';
+    final user = ReportRecord.keyFor(pubkey: pubkey);
+    return msg == user || isTargetReported(user) ? msg : '';
+  }
+
+  String? reportMessageLockedNote(String pubkey, String? messageId) {
+    final msg = reportEntryKey(pubkey, messageId);
+    return msg.startsWith('e:') && isTargetReported(msg) ? reportRefusal(msg) : null;
+  }
+
+  String reportRefusal(String key) {
+    switch (ReportRecord.refusal(key)) {
+      case 'You already reported this message.':
+        return tr('You already reported this message.');
+      case 'You already reported this emoji pack.':
+        return tr('You already reported this emoji pack.');
+      default:
+        return tr('You already reported this user.');
+    }
+  }
+
+  void showReportRefusal(String key) => _emitSystemMessage(reportRefusal(key));
+
+  void _noteReported(String key) {
+    if (key.isEmpty) return;
+    _reported = ReportRecord.add(
+        _reportRecord(), key, DateTime.now().millisecondsSinceEpoch ~/ 1000);
+    reportedRevision.value++;
+    if (_reportedOwner == 'local') return;
+    try {
+      _ref
+          .read(keyValueStoreProvider)
+          .setString(ReportRecord.storeKey, jsonEncode(_reported));
+    } catch (_) {}
+    syncSettings(delay: prefSyncDebounce);
+  }
+
+  void _applyReportedSync(Object? raw) {
+    if (raw is! Map || _settingsLocalOnly()) return;
+    final cur = _reportRecord();
+    final next = ReportRecord.merge(cur, raw);
+    if (jsonEncode(next) == jsonEncode(cur)) return;
+    _reported = next;
+    try {
+      _ref
+          .read(keyValueStoreProvider)
+          .setString(ReportRecord.storeKey, jsonEncode(next));
+    } catch (_) {}
+    reportedRevision.value++;
+  }
+
+  Future<bool> _publishReport(List<List<String>> tags, String? details) async {
+    final key = ReportRecord.keyOfTags(tags);
+    if (key.isNotEmpty &&
+        (isTargetReported(key) || _reportSending.contains(key))) {
+      showReportRefusal(key);
+      return false;
+    }
     final service = _service;
     final identity = _identity;
     final sig = _signer;
-    if (service == null || identity == null || sig == null) return false;
+    final hook = reportPublishForTest;
+    if ((service == null && hook == null) || identity == null || sig == null) {
+      return false;
+    }
+    if (key.isNotEmpty) _reportSending.add(key);
     try {
-      final tags = <List<String>>[
-        ['p', pubkey, type],
-        if (messageId != null && messageId.isNotEmpty) ['e', messageId, type],
-      ];
       final unsigned = UnsignedEvent(
         pubkey: identity.pubkey,
         createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -17648,14 +19032,32 @@ class NostrController {
         content: details ?? '',
       );
       final signed = await sig.sign(unsigned);
-      await service.pool.publish(signed);
+      if (hook != null) {
+        await hook(signed);
+      } else {
+        await service!.pool.publish(signed);
+      }
+      _noteReported(key);
       _emitSystemMessage(tr('Report submitted successfully'));
       return true;
     } catch (_) {
       _emitSystemMessage(tr('Failed to submit report'));
       return false;
+    } finally {
+      _reportSending.remove(key);
     }
   }
+
+  Future<bool> submitReport({
+    required String pubkey,
+    String? messageId,
+    required String type,
+    String? details,
+  }) =>
+      _publishReport([
+        ['p', pubkey, type],
+        if (messageId != null && messageId.isNotEmpty) ['e', messageId, type],
+      ], details);
 
   void _onGlobalEmojiBlocks(Object? ep, Object? epu) {
     try {
@@ -17668,28 +19070,9 @@ class NostrController {
     required String type,
     String? details,
   }) async {
-    final service = _service;
-    final identity = _identity;
-    final sig = _signer;
-    if (service == null || identity == null || sig == null) return false;
     final tags = EmojiBlock.reportTags(coord, type);
     if (tags.isEmpty) return false;
-    try {
-      final unsigned = UnsignedEvent(
-        pubkey: identity.pubkey,
-        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        kind: 1984,
-        tags: tags,
-        content: details ?? '',
-      );
-      final signed = await sig.sign(unsigned);
-      await service.pool.publish(signed);
-      _emitSystemMessage(tr('Report submitted successfully'));
-      return true;
-    } catch (_) {
-      _emitSystemMessage(tr('Failed to submit report'));
-      return false;
-    }
+    return _publishReport(tags, details);
   }
 
   String _stripHiddenEmoji(String text) {
@@ -18583,7 +19966,9 @@ class NostrController {
     // `?clear` also purges the D1 PM archive and syncs the cleared-at/welcomed markers.
     bot.pmArchivePurger = purgeBotPmArchive;
     bot.settingsSyncRequester = syncSettings;
-    bot.anonKeysChanged = _refreshEphemeralSubscriptions;
+    bot.prefChanged = _ref.read(settingsProvider.notifier).notePrefChanged;
+    bot.anonKeysChanged = _applyEphemeralKeys;
+    bot.anonEventPublisher = publishAnonLaneEvent;
     _applyEphemeralKeys();
     return true;
   }
@@ -18597,12 +19982,15 @@ class NostrController {
 
   Future<void> dispose() async {
     _answersClosed = true;
+    KeyValueStore.holdSessionKeysFor(this, null);
     _stopGeoPresenceSend();
     _geoPresenceViewSub?.close();
     _geoPresenceViewSub = null;
     _presenceSettingsSub?.close();
     _presenceSettingsSub = null;
     _flushTimer?.cancel();
+    _chatNavTimer?.cancel();
+    _chatNavTimer = null;
     _clearChatActivities();
     _liveInboundTimer?.cancel();
     _liveInboundTimer = null;
@@ -18793,15 +20181,16 @@ class PendingSettingsTransfersNotifier
 
 /// An inbound user-to-user settings transfer awaiting accept/reject.
 class UserSettingsTransfer {
-  const UserSettingsTransfer({
+  UserSettingsTransfer({
     required this.eventId,
     required this.fromPubkey,
     required this.fromNym,
     required this.settings,
     required this.transferredAt,
-    this.nickname,
+    String? nickname,
     this.avatarUrl,
-  });
+  }) : nickname =
+            nickname == null ? null : capNymBase(stripPubkeySuffix(nickname));
 
   /// The gift-wrap event id, the key for accept/reject/dismiss.
   final String eventId;

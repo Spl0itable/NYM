@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:uuid/uuid.dart';
 
+import '../../core/utils/nym_utils.dart';
+import '../../features/messages/bitchat_verify.dart' show isBitchatVerifyContent;
 import 'dedup.dart';
 import 'fragmentation.dart';
 import 'mesh_constants.dart';
@@ -111,7 +113,7 @@ class MeshService {
   bool _running = false;
 
   /// Recent public history reconciled with neighbors; policy lives in [GossipSync].
-  final GossipSync gossip = GossipSync();
+  final GossipSync gossip = GossipSync(refuses: isBitchatVerifyMeshPacket);
 
   /// Mail carried for other peers; policy lives in [CourierStore].
   final CourierStore couriers = CourierStore();
@@ -530,10 +532,10 @@ class MeshService {
     await _processPacket(packet, frame.linkId, frame.rssi);
   }
 
-  Future<void> _processPacket(
+  Future<bool> _processPacket(
       BitchatPacket packet, String linkId, int rssi) async {
     final senderPeerID = _hex(packet.senderID);
-    if (senderPeerID == identity.peerID) return;
+    if (senderPeerID == identity.peerID) return false;
 
     debugLog?.call('pkt type=0x${packet.type.toRadixString(16)} '
         'from=$senderPeerID '
@@ -549,7 +551,7 @@ class MeshService {
     if (!_seen.checkAndAdd(key)) {
       debugLog
           ?.call('  ↳ deduped (seen) type=0x${packet.type.toRadixString(16)}');
-      return;
+      return false;
     }
 
     final forUs = packet.recipientID == null ||
@@ -563,15 +565,16 @@ class MeshService {
       _gossipDirty = true;
     }
 
+    var withheld = false;
     switch (packet.type) {
       case MeshMessageType.announce:
         await _handleAnnounce(packet, senderPeerID, rssi);
         break;
       case MeshMessageType.message:
-        _handlePublicMessage(packet, senderPeerID);
+        withheld = _handlePublicMessage(packet, senderPeerID);
         break;
       case MeshMessageType.nymChannelMessage:
-        await _handleChannelMessage(packet, senderPeerID);
+        withheld = await _handleChannelMessage(packet, senderPeerID);
         break;
       case MeshMessageType.leave:
         _removePeer(senderPeerID);
@@ -583,7 +586,7 @@ class MeshService {
         if (forUs) await _handleEncrypted(senderPeerID, packet.payload);
         break;
       case MeshMessageType.fragment:
-        await _handleFragment(packet, linkId, rssi);
+        withheld = await _handleFragment(packet, linkId, rssi);
         break;
       case MeshMessageType.fileTransfer:
         // bitchat sends PM images directed and #mesh images broadcast; route by recipient.
@@ -638,11 +641,13 @@ class MeshService {
     final directedToUs = packet.recipientID != null &&
         !packet.isBroadcast &&
         _hex(packet.recipientID!) == identity.peerID;
-    if (!directedToUs &&
+    if (!withheld &&
+        !directedToUs &&
         packet.ttl > 1 &&
         packet.type != MeshMessageType.leave) {
       _scheduleRelay(packet);
     }
+    return withheld;
   }
 
   Future<void> _handleAnnounce(
@@ -691,9 +696,10 @@ class MeshService {
   }
 
   /// bitchat public message: raw UTF-8, nickname from the announce, content-derived id.
-  void _handlePublicMessage(BitchatPacket packet, String senderPeerID) {
+  bool _handlePublicMessage(BitchatPacket packet, String senderPeerID) {
     final content = utf8.decode(packet.payload, allowMalformed: true);
-    if (content.isEmpty) return;
+    if (content.isEmpty) return false;
+    if (isBitchatVerifyContent(content)) return true;
     final peer = _peers[senderPeerID];
     final nickname = peer?.displayName ?? senderPeerID;
     _touchPeer(senderPeerID);
@@ -709,29 +715,31 @@ class MeshService {
       timestampMs: packet.timestamp,
       channel: null,
     ));
+    return false;
   }
 
   /// Nymchat named-channel broadcast, possibly AES-sealed; routes to that channel, not #mesh.
-  Future<void> _handleChannelMessage(
+  Future<bool> _handleChannelMessage(
       BitchatPacket packet, String senderPeerID) async {
     final tlv = BitchatMessage.fromBinaryPayload(packet.payload);
-    if (tlv == null || tlv.channel == null) return;
+    if (tlv == null || tlv.channel == null) return false;
     String content;
     if (tlv.isEncrypted) {
       final enc = tlv.encryptedContent;
-      if (enc == null || !_channelCrypto.hasKey(tlv.channel!)) return;
+      if (enc == null || !_channelCrypto.hasKey(tlv.channel!)) return false;
       try {
         content = await _channelCrypto.decrypt(tlv.channel!, enc);
       } catch (_) {
-        return;
+        return false;
       }
     } else {
       content = tlv.content;
     }
+    if (isBitchatVerifyContent(content)) return true;
     _touchPeer(senderPeerID, nickname: tlv.sender);
     _publicMessages.add(MeshPublicMessage(
       senderPeerID: tlv.senderPeerID ?? senderPeerID,
-      senderNickname: tlv.sender,
+      senderNickname: capNym(tlv.sender),
       content: content,
       messageId: tlv.id,
       timestampMs: tlv.timestampMs,
@@ -739,6 +747,7 @@ class MeshService {
       mentions: tlv.mentions ?? const [],
       isRelay: tlv.isRelay,
     ));
+    return false;
   }
 
   Future<void> _handleHandshake(String senderPeerID, Uint8List payload) async {
@@ -934,16 +943,16 @@ class MeshService {
     ));
   }
 
-  Future<void> _handleFragment(
+  Future<bool> _handleFragment(
       BitchatPacket packet, String linkId, int rssi) async {
     final fragment = FragmentPayload.decode(packet.payload);
-    if (fragment == null) return;
+    if (fragment == null) return false;
     final reassembled = _reassembler.accept(fragment);
-    if (reassembled == null) return;
+    if (reassembled == null) return false;
     final inner = BinaryProtocol.decode(reassembled);
-    if (inner != null) {
-      await _processPacket(inner, linkId, rssi);
-    }
+    if (inner == null) return false;
+    return await _processPacket(inner, linkId, rssi) ||
+        isBitchatVerifyMeshPacket(inner);
   }
 
   /// Asks [peerID] once for their rich profile over the mesh.
@@ -1500,6 +1509,10 @@ class MeshService {
 
   // Gossip sync
 
+  void restoreGossipArchive(String? raw) {
+    if (gossip.decodeArchive(raw)) _gossipDirty = true;
+  }
+
   /// Files our own public sends, which the inbound path drops as self-echoes.
   void _rememberOwnPublic(BitchatPacket packet) {
     if (!packet.isBroadcast || !GossipSync.isSyncable(packet.type)) return;
@@ -1738,4 +1751,16 @@ class _ReactionData {
   final String emoji;
   final bool isRemove;
   final String reactorNick;
+}
+
+bool isBitchatVerifyMeshPacket(BitchatPacket packet) {
+  if (packet.type == MeshMessageType.message) {
+    return isBitchatVerifyContent(
+        utf8.decode(packet.payload, allowMalformed: true));
+  }
+  if (packet.type != MeshMessageType.nymChannelMessage) return false;
+  final tlv = BitchatMessage.fromBinaryPayload(packet.payload);
+  return tlv != null &&
+      !tlv.isEncrypted &&
+      isBitchatVerifyContent(tlv.content);
 }

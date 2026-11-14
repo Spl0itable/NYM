@@ -1,3 +1,4 @@
+import '../features/groups/group_invited.dart';
 import '../features/group_tools/group_tools.dart';
 
 /// Group control-event types carried in a group rumor's `['type', …]` tag.
@@ -91,8 +92,10 @@ class Group {
     List<JoinRequest>? joinRequests,
     Map<String, int>? memberAt,
     Map<String, int>? memberRemovedAt,
+    Map<String, int>? invited,
     this.joinedVia,
   })  : joinRequests = joinRequests ?? <JoinRequest>[],
+        invited = invited ?? <String, int>{},
         memberAt = memberAt ?? <String, int>{},
         memberRemovedAt = memberRemovedAt ?? <String, int>{},
         members = members ?? <String>[],
@@ -155,6 +158,8 @@ class Group {
 
   final Map<String, int> memberRemovedAt;
 
+  final Map<String, int> invited;
+
   String? joinedVia;
 
   bool isOwner(String pubkey) => createdBy == pubkey;
@@ -198,6 +203,7 @@ class Group {
           'joinRequests': joinRequests.map((r) => r.toJson()).toList(),
         if (memberAt.isNotEmpty) 'memberAt': memberAt,
         if (memberRemovedAt.isNotEmpty) 'memberRemovedAt': memberRemovedAt,
+        if (invited.isNotEmpty) GroupInvited.field: invited,
         if (joinedVia != null) 'joinedVia': joinedVia,
       };
 
@@ -293,6 +299,7 @@ class Group {
         ],
         memberAt: parseTimeMap(j['memberAt']),
         memberRemovedAt: parseTimeMap(j['memberRemovedAt']),
+        invited: GroupInvited.normalize(j[GroupInvited.field]),
         joinedVia: j['joinedVia'] is String ? j['joinedVia'] as String : null,
       );
 }

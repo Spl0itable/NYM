@@ -230,7 +230,7 @@
             const ui = (t) => (typeof this.uiText === 'function' ? this.uiText(t) : t);
             const esc = (t) => (typeof this.escapeHtml === 'function' ? this.escapeHtml(t) : String(t));
             if (!info || !info.nym) return esc(ui('This identity was deleted from another device.'));
-            const label = esc(info.nym) + (info.suffix ? '<span class="nym-suffix">#' + esc(info.suffix) + '</span>' : '');
+            const label = window.NymSuffix.sqHtml(info.nym, info.suffix);
             return esc(ui('{nym} was deleted from another device.')).split('{nym}').join(label);
         },
 

@@ -236,6 +236,8 @@ Object.assign(NYM.prototype, {
         if (!this._psOn()) { this._psClear(); return; }
         const list = box.querySelector('.ps-list');
         const more = box.querySelector('.ps-more');
+        const less = box.querySelector('.ps-less');
+        const pair = box.querySelector('.ps-more-row');
         const note = box.querySelector('.ps-note');
         const pill = box.querySelector('.ps-new');
         if (!list) return;
@@ -245,7 +247,7 @@ Object.assign(NYM.prototype, {
             if (!list.querySelector('.ps-skel')) {
                 list.innerHTML = ['ssk-w3', 'ssk-w1', 'ssk-w4', 'ssk-w2'].map((w) => `<li class="ps-skel sidebar-skeleton ssk-channel ${w}" aria-hidden="true"><span class="sk-bar"></span></li>`).join('');
             }
-            if (more) more.hidden = true;
+            if (pair) pair.hidden = true;
             if (note) note.hidden = true;
             if (pill) pill.hidden = true;
             return;
@@ -267,15 +269,20 @@ Object.assign(NYM.prototype, {
             const t = pl ? this.uiText(pl.template, pl.vars.n ? { n: this.abbreviateNumber ? this.abbreviateNumber(pl.vars.n) : pl.vars.n } : undefined) : '';
             if (pill.textContent !== t) pill.textContent = t;
         }
-        if (more) {
-            const b = res.button;
-            more.hidden = !b;
+        if (pair && more && less) {
+            const go = res.buttons.find((b) => b.kind !== 'less');
+            const back = res.buttons.some((b) => b.kind === 'less');
+            pair.hidden = !go && !back;
+            more.hidden = !go;
+            less.hidden = !back;
             let t = '';
-            if (b) {
-                const n = this.abbreviateNumber ? this.abbreviateNumber(b.n) : b.n;
-                t = b.kind === 'view' ? this.uiText('View {n} more...', { n }) : b.kind === 'show' ? this.uiText('Show {n} more...', { n }) : this.uiText('Show less');
+            if (go) {
+                const n = this.abbreviateNumber ? this.abbreviateNumber(go.n) : go.n;
+                t = go.kind === 'view' ? this.uiText('View {n} more...', { n }) : this.uiText('Show {n} more...', { n });
             }
             if (more.textContent !== t) more.textContent = t;
+            const lt = back ? this.uiText('Show less') : '';
+            if (less.textContent !== lt) less.textContent = lt;
         }
         if (note) note.hidden = res.rows.length > 0;
     },
@@ -294,7 +301,7 @@ Object.assign(NYM.prototype, {
         const body = hide ? null : this._psBody(m);
         const text = body ? P.partsText(body) : '';
         const color = (this._psColMap && r._psColSig && this._psColMap.get(r._psColSig)) || '';
-        const who = m.isOwn ? '' : (typeof this.getUserColorClass === 'function' ? this.getUserColorClass(pk) : '');
+        const who = m.isOwn ? (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted') ? 'self cosmetic-redacted' : 'self') : (typeof this.getUserColorClass === 'function' ? this.getUserColorClass(pk) : '');
         const blur = this._blursImagesFrom(pk, m.isOwn);
         return { when, author, pk, nym, text, body, color, who, blur };
     },
@@ -326,7 +333,7 @@ Object.assign(NYM.prototype, {
             if (p[0] === 'e') {
                 const url = emo && emo.get(p[1]);
                 text += url ? `<img class="custom-emoji ps-emoji" src="${e(this._psProxied(url, true))}" alt=":${e(p[1])}:" decoding="async" loading="lazy" draggable="false">` : e(':' + p[1] + ':');
-            } else text += this.mentionSuffixHtml(p[1]);
+            } else text += this.mentionSuffixHtml(window.NymSuffix.capMentions(p[1]));
         }
         const fb = (url) => {
             const list = this.mediaFallbacks instanceof Map ? (this.mediaFallbacks.get(url) || []) : [];
@@ -433,11 +440,15 @@ Object.assign(NYM.prototype, {
         this._psRender();
     },
 
-    _psMore() {
+    _psMore(which) {
         const P = this._psModel();
-        const b = this._psLast && this._psLast.button;
+        const bs = (this._psLast && this._psLast.buttons) || [];
+        const b = bs.find((x) => (x.kind === 'less') === (which === 'less'));
         if (!P || !b) return;
         this._psShown = b.next;
+        const box = b.kind === 'less' ? document.getElementById('publicStream') : null;
+        const back = box && box.querySelector('.ps-less');
+        const refocus = !!back && document.activeElement === back;
         if (b.kind === 'less') {
             this._psHold = null;
             this._psRelease = true;
@@ -447,6 +458,8 @@ Object.assign(NYM.prototype, {
         }
         this._psDirty = true;
         this._psRender();
+        const go = refocus && box.querySelector('.ps-more');
+        if (go && !go.hidden && typeof go.focus === 'function') go.focus({ preventScroll: true });
     },
 
     _psModeKey(e) {
@@ -476,7 +489,8 @@ Object.assign(NYM.prototype, {
                 const row = t.closest('.ps-row');
                 if (row) { this._psOpen(row.dataset.key, row.dataset.mid); return; }
                 if (t.closest('.ps-new')) { this._psShowNew(); return; }
-                if (t.closest('.ps-more')) this._psMore();
+                if (t.closest('.ps-less')) { this._psMore('less'); return; }
+                if (t.closest('.ps-more')) this._psMore('more');
             });
             const list = box.querySelector('.ps-list');
             if (list) list.addEventListener('pointerdown', () => { this._psPointer = true; }, { passive: true });

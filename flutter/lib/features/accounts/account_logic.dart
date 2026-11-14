@@ -221,34 +221,21 @@ class AccountLogic {
   static const String mapDb = 'nym-map';
 
   static const Set<String> deviceKeys = {
-    'nym_theme',
-    'nym_color_mode',
-    'nym_text_size',
-    'nym_transparency_enabled',
-    'nym_chat_layout',
-    'nym_chat_view_mode',
-    'nym_nick_style',
-    'nym_timestamps',
-    'nym_time_format',
-    'nym_date_format',
-    'nym_ui_language',
-    'nym_ui_language_chosen',
-    'nym_translate_language',
     'nym_connection_mode',
     'nym_relay_url',
     'nym_relay_direct_mode',
     'nym_relay_direct_ack',
     'nym_relay_fallback_notice_off',
-    'nym_low_data_mode',
     'nym_mesh_ghost_mode',
-    'nym_tutorial_seen',
     'nym_attest_authority',
-    'nym_voice_speed',
-    'nym_sidebar_section_order',
     'nym_sidebar_section_collapsed',
     'nym_settings_sections_collapsed',
+    'nym_settings_sections_split',
     'nym_global_emoji_blocks',
     'nym_global_emoji_block_urls',
+    'nym_screen_security',
+    'nym_incognito_keyboard',
+    'nym_background_connectivity',
   };
 
   static const List<String> devicePrefixes = ['nym_ui_i18n_', 'nym_cmd_i18n_'];
@@ -264,41 +251,21 @@ class AccountLogic {
     'nym_installed',
     'nym_mesh_enabled',
     'nym_ghost_mode',
-    'nym_background_connectivity',
     'nym_heartbeat_token',
     'nym_geo_relays',
-    'nym_geohash_places',
     'nym_botpm_model_catalog',
-    'nym_pubkey_format',
-    'nym_screen_security',
-    'nym_incognito_keyboard',
   };
 
   static const List<String> nativeDevicePrefixes = ['nym_bk_'];
 
   static const Map<String, List<String>> settingsScope = {
     'device': [
-      'theme',
-      'colorMode',
-      'textSize',
-      'transparency',
-      'chatLayout',
-      'chatViewMode',
-      'nickStyle',
-      'timestamps',
-      'timeFormat',
-      'dateFormat',
       'sidebarLayout',
-      'uiLanguage',
-      'translateLanguage',
       'connectionMode',
       'relayTransport',
-      'lowDataMode',
       'meshEnabled',
       'meshGhostMode',
       'notificationPermission',
-      'tutorialSeen',
-      'voiceSpeed',
     ],
     'account': [
       'keys',
@@ -343,6 +310,22 @@ class AccountLogic {
       'meshOutbox',
       'anonNymbotKeys',
       'notifyInactive',
+      'theme',
+      'colorMode',
+      'textSize',
+      'transparency',
+      'chatLayout',
+      'chatViewMode',
+      'nickStyle',
+      'timestamps',
+      'timeFormat',
+      'dateFormat',
+      'sectionOrder',
+      'uiLanguage',
+      'translateLanguage',
+      'lowDataMode',
+      'tutorialSeen',
+      'voiceSpeed',
     ],
   };
 
@@ -376,6 +359,10 @@ class AccountLogic {
     }
     return (text: 'New message for {nym}', nym: label, group: id);
   }
+
+  static bool hasOtherIdentity(AccountIndex? index) =>
+      index != null &&
+      index.accounts.any((a) => a.pubkey.isNotEmpty && a.id != index.active);
 
   static String classifyNative(String key) {
     if (nativeDeviceKeys.contains(key) ||

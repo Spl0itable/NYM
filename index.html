@@ -482,6 +482,8 @@
                     </label>
                 </div>
 
+                <p id="reportAlready" class="nm-h-6 nm-hidden" role="status"></p>
+
                 <div class="modal-actions">
                     <button class="icon-btn" data-action="closeReportModal">Cancel</button>
                     <button class="send-btn" data-action="submitReport">Submit Report</button>
@@ -615,7 +617,7 @@
                 <div class="ps-stream" id="publicStream" hidden>
                     <div class="ps-new-wrap"><button type="button" class="ps-new" hidden></button></div>
                     <ul class="ps-list" aria-label="Public stream, newest first, read only"></ul>
-                    <button type="button" class="view-more-btn ps-more" hidden></button>
+                    <div class="ps-more-row" hidden><button type="button" class="view-more-btn ps-more" hidden></button><button type="button" class="view-more-btn ps-less" hidden></button></div>
                     <div class="ps-note" hidden>No public messages in the last 24 hours.</div>
                 </div>
             </div>
@@ -652,6 +654,11 @@
                         data-on-keyup="filterPMs">
                     <span class="search-clear" data-action="clearSearch" data-search-target="pmSearch">✕</span>
                 </div>
+                <button type="button" class="gi-row" id="groupInvitesRow" hidden aria-label="Group invites, 0 waiting">
+                    <span class="gi-row-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5.5" r="2.5"/><path d="M2 14c0-3 2-4.5 4-4.5s4 1.5 4 4.5"/><path d="M12 4v4M10 6h4"/></svg></span>
+                    <span class="gi-row-label">Group invites</span>
+                    <span class="gi-row-count" aria-hidden="true">0</span>
+                </button>
                 <div class="pm-list" id="pmList">
                     <div class="sidebar-skeleton ssk-pm ssk-w2" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
                     <div class="sidebar-skeleton ssk-pm ssk-w3" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
@@ -1392,11 +1399,6 @@
                     </div>
                 </div>
 
-                <div class="relay-stats-section">
-                    <div class="relay-stats-section-title">Recent connection changes</div>
-                    <div class="relay-stats-changes" id="rsConnectionChanges"></div>
-                </div>
-
                 <!-- Relay List -->
                 <div class="relay-stats-section">
                     <div class="relay-stats-section-title">Data transferred</div>
@@ -1453,7 +1455,7 @@
                     <label class="form-label">Nickname</label>
                     <div class="nm-h-37 nm-field">
                         <input type="text" class="nm-h-38" id="newNickInput" placeholder="Enter new nym"
-                            maxlength="20" data-on-input="updateFieldCharCount" data-char-count="newNickCharCount">
+                            maxlength="20" data-nym-input data-on-input="updateFieldCharCount" data-char-count="newNickCharCount">
                         <span id="nickSuffixDisplay" class="nym-suffix nm-h-39"></span>
                     </div>
                     <div class="input-char-count" id="newNickCharCount">0/20</div>
@@ -1518,11 +1520,7 @@
                 </div>
 
                 <div class="form-group" id="revealPrivkeyGroup">
-                    <div class="reveal-privkey-toggle nm-h-41" data-action="toggleRevealPrivkey">
-                        <span id="revealPrivkeyArrow" class="nm-dim"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg></span>
-                        <span class="nm-h-42" id="revealPrivkeyLabel">Reveal this nym's private key</span>
-                    </div>
-                    <div id="privkeySlideout" class="nm-hidden nm-h-43">
+                    <div id="privkeySlideout" class="nm-h-43">
                         <div id="nsecRevealBlock">
                         <div class="nm-h-44">
                             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-h-45"><path d="M 8 1 L 15 14 L 1 14 Z" stroke-linejoin="round"/><path d="M 8 6 L 8 9.5" stroke-linecap="round" stroke-width="2"/><circle cx="8" cy="11.5" r="0.8" fill="currentColor" stroke="none"/></svg> Your private key (nsec) is like a password for your Nym identity. Anyone with access to it can post as you and read your encrypted messages. Store it securely in a password manager and never share it publicly. You can use the nsec to login on Nymchat.
@@ -1654,7 +1652,7 @@
                 <div class="form-group setup-nick-group" id="nymGroup">
                     <label class="form-label">Choose Your Nickname <span class="nm-h-2">(optional)</span></label>
                     <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nickname"
-                        maxlength="20" data-on-input="updateFieldCharCount" data-char-count="nymInputCharCount">
+                        maxlength="20" data-nym-input data-on-input="updateFieldCharCount" data-char-count="nymInputCharCount">
                     <div class="input-char-count" id="nymInputCharCount">0/20</div>
                     <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
                 </div>
@@ -2227,7 +2225,7 @@
                             <option value="friends">Friends only</option>
                             <option value="disabled">Disabled</option>
                         </select>
-                        <div class="form-hint">Control who can send you PMs and group chat invites. "Friends only" filters messages from non-friends.</div>
+                        <div class="form-hint">Control who can send you PMs and group chat invites. "Friends only" filters messages from non-friends. Group invites wait until you accept them.</div>
                     </div>
 
                     <div class="form-group">
@@ -3087,11 +3085,14 @@
     <script defer src="js/modules/filter-packs.js"></script>
     <script defer src="js/modules/content-filter.js"></script>
     <script defer src="js/modules/emoji-block.js"></script>
+    <script defer src="js/modules/report-record.js"></script>
     <script defer src="js/modules/event-details.js"></script>
     <script defer src="js/modules/wrap-outbox.js"></script>
     <script defer src="js/modules/relay-block.js"></script>
     <script defer src="js/modules/relay-add.js"></script>
     <script defer src="js/modules/d1-cursor.js"></script>
+    <script defer src="js/modules/encrypted-blob.js"></script>
+    <script defer src="js/modules/bitchat-verify.js"></script>
     <script defer src="js/modules/relays.js"></script>
     <script defer src="js/modules/upload-activity.js"></script>
     <script defer src="js/modules/nostr-core.js"></script>
@@ -3099,6 +3100,7 @@
     <script defer src="js/modules/last-seen.js"></script>
     <script defer src="js/modules/geo-presence.js"></script>
     <script defer src="js/modules/users.js"></script>
+    <script defer src="js/modules/channel-name.js"></script>
     <script defer src="js/modules/channels.js"></script>
     <script defer src="js/modules/syntax-highlight.js"></script>
     <script defer src="js/modules/media-notes.js"></script>
@@ -3165,6 +3167,9 @@
     <script defer src="js/modules/message-sheet.js"></script>
     <script defer src="js/modules/phone-pages.js"></script>
     <script defer src="js/modules/group-tools-ui.js"></script>
+    <script defer src="js/modules/group-invites.js"></script>
+    <script defer src="js/modules/group-invited.js"></script>
+    <script defer src="js/modules/group-invites-ui.js"></script>
     <script defer src="js/modules/call-history.js"></script>
     <script defer src="js/modules/sync-merge.js"></script>
     <script defer src="js/modules/call-history-ui.js"></script>
@@ -3182,6 +3187,7 @@
     <script defer src="js/modules/geo-places.js"></script>
     <script defer src="js/modules/geohash-globe.js"></script>
     <script defer src="js/modules/notifications.js"></script>
+    <script defer src="js/modules/name-contrast.js"></script>
     <script defer src="js/modules/settings.js"></script>
     <script defer src="js/modules/chat-nav-ui.js"></script>
     <script defer src="js/modules/chat-lock-ui.js"></script>

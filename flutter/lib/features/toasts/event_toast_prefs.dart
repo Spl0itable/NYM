@@ -25,8 +25,7 @@ class _EventToastPrefsSectionState
 
   void _save(EventToastSettings next) {
     setState(() => _s = next);
-    writeEventToastSettings(ref.read(keyValueStoreProvider), next);
-    ref.read(settingsProvider.notifier).notifySyncedChange();
+    ref.read(settingsProvider.notifier).setEventToastSettings(next);
   }
 
   @override

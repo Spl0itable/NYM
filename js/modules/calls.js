@@ -58,7 +58,7 @@ Object.assign(NYM.prototype, {
             ? `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>`
             : '';
         const friendHtml = (typeof this.getFriendBadgeHtml === 'function' && this.getFriendBadgeHtml(pubkey)) || '';
-        return `<span class="call-nym"><span class="call-nym-base">${this.escapeHtml(base)}</span><span class="nym-suffix">#${suffix}</span></span>${flairHtml}${verifiedBadge}${supporterBadge}${friendHtml}`;
+        return `${window.NymSuffix.sqHtml(base, suffix, 'call-nym-base')}${flairHtml}${verifiedBadge}${supporterBadge}${friendHtml}`;
     },
 
     // profileOnly trims the message-only actions that don't apply during a call.
@@ -2131,8 +2131,7 @@ Object.assign(NYM.prototype, {
         while ((m = re.exec(raw)) !== null) {
             const pre = m[1], name = m[2], sfx = m[3];
             out += this.escapeHtml(raw.slice(last, m.index)) + this.escapeHtml(pre);
-            const suffixHtml = sfx ? `<span class="nym-suffix">${this.escapeHtml(sfx)}</span>` : '';
-            out += `<span class="nm-mention">@${this.escapeHtml(name)}${suffixHtml}</span>`;
+            out += `<span class="nm-mention">@${window.NymSuffix.sqHtml(name, sfx || '')}</span>`;
             last = m.index + m[0].length;
         }
         out += this.escapeHtml(raw.slice(last));

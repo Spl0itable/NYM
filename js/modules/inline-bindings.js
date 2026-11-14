@@ -446,7 +446,6 @@ window.nymHaptic = function (kind) {
         'removeNickEditBanner':       function () { window.removeNickEditBanner(); },
         'updateBioCharCount':         function () { window.updateBioCharCount(); },
         'updateFieldCharCount':       function (_e, t) { window.updateFieldCharCount(t); },
-        'toggleRevealPrivkey':        function () { window.toggleRevealPrivkey(); },
         'toggleNsecVisibility':       function () { window.toggleNsecVisibility(); },
         'copyRevealedNsec':           function () { window.copyRevealedNsec(); },
         'togglePqRootVisibility':     function () { window.togglePqRootVisibility(); },

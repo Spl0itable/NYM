@@ -1,12 +1,15 @@
 // Composer autocomplete dropdown for all four query types; the composer owns selection and splicing.
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/nym_utils.dart' show nymInitial;
 import '../../models/user.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/common/nym_label.dart';
 import '../../widgets/context_menu/profile_badges.dart';
+import '../channels/geohash_place_cache.dart' show geohashPlaceCacheProvider;
 import '../emoji/custom_emoji.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
@@ -250,7 +253,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
               seed: m.pubkey,
               size: 18,
               imageUrl: m.avatarUrl,
-              label: m.baseNym.isNotEmpty ? m.baseNym[0] : null),
+              label: nymInitial(m.baseNym)),
           if (!hidden)
             Positioned(
               right: -1,
@@ -369,11 +372,9 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
             const SizedBox(width: 8),
             Expanded(
               flex: 2,
-              child: Text(
-                ch.location,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                softWrap: false,
+              child: _ChannelPlaceText(
+                geohash: ch.isGeohash ? ch.name : '',
+                fallback: ch.location,
                 style: TextStyle(
                   color: c.textDim.withValues(alpha: 0.5),
                   fontSize: 12,
@@ -465,4 +466,35 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
           ),
         ),
       );
+}
+
+class _ChannelPlaceText extends ConsumerWidget {
+  const _ChannelPlaceText({
+    required this.geohash,
+    required this.fallback,
+    required this.style,
+  });
+
+  final String geohash;
+  final String fallback;
+  final TextStyle style;
+
+  Widget _text(String s) => Text(
+        s,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        softWrap: false,
+        style: style,
+      );
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (geohash.isEmpty) return _text(fallback);
+    final cache = ref.watch(geohashPlaceCacheProvider);
+    return ValueListenableBuilder<int>(
+      valueListenable: cache.changes,
+      builder: (context, value, child) =>
+          _text(cache.nameFor(geohash) ?? fallback),
+    );
+  }
 }

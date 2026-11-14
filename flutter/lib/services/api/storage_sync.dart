@@ -19,12 +19,29 @@ import '../../features/chat_nav/chat_nav.dart'
     show ChatNavKeys, markStoreNorm, trimPinnedPayload;
 import '../../features/sidebar_folders/folders.dart'
     show FoldersKeys, trimFoldersPayload;
+import '../../features/groups/group_invited.dart';
+import '../../features/groups/group_invites.dart';
 import '../../features/sync/sync_merge.dart'
-    show SyncMergeCaps, kStampedPrefs, prefFp, prefRowStamp, tsMapNorm;
+    show
+        SyncMergeCaps,
+        colWire,
+        kColWire,
+        kSetSuffix,
+        kStampedPrefs,
+        kSyncedSets,
+        prefFp,
+        prefRowStamp,
+        setRealign,
+        setRowStamp,
+        setShed,
+        setWires,
+        tsMapNorm;
 import '../../features/away/away_sync.dart';
 import '../../features/toasts/event_toast_settings_store.dart';
 import '../../features/media_notes/media_notes.dart' show parseSpeed, speedWire;
 import '../../features/sync/pref_stamps.dart';
+import '../../features/sync/privacy_row.dart';
+import '../../features/sync/set_stamps.dart';
 import '../../features/sync/sync_rows.dart';
 import '../../features/relays/relay_add.dart';
 import '../../features/relays/relay_block.dart';
@@ -46,6 +63,7 @@ import 'api_client.dart';
 import 'api_config.dart';
 import 'd1_cursor.dart';
 import '../../features/emoji/emoji_block.dart';
+import '../../features/reports/report_record.dart';
 import '../../core/utils/isolate_gate.dart';
 
 const int kPmDepositRetryBaseMs = 2000;
@@ -159,6 +177,37 @@ class StorageSync {
   // Synced vs device-local settings
 
   /// Section to keys map (PWA `NYM_SETTINGS_SECTION_KEYS`); each section is its own encrypted category, else `misc`.
+  static const Set<String> neverSyncedKeys = {
+    'connectionMode',
+    'relayUrl',
+    'relayDirectMode',
+    'relayDirectAck',
+    'relayFallbackNoticeOff',
+    'meshEnabled',
+    'meshGhostMode',
+    'ghostMode',
+    'attestAuthority',
+    'sidebarSectionCollapsed',
+    'settingsSectionsCollapsed',
+    'settingsSectionsSplit',
+    'globalEmojiBlocks',
+    'globalEmojiBlockUrls',
+    'aiConsent',
+    'aiTranslateConsent',
+    'keypairMode',
+    'randomKeypairPerSession',
+    'autoEphemeral',
+    'vault',
+    'screenSecurity',
+    'incognitoKeyboard',
+    'syncDevice',
+    'pqDeviceId',
+    'backgroundConnectivity',
+    'backgroundConnectivityChosen',
+    'backgroundConnectivityTs',
+    'backgroundConnectivityFp',
+  };
+
   static const Map<String, List<String>> syncedSectionKeys = {
     'appearance': [
       'theme',
@@ -191,6 +240,7 @@ class StorageSync {
       'highContrastTs',
       'sidebarChannelsMode',
       'sidebarChannelsModeTs',
+      'streetDetail',
     ],
     'privacy': [
       'blockedUsers',
@@ -261,16 +311,18 @@ class StorageSync {
       'leftGroups',
       'closedPMTimes',
       'leftGroupTimes',
+      'leftGroupRoles',
     ],
     'data': [
       'lowDataMode',
-      'backgroundConnectivity',
-      'backgroundConnectivityChosen',
       'cachePMs',
       'tutorialSeen',
       'botPmWelcomed',
       'botPmClearedAt',
       'botMaxRuns',
+      'botAnonEnabled',
+      'botProModel',
+      'reportedTargets',
     ],
   };
 
@@ -287,8 +339,42 @@ class StorageSync {
       out.putIfAbsent('${name}Ts', () => section);
       out.putIfAbsent('${name}Fp', () => section);
     });
+    for (final name in kSyncedSets.keys) {
+      final section = out[name];
+      if (section != null) out.putIfAbsent('$name$kSetSuffix', () => section);
+    }
+    final cols = out['columnsLayout'];
+    if (cols != null) out.putIfAbsent(kColWire, () => cols);
     return out;
   }();
+
+  void forgetPublishedSets(Iterable<String> names) {
+    for (final name in names) {
+      final section = sectionLookup[name];
+      if (section == null) continue;
+      final dTag = sectionCategory(section);
+      _publishedSectionJson.remove(dTag);
+      _rows.forgetSynced(d1Category(dTag));
+      _repairRows.add(dTag);
+    }
+  }
+
+  static Map<String, List<dynamic>> syncedSetLists(KeyValueStore kv) => {
+        'blockedUsers': _kvJsonList(kv, StorageKeys.blocked),
+        'friends': _kvJsonList(kv, StorageKeys.friends),
+        'blockedKeywords': _kvJsonList(kv, StorageKeys.blockedKeywords),
+        'blockedChannels': _kvJsonList(kv, StorageKeys.blockedChannels),
+        'hiddenChannels': _kvJsonList(kv, StorageKeys.hiddenChannels),
+        'pinnedChannels': _kvJsonList(kv, StorageKeys.pinnedChannels),
+        'userJoinedChannels': _kvJsonList(kv, StorageKeys.userJoinedChannels),
+        'translateFavoriteLanguages':
+            _kvJsonList(kv, StorageKeys.translateFavorites),
+        'emojiPackFavorites': _kvJsonList(kv, StorageKeys.emojiPackFavorites),
+        'emojiCategoryFavorites':
+            _kvJsonList(kv, StorageKeys.emojiCategoryFavorites),
+        'favoriteGifs': _favoriteGifsForSync(kv),
+        EmojiBlock.syncField: _blockedEmojiPacksForSync(kv),
+      };
 
   void forgetPublishedPrefs(Iterable<String> names) {
     for (final name in names) {
@@ -324,6 +410,7 @@ class StorageSync {
     KeyValueStore? kv,
     String? selfPubkey,
     Map<String, dynamic>? extras,
+    int? stampSetsAt,
   }) {
     // The flat synced payload with PWA field names.
     final flat = <String, dynamic>{
@@ -368,7 +455,6 @@ class StorageSync {
       'sortByProximity': s.sortByProximity,
       'hideNonPinned': s.hideNonPinned,
       'lowDataMode': s.lowDataMode,
-      'backgroundConnectivity': s.backgroundConnectivity,
       'cachePMs': s.cachePMs,
       'uiLanguage': s.uiLanguage,
       'hidePreviews': s.hidePreviews,
@@ -402,6 +488,7 @@ class StorageSync {
       flat['leftGroups'] = const <dynamic>[];
       flat['closedPMTimes'] = _kvJsonMap(kv, StorageKeys.closedPmTimes);
       flat['leftGroupTimes'] = <String, dynamic>{};
+      flat['leftGroupRoles'] = <String, dynamic>{};
       // Per-pubkey lightning address, falling back to the global key, so a null never overwrites another device's.
       flat['lightningAddress'] = selfPubkey == null
           ? kv.getString(StorageKeys.lightningAddressGlobal)
@@ -433,11 +520,6 @@ class StorageSync {
         flat['swipeReactEmojiTs'] =
             kv.getInt(StorageKeys.swipeReactEmojiTs, defaultValue: 0);
       }
-      if (kv.contains(StorageKeys.backgroundConnectivity)) {
-        flat['backgroundConnectivityChosen'] = true;
-      } else {
-        flat.remove('backgroundConnectivity');
-      }
       flat['groupNotifyMentionsOnly'] =
           kv.getString(StorageKeys.groupNotifyMentionsOnly) == 'true';
       flat['threadNotifyMentionsOnly'] =
@@ -452,6 +534,9 @@ class StorageSync {
       flat['botPmClearedAt'] =
           kv.getInt(StorageKeys.botpmClearedAt, defaultValue: 0);
       flat['botMaxRuns'] = kv.getInt(StorageKeys.botpmMaxRuns, defaultValue: 0);
+      flat['botProModel'] = kv.getString(StorageKeys.botpmProModel) ?? '';
+      flat[ReportRecord.syncField] = _reportedTargetsForSync(kv);
+      flat['streetDetail'] = kv.getString(StorageKeys.streetDetail) != '0';
       flat['appVerifiedFilter'] =
           normalizeAppVerifiedFilter(kv.getString(StorageKeys.appVerifiedFilter));
       flat['filterPacks'] = _kvJsonList(kv, StorageKeys.filterPacks)
@@ -501,6 +586,15 @@ class StorageSync {
       extras.forEach((k, v) => flat[k] = v);
     }
 
+    if (kv != null && stampSetsAt != null) {
+      final lists = <String, List<dynamic>>{
+        for (final name in kSyncedSets.keys)
+          name: flat[name] is List ? flat[name] as List : const [],
+      };
+      final states = SetStamps.observe(kv, lists, stampSetsAt);
+      flat.addAll(setWires({...lists, ...flat}, states));
+    }
+
     if (kv != null) {
       final stamps = PrefStamps.read(kv);
       kStampedPrefs.forEach((name, keys) {
@@ -510,8 +604,15 @@ class StorageSync {
       });
     }
 
+    final cols = flat['columnsLayout'];
+    if (kv != null && stampSetsAt != null && cols is List) {
+      final ts = flat['columnsLayoutTs'] is int ? flat['columnsLayoutTs'] as int : 0;
+      flat[kColWire] = colWire(ColStamps.observe(kv, cols, stampSetsAt, ts), cols, ts);
+    }
+
     final lookup = sectionLookup;
 
+    flat.removeWhere((key, _) => neverSyncedKeys.contains(key));
     final out = <String, Map<String, dynamic>>{};
     flat.forEach((key, value) {
       final section = lookup[key] ?? 'misc';
@@ -564,6 +665,16 @@ class StorageSync {
   }
 
   /// Decodes a KV JSON object; anything else is empty.
+  static Map<String, int> _reportedTargetsForSync(KeyValueStore kv) {
+    try {
+      final raw = kv.getString(ReportRecord.storeKey);
+      if (raw == null || raw.isEmpty) return const {};
+      return ReportRecord.merge(jsonDecode(raw), null);
+    } catch (_) {
+      return const {};
+    }
+  }
+
   static List<Map<String, Object>> _blockedEmojiPacksForSync(KeyValueStore kv) {
     try {
       final raw = kv.getString(EmojiBlock.settingsKey);
@@ -648,6 +759,7 @@ class StorageSync {
   }) async {
     final sent = <String>{};
     settingsFailed = <String>{};
+    settingsOversize = <String>{};
     final sections = buildSectionPayloads(
       settings,
       pinnedLandingChannelJson: pinnedLandingChannelJson,
@@ -655,6 +767,7 @@ class StorageSync {
       kv: await _kvOrOpen(),
       selfPubkey: _pubkey,
       extras: extras,
+      stampSetsAt: DateTime.now().millisecondsSinceEpoch,
     );
     for (final entry in sections.entries) {
       // The real category rides inside the blob as `__cat`; only channels carries a trim fn.
@@ -662,13 +775,14 @@ class StorageSync {
         Map<String, dynamic>.of(entry.value),
         sectionCategory(entry.key),
         trim: switch (entry.key) {
-          'channels' => _channelsTrimmer(channelActivity ?? const {}),
+          'channels' => channelsTrimmer(channelActivity ?? const {}),
           'messaging' => trimMessagingSection,
           _ => null,
         },
       );
       if (ok) sent.add(entry.key);
       if (_lastRowResult == _rowFailed) settingsFailed.add(entry.key);
+      if (_lastRowOversize) settingsOversize.add(entry.key);
     }
     final ping = sent.toList();
     final join = onJoinSettingsPing;
@@ -682,6 +796,8 @@ class StorageSync {
   }
 
   Set<String> settingsFailed = <String>{};
+
+  Set<String> settingsOversize = <String>{};
 
   /// Stable id for this client, so a device ignores its own ping echo.
   String? _syncInstanceIdCache;
@@ -701,6 +817,8 @@ class StorageSync {
     _syncDeviceId = id;
   }
 
+  int _pingSeq = 0;
+
   /// Content-free "settings changed" ping to our other devices over the open self gift-wrap sub; they re-read D1.
   Future<void> publishSettingsChangedPing(List<String> sections) async {
     if (sections.isEmpty) return;
@@ -711,6 +829,7 @@ class StorageSync {
         'src': syncInstanceId,
         'sections': sections,
         'ts': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        'n': ++_pingSeq,
       }, 'nymchat-sync-ping');
     } catch (_) {
       // Best-effort: a failed ping only delays the other device to its next D1 read.
@@ -799,11 +918,29 @@ class StorageSync {
       utf8.encode(jsonEncode(jsonEncode(payload))).length + _rumorOverhead;
 
   /// Under size pressure only, trims joined channels first, then read-state arrays oldest first.
-  static bool Function(Map<String, dynamic>) _channelsTrimmer(
+  static bool Function(Map<String, dynamic>) channelsTrimmer(
       Map<String, int> activity) {
     return (Map<String, dynamic> p) {
-      // 1. Least-recently-active joined channels.
       final joined = p['userJoinedChannels'];
+      var bigAt = -1;
+      var bigBytes = 0;
+      if (joined is List) {
+        for (var i = 0; i < joined.length; i++) {
+          final b = utf8.encode('${joined[i]}').length;
+          if (b > bigBytes) {
+            bigBytes = b;
+            bigAt = i;
+          }
+        }
+      }
+      List<dynamic> without(List<dynamic> l) =>
+          [for (var i = 0; i < l.length; i++) if (i != bigAt) l[i]];
+      if (joined is List && bigBytes > 1024) {
+        p['userJoinedChannels'] = without(joined);
+        return true;
+      }
+
+      // 1. Least-recently-active joined channels.
       if (joined is List && joined.length > 20) {
         final ordered = joined.map((e) => '$e').toList()
           ..sort((a, b) => (activity[a] ?? 0).compareTo(activity[b] ?? 0));
@@ -812,6 +949,12 @@ class StorageSync {
         final drop = ordered.take(n).toSet();
         p['userJoinedChannels'] =
             joined.where((e) => !drop.contains('$e')).toList();
+        return true;
+      }
+
+      final roles = p['leftGroupRoles'];
+      if (roles is Map && roles.isNotEmpty) {
+        p['leftGroupRoles'] = <String, dynamic>{};
         return true;
       }
 
@@ -860,6 +1003,10 @@ class StorageSync {
         for (var i = 0; i < drop; i++) {
           m.remove(entries[i].key);
         }
+        return true;
+      }
+      if (joined is List && bigAt >= 0) {
+        p['userJoinedChannels'] = without(joined);
         return true;
       }
       return false;
@@ -925,13 +1072,31 @@ class StorageSync {
     bool Function(Map<String, dynamic> p)? trim,
   }) async {
     _lastRowResult = _rowSame;
-    if (trim != null) {
+    _lastRowOversize = false;
+    final shed =
+        kSyncedSets.keys.any((n) => payload['$n$kSetSuffix'] is Map);
+    final over = _rumorByteSize(payload) > _maxRumorBytes;
+    final keep = over && _d1Bytes(payload, dTag) <= PrivacyRow.d1Bytes;
+    final before = shed && !keep
+        ? jsonDecode(jsonEncode(payload)) as Map<String, dynamic>
+        : null;
+    final cut = shed
+        ? (Map<String, dynamic> p) => (trim?.call(p) ?? false) || setShed(p)
+        : trim;
+    if (cut != null && !keep) {
       var guard = 0;
       while (_rumorByteSize(payload) > _maxRumorBytes && guard++ < 500) {
-        if (!trim(payload)) break;
+        if (!cut(payload)) break;
       }
     }
-    if (_rumorByteSize(payload) > _maxRumorBytes) return false;
+    if (before != null) payload = setRealign(before, payload);
+    final relay = !keep && _rumorByteSize(payload) <= _maxRumorBytes;
+    if (!relay && !keep && _d1Bytes(payload, dTag) > PrivacyRow.d1Bytes) {
+      _lastRowResult = _rowFailed;
+      _lastRowOversize = true;
+      onRowOversize?.call(dTag);
+      return false;
+    }
 
     payload = _mergeUnknownSectionKeys(dTag, payload);
     final json = jsonEncode(payload);
@@ -950,7 +1115,7 @@ class StorageSync {
 
     // The relay wrap is best-effort; D1 is what restores read back.
     final wrapPublisher = _syncWrapPublisher;
-    if (wrapPublisher != null) {
+    if (wrapPublisher != null && relay) {
       try {
         await wrapPublisher(payload, dTag);
       } catch (_) {
@@ -964,6 +1129,15 @@ class StorageSync {
 
   int _lastRowResult = _rowSame;
 
+  bool _lastRowOversize = false;
+
+  void Function(String dTag)? onRowOversize;
+
+  int _d1Bytes(Map<String, dynamic> payload, String dTag) => utf8
+      .encode(jsonEncode(
+          _withCat(_mergeUnknownSectionKeys(dTag, payload), dTag)))
+      .length;
+
   /// Carries forward keys from the last inbound payload that we don't write, so the other client's settings survive.
   Map<String, dynamic> _mergeUnknownSectionKeys(
       String dTag, Map<String, dynamic> payload) {
@@ -971,7 +1145,18 @@ class StorageSync {
     if (prev == null || prev.isEmpty) return payload;
     final out = Map<String, dynamic>.from(payload);
     for (final e in prev.entries) {
-      if (e.key == 'v' || e.key == '__cat') continue;
+      if (e.key == 'v' ||
+          e.key == '__cat' ||
+          neverSyncedKeys.contains(e.key)) {
+        continue;
+      }
+      final k = e.key;
+      if (kSyncedSets.containsKey(k) ||
+          (k.endsWith(kSetSuffix) &&
+              kSyncedSets.containsKey(
+                  k.substring(0, k.length - kSetSuffix.length)))) {
+        continue;
+      }
       out.putIfAbsent(e.key, () => e.value);
     }
     return out;
@@ -1097,6 +1282,7 @@ class StorageSync {
     Map<String, int> threadLastRead = const {},
     Map<String, dynamic> seenMarks = const {},
     bool Function(String key)? keep,
+    bool Function(String key)? quiet,
   }) async {
     final map = readStateCapped(channelLastRead, keep: keep);
     if (map.isEmpty && threadLastRead.isEmpty && seenMarks.isEmpty) {
@@ -1111,10 +1297,20 @@ class StorageSync {
     });
     final json = jsonEncode(_withCat(payload, dTag));
     if (json == _readStateJson) return false;
+    final sent = _readStateSent;
+    if (quiet != null &&
+        sent != null &&
+        _readStateLoud(payload, quiet) == _readStateLoud(sent, quiet)) {
+      return false;
+    }
     final r = await _putRow(dTag, json, payload: payload);
-    if (r == _rowSame) _readStateJson = json;
+    if (r == _rowSame) {
+      _readStateJson = json;
+      _readStateSent = payload;
+    }
     if (r != _rowSent) return false;
     _readStateJson = json;
+    _readStateSent = payload;
     try {
       await publishSettingsChangedPing(const ['readstate']);
     } catch (_) {}
@@ -1122,6 +1318,21 @@ class StorageSync {
   }
 
   String? _readStateJson;
+  Map<String, dynamic>? _readStateSent;
+
+  static String _readStateLoud(
+      Map<String, dynamic> payload, bool Function(String key) quiet) {
+    Map<String, dynamic> strip(Object? m) => {
+          if (m is Map)
+            for (final e in m.entries)
+              if (!quiet('${e.key}')) '${e.key}': e.value,
+        };
+    return jsonEncode([
+      strip(payload['channelLastRead']),
+      strip(payload['threadLastRead']),
+      strip(payload['seenMarks']),
+    ]);
+  }
 
   static Map<String, int> readStateCapped(Map<String, int> channelLastRead,
       {bool Function(String key)? keep}) {
@@ -1228,6 +1439,24 @@ class StorageSync {
   }
 
   Future<bool> Function()? onJoinSettingsPing;
+
+  Future<bool> groupInvitesSyncSet(Map<String, dynamic> payload) async {
+    const dTag = GroupInvites.dTag;
+    try {
+      final changed = await _publishCategoryWrap(payload, dTag,
+          trim: GroupInvites.trimPayload);
+      if (changed) {
+        try {
+          await publishSettingsChangedPing(const [GroupInvites.section]);
+        } catch (_) {}
+        return true;
+      }
+      return _publishedSectionJson[dTag] ==
+          jsonEncode(_mergeUnknownSectionKeys(dTag, payload));
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<bool> awaySyncSet(Map<String, dynamic> payload) async {
     const dTag = AwaySync.dTag;
@@ -1374,11 +1603,38 @@ class StorageSync {
     return false;
   }
 
-  Future<void> botAnonSyncSet(Map<String, dynamic> payload) async {
+  Future<bool?> botAnonSyncSet(Map<String, dynamic> payload) async {
     try {
-      await _publishCategoryWrap({'botAnon': payload}, 'nymchat-botanon');
+      final changed =
+          await _publishCategoryWrap({'botAnon': payload}, 'nymchat-botanon');
+      if (changed) {
+        try {
+          await publishSettingsChangedPing(const ['botanon']);
+        } catch (_) {}
+      }
+      final held = _publishedSectionJson['nymchat-botanon'];
+      if (held == null) return null;
+      final row = jsonDecode(held);
+      final pk = row is Map && row['botAnon'] is Map && row['botAnon']['current'] is Map
+          ? row['botAnon']['current']['pk']
+          : null;
+      final want = payload['current'] is Map ? payload['current']['pk'] : null;
+      return pk != null && pk == want ? changed : null;
     } catch (_) {
+      return null;
     }
+  }
+
+  final Set<String> _keysWritten = {};
+
+  Future<bool> groupKeysRowSet(String gid, Map<String, dynamic> entry) async {
+    _keysWritten.remove(gid);
+    await groupSyncSet(
+      groupConversations: const {},
+      ephemeralKeysByGroup: {gid: entry},
+      historyByConvKey: const {},
+    );
+    return _keysWritten.remove(gid);
   }
 
   Future<void> groupSyncSet({
@@ -1396,13 +1652,16 @@ class StorageSync {
           Map<String, dynamic>.of(e.value),
           groupConversations[gid],
         );
-        await _publishCategoryWrap(
+        if (await _publishCategoryWrap(
           {
             'groupEphemeralKeys': {gid: entry},
           },
           _groupSyncDTag('nymchat-keys', gid),
-          trim: _trimEphemeralKeys,
-        );
+          trim: (p) =>
+              _trimEphemeralKeys(p, groupConversations[gid]?[GroupInvited.field]),
+        )) {
+          _keysWritten.add(gid);
+        }
       } catch (_) {
         // Best-effort per group.
       }
@@ -1508,8 +1767,7 @@ class StorageSync {
     return entry;
   }
 
-  /// When oversized: trims the oldest quarter of prev keys, then drops `memberKeyTs`.
-  static bool _trimEphemeralKeys(Map<String, dynamic> p) {
+  static bool _trimEphemeralKeys(Map<String, dynamic> p, [Object? invited]) {
     final map = p['groupEphemeralKeys'];
     if (map is! Map || map.isEmpty) return false;
     final entry = map.values.first;
@@ -1524,8 +1782,14 @@ class StorageSync {
         return true;
       }
     }
-    if (entry['memberKeyTs'] is Map) {
-      entry.remove('memberKeyTs');
+    final ts = entry['memberKeyTs'];
+    if (ts is Map) {
+      final next = GroupInvited.trimKeyTs(ts, invited);
+      if (next.isNotEmpty) {
+        entry['memberKeyTs'] = next;
+      } else {
+        entry.remove('memberKeyTs');
+      }
       return true;
     }
     return false;
@@ -1587,6 +1851,10 @@ class StorageSync {
 
   SyncRowLedger? _ledger;
 
+  bool Function()? _localOnly;
+
+  void setLocalOnly(bool Function() localOnly) => _localOnly = localOnly;
+
   SyncRowLedger get _rows {
     final held = _ledger;
     if (held != null) return held;
@@ -1596,7 +1864,10 @@ class StorageSync {
       read: kv == null ? null : () => kv.getString(SyncRowLedger.kvKey),
       write: kv == null
           ? null
-          : (v) => unawaited(kv.setString(SyncRowLedger.kvKey, v)),
+          : (v) {
+              if (_localOnly?.call() ?? false) return;
+              unawaited(kv.setString(SyncRowLedger.kvKey, v));
+            },
     );
   }
 
@@ -1623,6 +1894,13 @@ class StorageSync {
   SyncRowLedger get rowsForTest => _rows;
 
   @visibleForTesting
+  Map<String, dynamic> carryForwardForTest(String dTag,
+      Map<String, dynamic> inbound, Map<String, dynamic> payload) {
+    _lastInboundSections[dTag] = Map<String, dynamic>.of(inbound);
+    return _mergeUnknownSectionKeys(dTag, payload);
+  }
+
+  @visibleForTesting
   Set<String> get repairRowsForTest => _repairRows;
 
   static String _short(String hex) => hex.length > 32 ? hex.substring(0, 32) : hex;
@@ -1633,12 +1911,21 @@ class StorageSync {
     if (!_rows.noteRead(key, mode, _short(_sha256Hex(plain)))) return;
     _remoteChanged.add(realCat);
     _publishedSectionJson.remove(realCat);
-    if (realCat == 'nymchat-readstate') _readStateJson = null;
+    if (realCat == 'nymchat-readstate') {
+      _readStateJson = null;
+      _readStateSent = null;
+    }
   }
 
   static Map<String, dynamic>? _coverView(
-      String dTag, Map<String, dynamic>? payload) {
-    if (payload == null || dTag != sectionCategory('channels')) return payload;
+      String dTag, Map<String, dynamic>? raw) {
+    if (raw == null) return raw;
+    final payload = Map<String, dynamic>.of(raw);
+    for (final name in kSyncedSets.keys) {
+      final wire = payload['$name$kSetSuffix'];
+      if (wire is Map) payload['$name$kSetSuffix'] = {'r': wire['r']};
+    }
+    if (dTag != sectionCategory('channels')) return payload;
     final joined = payload['userJoinedChannels'];
     if (joined is! List) return payload;
     return {
@@ -2118,6 +2405,7 @@ class StorageSync {
     Map<String, dynamic>? savedMessages;
     Map<String, dynamic>? pinnedChats;
     Map<String, dynamic>? sidebarFolders;
+    Map<String, dynamic>? groupInvites;
     Map<String, dynamic>? lockedChats;
     Map<String, dynamic>? callHistory;
     Map<String, dynamic>? groupTools;
@@ -2155,6 +2443,9 @@ class StorageSync {
       } else if (c == FoldersKeys.dTag) {
         final folders = d.payload[FoldersKeys.payload];
         if (folders is Map) sidebarFolders = folders.cast<String, dynamic>();
+      } else if (c == GroupInvites.dTag) {
+        final gi = d.payload[GroupInvites.payloadKey];
+        if (gi is Map) groupInvites = gi.cast<String, dynamic>();
       } else if (c == ChatLockKeys.lockedDTag) {
         final locked = d.payload['lockedChats'];
         if (locked is Map) lockedChats = locked.cast<String, dynamic>();
@@ -2203,6 +2494,7 @@ class StorageSync {
         savedMessages != null ||
         pinnedChats != null ||
         sidebarFolders != null ||
+        groupInvites != null ||
         lockedChats != null ||
         callHistory != null ||
         groupTools != null ||
@@ -2228,6 +2520,7 @@ class StorageSync {
               savedMessages: savedMessages,
               pinnedChats: pinnedChats,
               sidebarFolders: sidebarFolders,
+              groupInvites: groupInvites,
               lockedChats: lockedChats,
               callHistory: callHistory,
               groupTools: groupTools,
@@ -2238,7 +2531,8 @@ class StorageSync {
     final merged = <String, dynamic>{};
     var newestTs = 0;
     for (final d in toApply) {
-      merged.addAll(prefRowStamp(d.payload, d.updatedAt));
+      merged.addAll(
+          setRowStamp(prefRowStamp(d.payload, d.updatedAt), d.updatedAt));
       if (d.updatedAt > newestTs) newestTs = d.updatedAt;
     }
     return SettingsLoadResult(
@@ -2254,6 +2548,7 @@ class StorageSync {
       savedMessages: savedMessages,
       pinnedChats: pinnedChats,
       sidebarFolders: sidebarFolders,
+      groupInvites: groupInvites,
       lockedChats: lockedChats,
       callHistory: callHistory,
       groupTools: groupTools,
@@ -4230,6 +4525,8 @@ class StorageSync {
     _pqSealToSelf = enabled;
   }
 
+  bool get pqSealToSelf => _pqSealToSelf;
+
   /// Seals a self blob hybrid when this device has a root and every device can open it; [allowPq] false forces classical.
   Future<String?> _encryptToSelf(String plaintext,
       {bool allowPq = true}) async {
@@ -4277,6 +4574,7 @@ class StorageSync {
     _rows.clearSynced();
     _publishedSectionJson.clear();
     _readStateJson = null;
+    _readStateSent = null;
   }
 
   /// Reads NIP-44, `pq1.` or `pq2.` blobs, trying every derivable epoch.
@@ -4395,6 +4693,7 @@ class SettingsLoadResult {
     this.savedMessages,
     this.pinnedChats,
     this.sidebarFolders,
+    this.groupInvites,
     this.lockedChats,
     this.callHistory,
     this.groupTools,
@@ -4429,6 +4728,8 @@ class SettingsLoadResult {
   final Map<String, dynamic>? pinnedChats;
 
   final Map<String, dynamic>? sidebarFolders;
+
+  final Map<String, dynamic>? groupInvites;
 
   final Map<String, dynamic>? lockedChats;
 

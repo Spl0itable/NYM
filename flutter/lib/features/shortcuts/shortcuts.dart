@@ -136,6 +136,7 @@ final sidebarNavOrderProvider =
 class ComposerShortcutHooks {
   static FocusNode? focus;
   static TextEditingController? text;
+  static FocusNode? parked;
 }
 
 InlineSpan keycapTooltip(BuildContext context, String label, String keys) {

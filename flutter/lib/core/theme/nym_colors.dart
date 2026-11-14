@@ -91,6 +91,9 @@ class NymColors extends ThemeExtension<NymColors> {
   /// Typed-input text color: pure white/black, not [text], which is accent-tinted in some themes.
   Color get inputText => isLight ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
 
+  Color get avatarRing =>
+      isLight ? const Color(0xFF000000) : const Color(0xFF808080);
+
   /// Self bubble fill: translucent primary in glass mode, else the resolved solid-UI color.
   Color get bubbleSelfBg =>
       _bubbleSelfBg ?? primary.withValues(alpha: isLight ? 0.20 : 0.25);

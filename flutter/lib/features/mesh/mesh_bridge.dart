@@ -155,7 +155,7 @@ class MeshBridge {
     try {
       final read = await _sealed.readDetailed(StorageKeys.meshGossipArchive);
       _gossipLocked = read.locked;
-      _service.gossip.decodeArchive(read.value);
+      _service.restoreGossipArchive(read.value);
     } catch (_) {}
     _service.onGossipArchiveChanged = (archive) {
       if (_gossipLocked) {
@@ -199,7 +199,7 @@ class MeshBridge {
       if (_gossipLocked) {
         final read = await _sealed.readDetailed(StorageKeys.meshGossipArchive);
         if (!read.locked) {
-          _service.gossip.decodeArchive(read.value);
+          _service.restoreGossipArchive(read.value);
           _gossipLocked = false;
           _sealed.write(
               StorageKeys.meshGossipArchive, _service.gossip.encodeArchive());

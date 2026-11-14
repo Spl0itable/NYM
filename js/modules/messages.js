@@ -1339,23 +1339,56 @@ Object.assign(NYM.prototype, {
     },
 
     _applyPendingEdit(message) {
+        if (!message || !this.editedMessages) return false;
         const editLookupId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
         const pendingEdit = (message.pubkey && this.editedMessages.get(`${message.pubkey}:${editLookupId}`))
             || this.editedMessages.get(editLookupId);
         if (!pendingEdit || pendingEdit.senderPubkey !== message.pubkey) return;
         const editAt = pendingEdit.editAt || (pendingEdit.timestamp ? Math.floor(pendingEdit.timestamp.getTime() / 1000) : 0);
         const T = window.NymChatTools;
-        if (T && T.editVerdict(null, { text: pendingEdit.newContent, at: editAt }, message.created_at) === 'invalid') return;
+        const cand = { text: pendingEdit.newContent, at: editAt, id: pendingEdit.editEventId || '' };
+        const verdict = T ? T.editVerdict(T.editHead(message), cand, message.created_at) : 'apply';
+        if (verdict === 'invalid' || verdict === 'same') return false;
+        if (verdict === 'stale') {
+            if (typeof this._noteStaleEdit === 'function') this._noteStaleEdit(message, cand.text, cand.at);
+            return false;
+        }
         if (typeof this._noteEdit === 'function' && message.content !== pendingEdit.newContent) {
             this._noteEdit(message, pendingEdit.newContent, editAt);
         }
         message.content = pendingEdit.newContent;
         message.isEdited = true;
+        message.editAt = cand.at;
+        message.editId = cand.id;
         if (typeof this._noteStaleEdit === 'function' && Array.isArray(pendingEdit.stale)) {
             for (const s of pendingEdit.stale) {
                 if (T && T.editVerdict(null, s, message.created_at) === 'invalid') continue;
                 this._noteStaleEdit(message, s.text, s.at);
             }
+        }
+        return true;
+    },
+
+    _copyEditState(from, to) {
+        to.content = from.content;
+        to.isEdited = true;
+        to.editAt = from.editAt;
+        to.editId = from.editId;
+    },
+
+    _syncEditCopies(key, message) {
+        const T = window.NymChatTools;
+        const list = this.messages.get(key);
+        if (!T || !list || !message.id) return;
+        const idx = typeof this._msgIndexOf === 'function' ? this._msgIndexOf(list) : null;
+        const hit = idx && !idx.clash ? idx.map.get(message.id) : list.find((m) => m && m !== message && m.id === message.id);
+        const stored = hit && hit !== message && hit.id === message.id && hit.pubkey === message.pubkey ? hit : null;
+        if (!stored) return;
+        if (T.newerCopy(message, stored)) this._copyEditState(stored, message);
+        else if (T.newerCopy(stored, message)) {
+            this._copyEditState(message, stored);
+            this.persistChannelMessages(key);
+            this.updateMessageInDOM(stored.id, stored.content);
         }
     },
 
@@ -1401,7 +1434,9 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        this._applyPendingEdit(message);
+        if (this._applyPendingEdit(message) && message.isPM && message.conversationKey && !message._threadRender) {
+            this.persistPMMessages(message.conversationKey);
+        }
 
         if (message.blocked) {
             return;
@@ -1445,6 +1480,7 @@ Object.assign(NYM.prototype, {
             }
 
             const exists = this._msgListHas(this.messages.get(storageKey), message.id);
+            if (exists) this._syncEditCopies(storageKey, message);
             if (!exists) {
                 const msgTime = (message.created_at || 0) * 1000;
                 const prevActivity = this.channelLastActivity.get(storageKey) || 0;
@@ -1660,7 +1696,7 @@ Object.assign(NYM.prototype, {
             const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk = this._safePubkey(message.pubkey);
             // Dim the suffix as everywhere else a nym is shown.
-            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">${this.escapeHtml(cleanAuthor)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${authorFlairHtml}`;
+            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">${window.NymSuffix.sqHtml(cleanAuthor, this.getPubkeySuffix(message.pubkey))}${authorFlairHtml}`;
 
             const actionContent = message.content.substring(4);
 
@@ -1787,7 +1823,7 @@ Object.assign(NYM.prototype, {
             const baseNym = this.resolveDisplayNym(message.pubkey, message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk2 = this._safePubkey(message.pubkey);
-            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${flairHtml}`;
+            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(baseNym, this.getPubkeySuffix(message.pubkey))}${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -1795,7 +1831,7 @@ Object.assign(NYM.prototype, {
             }
 
             const escapedAuthorBase = this.escapeHtml(baseNym);
-            const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
+            const authorWithHtml = window.NymSuffix.sqHtml(baseNym, this.getPubkeySuffix(message.pubkey));
 
             const fullTimestamp = this._rowTimeFormat('full', displayTimestamp).format(displayTimestamp);
 
@@ -1808,16 +1844,20 @@ Object.assign(NYM.prototype, {
             } else if (message.isOwn && message.isPM) {
                 if (message.isGroup && message.nymMessageId) {
                     const avatarHtml = this._buildGroupReadersHtml(message);
-                    deliveryCheckmark = `<span class="group-readers" data-nym-msg-id="${message.nymMessageId}">${avatarHtml}</span>`;
+                    const sendingHtml = message.deliveryStatus === 'sending'
+                        ? `<span class="delivery-status sending" title="${this.escapeHtml(this.uiText('Sending'))}">${this.deliveryTicksHtml('sending')}</span>` : '';
+                    deliveryCheckmark = `${sendingHtml}<span class="group-readers" data-nym-msg-id="${message.nymMessageId}">${avatarHtml}</span>`;
                 } else if (message.deliveryStatus) {
                     if (message.deliveryStatus === 'read') {
                         deliveryCheckmark = `<span class="delivery-status read" title="Read">${this.deliveryTicksHtml('read')}</span>`;
                     } else if (message.deliveryStatus === 'delivered') {
                         deliveryCheckmark = `<span class="delivery-status delivered" title="Delivered">${this.deliveryTicksHtml('delivered')}</span>`;
                     } else if (message.deliveryStatus === 'failed') {
-                        deliveryCheckmark = `<span class="delivery-status failed nm-pointer" title="Failed to send - click to retry" data-retry-event-id="${message.id}">!</span>`;
+                        deliveryCheckmark = `<span class="delivery-status failed nm-pointer" title="${this.escapeHtml(this.uiText('Failed to send - click to retry'))}" data-retry-event-id="${message.id}">!</span>`;
                     } else if (message.deliveryStatus === 'sent') {
                         deliveryCheckmark = `<span class="delivery-status sent" title="Sent">${this.deliveryTicksHtml('sent')}</span>`;
+                    } else if (message.deliveryStatus === 'sending') {
+                        deliveryCheckmark = `<span class="delivery-status sending" title="${this.escapeHtml(this.uiText('Sending'))}">${this.deliveryTicksHtml('sending')}</span>`;
                     }
                 }
             }
@@ -1970,10 +2010,7 @@ Object.assign(NYM.prototype, {
 
                         const contentEl = messageEl.querySelector('.message-content');
                         if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
-                            setTimeout(() => {
-                                contentEl.classList.add('cosmetic-redacted-message');
-                                contentEl.textContent = '';
-                            }, 10000);
+                            setTimeout(() => this._blankRedactedContent(messageEl, contentEl), 10000);
                         }
                     } else if (c) {
                         messageEl.classList.add(c);
@@ -1990,10 +2027,7 @@ Object.assign(NYM.prototype, {
 
                     const contentEl = messageEl.querySelector('.message-content');
                     if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
-                        setTimeout(() => {
-                            contentEl.classList.add('cosmetic-redacted-message');
-                            contentEl.textContent = '';
-                        }, 10000);
+                        setTimeout(() => this._blankRedactedContent(messageEl, contentEl), 10000);
                     }
                 }
             });
@@ -2698,15 +2732,77 @@ Object.assign(NYM.prototype, {
         return document.getElementById('messagesScroller');
     },
 
+    _readerTrack(sc) {
+        if (!sc || sc._readerTracked) return;
+        sc._readerTracked = true;
+        const input = () => { sc._readerInputAt = Date.now(); };
+        for (const type of ['wheel', 'touchmove']) sc.addEventListener(type, input, { passive: true });
+        sc.addEventListener('pointerdown', () => { sc._readerHeld = true; input(); }, { passive: true });
+        sc.addEventListener('scroll', () => {
+            if (Math.abs(sc.scrollTop) < 2) {
+                sc._readerAway = false;
+                return;
+            }
+            if (sc._readerHeld || Date.now() - Math.max(sc._readerInputAt || 0, this._readerKeyAt || 0) < 1000) sc._readerAway = true;
+        }, { passive: true });
+        if (this._readerDocBound || typeof document === 'undefined') return;
+        this._readerDocBound = true;
+        const keys = new Set(['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' ']);
+        document.addEventListener('keydown', (e) => {
+            const t = e && e.target;
+            if (!e || !keys.has(e.key) || (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '')))) return;
+            this._readerKeyAt = Date.now();
+        }, { capture: true, passive: true });
+        const release = () => {
+            for (const el of document.querySelectorAll('#messagesScroller, .cv-scroller')) el._readerHeld = false;
+        };
+        window.addEventListener('pointerup', release, { capture: true, passive: true });
+        window.addEventListener('pointercancel', release, { capture: true, passive: true });
+    },
+
+    _readerAwayOn(sc) {
+        if (!sc) return false;
+        if (sc._readerAway) return true;
+        return Math.abs(sc.scrollTop) >= 2 && (!!sc._readerHeld || Date.now() - Math.max(sc._readerInputAt || 0, this._readerKeyAt || 0) < 400);
+    },
+
+    _readerReset(sc) {
+        if (!sc) return;
+        sc._readerAway = false;
+        sc._readerInputAt = 0;
+    },
+
+    _readerPlace(container, sc) {
+        const a = this._scrollAnchorFor(container);
+        if (!a || a.sc !== sc || !a.el.dataset.messageId) return null;
+        return { id: a.el.dataset.messageId, edge: a.edge - sc.getBoundingClientRect().top };
+    },
+
+    _readerRestore(container, sc, place) {
+        if (!container || !sc || !place) return;
+        const el = container.querySelector('[data-message-id="' + (window.CSS && CSS.escape ? CSS.escape(place.id) : place.id) + '"]');
+        if (!el) return;
+        const delta = el.getBoundingClientRect().bottom - sc.getBoundingClientRect().top - place.edge;
+        if (Math.abs(delta) >= 1) sc.scrollTop += delta;
+        if (Math.abs(sc.scrollTop) >= 2) sc._readerAway = true;
+    },
+
     // Batches multiple scroll requests into one rAF frame.
     _scheduleScrollToBottom(force = false) {
         if (!force && (!this.settings.autoscroll || this.userScrolledUp)) return;
         if (!force && this.virtualScroll.suppressAutoScroll) return;
+        if (force) {
+            this._scrollRAFForce = true;
+            this._readerReset(this._getMessagesScroller());
+        }
         if (this._scrollRAF) return;
 
         this._scrollRAF = requestAnimationFrame(() => {
             this._scrollRAF = null;
+            const forced = !!this._scrollRAFForce;
+            this._scrollRAFForce = false;
             const scroller = this._getMessagesScroller();
+            if (!forced && this._readerAwayOn(scroller)) return;
             // Reverse-column flex: scrollTop is 0 at the bottom and negative scrolling up.
             if (scroller) scroller.scrollTop = 0;
         });
@@ -2929,7 +3025,7 @@ Object.assign(NYM.prototype, {
         }
         if (hit < 0) return null;
         const el = rows[hit];
-        return { sc, el, top: el.getBoundingClientRect().top };
+        return { sc, el, edge: el.getBoundingClientRect().bottom };
     },
 
     _recomputeAllBubbleGrouping(container) {
@@ -3108,8 +3204,80 @@ Object.assign(NYM.prototype, {
         return this._groupResizeObserver;
     },
 
-    setQuoteReply(author, text, sourceId) {
-        text = this._shownTextFor(text, sourceId);
+    _quoteSourceOf(author, sourceId, pubkey) {
+        if (typeof sourceId !== 'string' || !sourceId) return null;
+        const want = typeof pubkey === 'string' ? pubkey.toLowerCase() : '';
+        const F = window.NymContentFilter;
+        const T = window.NymChatTools;
+        const sfx = F && typeof F.nymSuffix === 'function' ? F.nymSuffix(String(author || '').trim().toLowerCase()) : '';
+        let hit = null;
+        for (const store of [this.messages, this.pmMessages]) {
+            if (!store || typeof store.forEach !== 'function') continue;
+            store.forEach((list) => {
+                if (!Array.isArray(list)) return;
+                for (const m of list) {
+                    if (!m || (m.id !== sourceId && m.nymMessageId !== sourceId)) continue;
+                    const pk = typeof m.pubkey === 'string' ? m.pubkey.toLowerCase() : '';
+                    if (want ? pk !== want : (sfx && /^[0-9a-f]{64}$/.test(pk) && pk.slice(-4) !== sfx)) continue;
+                    if (!hit || (T && typeof T.newerCopy === 'function' && T.newerCopy(hit, m))) hit = m;
+                }
+            });
+        }
+        return hit;
+    },
+
+    _quoteSourceGone(src, sourceId, pubkey, author) {
+        if (src) return typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(src);
+        const del = this.deletedEventIds;
+        if (!sourceId || !del || typeof del.has !== 'function') return false;
+        if (del.has(sourceId)) return true;
+        if (typeof pubkey === 'string' && pubkey) return del.has(`${pubkey}:${sourceId}`) || del.has(`${pubkey.toLowerCase()}:${sourceId}`);
+        const F = window.NymContentFilter;
+        const sfx = F && typeof F.nymSuffix === 'function' ? F.nymSuffix(String(author || '').trim().toLowerCase()) : '';
+        if (!sfx || typeof del.forEach !== 'function') return false;
+        const tail = ':' + sourceId;
+        let hit = false;
+        del.forEach((k) => {
+            if (!hit && typeof k === 'string' && k.length === 64 + tail.length && k.endsWith(tail) && k.slice(60, 64).toLowerCase() === sfx) hit = true;
+        });
+        return hit;
+    },
+
+    _quoteNote(text) {
+        if (typeof this.showToast === 'function') this.showToast(text);
+        else if (typeof this.displaySystemMessage === 'function') this.displaySystemMessage(text);
+    },
+
+    _refreshPendingQuote() {
+        const q = this.pendingQuote;
+        if (!q || !q.sourceId) return true;
+        const src = this._quoteSourceOf(q.author, q.sourceId, q.pubkey);
+        if (this._quoteSourceGone(src, q.sourceId, q.pubkey, q.author)) {
+            this.clearQuoteReply();
+            this._quoteNote(this.uiText('The message you were quoting was deleted, so the quote was removed.'));
+            return false;
+        }
+        if (src && src.isEdited === true && typeof src.content === 'string' && src.content && src.content !== q.raw) {
+            this._setQuote(q.author, src.content, q.sourceId, false, q.pubkey);
+        }
+        return true;
+    },
+
+    setQuoteReply(author, text, sourceId, pubkey) {
+        return this._setQuote(author, text, sourceId, true, pubkey);
+    },
+
+    _setQuote(author, text, sourceId, focus, pubkey) {
+        const src = this._quoteSourceOf(author, sourceId, pubkey);
+        const pk = typeof pubkey === 'string' && pubkey ? pubkey : (src && typeof src.pubkey === 'string' ? src.pubkey : '');
+        if (this._quoteSourceGone(src, sourceId, pk, author)) {
+            if (this.pendingQuote && this.pendingQuote.sourceId === sourceId) this.clearQuoteReply();
+            this._quoteNote(this.uiText('That message was deleted, so it can\'t be quoted.'));
+            return false;
+        }
+        if (src && src.isEdited === true && typeof src.content === 'string' && src.content) text = src.content;
+        const raw = typeof text === 'string' ? text : '';
+        text = this._shownTextFor(raw, sourceId);
         // Strip all nested quotes; keep only the last message being quoted.
         const MAX_NESTED = 1;
         const strippedLines = [];
@@ -3129,7 +3297,7 @@ Object.assign(NYM.prototype, {
             strippedText = window.NymMediaNotes.previewText(strippedText);
             text = window.NymMediaNotes.previewText(text);
         }
-        this.pendingQuote = { author, text: strippedText, fullText: text, sourceId: typeof sourceId === 'string' ? sourceId : '' };
+        this.pendingQuote = { author, text: strippedText, fullText: text, sourceId: typeof sourceId === 'string' ? sourceId : '', raw, pubkey: pk };
         if (typeof sourceId === 'string' && sourceId) this._noteQuoteSource(author, sourceId);
         const preview = document.getElementById('quotePreview');
         const authorEl = document.getElementById('quotePreviewAuthor');
@@ -3145,7 +3313,7 @@ Object.assign(NYM.prototype, {
                 avatarHtml = `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
                 flairHtml = this.getFlairForUser(pubkey) || '';
             }
-            authorEl.innerHTML = `${avatarHtml}${this.escapeHtml(base)}<span class="nym-suffix">${this.escapeHtml(suffix)}</span>${flairHtml}`;
+            authorEl.innerHTML = `${avatarHtml}${window.NymSuffix.sqHtml(base, suffix)}${flairHtml}`;
         } else {
             authorEl.textContent = author;
         }
@@ -3157,7 +3325,8 @@ Object.assign(NYM.prototype, {
         const input = document.getElementById('messageInput');
         if (typeof this.refreshComposerPrimary === 'function') this.refreshComposerPrimary();
         this._refreshComposerOffsets();
-        input.focus();
+        if (focus) input.focus();
+        return true;
     },
 
     clearQuoteReply() {
@@ -3262,16 +3431,23 @@ Object.assign(NYM.prototype, {
                 editAt: now
             });
 
-            this.messages.forEach((msgs) => {
+            const touched = [];
+            this.messages.forEach((msgs, key) => {
                 const msg = msgs.find(m => m.id === originalEventId);
                 if (msg) {
                     if (typeof this._noteEdit === 'function') this._noteEdit(msg, newContent, now);
+                    const wasHidden = typeof this.isContentHidden === 'function' && this.isContentHidden(msg);
                     msg.content = newContent;
                     msg.isEdited = true;
+                    msg.editAt = now;
+                    msg.editId = signedEvent.id;
+                    this.persistChannelMessages(key);
+                    touched.push([msg, key, wasHidden]);
                 }
             });
 
             this.updateMessageInDOM(originalEventId, newContent);
+            if (typeof this._applyEditVisibility === 'function') for (const [msg, key, wasHidden] of touched) this._applyEditVisibility(originalEventId, msg, key, wasHidden);
 
             if (typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(signedEvent.id, originalEventId);
             this.sendToRelay(['EVENT', signedEvent]);
@@ -3290,56 +3466,57 @@ Object.assign(NYM.prototype, {
     },
 
     updateMessageInDOM(messageId, newContent) {
-        const msgEl = this.findMessageElementAnywhere(messageId);
-        if (!msgEl) return;
-        delete msgEl.dataset.fmtPending;
+        for (const msgEl of this.findMessageElementsAnywhere(messageId)) {
+            delete msgEl.dataset.fmtPending;
 
-        const prevRaw = msgEl.dataset.rawContent;
-        msgEl.dataset.rawContent = newContent;
+            const prevRaw = msgEl.dataset.rawContent;
+            msgEl.dataset.rawContent = newContent;
 
-        const contentEl = msgEl.querySelector('.message-content');
-        if (contentEl && contentEl.classList.contains('cosmetic-redacted-message')) {
-            this._dropEditedFinish(msgEl, newContent, prevRaw);
-        } else if (contentEl) {
-            const bubbleTimeEl = contentEl.querySelector('.bubble-time-inner');
-            const hoverButtonsEl = contentEl.querySelector('.msg-hover-buttons');
-            const editedMsg = this._messageIndex().get(messageId);
-            const editBotAuthored = !!(msgEl.dataset.pubkey && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(msgEl.dataset.pubkey));
-            let formattedContent = this.formatMessageWithQuotes(this._shownContent({ content: newContent, quoted: this._quotedOf(editedMsg) }), 0, editBotAuthored, this._quotedOf(editedMsg));
-            if (editBotAuthored) formattedContent = this._botFinishHtml(formattedContent, editedMsg);
-            if (bubbleTimeEl) {
-                if (!bubbleTimeEl.querySelector('.edited-indicator')) {
-                    const bubbleEdited = document.createElement('span');
-                    bubbleEdited.className = 'edited-indicator';
-                    bubbleEdited.title = 'This message has been edited';
-                    bubbleEdited.dataset.action = 'showEditHistory';
-                    bubbleEdited.setAttribute('role', 'button');
-                    bubbleEdited.tabIndex = 0;
-                    bubbleEdited.textContent = '(edited)';
-                    bubbleTimeEl.insertBefore(bubbleEdited, bubbleTimeEl.firstChild);
-                    bubbleTimeEl.insertBefore(document.createTextNode(' '), bubbleEdited.nextSibling);
+            const contentEl = msgEl.querySelector('.message-content');
+            if (contentEl && contentEl.classList.contains('cosmetic-redacted-message')) {
+                this._dropEditedFinish(msgEl, newContent, prevRaw);
+            } else if (contentEl) {
+                const bubbleTimeEl = contentEl.querySelector('.bubble-time-inner');
+                const hoverButtonsEl = contentEl.querySelector('.msg-hover-buttons');
+                const editedMsg = this._messageIndex().get(messageId);
+                const editBotAuthored = !!(msgEl.dataset.pubkey && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(msgEl.dataset.pubkey));
+                let formattedContent = this.formatMessageWithQuotes(this._shownContent({ content: newContent, quoted: this._quotedOf(editedMsg) }), 0, editBotAuthored, this._quotedOf(editedMsg));
+                if (editBotAuthored) formattedContent = this._botFinishHtml(formattedContent, editedMsg);
+                if (bubbleTimeEl) {
+                    if (!bubbleTimeEl.querySelector('.edited-indicator')) {
+                        const bubbleEdited = document.createElement('span');
+                        bubbleEdited.className = 'edited-indicator';
+                        bubbleEdited.title = 'This message has been edited';
+                        bubbleEdited.dataset.action = 'showEditHistory';
+                        bubbleEdited.setAttribute('role', 'button');
+                        bubbleEdited.tabIndex = 0;
+                        bubbleEdited.textContent = '(edited)';
+                        bubbleTimeEl.insertBefore(bubbleEdited, bubbleTimeEl.firstChild);
+                        bubbleTimeEl.insertBefore(document.createTextNode(' '), bubbleEdited.nextSibling);
+                    }
+                    contentEl.innerHTML = formattedContent + bubbleTimeEl.outerHTML + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
+                } else {
+                    contentEl.innerHTML = formattedContent + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
                 }
-                contentEl.innerHTML = formattedContent + bubbleTimeEl.outerHTML + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
-            } else {
-                contentEl.innerHTML = formattedContent + (hoverButtonsEl ? hoverButtonsEl.outerHTML : '');
+                this._refinishEditedContent(msgEl, contentEl, editedMsg, newContent, prevRaw);
             }
-            this._refinishEditedContent(msgEl, contentEl, editedMsg, newContent, prevRaw);
-        }
 
-        if (!msgEl.querySelector('.edited-indicator-irc')) {
-            const ircIndicator = document.createElement('span');
-            ircIndicator.className = 'edited-indicator edited-indicator-irc';
-            ircIndicator.title = 'This message has been edited';
-            ircIndicator.dataset.action = 'showEditHistory';
-            ircIndicator.setAttribute('role', 'button');
-            ircIndicator.tabIndex = 0;
-            ircIndicator.textContent = '(edited)';
-            if (contentEl && contentEl.nextSibling) {
-                msgEl.insertBefore(ircIndicator, contentEl.nextSibling);
-            } else {
-                msgEl.appendChild(ircIndicator);
+            if (!msgEl.querySelector('.edited-indicator-irc')) {
+                const ircIndicator = document.createElement('span');
+                ircIndicator.className = 'edited-indicator edited-indicator-irc';
+                ircIndicator.title = 'This message has been edited';
+                ircIndicator.dataset.action = 'showEditHistory';
+                ircIndicator.setAttribute('role', 'button');
+                ircIndicator.tabIndex = 0;
+                ircIndicator.textContent = '(edited)';
+                if (contentEl && contentEl.nextSibling) {
+                    msgEl.insertBefore(ircIndicator, contentEl.nextSibling);
+                } else {
+                    msgEl.appendChild(ircIndicator);
+                }
             }
         }
+        if (this.pendingQuote) this._refreshPendingQuote();
     },
 
     _refinishEditedContent(msgEl, contentEl, editedMsg, newContent, prevRaw) {
@@ -3356,6 +3533,13 @@ Object.assign(NYM.prototype, {
         delete msgEl.dataset.nostrCardsAttached;
         msgEl._finishGen = (msgEl._finishGen || 0) + 1;
         if (prevRaw !== newContent && typeof this._dropManualTranslation === 'function') this._dropManualTranslation(msgEl);
+    },
+
+    _blankRedactedContent(messageEl, contentEl) {
+        contentEl.classList.add('cosmetic-redacted-message');
+        contentEl.textContent = '';
+        messageEl._finishGen = (messageEl._finishGen || 0) + 1;
+        if (typeof this._dropManualTranslation === 'function') this._dropManualTranslation(messageEl);
     },
 
     _botFinishHtml(html, message) {
@@ -3383,7 +3567,7 @@ Object.assign(NYM.prototype, {
                     const suffix = this.getPubkeySuffix(msgEl.dataset.pubkey);
                     const authorText = `${baseNym}#${suffix}`;
                     const cleanContent = msgEl.dataset.rawContent || msgEl.querySelector('.message-content')?.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
-                    if (cleanContent) this.setQuoteReply(authorText, cleanContent, msgEl.dataset.messageId);
+                    if (cleanContent) this.setQuoteReply(authorText, cleanContent, msgEl.dataset.messageId, msgEl.dataset.pubkey);
                 }
             },
             translate: {
@@ -3432,6 +3616,7 @@ Object.assign(NYM.prototype, {
                     const messageId = msgEl.dataset.messageId;
                     const targetPubkey = msgEl.dataset.pubkey;
                     if (!messageId || !targetPubkey) return;
+                    if (this._zapAnonLaneBlocked(messageId)) return;
                     if (targetPubkey === this.pubkey) {
                         this.displaySystemMessage('Cannot zap your own message');
                         return;
@@ -3469,6 +3654,19 @@ Object.assign(NYM.prototype, {
             none: { icon: '', run: () => {} }
         };
         return ACTIONS[action] || null;
+    },
+
+    _swipeFacts(msgEl) {
+        const contentEl = msgEl.querySelector('.message-content');
+        const pk = msgEl.dataset.pubkey || '';
+        const id = msgEl.dataset.messageId || '';
+        return {
+            id: !!id,
+            content: !!(msgEl.dataset.rawContent || (contentEl && contentEl.textContent.trim())),
+            author: !!pk,
+            self: !!pk && pk === this.pubkey,
+            anonLane: !!(id && typeof this._zapAnonLane === 'function' && this._zapAnonLane(id)),
+        };
     },
 
     setupSwipeToReply(container = document.getElementById('messagesContainer')) {
@@ -3524,16 +3722,7 @@ Object.assign(NYM.prototype, {
         const SWIPE_START_THRESHOLD = 16;
         const SCROLL_SLOP = 18;
 
-        const swipeFacts = (msgEl) => {
-            const contentEl = msgEl.querySelector('.message-content');
-            const pk = msgEl.dataset.pubkey || '';
-            return {
-                id: !!msgEl.dataset.messageId,
-                content: !!(msgEl.dataset.rawContent || (contentEl && contentEl.textContent.trim())),
-                author: !!pk,
-                self: !!pk && pk === this.pubkey,
-            };
-        };
+        const swipeFacts = (msgEl) => this._swipeFacts(msgEl);
 
         container.addEventListener('touchmove', (e) => {
             if (!currentEl) return;
@@ -3700,7 +3889,7 @@ Object.assign(NYM.prototype, {
 
             if (cleanContent) {
                 window.getSelection()?.removeAllRanges();
-                this.setQuoteReply(authorText, cleanContent, msgEl.dataset.messageId);
+                this.setQuoteReply(authorText, cleanContent, msgEl.dataset.messageId, msgEl.dataset.pubkey);
             }
         });
     },
@@ -3723,6 +3912,7 @@ Object.assign(NYM.prototype, {
             content = (content ? content + ' ' : '') + attachmentUrls.join(' ');
         }
 
+        if (this.pendingQuote && !this._refreshPendingQuote()) return;
         if (!content && !this.pendingQuote) return;
 
         const meshOnly = typeof this.meshShouldCarry === 'function' &&
@@ -3745,6 +3935,7 @@ Object.assign(NYM.prototype, {
         if (this.pendingEdit) {
             const edit = this.pendingEdit;
             this.cancelEditMessage();
+            this._clearComposerForSend(input);
 
             const edited = this._editedContent(edit, content);
             if (edited === null) {
@@ -3765,11 +3956,6 @@ Object.assign(NYM.prototype, {
             }
             if (window.nymHaptic) window.nymHaptic('light');
 
-            input.value = '';
-            this.autoResizeTextarea(input);
-            this.hideCommandPalette();
-            this.hideAutocomplete();
-            this.hideEmojiAutocomplete();
             this.sendTypingStop();
             this.sendChannelTypingStop();
             input.focus();
@@ -3777,6 +3963,7 @@ Object.assign(NYM.prototype, {
         }
 
         const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text, fullText: this.pendingQuote.fullText } : null;
+        const quoteSource = (this.pendingQuote && this.pendingQuote.sourceId) || '';
         const quoteData = savedQuote;
         const rawInput = content;
 
@@ -3800,7 +3987,8 @@ Object.assign(NYM.prototype, {
 
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
-            const quoteLine = `> @${this.pendingQuote.author}: ${textLines[0]}` +
+            const anonQuote = !!(this.pendingQuote.sourceId && typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(this.pendingQuote.sourceId));
+            const quoteLine = (anonQuote ? `> ${textLines[0]}` : `> @${this.pendingQuote.author}: ${textLines[0]}`) +
                 (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
             content = content ? `${quoteLine}\n\n${content}` : quoteLine;
             this.clearQuoteReply();
@@ -3810,44 +3998,50 @@ Object.assign(NYM.prototype, {
         this.historyIndex = this.commandHistory.length;
         if (window.nymHaptic) window.nymHaptic('light');
 
-        if (content.startsWith('/')) {
-            this.handleCommand(content);
-        } else {
-            if (this.inPMMode && this.currentGroup) {
-                channelClaim = typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null;
-                this._takeTypingUnderClaim(channelClaim);
-                await this.sendGroupMessage(content, this.currentGroup, { threadRoot, claim: channelClaim });
-            } else if (this.inPMMode && this.currentPM && meshPm) {
-                await this.sendPMOverMesh(content, this.currentPM, meshPm);
-            } else if (this.inPMMode && this.currentPM) {
-                channelClaim = typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null;
-                this._takeTypingUnderClaim(channelClaim);
-                await this.sendPM(content, this.currentPM, { threadRoot, claim: channelClaim });
-            } else if (this.currentGeohash) {
-                channelClaim = typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null;
-                // The Bluetooth mesh carries #mesh always, and any channel when the internet route is down.
-                if (meshOnly) {
-                    await this._sendChannelOverMesh(content, this.currentGeohash, channelClaim);
-                } else {
-                    await this.publishMessage(content, this.currentGeohash, this.currentGeohash, quoteData, threadRoot, channelClaim ? { claim: channelClaim } : null);
-                }
-                // Use rawInput for trigger detection, since the quote prepend may hide the prefix.
-                const ownInput = rawInput.replace(/^>.*$/gm, '>');
-                const isBotCmd = rawInput.startsWith('?') || /(^|[^A-Za-z0-9_])@nymbot(?:#[0-9a-f]{4})?(?![A-Za-z0-9_])/i.test(ownInput);
-                const botQuote = savedQuote || threadBotQuote;
-                const isNymbotReply = botQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(botQuote.author);
-                if (isBotCmd || isNymbotReply) {
-                    this._handleBotCommand(rawInput, this.currentGeohash, botQuote, content, threadRoot, undefined, undefined, channelClaim);
+        const flightKey = this._sendFlightKey(content, threadRoot);
+        if (flightKey && this._sendInFlight(flightKey, content, threadRoot)) {
+            this._clearComposerForSend(input);
+            input.focus();
+            return;
+        }
+        this._clearComposerForSend(input);
+        if (flightKey) this._sendFlights.add(flightKey);
+        try {
+            if (content.startsWith('/')) {
+                this.handleCommand(content);
+            } else {
+                if (this.inPMMode && this.currentGroup) {
+                    channelClaim = typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null;
+                    this._takeTypingUnderClaim(channelClaim);
+                    await this.sendGroupMessage(content, this.currentGroup, { threadRoot, claim: channelClaim });
+                } else if (this.inPMMode && this.currentPM && meshPm) {
+                    await this.sendPMOverMesh(content, this.currentPM, meshPm);
+                } else if (this.inPMMode && this.currentPM) {
+                    channelClaim = typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null;
+                    this._takeTypingUnderClaim(channelClaim);
+                    await this.sendPM(content, this.currentPM, { threadRoot, claim: channelClaim, quoteSource });
+                } else if (this.currentGeohash) {
+                    channelClaim = typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null;
+                    // The Bluetooth mesh carries #mesh always, and any channel when the internet route is down.
+                    if (meshOnly) {
+                        await this._sendChannelOverMesh(content, this.currentGeohash, channelClaim);
+                    } else {
+                        await this.publishMessage(content, this.currentGeohash, this.currentGeohash, quoteData, threadRoot, channelClaim ? { claim: channelClaim } : null);
+                    }
+                    // Use rawInput for trigger detection, since the quote prepend may hide the prefix.
+                    const ownInput = rawInput.replace(/^>.*$/gm, '>');
+                    const isBotCmd = rawInput.startsWith('?') || /(^|[^A-Za-z0-9_])@nymbot(?:#[0-9a-f]{4})?(?![A-Za-z0-9_])/i.test(ownInput);
+                    const botQuote = savedQuote || threadBotQuote;
+                    const isNymbotReply = botQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(botQuote.author);
+                    if (isBotCmd || isNymbotReply) {
+                        this._handleBotCommand(rawInput, this.currentGeohash, botQuote, content, threadRoot, undefined, undefined, channelClaim);
+                    }
                 }
             }
+        } finally {
+            if (flightKey) this._sendFlights.delete(flightKey);
         }
 
-        input.value = '';
-        if (typeof this.clearComposerAttachments === 'function') this.clearComposerAttachments();
-        this.autoResizeTextarea(input);
-        this.hideCommandPalette();
-        this.hideAutocomplete();
-        this.hideEmojiAutocomplete();
         this.sendTypingStop(channelClaim);
         this.sendChannelTypingStop(undefined, channelClaim);
         input.focus();
@@ -3856,6 +4050,39 @@ Object.assign(NYM.prototype, {
         if (this.connectionMode === 'ephemeral' && localStorage.getItem('nym_keypair_mode') === 'hardcore') {
             if (!channelClaim || !channelClaim.sk) this._claimChannelKey();
         }
+    },
+
+    _clearComposerForSend(input) {
+        if (!input) return;
+        input.value = '';
+        if (typeof this.clearComposerAttachments === 'function') this.clearComposerAttachments();
+        this.autoResizeTextarea(input);
+        this.hideCommandPalette();
+        this.hideAutocomplete();
+        this.hideEmojiAutocomplete();
+    },
+
+    _sendFlightKey(content, threadRoot) {
+        if (!content || content.startsWith('/')) return null;
+        let target = '';
+        if (this.inPMMode && this.currentGroup) target = 'g:' + this.currentGroup;
+        else if (this.inPMMode && this.currentPM) target = 'p:' + this.currentPM;
+        else if (this.currentGeohash) target = 'c:' + this.currentGeohash;
+        else return null;
+        if (!(this._sendFlights instanceof Set)) this._sendFlights = new Set();
+        return target + '\n' + (threadRoot || '') + '\n' + content;
+    },
+
+    _sendInFlight(key, content, threadRoot) {
+        if (this._sendFlights instanceof Set && this._sendFlights.has(key)) return true;
+        if (!(this.inPMMode && this.currentPM && !this.currentGroup)) return false;
+        const list = this.pmMessages && this.pmMessages.get(this.getPMConversationKey(this.currentPM));
+        if (!Array.isArray(list)) return false;
+        for (let i = list.length - 1; i >= 0 && i >= list.length - 50; i--) {
+            const m = list[i];
+            if (m && m.isOwn && m.deliveryStatus === 'sending' && m.content === content && (m.threadRoot || null) === (threadRoot || null)) return true;
+        }
+        return false;
     },
 
     async sendMessagePseudonymous() {
@@ -3875,6 +4102,7 @@ Object.assign(NYM.prototype, {
             content = (content ? content + ' ' : '') + attachmentUrls.join(' ');
         }
 
+        if (this.pendingQuote && !this._refreshPendingQuote()) return false;
         if (!content && !this.pendingQuote) return false;
 
         if (!this.connected) {
@@ -3904,7 +4132,8 @@ Object.assign(NYM.prototype, {
 
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
-            const quoteLine = `> @${this.pendingQuote.author}: ${textLines[0]}` +
+            const anonQuote = !!(this.pendingQuote.sourceId && typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(this.pendingQuote.sourceId));
+            const quoteLine = (anonQuote ? `> ${textLines[0]}` : `> @${this.pendingQuote.author}: ${textLines[0]}`) +
                 (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
             content = content ? `${quoteLine}\n\n${content}` : quoteLine;
         }
@@ -4379,6 +4608,19 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
+    findMessageElementsAnywhere(messageId) {
+        if (!messageId) return [];
+        const sel = `[data-message-id="${String(messageId).replace(/"/g, '\\"')}"]`;
+        const top = (el) => !(el.parentElement && el.parentElement.closest(sel));
+        const out = Array.from(document.querySelectorAll(sel)).filter(top);
+        if (this.channelDOMCache && this.channelDOMCache.size > 0) {
+            for (const cached of this.channelDOMCache.values()) {
+                if (cached && cached.fragment) out.push(...Array.from(cached.fragment.querySelectorAll(sel)).filter(top));
+            }
+        }
+        return out;
+    },
+
     findMessageElementAnywhere(messageId) {
         if (!messageId) return null;
         const safeId = String(messageId).replace(/"/g, '\\"');
@@ -4395,7 +4637,7 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    loadChannelMessages(displayName) {
+    loadChannelMessages(displayName, place = null) {
         const container = document.getElementById('messagesContainer');
         const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
 
@@ -4436,7 +4678,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        this.renderMessagesWithVirtualScroll(container, storageKey, true, false, filteredMessages);
+        this.renderMessagesWithVirtualScroll(container, storageKey, true, false, filteredMessages, place);
         this._applyDirectHistoryNote(container);
 
         this.renderChannelPolls();
@@ -4508,6 +4750,7 @@ Object.assign(NYM.prototype, {
         if (this.settings.autoscroll) {
             this.userScrolledUp = false;
             const scroller = this._getMessagesScroller();
+            this._readerReset(scroller);
             if (scroller) {
                 scroller.scrollTop = 0;
                 requestAnimationFrame(() => {
@@ -4683,8 +4926,11 @@ Object.assign(NYM.prototype, {
     },
 
     // isPM: uses pmMessages with conversationKey instead of messages with storageKey.
-    renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false, filtered = null) {
+    renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false, filtered = null, place = null) {
         const messages = Array.isArray(filtered) ? filtered : (isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey));
+        const mainScroller = container.id === 'messagesContainer' && !this._cvActive ? this._getMessagesScroller() : null;
+        const keep = !scrollToBottom || !mainScroller ? null : (place || (container.dataset.virtualScrollKey === storageKey && this._readerAwayOn(mainScroller)
+            ? this._readerPlace(container, mainScroller) : null));
         if (!isPM && this.channelWindowEnd) this.channelWindowEnd.delete(storageKey);
 
         container.dataset.virtualScrollKey = storageKey;
@@ -4698,22 +4944,16 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        let renderMessages = messages;
-        if (isPM && messages.length > this.pmPageSize) {
-            const startIdx = messages.length - this.pmPageSize;
-            renderMessages = messages.slice(startIdx);
-            this.pmRenderedStart.set(storageKey, startIdx);
-        } else if (isPM) {
-            this.pmRenderedStart.set(storageKey, 0);
-        } else if (!isPM && messages.length > this.channelPageSize) {
-            const startIdx = messages.length - this.channelPageSize;
-            renderMessages = messages.slice(startIdx);
-            this.channelRenderedStart.set(storageKey, startIdx);
-        } else if (!isPM) {
-            this.channelRenderedStart.set(storageKey, 0);
+        const pageSize = isPM ? this.pmPageSize : this.channelPageSize;
+        let startIdx = messages.length > pageSize ? messages.length - pageSize : 0;
+        if (keep) {
+            const at = messages.findIndex((m) => ((m && m.isPM && m.nymMessageId) ? m.nymMessageId : (m && m.id)) === keep.id);
+            if (at >= 0) startIdx = Math.min(startIdx, Math.max(0, at - 10));
         }
+        let renderMessages = startIdx > 0 ? messages.slice(startIdx) : messages;
+        (isPM ? this.pmRenderedStart : this.channelRenderedStart).set(storageKey, startIdx);
 
-        const firstRows = scrollToBottom ? this._entryFirstRows(container, isPM, storageKey, renderMessages) : 0;
+        const firstRows = scrollToBottom && !keep ? this._entryFirstRows(container, isPM, storageKey, renderMessages) : 0;
         let deferredRows = 0;
         if (firstRows > 0 && renderMessages.length > firstRows) {
             deferredRows = renderMessages.length - firstRows;
@@ -4751,9 +4991,13 @@ Object.assign(NYM.prototype, {
         this._backfillZapReceiptsForMessages(renderMessages);
 
         // The reverse-column container keeps the bottom pinned as media loads, so no follow-up is needed.
-        if (scrollToBottom && this.settings.autoscroll) {
+        if (keep) {
+            this._readerRestore(container, mainScroller, keep);
+            requestAnimationFrame(() => this._readerRestore(container, mainScroller, keep));
+        } else if (scrollToBottom && this.settings.autoscroll) {
             this.userScrolledUp = false;
             const scroller = this._getMessagesScroller();
+            this._readerReset(scroller);
             if (scroller) {
                 scroller.scrollTop = 0;
                 requestAnimationFrame(() => {
@@ -5289,6 +5533,10 @@ Object.assign(NYM.prototype, {
             }
 
             if (!container) return;
+            const here = () => {
+                const sc = this._getMessagesScroller();
+                return this._readerAwayOn(sc) ? this._readerPlace(container, sc) : null;
+            };
 
             if (this.inPMMode) {
                 const key = this.currentGroup
@@ -5298,9 +5546,10 @@ Object.assign(NYM.prototype, {
                 const stored = (this.pmMessages.get(key) || []).length;
                 const domCount = container.querySelectorAll('.message[data-message-id], .me-message[data-message-id], .group-notice[data-message-id]').length;
                 if (stored > domCount) {
+                    const place = here();
                     container.dataset.lastChannel = '';
                     this.channelDOMCache.delete(key);
-                    this.loadPMMessages(key);
+                    this.loadPMMessages(key, false, place);
                 }
             } else if (this.currentChannel || this.currentGeohash) {
                 const key = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
@@ -5308,9 +5557,10 @@ Object.assign(NYM.prototype, {
                 const domCount = container.querySelectorAll('.message[data-message-id], .me-message[data-message-id], .group-notice[data-message-id]').length;
                 const short = !this.userScrolledUp && !this._chWinDetached(key) && domCount < Math.min(stored, this.channelPageSize || 50);
                 if (stored > domCount && (domCount === 0 || short)) {
+                    const place = here();
                     container.dataset.lastChannel = '';
                     this.channelDOMCache.delete(key);
-                    this.loadChannelMessages(this.currentChannel || `#${this.currentGeohash}`);
+                    this.loadChannelMessages(this.currentChannel || `#${this.currentGeohash}`, place);
                 } else if (!sweep && domCount) {
                     this._chWinReconcile(key, container);
                 }
@@ -5337,6 +5587,9 @@ Object.assign(NYM.prototype, {
                 });
             });
         }
+
+        document.querySelectorAll('#pmList .pm-item[data-pubkey]').forEach(row => this._paintPmNickColor(row));
+        if (window.NymLayout && typeof window.NymLayout.refreshPreviews === 'function') window.NymLayout.refreshPreviews();
 
         this.updateUserList();
     },
@@ -5381,6 +5634,7 @@ Object.assign(NYM.prototype, {
 
     _refreshBubbleRelativeTimes() {
         if (document.hidden) return;
+        if (typeof this._refreshNotificationRelativeTimes === 'function') this._refreshNotificationRelativeTimes();
         if (!document.body.classList.contains('chat-bubbles')) return;
         document.querySelectorAll('.bubble-time-inner > .bubble-time-text').forEach(el => {
             const msgEl = el.closest('[data-timestamp]');
@@ -5850,6 +6104,7 @@ Object.assign(NYM.prototype, {
         const rev = this._formatCtxRev || 0;
         const locale = (typeof this.getUiLanguage === 'function' && this.getUiLanguage()) || null;
         const spoilerLabel = typeof this.uiText === 'function' ? this.uiText('Spoiler, tap to reveal') : null;
+        const verifyLabel = typeof this.uiText === 'function' ? this.uiText('bitchat verification link') : null;
 
         const cached = this._formatCtxCache;
         if (cached && cached.rev === rev &&
@@ -5857,7 +6112,8 @@ Object.assign(NYM.prototype, {
             cached.ctx.currentChannel === currentChannel &&
             cached.ctx.currentGeohash === currentGeohash &&
             cached.ctx.locale === locale &&
-            cached.ctx.spoilerLabel === spoilerLabel) {
+            cached.ctx.spoilerLabel === spoilerLabel &&
+            cached.ctx.verifyLabel === verifyLabel) {
             return cached.ctx;
         }
 
@@ -5873,6 +6129,7 @@ Object.assign(NYM.prototype, {
             mediaFallbacks: (this.mediaFallbacks && this.mediaFallbacks.size) ? Object.fromEntries(this.mediaFallbacks) : null,
             locale,
             spoilerLabel,
+            verifyLabel,
         };
         this._formatCtxCache = { rev, ctx };
         return ctx;

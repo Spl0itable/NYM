@@ -7,6 +7,7 @@
     const S = () => G.NymMeshSync;
     const X = () => G.NymMeshCourier;
     const E = () => G.NymMeshExtras;
+    const capNick = (n) => (typeof n === 'string' && n && G.NymSuffix && typeof G.NymSuffix.cap === 'function' ? G.NymSuffix.cap(n) : n);
 
     const GHOST_FLAG_KEY = 'nym_mesh_ghost_mode';
     const GHOST_ROTATE_MS = 15 * 60 * 1000;
@@ -116,7 +117,7 @@
             this.noise = null;
             this.seen = new (P().SeenPackets)();
             // Reconciled with neighbors so peers out of range or in another partition still get it.
-            this.gossip = new (S().GossipSync)();
+            this.gossip = new (S().GossipSync)({ refuses: (p) => this._dropsPublicPacket(p) });
             this._gossipDirty = false;
             // Sealed mail carried for peers who were out of range when it was sent.
             this.couriers = new (X().CourierStore)();
@@ -633,6 +634,11 @@
                     const bytes = new Uint8Array(bin.length);
                     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
                     const pkt = await P().decodePacketAsync(bytes);
+                    if (pkt && this._dropsPublicPacket(pkt)) {
+                        this._gossipDirty = true;
+                        await this.gossip.noteRefused(pkt);
+                        continue;
+                    }
                     if (pkt) await this.gossip.onPublicPacketSeen(pkt, P().isBroadcast);
                 } catch (_) {
                     // One unreadable row costs one message.
@@ -889,17 +895,18 @@
                 P().toHex(packet.recipientID) === mine;
             const forUs = !packet.recipientID || P().isBroadcast(packet) || directedToUs;
 
+            let withheld = false;
             switch (packet.type) {
                 case T.announce: await this._handleAnnounce(packet, senderPeerID, rssi); break;
-                case T.message: this._handlePublicMessage(packet, senderPeerID); break;
-                case T.nymChannelMessage: this._handleChannelMessage(packet, senderPeerID); break;
+                case T.message: withheld = this._handlePublicMessage(packet, senderPeerID); break;
+                case T.nymChannelMessage: withheld = await this._handleChannelMessage(packet, senderPeerID); break;
                 case T.fileTransfer:
                     if (forUs) this._handleFile(packet, senderPeerID, directedToUs);
                     break;
                 case T.leave: this._removePeer(senderPeerID); break;
                 case T.noiseHandshake: if (forUs) await this._handleHandshake(senderPeerID, packet.payload); break;
                 case T.noiseEncrypted: if (forUs) await this._handleEncrypted(senderPeerID, packet.payload); break;
-                case T.fragment: await this._handleFragment(packet, linkId, rssi); break;
+                case T.fragment: withheld = await this._handleFragment(packet, linkId, rssi); break;
                 case T.courierEnvelope:
                     // Directed mail: deliver if ours, else carry it.
                     if (forUs) await this._handleCourierEnvelope(packet, senderPeerID);
@@ -929,9 +936,10 @@
             }
 
             // Never relay packets addressed only to us, back down the arrival hop, or reassembled (fragments already were).
-            if (!alreadyRelayed && !directedToUs && packet.ttl > 1 && packet.type !== T.leave) {
+            if (!withheld && !alreadyRelayed && !directedToUs && packet.ttl > 1 && packet.type !== T.leave) {
                 this._scheduleRelay(packet, linkId);
             }
+            return withheld;
         }
 
         _scheduleRelay(packet, linkId) {
@@ -951,11 +959,12 @@
 
         async _handleFragment(packet, linkId, rssi) {
             const fragment = P().decodeFragment(packet.payload);
-            if (!fragment) return;
+            if (!fragment) return false;
             const full = this.reassembler.accept(fragment);
-            if (!full) return;
+            if (!full) return false;
             const inner = await P().decodePacketAsync(full);
-            if (inner) await this._processPacket(inner, linkId, rssi, true);
+            if (!inner) return false;
+            return !!(await this._processPacket(inner, linkId, rssi, true)) || this._dropsPublicPacket(inner);
         }
 
         async _handleAnnounce(packet, senderPeerID, rssi) {
@@ -972,7 +981,7 @@
             let peer = this.peers.get(senderPeerID);
             const isNew = !peer;
             if (!peer) { peer = { peerID: senderPeerID }; this.peers.set(senderPeerID, peer); }
-            peer.nickname = ann.nickname;
+            peer.nickname = capNick(ann.nickname);
             peer.noisePublicKey = ann.noisePublicKey;
             peer.signingPublicKey = ann.signingPublicKey;
             peer.isVerified = verified;
@@ -1001,9 +1010,23 @@
             }, 150 + Math.floor(Math.random() * 500));
         }
 
+        _dropsPublic(content) {
+            const V = G.NymBitchatVerify;
+            return !!V && V.isBitchatVerifyContent(content);
+        }
+
+        _dropsPublicPacket(packet) {
+            const T = P().MsgType;
+            if (packet.type === T.message) return this._dropsPublic(P().utf8d.decode(packet.payload));
+            if (packet.type !== T.nymChannelMessage) return false;
+            const msg = P().decodeBitchatMessage(packet.payload);
+            return !!msg && !msg.isEncrypted && this._dropsPublic(msg.content);
+        }
+
         _handlePublicMessage(packet, senderPeerID) {
             const content = P().utf8d.decode(packet.payload);
-            if (!content) return;
+            if (!content) return false;
+            if (this._dropsPublic(content)) return true;
             const peer = this._touchPeer(senderPeerID);
             this.onPublicMessage({
                 senderPeerID,
@@ -1013,6 +1036,7 @@
                 timestampMs: packet.timestamp,
                 channel: null,
             });
+            return false;
         }
 
         async setChannelPassword(channel, password) {
@@ -1027,23 +1051,25 @@
 
         async _handleChannelMessage(packet, senderPeerID) {
             const msg = P().decodeBitchatMessage(packet.payload);
-            if (!msg || !msg.channel) return;
+            if (!msg || !msg.channel) return false;
             if (msg.isEncrypted) {
                 const key = this.channelKeys.get(C().channelWireName(msg.channel));
-                if (!key || !msg.encryptedContent) return;
-                try { msg.content = await C().channelDecrypt(key, msg.encryptedContent); } catch (_) { return; }
+                if (!key || !msg.encryptedContent) return false;
+                try { msg.content = await C().channelDecrypt(key, msg.encryptedContent); } catch (_) { return false; }
             }
+            if (this._dropsPublic(msg.content)) return true;
             const peer = this._touchPeer(senderPeerID);
             this.onPublicMessage({
                 // The sender's outbox republishes this as a `['nymmesh', id]` tag so receivers can drop the Nostr copy.
                 id: msg.id || null,
                 senderPeerID,
-                senderNickname: msg.sender || (peer && peer.nickname) || senderPeerID,
+                senderNickname: capNick(msg.sender) || (peer && peer.nickname) || senderPeerID,
                 senderNostrPubkey: peer && peer.nostrPubkey,
                 content: msg.content,
                 timestampMs: msg.timestampMs || packet.timestamp,
                 channel: msg.channel,
             });
+            return false;
         }
 
         async _handleHandshake(senderPeerID, payload) {

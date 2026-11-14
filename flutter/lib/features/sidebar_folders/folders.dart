@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../../core/utils/channel_name.dart';
+
 class FoldersLimits {
   const FoldersLimits._();
 
@@ -15,6 +17,7 @@ class FoldersLimits {
   static const int wrapLimitPq2 = 16384;
   static const int wrapLimitClassic = 28672;
   static const int reserve = 1024;
+  static const int oldRefMax = 64;
 
   static Map<String, int> toJson() => const {
         'folders': folders,
@@ -29,6 +32,7 @@ class FoldersLimits {
         'wrapLimitPq2': wrapLimitPq2,
         'wrapLimitClassic': wrapLimitClassic,
         'reserve': reserve,
+        'oldRefMax': oldRefMax,
       };
 }
 
@@ -136,7 +140,6 @@ const List<String> kFolderBuiltins = ['channels', 'pms', 'nyms'];
 final RegExp _rxFid = RegExp(r'^[a-z0-9]{12}$');
 final RegExp _rxHex64 = RegExp(r'^[0-9a-f]{64}$');
 final RegExp _rxGroup = RegExp(r'^[0-9a-f]{16,64}$');
-final RegExp _rxChannel = RegExp(r'^[\p{L}\p{N}]{1,64}$', unicode: true);
 const String _idChars = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const String _removed = '';
 
@@ -238,9 +241,7 @@ bool folderValidRef(Object? k) {
   final s = k is String ? k : '';
   if (s.startsWith('d:')) return _rxHex64.hasMatch(s.substring(2));
   if (s.startsWith('g:')) return _rxGroup.hasMatch(s.substring(2));
-  if (s.startsWith('c:')) {
-    return _rxChannel.hasMatch(s.substring(2)) && s != 'c:nymchat';
-  }
+  if (s.startsWith('c:')) return isChannelName(s.substring(2));
   return false;
 }
 
@@ -399,6 +400,9 @@ int _stateBytes(FoldersState s) =>
 FoldersState _fitBudget(FoldersState s) {
   var bytes = _stateBytes(s);
   if (bytes <= FoldersLimits.wrapLimitPq2) return s;
+  final seen = foldersLiveBytes(_oldBuildView(s));
+  final budget = FoldersLimits.wrapLimitPq2 + foldersLiveBytes(s) - seen;
+  if (bytes <= budget || seen > FoldersLimits.wrapLimitPq2) return s;
   final tombs = <({Map<String, int> m, String k, int at, int o})>[
     for (final e in s.removed.entries) (m: s.removed, k: e.key, at: e.value, o: 0),
     for (final e in s.deleted.entries) (m: s.deleted, k: e.key, at: e.value, o: 1),
@@ -409,7 +413,7 @@ FoldersState _fitBudget(FoldersState s) {
       return _cmpStr(a.k, b.k);
     });
   for (final t in tombs) {
-    if (bytes <= FoldersLimits.wrapLimitPq2) break;
+    if (bytes <= budget) break;
     t.m.remove(t.k);
     bytes = _stateBytes(s);
   }
@@ -797,6 +801,22 @@ FoldersState mergeFolders(Object? a, Object? b, Object? nowMs) {
   return _finish(t, nowMs);
 }
 
+bool _oldBuildsSee(String ref) =>
+    !ref.startsWith('c:') ||
+    ref.substring(2).runes.length <= FoldersLimits.oldRefMax;
+
+FoldersState _oldBuildView(FoldersState s) => FoldersState(
+      folders: {
+        for (final f in s.folders.entries)
+          f.key: SidebarFolder(f.value.name, f.value.nt, f.value.at, {
+            for (final e in f.value.items.entries)
+              if (_oldBuildsSee(e.key)) e.key: e.value,
+          }),
+      },
+      layout: s.layout,
+      lt: s.lt,
+    );
+
 ({FoldersState state, bool changed}) capRepair(Object? state, Object? nowMs) {
   var s = normalizeFolders(state, nowMs);
   var changed = false;
@@ -817,7 +837,8 @@ FoldersState mergeFolders(Object? a, Object? b, Object? nowMs) {
   for (final id in s.folders.keys.toList()) {
     final items = s.folders[id]!.items;
     final list = [
-      for (final e in items.entries) (id: id, ref: e.key, at: e.value),
+      for (final e in items.entries)
+        if (_oldBuildsSee(e.key)) (id: id, ref: e.key, at: e.value),
     ]..sort(newest);
     final extra = list.length - FoldersLimits.perFolder;
     if (extra > 0) {
@@ -828,7 +849,8 @@ FoldersState mergeFolders(Object? a, Object? b, Object? nowMs) {
   }
   final all = [
     for (final f in s.folders.entries)
-      for (final e in f.value.items.entries) (id: f.key, ref: e.key, at: e.value),
+      for (final e in f.value.items.entries)
+        if (_oldBuildsSee(e.key)) (id: f.key, ref: e.key, at: e.value),
   ];
   final over = all.length - FoldersLimits.total;
   if (over > 0) {
@@ -839,13 +861,13 @@ FoldersState mergeFolders(Object? a, Object? b, Object? nowMs) {
     changed = true;
   }
   for (var guard = 0;
-      foldersLiveBytes(s) > FoldersLimits.wrapLimitPq2 &&
+      foldersLiveBytes(_oldBuildView(s)) > FoldersLimits.wrapLimitPq2 &&
           guard < FoldersLimits.total;
       guard++) {
     final live = [
       for (final f in s.folders.entries)
         for (final e in f.value.items.entries)
-          (id: f.key, ref: e.key, at: e.value),
+          if (_oldBuildsSee(e.key)) (id: f.key, ref: e.key, at: e.value),
     ];
     if (live.isEmpty) break;
     live.sort(newest);

@@ -16,6 +16,7 @@ import '../i18n/i18n.dart';
 import '../nymbot/bot_runs_view.dart' show botRunTrailing;
 import '../reactions/reaction_picker.dart';
 import '../toasts/toast_center.dart';
+import '../../widgets/chat/list_anchor.dart';
 
 /// Focuses the conversation first so the shared composer targets it, then swaps the message area to [m]'s thread.
 void openMessageThread(WidgetRef ref, Message m,
@@ -108,6 +109,7 @@ class _ThreadPosition extends ScrollPositionWithSingleContext {
 
 class _ThreadViewState extends ConsumerState<ThreadView> {
   final ScrollController _scroll = _ThreadScroll();
+  final ReaderAway _reader = ReaderAway();
   int _lastReplyCount = -1;
 
   @override
@@ -151,11 +153,23 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
     final reactions = ref.watch(reactionsProvider);
 
     if (replies.length != _lastReplyCount) {
+      final first = _lastReplyCount < 0;
+      if (!first &&
+          replies.length > _lastReplyCount &&
+          replies
+              .skip(_lastReplyCount)
+              .any((m) => m.isOwn && !m.isHistorical)) {
+        _reader.reset();
+      }
       _lastReplyCount = replies.length;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !_scroll.hasClients) return;
-        _scroll.jumpTo(_scroll.position.maxScrollExtent);
-      });
+      if (first || !_reader.away) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_scroll.hasClients || (!first && _reader.away)) {
+            return;
+          }
+          _scroll.jumpTo(_scroll.position.maxScrollExtent);
+        });
+      }
     }
 
     Widget row(Message m) {
@@ -228,6 +242,11 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
             ),
           ),
           Expanded(
+            child: NotificationListener<ScrollNotification>(
+            onNotification: (n) {
+              _reader.observe(n);
+              return false;
+            },
             child: MessageSelection(
             builder: (keepAlives) => ListView(
               addAutomaticKeepAlives: keepAlives,
@@ -290,7 +309,7 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
               ])
                   MessageSelection.item(context, w),
               ],
-            )),
+            ))),
           ),
           if (widget.showTyping) const TypingIndicatorRow(),
         ],

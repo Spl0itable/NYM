@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../../core/crypto/bech32_codec.dart' show encodeNpub;
+import '../../core/utils/channel_name.dart';
 import '../../models/channel.dart' show kDefaultChannel;
 import '../../models/group.dart';
 import '../channels/channel_share.dart' show kNymchatShareHost;
@@ -11,9 +12,14 @@ import '../groups/group_logic.dart' show kMaxGroupMembers;
 const List<String> kShareHosts = ['web.nymchat.app'];
 const int kShareMaxInputBytes = 4096;
 const int kShareMaxTokenChars = 4000;
-const int kShareMaxChannelChars = 64;
 const int kShareMaxNprofileChars = 1000;
 const int kShareCodeMaxBytes = 382;
+
+class ShareStrings {
+  const ShareStrings._();
+  static const String qrTooLong =
+      'This link is too long for a QR code. Copy or share the link instead.';
+}
 
 class ShareAppLinks {
   const ShareAppLinks._();
@@ -131,7 +137,6 @@ final RegExp _scheme = RegExp(r'^[A-Za-z][A-Za-z0-9+.-]*:');
 final RegExp _token = RegExp(r'^[A-Za-z0-9_-]{1,4000}$');
 final RegExp _npubFragment = RegExp(r'^npub1[02-9ac-hj-np-z]{58}$');
 final RegExp _ref = RegExp(r'^([egcEGC]):(.*)$', dotAll: true);
-final RegExp _channelName = RegExp(r'^[\p{L}\p{N}]+$', unicode: true);
 final RegExp _upperOrTitle = RegExp(r'[\p{Lu}\p{Lt}]', unicode: true);
 final RegExp _asciiUpper = RegExp('[A-Z]');
 final RegExp _hex2 = RegExp(r'^[0-9A-Fa-f]{2}$');
@@ -260,9 +265,7 @@ ShareParseResult _channel(String name, String refPrefix) {
     n = d;
   }
   n = _asciiLower(n);
-  if (_upperOrTitle.hasMatch(n) ||
-      !_channelName.hasMatch(n) ||
-      n.runes.length > kShareMaxChannelChars) {
+  if (_upperOrTitle.hasMatch(n) || !isChannelName(n)) {
     return const ShareParseResult.invalid('bad_fragment');
   }
   return ShareParseResult.channel(n,

@@ -10,6 +10,7 @@ import '../../models/user.dart';
 import '../../state/app_state.dart' show liveCustomEmojiProvider, usersProvider;
 import '../../state/nostr_controller.dart' show nostrControllerProvider;
 import '../../widgets/common/app_dialog.dart';
+import '../reports/report_record.dart';
 import '../../widgets/common/hit_slop.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/context_menu/report_modal.dart';
@@ -95,22 +96,43 @@ Future<void> openEmojiPackReport(
     BuildContext context, WidgetRef ref, CustomEmojiPack pack) async {
   final coord = EmojiBlock.packCoord(pack);
   if (coord.isEmpty) return;
+  final controller = ref.read(nostrControllerProvider);
+  final key = ReportRecord.keyFor(coord: coord);
+  if (controller.isTargetReported(key)) {
+    controller.showReportRefusal(key);
+    return;
+  }
   final name = pack.title.isNotEmpty ? pack.title : pack.identifier;
   final author = emojiPackAuthorLabel(ref.read(usersProvider), pack.pubkey);
   await ReportModal.show(
     context,
     targetNym: '',
     pack: (name: name, author: author),
+    reportedChanges: controller.reportedRevision,
+    alreadyReported: (_) =>
+        controller.isTargetReported(key) ? controller.reportRefusal(key) : null,
     onSubmit: (type, details, _) {
-      ref
-          .read(nostrControllerProvider)
-          .submitEmojiPackReport(coord: coord, type: type, details: details);
+      controller.submitEmojiPackReport(
+          coord: coord, type: type, details: details);
     },
   );
 }
 
 Future<void> confirmBlockEmojiPack(
     BuildContext context, WidgetRef ref, CustomEmojiPack pack) async {
+  if (ref
+      .read(nostrControllerProvider)
+      .isTargetReported(ReportRecord.keyFor(coord: EmojiBlock.packCoord(pack)))) {
+    final ok = await showAppConfirm(
+      context,
+      tr('Emoji from this pack will be hidden everywhere: the emoji picker, autocomplete, reactions and messages. You can unblock it in Settings.'),
+      title: tr('Block emoji pack?'),
+      okLabel: tr('Block'),
+      danger: true,
+    );
+    if (ok) await blockEmojiPackNow(ref, pack);
+    return;
+  }
   final res = await showAppConfirmWithCheckbox(
     context,
     tr('Emoji from this pack will be hidden everywhere: the emoji picker, autocomplete, reactions and messages. You can unblock it in Settings.'),

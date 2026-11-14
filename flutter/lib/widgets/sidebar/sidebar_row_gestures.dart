@@ -3,7 +3,12 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/theme/nym_colors.dart';
 import '../common/nym_focusable.dart';
+
+Color sidebarRowHoverFill(NymColors c) => c.isLight
+    ? Colors.black.withValues(alpha: 0.04)
+    : Colors.white.withValues(alpha: 0.06);
 
 /// Sidebar row gestures: a 500ms hold opens the menu, 10px drift cancels, right-click does nothing.
 class SidebarRowGestures extends StatefulWidget {

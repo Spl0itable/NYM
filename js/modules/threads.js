@@ -545,9 +545,23 @@ Object.assign(NYM.prototype, {
         return !!(this.activeThread && this._threadContainer && container === this._threadContainer);
     },
 
+    _threadAnonLane(at) {
+        return !!(at && at.ctx && typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(at.rootId));
+    },
+
+    _threadQuietClose(pubkey, fn) {
+        const prev = this._anonThreadClosing || null;
+        this._anonThreadClosing = pubkey || null;
+        try { return fn(); } finally { this._anonThreadClosing = prev; }
+    },
+
     closeThreadView(opts = {}) {
         const at = this.activeThread;
         if (!at) return;
+        this._threadQuietClose(this._threadAnonLane(at) ? at.ctx.pubkey : null, () => this._closeThreadViewNow(at, opts));
+    },
+
+    _closeThreadViewNow(at, opts) {
         const container = this._threadContainer;
         this.activeThread = null;
         this._threadContainer = null;
@@ -693,6 +707,9 @@ Object.assign(NYM.prototype, {
         const at = this.activeThread;
         if (!at || !at.ctx || typeof this._markThreadNotificationsSeen !== 'function') return;
         if (typeof document !== 'undefined' && document.hidden) return;
+        if (typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(at.rootId)) return;
+        if (at.ctx.type === 'pm' && this.isVerifiedBot(at.ctx.pubkey)
+            && !(this.pmMessages.get(at.ctx.storageKey) || []).some((x) => x && (x.id === at.rootId || x.nymMessageId === at.rootId))) return;
         this._markThreadNotificationsSeen(at.ctx.storageKey, at.rootId);
     },
 

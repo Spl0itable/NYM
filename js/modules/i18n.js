@@ -197,6 +197,7 @@ Object.assign(NYM.prototype, {
         if (this._i18nElSkipped(parent)) return false;
         // A bare text node beside a `.nym-suffix` span is a nickname and must never be translated.
         if (parent && parent.querySelector && parent.querySelector(':scope > .nym-suffix')) return false;
+        if (parent && parent.closest && parent.closest('.nym-b')) return false;
         return true;
     },
 
@@ -626,7 +627,7 @@ Object.assign(NYM.prototype, {
 
         try {
             let seen = false;
-            try { seen = localStorage.getItem('nym_tutorial_seen') === 'true'; } catch (_) { }
+            try { seen = (window.NymAccounts && typeof window.NymAccounts.tutorialSeen === 'function' ? window.NymAccounts.tutorialSeen((k) => localStorage.getItem(k)) : localStorage.getItem('nym_tutorial_seen') === 'true'); } catch (_) { }
             if (!seen && typeof window.nymTutorialStrings === 'function') {
                 const tutorialStrings = window.nymTutorialStrings();
                 if (tutorialStrings && tutorialStrings.length) {

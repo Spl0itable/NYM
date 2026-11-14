@@ -1,5 +1,6 @@
 import { spamEngine } from './_spam.js';
 import { verifySignedEvent, spamEngineJob } from './relay-pool.js';
+import { isEncryptedBlobChannelEvent } from './_encrypted-blob.js';
 
 const INGEST_SECRET_HEADER = 'X-Nymchat-Proxy-Secret';
 const INGEST_MAX_EVENTS = 500;
@@ -96,6 +97,7 @@ export async function onRequestPost(context) {
     if (!verifySignedEvent(ev)) { invalid++; continue; }
     if (seen.has(ev.id)) continue;
     seen.add(ev.id);
+    if (isEncryptedBlobChannelEvent(ev)) { drop.add(ev.id); continue; }
     const job = spamEngineJob(ev, ev.kind, NO_SIGNALS);
     if (!job.channel) { invalid++; continue; }
     let resolve;

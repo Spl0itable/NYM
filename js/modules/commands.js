@@ -926,7 +926,7 @@ Object.assign(NYM.prototype, {
         }
 
         const oldNym = this.nym;
-        const newNym = args.trim().substring(0, 20);
+        const newNym = window.NymSuffix.capBase(args.trim());
 
         if (oldNym === newNym) {
             this.displaySystemMessage('That is already your current nym');
@@ -995,7 +995,7 @@ Object.assign(NYM.prototype, {
             .map(u => {
                 const baseNym = this.stripPubkeySuffix(u.nym);
                 const suffix = this.getPubkeySuffix(u.pubkey);
-                return `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+                return `${window.NymSuffix.sqHtml(baseNym, suffix)}`;
             })
             .join(', ');
 
@@ -1249,7 +1249,7 @@ Object.assign(NYM.prototype, {
             }
 
             if (await window.showAppConfirm(`Block channel #${currentChannelName}?`, { danger: true, okLabel: 'Block' })) {
-                this.blockChannel(this.currentGeohash, this.currentGeohash);
+                if (this.blockChannel(this.currentGeohash, this.currentGeohash) === false) return;
                 this.displaySystemMessage(this.isValidGeohash(this.currentGeohash)
                     ? this.uiText('Blocked geohash channel #{channel}', { channel: this.currentGeohash })
                     : this.uiText('Blocked channel #{channel}', { channel: this.currentGeohash }));
@@ -1269,7 +1269,7 @@ Object.assign(NYM.prototype, {
 
             if (this.currentGeohash === channelName) {
                 if (await window.showAppConfirm(`Block and leave channel #${channelName}?`, { danger: true, okLabel: 'Block' })) {
-                    this.blockChannel(channelName, channelName);
+                    if (this.blockChannel(channelName, channelName) === false) return;
                     this.displaySystemMessage(this.isValidGeohash(channelName)
                         ? this.uiText('Blocked geohash channel #{channel}', { channel: channelName })
                         : this.uiText('Blocked channel #{channel}', { channel: channelName }));
@@ -1286,7 +1286,7 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            this.blockChannel(channelName, channelName);
+            if (this.blockChannel(channelName, channelName) === false) return;
             if (this.isValidGeohash(channelName)) {
                 this.displaySystemMessage(this.uiText(`Blocked geohash channel #{channelName}`, { channelName }));
             } else {
@@ -1319,6 +1319,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        if (typeof this._privacyFitsWith === 'function' && !this._privacyFitsWith('blockedUsers', targetPubkey)) return;
         this.blockedUsers.add(targetPubkey);
         this.saveBlockedUsers();
         this.hideMessagesFromBlockedUser(targetPubkey);

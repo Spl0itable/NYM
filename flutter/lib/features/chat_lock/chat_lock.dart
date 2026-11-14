@@ -3,10 +3,13 @@ import 'dart:math' as math;
 
 import 'package:cryptography/cryptography.dart';
 
+import '../../core/utils/channel_name.dart';
+
 class ChatLockLimits {
   const ChatLockLimits._();
 
   static const int lockMax = 100;
+  static const int rowBytes = 15360;
   static const int removedMax = 300;
   static const int removedTtlMs = 180 * 24 * 60 * 60 * 1000;
   static const int codeMin = 4;
@@ -22,6 +25,7 @@ class ChatLockLimits {
 
   static Map<String, Object> toJson() => {
         'lockMax': lockMax,
+        'rowBytes': rowBytes,
         'removedMax': removedMax,
         'removedTtlMs': removedTtlMs,
         'codeMin': codeMin,
@@ -97,6 +101,8 @@ class ChatLockStrings {
   static const String locked = 'Chat locked. Find it in Locked chats.';
   static const String unlocked = 'Chat lock removed.';
   static const String lockCap = 'You can lock up to {n} chats.';
+  static const String lockFull =
+      'Locked chats are full. Unlock some to make room.';
   static const String defaultLocked = '#nymchat cannot be locked';
   static const String settingsTitle = 'Chat Lock';
   static const String settingsButton = 'Chat lock settings…';
@@ -165,6 +171,7 @@ class ChatLockStrings {
         'locked': locked,
         'unlocked': unlocked,
         'lockCap': lockCap,
+        'lockFull': lockFull,
         'defaultLocked': defaultLocked,
         'settingsTitle': settingsTitle,
         'settingsButton': settingsButton,
@@ -202,7 +209,6 @@ String _same(String s) => s;
 
 final RegExp _rxHex64 = RegExp(r'^[0-9a-f]{64}$');
 final RegExp _rxGroup = RegExp(r'^[0-9a-f]{16,64}$');
-final RegExp _rxChannel = RegExp(r'^[\p{L}\p{N}]{1,64}$', unicode: true);
 
 num _num(Object? v) {
   if (v is num) return v.isFinite ? v : 0;
@@ -250,7 +256,7 @@ String _lockKeyOf(String kind, Object? id) {
   }
   if (kind == 'channel') {
     final c = raw.replaceFirst(RegExp(r'^#'), '').toLowerCase();
-    return _rxChannel.hasMatch(c) ? 'c:$c' : '';
+    return isChannelName(c) ? 'c:$c' : '';
   }
   return '';
 }
@@ -263,7 +269,7 @@ String _lockKeyOf(String kind, Object? id) {
   if (s.startsWith('g:') && _rxGroup.hasMatch(s.substring(2))) {
     return (kind: 'group', id: s.substring(2));
   }
-  if (s.startsWith('c:') && _rxChannel.hasMatch(s.substring(2))) {
+  if (s.startsWith('c:') && isChannelName(s.substring(2))) {
     return (kind: 'channel', id: s.substring(2));
   }
   return null;
@@ -410,6 +416,18 @@ bool isLocked(Object? state, String? k) {
   return !(r != null && r >= at);
 }
 
+int lockRowBytes(Object? state) {
+  final s = normalizeLocks(state);
+  final live = <String, dynamic>{
+    'v': s['v'],
+    'items': s['items'],
+    'removed': <String, int>{},
+    'hide': s['hide'],
+  };
+  return utf8.encode(jsonEncode(jsonEncode({'lockedChats': live}))).length +
+      256;
+}
+
 ({Map<String, dynamic> state, String? error}) lockAdd(
     Object? state, String k, num nowMs) {
   final s = normalizeLocks(state);
@@ -427,7 +445,11 @@ bool isLocked(Object? state, String? k) {
     (items[k] ?? 0) + 1,
   ].reduce(math.max);
   removed.remove(k);
-  return (state: _finishLocks(s, nowMs), error: null);
+  final next = _finishLocks(s, nowMs);
+  if (lockRowBytes(next) > ChatLockLimits.rowBytes) {
+    return (state: normalizeLocks(state), error: 'size');
+  }
+  return (state: next, error: null);
 }
 
 Map<String, dynamic> lockRemove(Object? state, String k, num nowMs) {
@@ -486,29 +508,15 @@ bool trimLockedPayload(Map<String, dynamic> p) {
   if (s is! Map) return false;
   final removed = s['removed'];
   final rk = removed is Map ? removed.keys.map((k) => '$k').toList() : <String>[];
-  if (rk.length > 20 && removed is Map) {
-    rk.sort((a, b) {
-      final d = _num(removed[a]).compareTo(_num(removed[b]));
-      return d != 0 ? d : _cmpStr(a, b);
-    });
-    for (final k in rk.sublist(0, (rk.length / 4).ceil())) {
-      removed.remove(k);
-    }
-    return true;
+  if (rk.isEmpty || removed is! Map) return false;
+  rk.sort((a, b) {
+    final d = _num(removed[a]).compareTo(_num(removed[b]));
+    return d != 0 ? d : _cmpStr(a, b);
+  });
+  for (final k in rk.sublist(0, (rk.length / 4).ceil())) {
+    removed.remove(k);
   }
-  final items = s['items'];
-  final ik = items is Map ? items.keys.map((k) => '$k').toList() : <String>[];
-  if (ik.length > 20 && items is Map) {
-    ik.sort((a, b) {
-      final d = _num(items[a]).compareTo(_num(items[b]));
-      return d != 0 ? d : _cmpStr(a, b);
-    });
-    for (final k in ik.sublist(0, (ik.length / 4).ceil())) {
-      items.remove(k);
-    }
-    return true;
-  }
-  return false;
+  return true;
 }
 
 bool secretMatches(Object? state, String? term) {

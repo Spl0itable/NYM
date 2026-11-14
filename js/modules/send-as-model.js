@@ -21,7 +21,6 @@
 
     const METHODS = Object.freeze(['nsec', 'ephemeral', 'extension', 'nip46']);
     const HEX = /^[0-9a-f]{64}$/;
-    const NYM_MAX = 20;
     const PROBE_KEYS = Object.freeze([
         'nym_nostr_login_nsec', 'nym_session_nsec', 'nym_dev_nsec', 'nym_vault_enabled',
         'nym_keypair_mode', 'nym_random_keypair_per_session', 'nym_ai_consent',
@@ -128,7 +127,7 @@
         }
         nym = nym.replace(/#[0-9a-f]{4}$/i, '').trim();
         if (!nym) nym = str(fallback).replace(/#[0-9a-f]{4}$/i, '').trim();
-        return (nym || 'nym').substring(0, NYM_MAX);
+        return G.NymSuffix.capBase(nym || 'nym');
     }
 
     function difficulty(raw, floor) {

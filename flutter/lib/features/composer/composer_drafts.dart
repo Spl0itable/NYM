@@ -4,6 +4,7 @@ typedef SendAsDraft = ({
   String composed,
   ({String author, String text, String fullText})? quote,
   String quoteId,
+  String quotePubkey,
 });
 
 class ComposerDrafts {

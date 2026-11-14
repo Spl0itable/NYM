@@ -37,6 +37,7 @@ import 'nymbot_models.dart';
 import '../../services/storage/revocable_prefs.dart';
 import '../../services/storage/secure_store.dart';
 import 'anon_bot.dart';
+import '../sync/pref_stamps.dart';
 import 'nymbot_service.dart';
 import 'long_text.dart';
 
@@ -73,6 +74,9 @@ final nymbotServiceProvider = Provider<NymbotService>((ref) {
 });
 
 /// Request to open the credits buy modal with [tier] preselected; listeners open it, then consume.
+
+const String kBotLaneLinkRefusal = 'Not sent: this would link your anonymous Nymbot chat to your nym.';
+
 class BotBuyRequest {
   const BotBuyRequest({required this.tier});
   final CreditTier tier;
@@ -116,9 +120,10 @@ String botSendErrorText(NymbotException e) => e.priceUnavailable
     : 'Nymbot: ${BotChatController._errorDetail(e) ?? 'request failed'}';
 
 class BotPriceRetry {
-  const BotPriceRetry({required this.message, this.wrapId, this.long});
+  const BotPriceRetry({required this.message, this.wrapId, this.long, this.anon = false});
 
   final Message message;
+  final bool anon;
   final String? wrapId;
   final ({List<String> parts, List<Map<String, dynamic>> wraps})? long;
 }
@@ -296,11 +301,12 @@ class BotChatController extends StateNotifier<BotChatState> {
           priceRetry: BotPriceRetry(
               message: _ownMessageFor(run.id) ?? _specMessage(run.spec),
               wrapId: run.eventId,
-              long: botRunLongParts(run)));
+              long: botRunLongParts(run),
+              anon: run.anon));
       _systemFeed(kBotPriceUnavailableText);
     },
     onOpenBuy: (pro) {
-      if (anon.ready) {
+      if (anon.enabled && anon.ensureIdentity() != null) {
         _ref.read(botAnonRequestProvider.notifier).request();
       } else {
         _ref
@@ -315,6 +321,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     onResponse: () => _markBotPMReceipts('read'),
     onPersist: _persistInflight,
     anonNow: () => anon.ready,
+    laneOf: (spec) => anon.runLane(spec.eventId),
     maxRuns: () => _maxRuns,
     setMaxRuns: (n) => setMaxRuns(n),
   );
@@ -339,7 +346,8 @@ class BotChatController extends StateNotifier<BotChatState> {
           (status: 0, data: const <String, dynamic>{}));
     }
     final wantAnon = asAnon ?? anon.enabled;
-    if (wantAnon && !anon.ready) {
+    final laneId = asAnon == true ? anon.identity : null;
+    if (wantAnon && laneId == null && !anon.ready) {
       return Future.value((
         status: 503,
         data: const <String, dynamic>{
@@ -347,7 +355,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         }
       ));
     }
-    final anonId = wantAnon ? anon.identity : null;
+    final anonId = wantAnon ? (laneId ?? anon.identity) : null;
     final key = anonId?.pk ?? pk;
     final claimed = anonId == null ? _hardcoreAskFor(body) : null;
     final claimedSigner = claimed == null ? null : LocalSigner(claimed.sk);
@@ -401,46 +409,105 @@ class BotChatController extends StateNotifier<BotChatState> {
     unawaited(_prefs.then((p) => clean > 0
         ? p.setString(_kMaxRunsPref, '$clean')
         : p.remove(_kMaxRunsPref)));
-    if (!fromSync) settingsSyncRequester?.call();
+    if (fromSync) return;
+    if (anon.enabled) {
+      try {
+        PrefStamps.set(_ref.read(keyValueStoreProvider), 'botMaxRuns',
+            DateTime.now().millisecondsSinceEpoch);
+      } catch (_) {}
+      return;
+    }
+    final cb = prefChanged;
+    if (cb != null) {
+      cb('botMaxRuns');
+    } else {
+      settingsSyncRequester?.call();
+    }
   }
 
   void _persistInflight(List<Map<String, dynamic>> list) {
     final pk = _pubkey;
     if (pk == null) return;
-    unawaited(_prefs.then((p) => list.isEmpty
-        ? p.remove('$_kInflightPref$pk')
-        : p.setString('$_kInflightPref$pk', jsonEncode(list))));
+    anon.keepRunLanes([
+      for (final r in runsEngine.runs.values)
+        if (r.anon) r.eventId,
+    ]);
+    final kv = _ref.read(keyValueStoreProvider);
+    unawaited(list.isEmpty
+        ? kv.remove('$_kInflightPref$pk')
+        : kv.setString('$_kInflightPref$pk', jsonEncode(list)));
   }
 
   bool _runsResumed = false;
 
-  Future<void> onChatOpen() async {
+  bool laneOnlyOpen() => !anon.enabled && _app.laneOnlyEntry(conversationKey);
+
+  Future<void> onScreenOpen({required bool quiet}) async {
+    ensureIntro(credits: false);
+    final hush = quiet || await _anonResumePending();
+    if (!hush) refreshBalance();
+    return onChatOpen(poll: !hush);
+  }
+
+  Future<void> onColumnFocus() async {
+    ensureIntro(credits: false);
+    if (laneOnlyOpen() || await _anonResumePending()) return;
+    await refreshBalance();
+  }
+
+  Future<bool> _anonResumePending() async {
+    final pk = _pubkey;
+    if (pk == null || anon.enabled || _runsResumed) return false;
+    try {
+      await _anonHydration;
+    } catch (_) {}
+    try {
+      final raw =
+          _ref.read(keyValueStoreProvider).getString('$_kInflightPref$pk');
+      final list = raw == null ? const <Object?>[] : jsonDecode(raw);
+      return list is List &&
+          list.any((e) => e is Map && anon.runLane('${e['eventId'] ?? ''}'));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> onChatOpen({bool poll = true}) async {
     final pk = _pubkey;
     if (pk == null) return;
     if (!_runsResumed) {
       _runsResumed = true;
       try {
-        final p = await _prefs;
-        final raw = p.getString('$_kInflightPref$pk');
+        await _anonHydration;
+      } catch (_) {}
+      if (!mounted || _pubkey != pk) return;
+      try {
+        final raw =
+            _ref.read(keyValueStoreProvider).getString('$_kInflightPref$pk');
         final list = raw == null ? const <Object?>[] : jsonDecode(raw);
         if (list is List && mounted) runsEngine.resume(list);
       } catch (_) {}
     }
-    await pollRuns();
+    if (poll) await pollRuns();
   }
 
   Future<void> pollRuns() async {
     if (_pubkey == null || !mounted) return;
+    _remoteLane = anon.enabled;
     await runsEngine.poll();
   }
 
   bool runsSheetOpen = false;
 
-  bool get runsPollWanted =>
-      runsSheetOpen ||
-      runsEngine.runs.isNotEmpty ||
-      runsEngine.remote.isNotEmpty ||
-      runsEngine.watchingSteers;
+  bool? _remoteLane;
+
+  bool get runsPollWanted {
+    final lane = anon.enabled;
+    return runsSheetOpen ||
+        runsEngine.runs.values.any((r) => r.anon == lane) ||
+        (runsEngine.remote.isNotEmpty && _remoteLane == lane) ||
+        runsEngine.watchingSteers;
+  }
 
   void botNotice(String text) => _system(text);
 
@@ -598,10 +665,49 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
-  void _persistProModel(ProModel? model) {
-    unawaited(_prefs.then((p) => model == null
-        ? p.remove(_kProModelPref)
-        : p.setString(_kProModelPref, model.key)));
+  void _persistProModel(ProModel? model) => _persistProModelKey(model?.key ?? '');
+
+  void _persistProModelKey(String key) {
+    try {
+      final kv = _ref.read(keyValueStoreProvider);
+      unawaited(key.isEmpty
+          ? kv.remove(_kProModelPref)
+          : kv.setString(_kProModelPref, key));
+    } catch (_) {
+      unawaited(_prefs.then((p) =>
+          key.isEmpty ? p.remove(_kProModelPref) : p.setString(_kProModelPref, key)));
+    }
+  }
+
+  static final RegExp _modelKeyBad = RegExp(r'[\x00-\x1f\x7f]');
+
+  static bool proModelKeyOk(String key) =>
+      key.length <= 128 && !_modelKeyBad.hasMatch(key);
+
+  void applySyncedProModel(String key) {
+    if (!proModelKeyOk(key)) return;
+    final model = key.isEmpty
+        ? null
+        : (_catalog.byKey(key) ?? kProModelCatalogFallback.byKey(key));
+    _pendingModelKey = (model == null && key.isNotEmpty) ? key : '';
+    if (mounted) state = state.copyWith(proModel: model);
+    _persistProModelKey(key);
+  }
+
+  void _noteProModelChanged() {
+    if (anon.enabled) {
+      try {
+        PrefStamps.set(_ref.read(keyValueStoreProvider), 'botProModel',
+            DateTime.now().millisecondsSinceEpoch);
+      } catch (_) {}
+      return;
+    }
+    final cb = prefChanged;
+    if (cb != null) {
+      cb('botProModel');
+    } else {
+      settingsSyncRequester?.call();
+    }
   }
 
   void _setClearedAt(int sec) {
@@ -636,8 +742,12 @@ class BotChatController extends StateNotifier<BotChatState> {
     _signer = signer ?? (privkey != null ? LocalSigner(privkey) : null);
     anon.reset(pubkey);
     anon.bindAccount(pubkey, _authFor);
-    unawaited(_hydrateAnon(pubkey, refresh: switched));
+    final hydration = _hydrateAnon(pubkey, refresh: switched);
+    _anonHydration = hydration;
+    unawaited(hydration);
   }
+
+  Future<void>? _anonHydration;
 
   Future<void> _hydrateAnon(String pubkey, {bool refresh = false}) async {
     String? blob;
@@ -652,7 +762,6 @@ class BotChatController extends StateNotifier<BotChatState> {
     } else {
       anon.markLoaded();
     }
-    if (anon.enabled) anon.ensureIdentity();
     if (mounted) {
       state = state.copyWith(
           anonEnabled: anon.enabled, anonPubkey: anon.pubkey);
@@ -674,6 +783,8 @@ class BotChatController extends StateNotifier<BotChatState> {
 
   /// Debounced settings publish so clear/welcome markers reach other devices.
   void Function()? settingsSyncRequester;
+
+  void Function(String name)? prefChanged;
 
   bool get isBound => _pubkey != null;
 
@@ -729,6 +840,8 @@ class BotChatController extends StateNotifier<BotChatState> {
 
   void _anonNotReady() =>
       _system('Anonymous Nymbot chat is not ready on this device yet.');
+
+  void _laneLinkRefused() => _system(kBotLaneLinkRefusal);
 
   bool get _anonPending => anon.enabled && !anon.ready;
 
@@ -881,7 +994,7 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 
   /// Empty-thread intro: start line, welcome (unless cleared), and a silent credit refresh.
-  void ensureIntro() {
+  void ensureIntro({bool credits = true}) {
     final list = _thread;
     if (!_primed) _primeHandled(list);
     if (list.isNotEmpty) {
@@ -898,7 +1011,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       // Rendered after the start line with a fresh timestamp.
       _displayBotInfoMessage(botWelcomeCopy(), id: 'nymbot-welcome');
     }
-    unawaited(checkBotCredits(display: false));
+    if (credits) unawaited(checkBotCredits(display: false));
   }
 
   /// One proactive local welcome PM per device for brand-new users.
@@ -933,21 +1046,35 @@ class BotChatController extends StateNotifier<BotChatState> {
       senderVerified: true,
     ));
     await p.setString(_kWelcomedPref, 'true');
-    // Sync the welcomed flag so other devices skip it.
+    if (anon.enabled) return;
     settingsSyncRequester?.call();
   }
 
   /// Pins or clears the Pro model directly; persisted.
   void setModelDirect(ProModel? model) {
     state = state.copyWith(proModel: model);
+    _pendingModelKey = '';
     _persistProModel(model);
+    _noteProModelChanged();
   }
 
   void setBalance(BotBalance b) => state =
       state.copyWith(balance: b, balanceKnown: true, balanceUnavailable: false);
 
   /// Runs a `?` control command on-device; never published or billed.
-  Future<void> handleBotPMCommand(String content, {({String pk, Uint8List sk})? hardcore}) async {
+  Future<void> handleBotPMCommand(String content,
+      {({String pk, Uint8List sk})? hardcore, String? threadRoot, String? quoteSource}) async {
+    final lane = laneFor(threadRoot, quoteSource);
+    if (lane == null) {
+      _laneLinkRefused();
+      return;
+    }
+    final sourced = (threadRoot?.isNotEmpty ?? false) || (quoteSource?.isNotEmpty ?? false);
+    final forced = lane ? anon.identity : null;
+    if (lane && sourced && forced == null) {
+      _anonNotReady();
+      return;
+    }
     // Fold localized commands back to canonical English first.
     final trimmed = canonicalizeCommandInput(content.trim());
     _markBotPMReceipts('delivered');
@@ -958,7 +1085,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       return;
     }
     if (RegExp(r'^\?balance\b', caseSensitive: false).hasMatch(trimmed)) {
-      await checkBotCredits(display: true, hardcore: hardcore);
+      await checkBotCredits(display: true, hardcore: hardcore, lane: forced);
       return;
     }
     if (RegExp(r'^\?buy\b', caseSensitive: false).hasMatch(trimmed)) {
@@ -981,11 +1108,15 @@ class BotChatController extends StateNotifier<BotChatState> {
       return;
     }
     if (RegExp(r'^\?clear\b', caseSensitive: false).hasMatch(trimmed)) {
-      await clearBotPMHistory(hardcore: hardcore);
+      await clearBotPMHistory(hardcore: hardcore, lane: forced);
       return;
     }
     if (RegExp(r'^\?transfer\b', caseSensitive: false).hasMatch(trimmed)) {
-      await handleTransferCommand(trimmed, hardcore: hardcore);
+      if (lane && forced == null) {
+        _anonNotReady();
+        return;
+      }
+      await handleTransferCommand(trimmed, hardcore: hardcore, lane: forced);
       return;
     }
     if (RegExp(r'^\?gift\b', caseSensitive: false).hasMatch(trimmed)) {
@@ -996,11 +1127,12 @@ class BotChatController extends StateNotifier<BotChatState> {
 
   /// Control commands run on-device; everything else goes out as a real NIP-17 PM and to the worker by wrap id.
   Future<void> sendUserBotPM(String content,
-      {String? threadRoot, ({String pk, Uint8List sk})? hardcore}) async {
+      {String? threadRoot, ({String pk, Uint8List sk})? hardcore, String? quoteSource}) async {
     final trimmed = content.trim();
     if (trimmed.isEmpty) return;
     if (botPMCommandRe.hasMatch(trimmed)) {
-      await handleBotPMCommand(trimmed, hardcore: hardcore);
+      await handleBotPMCommand(trimmed,
+          hardcore: hardcore, threadRoot: threadRoot, quoteSource: quoteSource);
       return;
     }
     if (!await AiConsent.instance.ensure()) {
@@ -1025,7 +1157,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       } else if (chunks != null) {
         for (var i = 0; i < chunks.length; i++) {
           await _sendUserBotPMOnce(
-              '[Part ${i + 1} of ${chunks.length}]\n${chunks[i]}', thread, hardcore);
+              '[Part ${i + 1} of ${chunks.length}]\n${chunks[i]}', thread, hardcore, quoteSource);
         }
         return;
       } else if (!choice.go) {
@@ -1035,14 +1167,33 @@ class BotChatController extends StateNotifier<BotChatState> {
     final guardKey = '${thread ?? ''}|$content';
     if (!runsEngine.guardTake(guardKey)) return;
     try {
-      await _sendUserBotPMOnce(content, thread, hardcore);
+      await _sendUserBotPMOnce(content, thread, hardcore, quoteSource);
     } finally {
       runsEngine.guardRelease(guardKey);
     }
   }
 
+  bool? laneFor(String? threadRoot, String? quoteSource) {
+    var anonSource = false;
+    var identitySource = false;
+    for (final id in [threadRoot, quoteSource]) {
+      if (id == null || id.isEmpty) continue;
+      final m = _app.messageById(id);
+      if (m == null) return null;
+      if (m.anonLane) {
+        anonSource = true;
+      } else {
+        identitySource = true;
+      }
+    }
+    if (anonSource && identitySource) return null;
+    if (anonSource) return true;
+    if (identitySource) return anon.enabled ? null : false;
+    return anon.enabled;
+  }
+
   Future<void> _sendUserBotPMOnce(String content, String? threadRoot,
-      [({String pk, Uint8List sk})? hardcore]) async {
+      [({String pk, Uint8List sk})? hardcore, String? quoteSource]) async {
     final app = _appState;
     final claimed = hardcore == null
         ? null
@@ -1054,8 +1205,15 @@ class BotChatController extends StateNotifier<BotChatState> {
     // Wrap the kind-14 rumor to the bot and to self and publish both; the worker fetches its wrap by id.
     NostrEvent? botWrap;
     NostrEvent? selfWrap;
-    final anonSender = anon.enabled ? anon.ensureIdentity() : null;
-    if (anon.enabled && anonSender == null) {
+    final lane = laneFor(threadRoot, quoteSource);
+    if (lane == null) {
+      _laneLinkRefused();
+      return;
+    }
+    final anonSender = lane && (anon.enabled || anon.identity != null)
+        ? anon.ensureIdentity(send: true)
+        : null;
+    if (lane && anonSender == null) {
       _anonNotReady();
       return;
     }
@@ -1125,9 +1283,11 @@ class BotChatController extends StateNotifier<BotChatState> {
           _publishDmEvent(selfWrap.toJson(), anon: anonSender != null);
         }
         // Record own activity like every other send surface.
-        try {
-          _ref.read(nostrControllerProvider).recordOwnActivity();
-        } catch (_) {}
+        if (anonSender == null) {
+          try {
+            _ref.read(nostrControllerProvider).recordOwnActivity();
+          } catch (_) {}
+        }
       }
     }
 
@@ -1149,7 +1309,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       threadRoot: threadRoot,
       deliveryStatus:
           botWrap != null ? DeliveryStatus.sent : DeliveryStatus.failed,
-    );
+    )..anonLane = anonSender != null;
     _handledIds.add(msg.id);
     _app.ingestPMMessage(msg);
     if (claimed != null && anonSender == null && botWrap != null) {
@@ -1162,16 +1322,59 @@ class BotChatController extends StateNotifier<BotChatState> {
     if (pieces != null && botWrap != null) {
       _longParts[botWrap.id] = (parts: [...leadIds, botWrap.id], wraps: [...leadWraps, botWrap.toJson()]);
     }
-    unawaited(_runBotExchange(msg, wrapId: botWrap?.id));
+    unawaited(_runBotExchange(msg, wrapId: botWrap?.id, lane: anonSender));
+  }
+
+  bool Function(NostrEvent event)? anonEventPublisher;
+
+  Future<bool> publishAnonReaction({
+    required String messageId,
+    required String emoji,
+    required bool remove,
+    required bool own,
+    List<List<String>> emojiTags = const [],
+  }) async {
+    final sender = anon.identity;
+    if (sender == null) return false;
+    final rumor = UnsignedEvent(
+      pubkey: sender.pk,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: EventKind.reaction,
+      tags: [
+        ['e', messageId],
+        ['p', own ? sender.pk : kNymbotPubkey],
+        ['k', '1059'],
+        if (remove) ['action', 'remove'],
+        ...emojiTags,
+      ],
+      content: emoji,
+    );
+    final toBot = await _wrapRumor(rumor, kNymbotPubkey, sender: sender);
+    if (toBot == null || !_publishDmEvent(toBot.toJson(), anon: true)) {
+      return false;
+    }
+    final self = await _wrapRumor(rumor, sender.pk,
+        sender: sender, recipientKem: anon.kemFor(sender)?.publicKey);
+    if (self != null) _publishDmEvent(self.toJson(), anon: true);
+    return true;
   }
 
   /// Publishes a pre-signed kind-1059 wrap to the DM relays; false before a publisher is wired.
   bool _publishDmEvent(Map<String, dynamic> event, {bool anon = false}) {
+    final id = event['id'];
+    if (anon) {
+      final lane = anonEventPublisher;
+      if (lane == null) return false;
+      if (id is String) this.anon.markLane(id);
+      try {
+        return lane(NostrEvent.fromJson(event));
+      } catch (_) {
+        return false;
+      }
+    }
     final publish =
         _ref.read(shopControllerProvider.notifier).giftEventPublisher;
     if (publish == null) return false;
-    final id = event['id'];
-    if (anon && id is String) this.anon.markLane(id);
     try {
       publish(event);
       return true;
@@ -1193,9 +1396,9 @@ class BotChatController extends StateNotifier<BotChatState> {
         var kemPk = recipientKem;
         if (kemPk == null) {
           try {
-            kemPk = await _ref
+            kemPk = _ref
                 .read(nostrControllerProvider)
-                .pqLayeredWrapKeyFor(recipientPubkey);
+                .pqLayeredWrapKeyCached(recipientPubkey);
           } catch (_) {
             kemPk = null;
           }
@@ -1297,13 +1500,26 @@ class BotChatController extends StateNotifier<BotChatState> {
     ];
   }
 
+  Future<({Map<String, dynamic> rumor, bool verified})?> Function(
+      NostrEvent wrap, List<giftwrap.UnwrapCandidate> candidates)? openReplyForTest;
+
+  static Future<({Map<String, dynamic> rumor, bool verified})?> _openBotReply(
+      NostrEvent wrap, List<giftwrap.UnwrapCandidate> candidates) async {
+    final unwrapped = await giftwrap.unwrapGiftWrap(wrap, candidates);
+    if (unwrapped == null) return null;
+    final rumor = unwrapped.rumor;
+    if (!fromBot(unwrapped.seal, rumor)) return null;
+    return (rumor: rumor, verified: unwrapped.seal.pubkey == (rumor['pubkey'] ?? ''));
+  }
+
   /// Unwraps the worker's reply into the thread, splitting any leading `<think>`; undecryptable wraps arrive via relay echo.
   Future<void> _displayBotReplyWrap(Map<String, dynamic> wrapJson,
       {String? replyTo}) async {
     final sk = _privkey;
     try {
       final wrap = NostrEvent.fromJson(wrapJson);
-      var candidates = anonUnwrapCandidates(wrap);
+      final laneCandidates = anonUnwrapCandidates(wrap);
+      var candidates = laneCandidates;
       if (candidates.isEmpty) {
         if (sk == null) return;
         // Full self candidate set, ML-KEM first, so post-quantum replies unwrap without the slower fallback.
@@ -1315,16 +1531,15 @@ class BotChatController extends StateNotifier<BotChatState> {
           candidates = [giftwrap.classicalCandidate(sk)];
         }
       }
-      final unwrapped = await giftwrap.unwrapGiftWrap(wrap, candidates);
-      if (unwrapped == null || !mounted) return;
-      final rumor = unwrapped.rumor;
-      if (!fromBot(unwrapped.seal, rumor)) return;
+      final opened = await (openReplyForTest ?? _openBotReply)(wrap, candidates);
+      if (opened == null || !mounted) return;
+      final rumor = opened.rumor;
       final msg = PmLogic.mapPmRumor(
         rumor: rumor,
         wrapId: wrap.id,
         selfPubkey: _pubkey ?? _appState.selfPubkey,
         // Seal signer must match the rumor author (NIP-59).
-        senderVerified: unwrapped.seal.pubkey == (rumor['pubkey'] ?? ''),
+        senderVerified: opened.verified,
       );
       if (msg == null) return;
       // Split a leading `<think>` block so previews see only the reply.
@@ -1338,6 +1553,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       msg.content = iosBotBuyRewrite(msg.content);
       msg.author = _botNym;
       msg.isBot = true;
+      msg.anonLane = laneCandidates.isNotEmpty;
       msg.replyTo ??= replyTo;
       _handledIds.add(msg.id);
       _app.ingestPMMessage(msg);
@@ -1348,7 +1564,8 @@ class BotChatController extends StateNotifier<BotChatState> {
 
   final Map<String, ({List<String> parts, List<Map<String, dynamic>> wraps})> _longParts = {};
 
-  Future<void> _runBotExchange(Message m, {String? wrapId}) async {
+  Future<void> _runBotExchange(Message m,
+      {String? wrapId, AnonBotIdentity? lane, bool anonRun = false}) async {
     if (!await AiConsent.instance.ensure()) {
       _systemFeed(AiConsentStrings.offNotice);
       return;
@@ -1357,7 +1574,11 @@ class BotChatController extends StateNotifier<BotChatState> {
       _anonNotReady();
       return;
     }
-    final anonId = anon.ready ? anon.identity : null;
+    final anonId = lane ?? (anon.ready ? anon.identity : null);
+    if ((anonRun || m.anonLane) && anonId == null) {
+      _anonNotReady();
+      return;
+    }
     if (_pubkey == null) {
       _system(
           'Nymbot: could not publish your encrypted message. Please try again.');
@@ -1414,7 +1635,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         if (long != null) 'parts': long.parts,
         if (long != null) 'wraps': long.wraps,
       },
-    ));
+    ), anon: anonId != null);
     await run?.done;
   }
 
@@ -1425,7 +1646,9 @@ class BotChatController extends StateNotifier<BotChatState> {
     final wrapId = retry.wrapId;
     final long = retry.long;
     if (wrapId != null && long != null) _longParts[wrapId] = long;
-    await _runBotExchange(retry.message, wrapId: wrapId);
+    final laneRun = retry.anon || retry.message.anonLane;
+    await _runBotExchange(retry.message,
+        wrapId: wrapId, lane: laneRun ? anon.identity : null, anonRun: laneRun);
   }
 
   void dismissPriceRetry() {
@@ -1472,14 +1695,15 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 
   /// Refreshes the balance; with [display] it also posts a balance bubble.
-  Future<void> checkBotCredits({required bool display, ({String pk, Uint8List sk})? hardcore}) async {
+  Future<void> checkBotCredits(
+      {required bool display, ({String pk, Uint8List sk})? hardcore, AnonBotIdentity? lane}) async {
     if (_pubkey == null) return;
-    if (_anonPending) {
+    if (lane == null && _anonPending) {
       if (display) _anonNotReady();
       return;
     }
     try {
-      final anonId = anon.ready ? anon.identity : null;
+      final anonId = lane ?? (anon.ready ? anon.identity : null);
       final claimed =
           anonId == null && hardcore != null ? LocalSigner(hardcore.sk) : null;
       final key = anonId?.pk ?? (claimed != null ? hardcore!.pk : _pubkey!);
@@ -1500,10 +1724,10 @@ class BotChatController extends StateNotifier<BotChatState> {
         final std = b.balance;
         final pro = b.proBalance;
         _displayBotInfoMessage(
-            '${anon.ready ? 'Your anonymous balance' : 'Your balance'}: '
+            '${anonId != null ? 'Your anonymous balance' : 'Your balance'}: '
             '**$std** standard credit${std == 1 ? '' : 's'} · '
             '**$pro** Pro credit${pro == 1 ? '' : 's'}.'
-            '${anon.ready ? ' Type `?anon` to move more credits across from your nym.' : ''}'
+            '${anonId != null ? ' Type `?anon` to move more credits across from your nym.' : ''}'
             '${std <= 0 && pro <= 0 ? botBalanceBuyHint : ''}');
       }
     } on NymbotException catch (e) {
@@ -1548,7 +1772,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       state = state.copyWith(anonEnabled: on, anonPubkey: anon.pubkey);
     }
     try {
-      _ref.read(settingsProvider.notifier).notifySyncedChange();
+      _ref.read(settingsProvider.notifier).notePrefChanged('botAnonEnabled');
     } catch (_) {}
     if (on) unawaited(anon.flush());
     await checkBotCredits(display: false);
@@ -1631,17 +1855,23 @@ class BotChatController extends StateNotifier<BotChatState> {
         {'model': picked.label, 'price': _price(picked)});
   }
 
-  Future<void> clearBotPMHistory({({String pk, Uint8List sk})? hardcore}) async {
-    if (_anonPending) {
+  Future<void> clearBotPMHistory({({String pk, Uint8List sk})? hardcore, AnonBotIdentity? lane}) async {
+    if (lane == null && _anonPending) {
       _anonNotReady();
       return;
     }
     // Snapshot wrap ids before the wipe; they key the archive purge.
     final ids = [for (final m in _thread) m.id];
+    final ownIds = [for (final m in _thread) if (!m.anonLane) m.id];
+    final open = _ref.read(activeThreadProvider);
+    if (open != null && open.view == const ChatView.pm(kNymbotPubkey)) {
+      _ref.read(activeThreadProvider.notifier).state = null;
+    }
+    final anonChat = lane != null || anon.enabled;
     _setClearedAt(DateTime.now().millisecondsSinceEpoch ~/ 1000);
     // Best-effort server-side context wipe.
     if (_pubkey != null) {
-      final anonId = anon.ready ? anon.identity : null;
+      final anonId = lane ?? (anon.ready ? anon.identity : null);
       final claimed =
           anonId == null && hardcore != null ? LocalSigner(hardcore.sk) : null;
       final pk = anonId?.pk ?? (claimed != null ? hardcore!.pk : _pubkey!);
@@ -1657,11 +1887,11 @@ class BotChatController extends StateNotifier<BotChatState> {
                       : (await _authFor('clear-history', payload) ?? _auth))
           .catchError((_) => <String, dynamic>{}));
     }
-    // Purge the thread's wraps from the D1 archive so no device restores them.
-    final purge = pmArchivePurger;
-    if (purge != null) unawaited(purge(ids));
-    // Sync the cleared-at marker so other devices filter the thread too.
-    settingsSyncRequester?.call();
+    if (!anonChat) {
+      final purge = pmArchivePurger;
+      if (purge != null && ownIds.isNotEmpty) unawaited(purge(ownIds));
+      settingsSyncRequester?.call();
+    }
     // Wipe the local thread and transient bubbles.
     for (final id in ids) {
       _app.removeMessage(id);
@@ -1681,6 +1911,7 @@ class BotChatController extends StateNotifier<BotChatState> {
   void dispose() {
     _typingHeartbeat?.cancel();
     runsEngine.dispose();
+    anon.dispose();
     super.dispose();
   }
 
@@ -1762,7 +1993,8 @@ class BotChatController extends StateNotifier<BotChatState> {
         .request(pubkey: giftPubkey, nym: giftNym);
   }
 
-  Future<void> handleTransferCommand(String trimmed, {({String pk, Uint8List sk})? hardcore}) async {
+  Future<void> handleTransferCommand(String trimmed,
+      {({String pk, Uint8List sk})? hardcore, AnonBotIdentity? lane}) async {
     final raw = trimmed
         .replaceFirst(RegExp(r'^\?transfer\b', caseSensitive: false), '')
         .trim();
@@ -1796,7 +2028,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         _appState.users[targetPubkey]?.nym ?? targetPubkey.substring(0, 8));
 
     if (!confirming) {
-      await checkBotCredits(display: false, hardcore: hardcore);
+      await checkBotCredits(display: false, hardcore: hardcore, lane: lane);
       final have = state.balance.balance;
       final havePro = state.balance.proBalance;
       if (have <= 0 && havePro <= 0) {
@@ -1821,7 +2053,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
 
     try {
-      final res = await transferCredits(targetPubkey, hardcore: hardcore);
+      final res = await transferCredits(targetPubkey, hardcore: hardcore, lane: lane);
       if (res == null || res['error'] != null) {
         final error = res?['error'];
         if (error == null) {
@@ -1939,16 +2171,19 @@ class BotChatController extends StateNotifier<BotChatState> {
 
   /// Transfers all credits to [targetPubkey], zeroing local balances on success; null if unbound.
   Future<Map<String, dynamic>?> transferCredits(String targetPubkey,
-      {({String pk, Uint8List sk})? hardcore}) async {
+      {({String pk, Uint8List sk})? hardcore, AnonBotIdentity? lane}) async {
     if (_pubkey == null) return null;
-    final claimed = hardcore == null ? null : LocalSigner(hardcore.sk);
+    final claimed = lane == null && hardcore != null ? LocalSigner(hardcore.sk) : null;
     final res = await _service.transfer(
-        pubkey: claimed != null ? hardcore!.pk : _pubkey!,
+        pubkey: lane?.pk ?? (claimed != null ? hardcore!.pk : _pubkey!),
         targetPubkey: targetPubkey,
+        anon: lane != null,
         direct: claimed != null,
-        signedFor: (payload) => claimed != null
-            ? _authWith(claimed, 'transfer-credits', payload)
-            : _authFor('transfer-credits', payload));
+        signedFor: (payload) => lane != null
+            ? anon.authFor('transfer-credits', payload)
+            : claimed != null
+                ? _authWith(claimed, 'transfer-credits', payload)
+                : _authFor('transfer-credits', payload));
     if (res['error'] == null) {
       final b = state.balance;
       state = state.copyWith(

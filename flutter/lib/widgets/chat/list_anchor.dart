@@ -1,7 +1,10 @@
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+
+import '../../models/message.dart';
 
 class AnchoredUnits {
   final Map<String, List<BuildContext>> _contexts = {};
@@ -120,6 +123,167 @@ class _AnchoredUnitState extends State<AnchoredUnit> {
 class BottomFollow {
   bool armed = false;
   double Function()? anchor;
+  double? Function()? hold;
+}
+
+class ReaderAway {
+  ReaderAway() {
+    HardwareKeyboard.instance
+      ..removeHandler(_onKey)
+      ..addHandler(_onKey);
+  }
+
+  static const double bottom = 2;
+  static const Duration _keyWindow = Duration(seconds: 1);
+  static final Set<LogicalKeyboardKey> _keys = {
+    LogicalKeyboardKey.pageUp,
+    LogicalKeyboardKey.pageDown,
+    LogicalKeyboardKey.arrowUp,
+    LogicalKeyboardKey.arrowDown,
+    LogicalKeyboardKey.home,
+    LogicalKeyboardKey.end,
+    LogicalKeyboardKey.space,
+  };
+  static final Stopwatch _clock = Stopwatch()..start();
+  static Duration? _keyAt;
+
+  static bool _onKey(KeyEvent e) {
+    if (e is KeyUpEvent || !_keys.contains(e.logicalKey)) return false;
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx != null &&
+        (ctx.widget is EditableText ||
+            ctx.findAncestorWidgetOfExactType<EditableText>() != null)) {
+      return false;
+    }
+    _keyAt = _clock.elapsed;
+    return false;
+  }
+
+  static bool get _keyed {
+    final at = _keyAt;
+    return at != null && _clock.elapsed - at < _keyWindow;
+  }
+
+  bool away = false;
+  bool _input = false;
+  int _jumps = 0;
+
+  void keyed() => _input = true;
+
+  void reset() {
+    away = false;
+    _input = false;
+  }
+
+  void sync(int jumps) {
+    if (jumps == _jumps) return;
+    _jumps = jumps;
+    reset();
+  }
+
+  static double gapOf(ScrollMetrics m) =>
+      m.axisDirection == AxisDirection.up ||
+              m.axisDirection == AxisDirection.left
+          ? m.pixels - m.minScrollExtent
+          : m.maxScrollExtent - m.pixels;
+
+  void observe(ScrollNotification n) {
+    if (n.depth != 0) return;
+    if (n is UserScrollNotification) {
+      if (n.direction != ScrollDirection.idle) _input = true;
+    } else if (n is ScrollUpdateNotification) {
+      if (_input || n.dragDetails != null || _keyed) _note(n.metrics);
+    } else if (n is ScrollEndNotification) {
+      if (_input || _keyed) _note(n.metrics);
+      _input = false;
+    }
+  }
+
+  void _note(ScrollMetrics m) {
+    if (!m.hasPixels || !m.hasContentDimensions) return;
+    away = gapOf(m) >= bottom;
+  }
+}
+
+class OwnSend {
+  Message? _seen;
+
+  void prime(List<Message> messages) {
+    if (messages.isNotEmpty) _seen ??= messages.last;
+  }
+
+  bool arrived(List<Message> messages) {
+    final seen = _seen;
+    _seen = messages.isEmpty ? null : messages.last;
+    if (seen == null) return false;
+    var mine = false;
+    for (var i = messages.length - 1;
+        i >= 0 && i >= messages.length - 64;
+        i--) {
+      final m = messages[i];
+      if (identical(m, seen)) return mine;
+      if (m.isOwn && !m.isPM && !m.isGroup && !m.isHistorical) mine = true;
+    }
+    return false;
+  }
+}
+
+class RowHold {
+  RowHold({required this.units, required this.away});
+
+  final AnchoredUnits units;
+  final bool Function() away;
+  String? _unit;
+  double? _at;
+
+  double? _offsetOf(String id) {
+    for (final context in units._contexts[id] ?? const <BuildContext>[]) {
+      if (!context.mounted) continue;
+      RenderObject? child = context.findRenderObject();
+      while (child != null && child.attached) {
+        final parent = child.parent;
+        if (parent is RenderSliverMultiBoxAdaptor) {
+          final data = child.parentData;
+          if (data is SliverMultiBoxAdaptorParentData &&
+              data.layoutOffset != null) {
+            return data.layoutOffset;
+          }
+          break;
+        }
+        child = parent;
+      }
+    }
+    return null;
+  }
+
+  void pick() {
+    _unit = null;
+    _at = null;
+    if (!away()) return;
+    String? best;
+    double? bestEdge;
+    for (final id in units._contexts.keys) {
+      final edge = units.edgeOf(id);
+      if (edge == null || edge < 0 || edge >= 1) continue;
+      if (bestEdge == null || edge < bestEdge) {
+        best = id;
+        bestEdge = edge;
+      }
+    }
+    _unit = best;
+    _at = best == null ? null : _offsetOf(best);
+  }
+
+  double? delta() {
+    final unit = _unit;
+    if (unit == null || !away()) return null;
+    final now = _offsetOf(unit);
+    final was = _at;
+    _at = now;
+    if (now == null) _unit = null;
+    if (now == null || was == null) return null;
+    return now - was;
+  }
 }
 
 class ListAnchorKeeper {
@@ -276,6 +440,11 @@ class KeepReadingPhysics extends ScrollPhysics {
     final still = newPosition.pixels == oldPosition.pixels;
     final away = oldPosition.pixels - oldPosition.minScrollExtent;
     final gate = follow;
+    final held = gate?.hold?.call();
+    if (held != null && held != 0) {
+      return (newPosition.pixels + held).clamp(
+          newPosition.minScrollExtent, newPosition.maxScrollExtent);
+    }
     if (up &&
         still &&
         gate != null &&

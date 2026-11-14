@@ -14,6 +14,7 @@
         wrapLimitPq2: 16384,
         wrapLimitClassic: 28672,
         reserve: 1024,
+        oldRefMax: 64,
     });
 
     const KEYS = Object.freeze({
@@ -67,7 +68,7 @@
     const RX_FID = /^[a-z0-9]{12}$/;
     const RX_HEX64 = /^[0-9a-f]{64}$/;
     const RX_GROUP = /^[0-9a-f]{16,64}$/;
-    const RX_CHANNEL = /^[\p{L}\p{N}]{1,64}$/u;
+    const isChannelName = (s) => G.NymChannelName.isChannelName(s);
     const ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
     const REMOVED = '';
 
@@ -93,7 +94,7 @@
         const s = typeof k === 'string' ? k : '';
         if (s.indexOf('d:') === 0) return RX_HEX64.test(s.slice(2));
         if (s.indexOf('g:') === 0) return RX_GROUP.test(s.slice(2));
-        if (s.indexOf('c:') === 0) return RX_CHANNEL.test(s.slice(2)) && s !== 'c:nymchat';
+        if (s.indexOf('c:') === 0) return isChannelName(s.slice(2));
         return false;
     }
 
@@ -232,12 +233,15 @@
     function fitBudget(s) {
         let bytes = stateBytes(s);
         if (bytes <= LIMITS.wrapLimitPq2) return s;
+        const seen = liveBytes(oldBuildView(s));
+        const budget = LIMITS.wrapLimitPq2 + liveBytes(s) - seen;
+        if (bytes <= budget || seen > LIMITS.wrapLimitPq2) return s;
         const tombs = [];
         for (const k of Object.keys(s.removed)) tombs.push({ m: s.removed, k, at: s.removed[k], o: 0 });
         for (const k of Object.keys(s.deleted)) tombs.push({ m: s.deleted, k, at: s.deleted[k], o: 1 });
         tombs.sort((a, b) => (a.at - b.at) || (a.o - b.o) || cmpStr(a.k, b.k));
         for (const t of tombs) {
-            if (bytes <= LIMITS.wrapLimitPq2) break;
+            if (bytes <= budget) break;
             delete t.m[t.k];
             bytes = stateBytes(s);
         }
@@ -527,6 +531,21 @@
         return finish(t, nowMs);
     }
 
+    function oldBuildsSee(ref) {
+        return ref.indexOf('c:') !== 0 || codePoints(ref.slice(2)).length <= LIMITS.oldRefMax;
+    }
+
+    function oldBuildView(s) {
+        const folders = {};
+        for (const id of Object.keys(s.folders)) {
+            const f = s.folders[id];
+            const items = {};
+            for (const ref of Object.keys(f.items)) if (oldBuildsSee(ref)) items[ref] = f.items[ref];
+            folders[id] = { name: f.name, nt: f.nt, at: f.at, items };
+        }
+        return { v: 1, folders, removed: {}, deleted: {}, layout: s.layout, lt: s.lt };
+    }
+
     function capRepair(state, nowMs) {
         let s = normalizeFolders(state, nowMs);
         let changed = false;
@@ -535,20 +554,20 @@
         const newest = (list) => list.sort((p, q) => (q.at - p.at) || cmpStr(q.ref, p.ref));
         for (const id of Object.keys(s.folders)) {
             const items = s.folders[id].items;
-            const list = newest(Object.keys(items).map((ref) => ({ ref, at: items[ref] })));
+            const list = newest(Object.keys(items).filter(oldBuildsSee).map((ref) => ({ ref, at: items[ref] })));
             const extra = list.length - LIMITS.perFolder;
             if (extra > 0) { s = folderRemove(s, id, list.slice(0, extra).map((e) => e.ref), nowMs).state; changed = true; }
         }
         const all = [];
-        for (const id of Object.keys(s.folders)) for (const ref of Object.keys(s.folders[id].items)) all.push({ id, ref, at: s.folders[id].items[ref] });
+        for (const id of Object.keys(s.folders)) for (const ref of Object.keys(s.folders[id].items).filter(oldBuildsSee)) all.push({ id, ref, at: s.folders[id].items[ref] });
         const over = all.length - LIMITS.total;
         if (over > 0) {
             for (const e of newest(all).slice(0, over)) s = folderRemove(s, e.id, [e.ref], nowMs).state;
             changed = true;
         }
-        for (let guard = 0; liveBytes(s) > LIMITS.wrapLimitPq2 && guard < LIMITS.total; guard++) {
+        for (let guard = 0; liveBytes(oldBuildView(s)) > LIMITS.wrapLimitPq2 && guard < LIMITS.total; guard++) {
             const live = [];
-            for (const id of Object.keys(s.folders)) for (const ref of Object.keys(s.folders[id].items)) live.push({ id, ref, at: s.folders[id].items[ref] });
+            for (const id of Object.keys(s.folders)) for (const ref of Object.keys(s.folders[id].items).filter(oldBuildsSee)) live.push({ id, ref, at: s.folders[id].items[ref] });
             if (!live.length) break;
             const e = newest(live)[0];
             s = folderRemove(s, e.id, [e.ref], nowMs).state;

@@ -176,7 +176,7 @@ Object.assign(NYM.prototype, {
             ? opts.anon
             : (typeof this._botAnonAutoRoute === 'function' && this._botAnonAutoRoute(action));
         if (anon) {
-            if (!this.botAnonReady()) {
+            if (!this.botAnonReady() && !(opts && opts.anon === true && typeof this.botAnonIdentity === 'function' && this.botAnonIdentity())) {
                 return { status: 503, data: { error: 'Anonymous Nymbot chat is not ready on this device yet.' } };
             }
             return this.botAnonRequest(action, extra, opts);
@@ -642,10 +642,7 @@ Object.assign(NYM.prototype, {
                 if (auth) auth.classList.add('cosmetic-redacted');
                 const contentEl = msg.querySelector('.message-content');
                 if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
-                    setTimeout(() => {
-                        contentEl.classList.add('cosmetic-redacted-message');
-                        contentEl.textContent = '';
-                    }, 10000);
+                    setTimeout(() => this._blankRedactedContent(msg, contentEl), 10000);
                 }
             } else if (c) {
                 msg.classList.add(c);
@@ -1111,7 +1108,7 @@ Object.assign(NYM.prototype, {
 <div class="shop-active-items shop-preview-block">
     <div class="shop-active-items-title">Preview</div>
     <div class="${classes.join(' ')}">
-        <span class="message-author self ${colorClass}${authorExtra}"><span class="nym-bracket">&lt;</span>${nym}<span class="nym-suffix">#${suffix}</span>${flairHtml}${supporterBadge}<span class="nym-bracket">&gt;</span></span>
+        <span class="message-author self ${colorClass}${authorExtra}"><span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(this.stripPubkeySuffix(this.nym) || 'You', suffix)}${flairHtml}${supporterBadge}<span class="nym-bracket">&gt;</span></span>
         <span class="message-content ${colorClass}">${this.escapeHtml(this.uiText('This is how your messages look.'))}</span>
     </div>
 </div>`;
@@ -1939,6 +1936,8 @@ ${bundleCodes || (code ? `
             const avatarUrl = this.userAvatars.get(this.pubkey) || localStorage.getItem('nym_avatar_url') || '';
 
             const transferSettings = this._buildSettingsPayload();
+            for (const name of Object.keys((window.NymSyncMerge && window.NymSyncMerge.SETS) || {})) delete transferSettings[name + window.NymSyncMerge.SET_SUFFIX];
+            if (window.NymSyncMerge && window.NymSyncMerge.COL_WIRE) delete transferSettings[window.NymSyncMerge.COL_WIRE];
             delete transferSettings.closedPMs;
             delete transferSettings.leftGroups;
             delete transferSettings.notificationLastReadTime;
@@ -1988,6 +1987,7 @@ ${bundleCodes || (code ? `
 
             const data = JSON.parse(event.content);
             if (!data.fromPubkey || !data.settings) return;
+            if (window.NymSyncMerge && window.NymSyncMerge.COL_WIRE && typeof data.settings === 'object') delete data.settings[window.NymSyncMerge.COL_WIRE];
 
             if (event.pubkey !== data.fromPubkey) return;
             if (typeof this.isPersonHidden === 'function'
@@ -2000,7 +2000,7 @@ ${bundleCodes || (code ? `
                 eventId: event.id,
                 fromPubkey: data.fromPubkey,
                 fromNym: data.fromNym || data.fromPubkey.substring(0, 8) + '...',
-                nickname: data.nickname,
+                nickname: typeof data.nickname === 'string' ? window.NymSuffix.capBase(this.parseNymFromDisplay(data.nickname)) : data.nickname,
                 avatarUrl: data.avatarUrl,
                 settings: data.settings,
                 transferredAt: data.transferredAt || event.created_at
@@ -2017,9 +2017,10 @@ ${bundleCodes || (code ? `
         const transfer = this.pendingSettingsTransfers.find(t => t.eventId === eventId);
         if (!transfer) return;
 
-        if (transfer.nickname) {
-            this.nym = transfer.nickname;
-            localStorage.setItem(`nym_nickname_${this.pubkey}`, transfer.nickname);
+        const nickname = typeof transfer.nickname === 'string' ? window.NymSuffix.capBase(this.parseNymFromDisplay(transfer.nickname)) : '';
+        if (nickname) {
+            this.nym = nickname;
+            localStorage.setItem(`nym_nickname_${this.pubkey}`, nickname);
             document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
             this.saveToNostrProfile();
         }
@@ -2038,7 +2039,7 @@ ${bundleCodes || (code ? `
 
             if (s.lightningAddress && this.pubkey) {
                 this.lightningAddress = s.lightningAddress;
-                localStorage.setItem(`nym_lightning_address_${this.pubkey}`, s.lightningAddress);
+                this._lnStore(s.lightningAddress);
             }
 
             this.saveSyncedSettings();

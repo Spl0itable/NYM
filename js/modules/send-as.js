@@ -287,6 +287,7 @@
             if (!input || !this.currentGeohash) return null;
             const typed = typeof input.value === 'string' ? input.value : '';
             const rawInput = this._sendAsRawInput();
+            if (this.pendingQuote && typeof this._refreshPendingQuote === 'function' && !this._refreshPendingQuote()) return null;
             if (!rawInput && !this.pendingQuote) return null;
             const quotes = this._sendAsBotQuotes();
             let content = rawInput;
@@ -302,6 +303,7 @@
                 content,
                 quote: quotes.savedQuote,
                 quoteSource: this.pendingQuote ? String(this.pendingQuote.sourceId || '') : '',
+                quotePubkey: this.pendingQuote ? String(this.pendingQuote.pubkey || '') : '',
                 quotePending: this._sendAsQuotePending(),
                 threadRoot: quotes.threadRoot,
                 botQuote: quotes.botQuote,
@@ -701,7 +703,7 @@
             el.dataset.seq = String(seq);
             const body = esc(snap.content).replace(/\n/g, '<br>');
             el.innerHTML = `<span class="message-time">${esc(time)}</span>`
-                + `<span class="message-author"><span class="bubble-time">${esc(time)}</span><span class="author-clickable"><bdi>${esc(nym)}<span class="nym-suffix">#${esc(suffix)}</span></bdi></span><span class="nym-bracket">&gt;</span></span>`
+                + `<span class="message-author"><span class="bubble-time">${esc(time)}</span><span class="author-clickable"><bdi>${window.NymSuffix.sqHtml(nym, esc(suffix))}</bdi></span><span class="nym-bracket">&gt;</span></span>`
                 + `<span class="message-content">${body}<span class="sendas-status"></span></span>`;
             let node = el;
             if (document.body && document.body.classList.contains('chat-bubbles')) {
@@ -805,7 +807,7 @@
             }
             const cur = String(input.value || '');
             if (!cur.includes(raw)) input.value = cur.trim() ? cur + '\n' + raw : raw;
-            if (!cur.trim() && job.snap.quote && !this.pendingQuote && typeof this.setQuoteReply === 'function') this.setQuoteReply(job.snap.quote.author, job.snap.quote.fullText || job.snap.quote.text, job.snap.quoteSource);
+            if (!cur.trim() && job.snap.quote && !this.pendingQuote && typeof this.setQuoteReply === 'function') this.setQuoteReply(job.snap.quote.author, job.snap.quote.fullText || job.snap.quote.text, job.snap.quoteSource, job.snap.quotePubkey);
             if (typeof this.autoResizeTextarea === 'function') this.autoResizeTextarea(input);
             if (typeof this.refreshComposerPrimary === 'function') this.refreshComposerPrimary();
             if (typeof input.focus === 'function') input.focus();
@@ -882,7 +884,7 @@
             }
             input.value = job.snap.rawInput;
             job.restored = job.snap.rawInput;
-            if (job.snap.quote && typeof this.setQuoteReply === 'function') this.setQuoteReply(job.snap.quote.author, job.snap.quote.fullText || job.snap.quote.text, job.snap.quoteSource);
+            if (job.snap.quote && typeof this.setQuoteReply === 'function') this.setQuoteReply(job.snap.quote.author, job.snap.quote.fullText || job.snap.quote.text, job.snap.quoteSource, job.snap.quotePubkey);
             if (typeof this.autoResizeTextarea === 'function') this.autoResizeTextarea(input);
             if (typeof this.refreshComposerPrimary === 'function') this.refreshComposerPrimary();
             return true;

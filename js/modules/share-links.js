@@ -6,7 +6,6 @@
     const CODE_MAX_BYTES = 382;
     const MAX_INPUT_BYTES = 4096;
     const MAX_TOKEN_CHARS = 4000;
-    const MAX_CHANNEL_CHARS = 64;
     const MAX_NPROFILE_CHARS = 1000;
     const NEARBY_TYPE = 0x71;
     const NEARBY_VERSION = 0x01;
@@ -17,6 +16,7 @@
         notNymchat: 'Not a Nymchat code',
         groupWarning: 'Anyone who sees or scans this code can ask to join and will see the group’s name.',
         stickerWarning: 'Anyone who taps or scans this sticker can read the link.',
+        qrTooLong: 'This link is too long for a QR code. Copy or share the link instead.',
     });
 
     const APP_LINKS = Object.freeze({
@@ -137,7 +137,6 @@
     const RX_CONTROL = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF]/;
     const RX_NPUB_FRAGMENT = /^npub1[02-9ac-hj-np-z]{58}$/;
     const RX_GEOHASH = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
-    const RX_CHANNEL = /^[\p{L}\p{N}]+$/u;
     const RX_UPPER_OR_TITLE = /[\p{Lu}\p{Lt}]/u;
     const asciiLower = (v) => v.replace(/[A-Z]/g, (c) => c.toLowerCase());
 
@@ -168,7 +167,7 @@
             if (n === null) return invalid('bad_fragment');
         }
         n = asciiLower(n);
-        if (RX_UPPER_OR_TITLE.test(n) || !RX_CHANNEL.test(n) || Array.from(n).length > MAX_CHANNEL_CHARS) return invalid('bad_fragment');
+        if (RX_UPPER_OR_TITLE.test(n) || !G.NymChannelName.isChannelName(n)) return invalid('bad_fragment');
         return { kind: 'channel', channel: n, geohash: RX_GEOHASH.test(n), refPrefix };
     }
 
@@ -186,7 +185,7 @@
         if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);
         s = trimAscii(s);
         if (!s) return invalid('empty');
-        if (utf8Len(s) > MAX_INPUT_BYTES) return invalid('too_long');
+        if (!(opts && opts.fromAddress === true) && utf8Len(s) > MAX_INPUT_BYTES) return invalid('too_long');
         if (RX_CONTROL.test(s)) return invalid('control_chars');
         if (APP_LINKS.exact.indexOf(s) !== -1) return { kind: 'appLink', url: s };
 

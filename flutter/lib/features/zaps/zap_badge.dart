@@ -155,7 +155,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
           ),
         ),
         // Quick-zap only when the author pubkey is known.
-        if (message.pubkey.isNotEmpty) ...[
+        if (message.pubkey.isNotEmpty && !message.anonLane) ...[
           const SizedBox(width: 5),
           _QuickZapBtn(
             onTap: () => _quickZap(context),
@@ -224,6 +224,9 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
 
   /// Fresh-fetches the author's lightning address before opening the zap modal, so an unseen kind 0 isn't reported as unzappable.
   Future<void> _quickZap(BuildContext context) async {
+    if (ref.read(nostrControllerProvider).anonLaneZapRefused(message.id)) {
+      return;
+    }
     // Prefer the live profile nym over the one frozen onto the message.
     final liveNym = ref.read(appStateProvider).users[message.pubkey]?.nym;
     final baseNym = pickDisplayNym(liveNym, message.author);

@@ -82,6 +82,7 @@
                 edited: !!(msgEl.querySelector('.edited-indicator') || (m && m.isEdited)),
                 hexId: HEX64.test(messageId),
                 bot: typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(pubkey),
+                anonLane: !!(messageId && typeof this._zapAnonLane === 'function' && this._zapAnonLane(messageId)),
             };
             return {
                 msgEl, messageId, pubkey, baseNym, content, self, found, facts,
@@ -93,7 +94,7 @@
         _msgActionRun(id, x) {
             switch (id) {
                 case 'reply':
-                    return () => this.setQuoteReply(x.fullNym, x.content, x.messageId);
+                    return () => this.setQuoteReply(x.fullNym, x.content, x.messageId, x.pubkey);
                 case 'replyPrivately':
                     return () => this.replyPrivately(x.toolId);
                 case 'thread':
@@ -108,7 +109,7 @@
                         }
                     };
                 case 'translate':
-                    return () => this.translateMessage(x.content, x.messageId);
+                    return this._redactBlankedRow(x.msgEl) ? null : () => this.translateMessage(x.content, x.messageId);
                 case 'save':
                 case 'unsave':
                     return () => {
@@ -121,6 +122,7 @@
                     return () => this.toggleKeepMessage(x.toolId);
                 case 'zap':
                     return async () => {
+                        if (this._zapAnonLaneBlocked(x.messageId)) return;
                         this.displaySystemMessage(this.uiText(`Checking if @{baseNym} can receive zaps...`, { baseNym: x.baseNym }));
                         try {
                             const lnAddress = await this.fetchLightningAddressForUser(x.pubkey);
@@ -168,12 +170,16 @@
             for (const id of ids) {
                 const action = this._msgActionRun(id, x);
                 if (!action) continue;
+                const blockedKey = id === 'report' && typeof this._reportEntryBlocked === 'function'
+                    ? this._reportEntryBlocked({ pubkey: x.pubkey, messageId: x.messageId }) : '';
+                const reported = !!blockedKey;
                 items.push({
                     id,
-                    label: LABELS[id],
+                    label: reported ? 'Reported' : LABELS[id],
                     svg: ICONS[id] || '',
                     cls: A().actionTone(id) === 'normal' ? '' : A().actionTone(id),
-                    action,
+                    action: reported ? () => this.displaySystemMessage(this._reportRefusal(blockedKey)) : action,
+                    disabled: reported,
                 });
             }
             return { items, ctx: x };
@@ -227,7 +233,7 @@
                 '<div class="msg-sheet-preview" data-sheet-handle>' +
                 `<img class="msg-sheet-avatar" alt="" src="${esc(avatar)}">` +
                 '<div class="msg-sheet-meta">' +
-                `<div class="msg-sheet-head"><span class="msg-sheet-author" data-no-i18n><span class="msg-sheet-nym">${window.NymSuffix.html(ctx.baseNym, suffix)}</span></span><span class="msg-sheet-time">${esc(this._msgSheetTime(msgEl))}</span></div>` +
+                `<div class="msg-sheet-head"><span class="msg-sheet-author" data-no-i18n><span class="msg-sheet-nym">${window.NymSuffix.sqHtml(ctx.baseNym, suffix)}</span></span><span class="msg-sheet-time">${esc(this._msgSheetTime(msgEl))}</span></div>` +
                 `<div class="msg-sheet-text" data-no-i18n>${this.mentionSuffixHtml(preview.text)}</div>` +
                 '</div>' +
                 (preview.thumb ? `<img class="msg-sheet-thumb${thumbBlur ? ' blurred' : ''}" alt="" src="${esc(typeof this.getProxiedMediaUrl === 'function' ? this.getProxiedMediaUrl(preview.thumb) : preview.thumb)}">` : '') +
@@ -237,7 +243,7 @@
                 `<button type="button" class="msg-sheet-more" aria-label="${esc(tr('More reactions'))}">${ICONS.more}</button>` +
                 '</div>' +
                 '<div class="msg-sheet-actions">' +
-                items.map((it) => `<button type="button" class="msg-sheet-action${it.cls ? ' ' + it.cls : ''}" data-msg-action="${it.id}">${it.svg}<span>${esc(it.label)}</span></button>`).join('') +
+                items.map((it) => `<button type="button" class="msg-sheet-action${it.cls ? ' ' + it.cls : ''}" data-msg-action="${it.id}"${it.disabled ? ' disabled aria-disabled="true"' : ''}>${it.svg}<span>${esc(it.disabled ? this.uiText('Reported') : it.label)}</span></button>`).join('') +
                 '</div>' +
                 '</div>';
             const img = modal.querySelector('.msg-sheet-avatar');
@@ -255,7 +261,7 @@
                     const emoji = b.dataset.emoji;
                     closeThen(async () => {
                         await this.sendReaction(ctx.messageId, emoji);
-                        this.addToRecentEmojis(emoji);
+                        this.addToRecentEmojis(emoji, { messageId: ctx.messageId });
                     });
                 };
             });

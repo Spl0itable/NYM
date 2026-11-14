@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import '../../core/utils/channel_name.dart';
+
 class UnifiedSearchConfig {
   const UnifiedSearchConfig._();
 
@@ -225,7 +227,6 @@ final Map<String, String> _kFold = () {
 }();
 
 final RegExp _nonAscii = RegExp(r'[^\x00-\x7f]');
-final RegExp _nameChars = RegExp(r'^[\p{L}\p{N}]+$', unicode: true);
 final RegExp _wordChar = RegExp(r'[\p{L}\p{N}]', unicode: true);
 final RegExp _hexKey = RegExp(r'^[0-9a-f]{8,64}$');
 final RegExp _hexSuffix = RegExp(r'^[0-9a-f]{4}$');
@@ -365,7 +366,7 @@ SearchJoin? searchJoinSuggestion(
   if (q.mode == SearchMode.nym || q.nameTokens.length != 1) return null;
   final name = q.bare;
   if (name.length < 2 ||
-      !_nameChars.hasMatch(name) ||
+      !isChannelName(name) ||
       name.startsWith('npub1') ||
       _hexKey.hasMatch(name)) {
     return null;

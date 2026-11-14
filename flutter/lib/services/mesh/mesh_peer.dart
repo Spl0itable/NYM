@@ -1,10 +1,12 @@
 import 'dart:typed_data';
 
+import '../../core/utils/nym_utils.dart';
+
 /// A mesh peer; [isVerified] once its peerID is bound to the announced Noise static key.
 class MeshPeer {
   MeshPeer({
     required this.peerID,
-    this.nickname,
+    String? nickname,
     this.noisePublicKey,
     this.signingPublicKey,
     this.rssi = 0,
@@ -17,12 +19,17 @@ class MeshPeer {
     this.avatarFilePath,
     this.supportsPrivateMedia = false,
     DateTime? lastSeen,
-  }) : lastSeen = lastSeen ?? DateTime.now();
+  })  : _nickname = nickname == null ? null : capNym(nickname),
+        lastSeen = lastSeen ?? DateTime.now();
 
   /// 16-hex mesh id: first 8 bytes of SHA-256(noise pubkey).
   final String peerID;
 
-  String? nickname;
+  String? _nickname;
+
+  String? get nickname => _nickname;
+
+  set nickname(String? v) => _nickname = v == null ? null : capNym(v);
 
   /// Curve25519 static key (Noise identity) from the announcement.
   Uint8List? noisePublicKey;

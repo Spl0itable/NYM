@@ -532,7 +532,7 @@
     window.maybeStartTutorial = function (force = false) {
         try {
             if (!force) {
-                const seen = localStorage.getItem('nym_tutorial_seen') === 'true';
+                const seen = (window.NymAccounts && typeof window.NymAccounts.tutorialSeen === 'function' ? window.NymAccounts.tutorialSeen((k) => localStorage.getItem(k)) : localStorage.getItem('nym_tutorial_seen') === 'true');
                 if (seen) return;
             }
             setTimeout(() => startTutorial(), 300);
@@ -843,6 +843,7 @@ class NYM {
         defineLazy('closedPMs', lazyStoredSet('nym_closed_pms'));
         defineLazy('leftGroups', lazyStoredSet('nym_left_groups'));
         defineLazy('closedPMTimes', lazyStoredMap('nym_closed_pm_times'));
+        defineLazy('pmQuietReopens', lazyStoredMap('nym_pm_quiet_reopens'));
         defineLazy('leftGroupTimes', lazyStoredMap('nym_left_group_times'));
         this.recentEmojis = [];
         this._customEmojiCacheLoaded = false;
@@ -2216,6 +2217,8 @@ function scrollToBottom() {
     if (!scroller) return;
 
     nym.userScrolledUp = false;
+    nym._readerReset(scroller);
+    if (typeof nym._cnUnpin === 'function') nym._cnUnpin(nym._cnSingleKey());
 
     if (nym._scrollRAF) {
         cancelAnimationFrame(nym._scrollRAF);
@@ -2672,6 +2675,7 @@ function applyKeypairMode(mode) {
         if (nym.nym && !(typeof nym.isReservedNick === 'function' && nym.isReservedNick(nym.nym))) {
             try { localStorage.setItem('nym_auto_ephemeral_nick', nym.nym); } catch (_) { }
         }
+        if (typeof nym._throwawayNeedles === 'function') nym._throwawayNeedles();
     }
     if (addedBefore) nym._addedRelayUseChanged(addedBefore);
 }
@@ -3140,10 +3144,6 @@ function editNick() {
         lnInput.value = nym.lightningAddress || '';
     }
 
-    const privkeySlideout = document.getElementById('privkeySlideout');
-    if (privkeySlideout) privkeySlideout.style.display = 'none';
-    const privkeyArrow = document.getElementById('revealPrivkeyArrow');
-    if (privkeyArrow) privkeyArrow.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
     const nsecInput = document.getElementById('revealedNsecValue');
     if (nsecInput) { nsecInput.value = ''; nsecInput.type = 'password'; }
     const rootInput = document.getElementById('pqRootValue');
@@ -3158,12 +3158,9 @@ function editNick() {
     const signerOnly = nym.nostrLoginMethod === 'extension';
     const nsecBlock = document.getElementById('nsecRevealBlock');
     if (nsecBlock) nsecBlock.style.display = signerOnly ? 'none' : 'block';
-    const revealLabel = document.getElementById('revealPrivkeyLabel');
-    if (revealLabel) {
-        revealLabel.textContent = signerOnly
-            ? "Reveal this nym's post-quantum recovery code"
-            : "Reveal this nym's private key and recovery code";
-    }
+    const keySlideout = document.getElementById('privkeySlideout');
+    if (keySlideout) keySlideout.classList.toggle('nm-signer-only', signerOnly);
+    fillPrivkeySlideout();
 
     if (window.NymKeyBackup) window.NymKeyBackup.refresh();
     if (window.NymPasskeyBackup) window.NymPasskeyBackup.refresh();
@@ -3201,7 +3198,7 @@ function updateFieldCharCount(input) {
 }
 
 async function changeNick() {
-    const newNick = document.getElementById('newNickInput').value.trim();
+    const newNick = window.NymSuffix.capBase(document.getElementById('newNickInput').value).trim();
     // The suffix is derived from the pubkey, so strip any typed one.
     const baseNick = nym.parseNymFromDisplay(newNick);
     const currentBase = nym.parseNymFromDisplay(nym.nym);
@@ -3224,16 +3221,10 @@ async function changeNick() {
     if (lnInput) {
         const newLn = lnInput.value.trim();
         if (newLn !== (nym.lightningAddress || '')) {
-            if (newLn) {
-                nym.lightningAddress = newLn;
-                localStorage.setItem(`nym_lightning_address_${nym.pubkey}`, newLn);
-                localStorage.setItem('nym_lightning_address_global', newLn);
-            } else {
-                nym.lightningAddress = null;
-                localStorage.removeItem(`nym_lightning_address_${nym.pubkey}`);
-                localStorage.removeItem('nym_lightning_address_global');
-            }
+            nym.lightningAddress = newLn || null;
+            nym._lnStore(newLn, true);
             nym.updateLightningAddressDisplay();
+            if (!nym._settingsSyncLocal()) nym.notePrefChanged('lightningAddress');
             profileDirty = true;
         }
     }
@@ -3479,29 +3470,19 @@ function updateSetupBioCharCount() {
     }
 }
 
-function toggleRevealPrivkey() {
-    const slideout = document.getElementById('privkeySlideout');
-    const arrow = document.getElementById('revealPrivkeyArrow');
-    if (!slideout) return;
-
-    const isHidden = getComputedStyle(slideout).display === 'none';
-    slideout.style.display = isHidden ? 'block' : 'none';
-    if (arrow) arrow.innerHTML = isHidden ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 3 6 L 8 11 L 13 6 Z"/></svg>' : '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
-
-    if (isHidden) {
-        const nsecInput = document.getElementById('revealedNsecValue');
-        if (nsecInput && nym.privkey) {
-            try {
-                const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
-                nsecInput.value = nsec;
-            } catch (e) {
-                nsecInput.value = 'Unable to encode private key';
-            }
-        } else if (nsecInput) {
-            nsecInput.value = 'No private key available (using browser extension)';
+function fillPrivkeySlideout() {
+    const nsecInput = document.getElementById('revealedNsecValue');
+    if (nsecInput && nym.privkey) {
+        try {
+            const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
+            nsecInput.value = nsec;
+        } catch (e) {
+            nsecInput.value = 'Unable to encode private key';
         }
-        refreshPqRootReveal();
+    } else if (nsecInput) {
+        nsecInput.value = 'No private key available (using browser extension)';
     }
+    refreshPqRootReveal();
 }
 
 // The recovery code sits beside the nsec with the same handling and warning.
@@ -4042,26 +4023,24 @@ async function showSettings() {
 
         const channelOptions = [];
 
+        const geoOption = (group, geohash) => ({
+            group,
+            get label() {
+                const location = nym._geoPlaceLabel(geohash);
+                return location ? `#${geohash} (${location})` : `#${geohash}`;
+            },
+            value: { type: 'geohash', geohash: geohash },
+            get searchText() { return (geohash + ' ' + (nym._geoPlaceLabel(geohash) || '')).toLowerCase(); }
+        });
+
         nym.commonGeohashes.forEach(geohash => {
-            const location = nym.getGeohashLocation(geohash);
-            channelOptions.push({
-                group: 'Common Geohash Channels',
-                label: location ? `#${geohash} (${location})` : `#${geohash}`,
-                value: { type: 'geohash', geohash: geohash },
-                searchText: (geohash + ' ' + (location || '')).toLowerCase()
-            });
+            channelOptions.push(geoOption('Common Geohash Channels', geohash));
         });
 
         Array.from(nym.channels.entries())
             .filter(([key, val]) => nym.isValidGeohash(key) && !nym.commonGeohashes.includes(key))
             .forEach(([geohash]) => {
-                const location = nym.getGeohashLocation(geohash);
-                channelOptions.push({
-                    group: 'Joined Geohash Channels',
-                    label: location ? `#${geohash} (${location})` : `#${geohash}`,
-                    value: { type: 'geohash', geohash: geohash },
-                    searchText: (geohash + ' ' + (location || '')).toLowerCase()
-                });
+                channelOptions.push(geoOption('Joined Geohash Channels', geohash));
             });
 
         const currentOption = channelOptions.find(opt =>
@@ -4096,7 +4075,8 @@ async function showSettings() {
             Object.keys(grouped).forEach(groupName => {
                 html += `<div class="nm-app-2">${groupName}</div>`;
                 grouped[groupName].forEach(opt => {
-                    html += `<div class="channel-dropdown-option nm-app-3" data-value='${JSON.stringify(opt.value)}'>${opt.label}</div>`;
+                    const geoAttr = opt.value && opt.value.type === 'geohash' && nym.isValidGeohash(opt.value.geohash) ? ` data-geohash="${nym.escapeHtml(String(opt.value.geohash).toLowerCase())}"` : '';
+                    html += `<div class="channel-dropdown-option nm-app-3"${geoAttr} data-value='${JSON.stringify(opt.value)}'>${nym.escapeHtml(opt.label)}</div>`;
                 });
             });
 
@@ -4749,7 +4729,7 @@ function initWallpaperUI() {
 }
 
 const NYMCHAT_VERSION = 'v3.75.545';
-const NYMCHAT_BUILD = 930;
+const NYMCHAT_BUILD = 1045;
 
 function nymUiArgs(template, args) {
     if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);
@@ -5102,7 +5082,8 @@ async function checkSavedConnection() {
             let isDeveloperLogin = false;
             const randomKeypairPerSession = localStorage.getItem('nym_random_keypair_per_session') === 'true';
 
-            const savedNick = localStorage.getItem('nym_auto_ephemeral_nick');
+            const storedNick = localStorage.getItem('nym_auto_ephemeral_nick');
+            const savedNick = storedNick ? window.NymSuffix.cap(storedNick) : storedNick;
             if (savedNick && nym.isReservedNick(savedNick)) {
                 const savedNsec = nymSecretGet('nym_dev_nsec');
                 if (savedNsec) {
@@ -5148,7 +5129,7 @@ async function checkSavedConnection() {
                         nymSecretSet('nym_session_nsec', nsec);
                     } catch (e) { }
                 }
-                if (nym.nym && savedNick !== nym.nym) {
+                if (nym.nym && storedNick !== nym.nym) {
                     try { localStorage.setItem('nym_auto_ephemeral_nick', nym.nym); } catch (e) { }
                 }
             } else {
@@ -5166,7 +5147,7 @@ async function checkSavedConnection() {
 
             nym._loadGroupConversations();
             nym._loadEphemeralKeys();
-            if (typeof nym._sfLoad === 'function') nym._sfLoad();
+            if (typeof nym._sfLoad === 'function') nym._sfLoad(); if (typeof nym._giReady === 'function') nym._giReady();
             nym._loadBotAnonState();
             nym._loadLastPMSyncTime();
             nym._refreshPmSupportBadges();
@@ -5177,6 +5158,9 @@ async function checkSavedConnection() {
 
             if (isDeveloperLogin) {
                 await nym.loadLightningAddress();
+            } else if (nym._settingsSyncLocal()) {
+                nym._lnDropStored();
+                nym._dropThrowawayLeftovers();
             } else {
                 const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
                 if (globalLnAddress) {
@@ -5247,7 +5231,7 @@ async function initializeNym() {
     enterBtn.innerHTML = '<span class="loader"></span> Connecting...';
 
     try {
-        const nymInput = document.getElementById('nymInput').value.trim();
+        const nymInput = window.NymSuffix.capBase(document.getElementById('nymInput').value).trim();
         let isDeveloperLogin = false;
 
         const nostrLoginActive = isNostrLoggedIn();
@@ -5346,7 +5330,7 @@ async function initializeNym() {
 
         nym._loadGroupConversations();
         nym._loadEphemeralKeys();
-        if (typeof nym._sfLoad === 'function') nym._sfLoad();
+        if (typeof nym._sfLoad === 'function') nym._sfLoad(); if (typeof nym._giReady === 'function') nym._giReady();
         nym._loadBotAnonState();
         nym._loadLastPMSyncTime();
         nym._refreshPmSupportBadges();
@@ -5358,6 +5342,9 @@ async function initializeNym() {
 
         if (isDeveloperLogin) {
             await nym.loadLightningAddress();
+        } else if (!nostrLoginActive && nym._settingsSyncLocal()) {
+            nym._lnDropStored();
+            nym._dropThrowawayLeftovers();
         } else if (!nostrLoginActive) {
             const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
             if (globalLnAddress) {
@@ -6334,7 +6321,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Restore groups and ephemeral keys before relay history arrives.
     nym._loadGroupConversations();
     nym._loadEphemeralKeys();
-    if (typeof nym._sfLoad === 'function') nym._sfLoad();
+    if (typeof nym._sfLoad === 'function') nym._sfLoad(); if (typeof nym._giReady === 'function') nym._giReady();
     nym._loadBotAnonState();
     nym._loadLastPMSyncTime();
     nym._refreshPmSupportBadges();
@@ -6610,13 +6597,13 @@ async function applyNostrSettingsAdditive(s) {
     }
 
     if (Array.isArray(s.closedPMs)) {
-        for (const pk of s.closedPMs) nym.closedPMs.add(pk);
+        for (const pk of s.closedPMs) if (!nym._pmQuietReopenWins(pk, s.closedPMTimes)) nym.closedPMs.add(pk);
         try { localStorage.setItem('nym_closed_pms', JSON.stringify([...nym.closedPMs])); } catch (_) { }
     }
     if (s.closedPMTimes && typeof s.closedPMTimes === 'object') {
         if (!nym.closedPMTimes) nym.closedPMTimes = new Map();
         for (const [pk, v] of Object.entries(s.closedPMTimes)) {
-            if (typeof v !== 'number' || v <= 0) continue;
+            if (typeof v !== 'number' || v <= 0 || nym._pmQuietReopenWins(pk, s.closedPMTimes)) continue;
             const cur = nym.closedPMTimes.get(pk) || 0;
             if (v > cur) nym.closedPMTimes.set(pk, v);
         }
@@ -6635,6 +6622,9 @@ async function applyNostrSettingsAdditive(s) {
             if (v > cur) nym.leftGroupTimes.set(gid, v);
         }
         try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(nym.leftGroupTimes))); } catch (_) { }
+    }
+    if (s.leftGroupRoles && typeof s.leftGroupRoles === 'object' && typeof nym._giMergeLeftRoles === 'function') {
+        nym._giMergeLeftRoles(s.leftGroupRoles).catch(() => { });
     }
 
     if (s.channelLastRead && typeof s.channelLastRead === 'object' && typeof nym._applySyncedLastRead === 'function') {
@@ -6664,6 +6654,7 @@ async function applyNostrSettingsAdditive(s) {
                     g.admins = Array.isArray(group.admins) ? [...group.admins] : [];
                     if (group.genesisOwner) g.genesisOwner = group.genesisOwner;
                     if (group.genesisNonce) g.genesisNonce = group.genesisNonce;
+                    if (typeof nym._gnAdopt === 'function') nym._gnAdopt(g, group);
                     if (group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
                     const syncedBy = nym._cleanGroupMetaBy(group.metaBy);
                     if (syncedBy) g.metaBy = syncedBy;
@@ -6743,12 +6734,6 @@ async function applyNostrSettingsAdditive(s) {
     if (s.botAnon && typeof s.botAnon === 'object') {
         try { nym.botAnonApplySynced(s.botAnon); } catch (_) { }
     }
-    if (typeof s.botAnonEnabled === 'boolean') {
-        try {
-            nym._botAnonOn = s.botAnonEnabled;
-            localStorage.setItem('nym_botanon_enabled', s.botAnonEnabled ? 'true' : 'false');
-        } catch (_) { }
-    }
 
     if (s.awayStatus && typeof nym.applySyncedAway === 'function') {
         try { awayRun = Promise.resolve(nym.applySyncedAway(s.awayStatus)).catch(() => { }); } catch (_) { }
@@ -6763,6 +6748,10 @@ async function applyNostrSettingsAdditive(s) {
 
     if (s.sidebarFolders && typeof s.sidebarFolders === 'object' && typeof nym.applySyncedFolders === 'function') {
         try { nym.applySyncedFolders(s.sidebarFolders); } catch (_) { }
+    }
+
+    if (s.groupInvites && typeof s.groupInvites === 'object' && typeof nym.applySyncedGroupInvites === 'function') {
+        try { nym.applySyncedGroupInvites(s.groupInvites); } catch (_) { }
     }
 
     if (s.lockedChats && typeof s.lockedChats === 'object' && typeof nym.applySyncedLocked === 'function') {
@@ -6857,11 +6846,19 @@ async function applyNostrSettings(s, opts) {
     const lsSave = (k, v) => { try { localStorage.setItem(k, v); } catch (_) { } };
     const accepted = !!(opts && opts.accepted);
     const M = window.NymSyncMerge;
+    const colGate = !accepted && M && typeof M.colGate === 'function' && typeof nym._colState === 'function' && typeof nym._colListForSync === 'function' && typeof nym._prefStamps === 'function'
+        ? M.colGate(s, nym._colState(), nym._colListForSync(), nym._prefStamps().columnsLayout || 0, 0, opts && opts.rowTs, Date.now())
+        : null;
+    if (colGate) s = colGate.payload;
     const gate = !accepted && M && typeof M.prefGate === 'function' && typeof nym._prefStamps === 'function'
         ? M.prefGate(s, nym._prefStamps(), M.STAMPED, opts && opts.rowTs)
         : null;
     const gateIn = s;
     if (gate) s = gate.payload;
+    const setGate = !accepted && M && typeof M.setGate === 'function' && typeof nym._setStates === 'function'
+        ? M.setGate(M.setRowStamp(s, opts && opts.rowTs), nym._setStates(), nym._setListsForSync(), Date.now())
+        : null;
+    if (setGate) s = setGate.payload;
     nym._applyRemoteDepth = (nym._applyRemoteDepth || 0) + 1;
     nym._applyingRemoteSettings = true;
     try {
@@ -6881,6 +6878,12 @@ async function applyNostrSettings(s, opts) {
     }
     if (typeof s.botMaxRuns === 'number' && typeof nym.setBotMaxRuns === 'function') {
         try { nym.setBotMaxRuns(s.botMaxRuns, { fromSync: true }); } catch (_) { }
+    }
+    if (typeof s.botProModel === 'string' && typeof nym._applySyncedBotProModel === 'function') {
+        try { nym._applySyncedBotProModel(s.botProModel); } catch (_) { }
+    }
+    if (typeof s.streetDetail === 'boolean' && typeof nym._applySyncedStreetDetail === 'function') {
+        try { nym._applySyncedStreetDetail(s.streetDetail); } catch (_) { }
     }
 
     if (s.encryptAtRestPreferred === true) {
@@ -7047,6 +7050,7 @@ async function applyNostrSettings(s, opts) {
     if (Array.isArray(s.columnsLayout)) {
         nym.columnsLayout = s.columnsLayout;
         try { localStorage.setItem('nym_columns_layout', JSON.stringify(s.columnsLayout)); } catch (e) { }
+        if (typeof nym._cvApplySyncedLayout === 'function') nym._cvApplySyncedLayout();
     }
 
     if (typeof s.threadsEnabled === 'boolean') {
@@ -7071,7 +7075,15 @@ async function applyNostrSettings(s, opts) {
 
     if (s.lightningAddress) {
         lsSave('nym_lightning_address_global', s.lightningAddress);
+        if (nym.pubkey) lsSave(`nym_lightning_address_${nym.pubkey}`, s.lightningAddress);
         nym.lightningAddress = s.lightningAddress;
+    } else if ('lightningAddress' in s && s.lightningAddressFp && Number(s.lightningAddressTs) > (nym._prefStamps().lightningAddress || 0)) {
+        try {
+            localStorage.removeItem('nym_lightning_address_global');
+            if (nym.pubkey) localStorage.removeItem(`nym_lightning_address_${nym.pubkey}`);
+        } catch (_) { }
+        nym.lightningAddress = null;
+        if (typeof nym.updateLightningAddressDisplay === 'function') nym.updateLightningAddressDisplay();
     }
 
     if (typeof s.powDifficulty === 'number') {
@@ -7182,6 +7194,16 @@ async function applyNostrSettings(s, opts) {
         });
         if (typeof nym._withBulkChannelAdd === 'function') nym._withBulkChannelAdd(addJoined);
         else addJoined();
+        if (setGate) {
+            const keep = new Set(joined);
+            for (const key of [...nym.userJoinedChannels]) {
+                if (keep.has(key) || key === 'nymchat') continue;
+                const ch = nym.channels.get(key);
+                const current = nym.currentGeohash === key || (!nym.currentGeohash && nym.currentChannel === key);
+                if (ch && !current && typeof nym.removeChannel === 'function') nym.removeChannel(ch.channel, ch.geohash || '');
+                nym.userJoinedChannels.delete(key);
+            }
+        }
 
         lsSave('nym_user_joined_channels', JSON.stringify(joined));
         lsSave('nym_user_channels', JSON.stringify(
@@ -7275,6 +7297,11 @@ async function applyNostrSettings(s, opts) {
     }
 
 
+    const pickerFavs = () => JSON.stringify([
+        typeof nym._getEmojiPackFavorites === 'function' ? nym._getEmojiPackFavorites() : null,
+        typeof nym._getDefaultCategoryFavorites === 'function' ? nym._getDefaultCategoryFavorites() : null,
+    ]);
+    const pickerFavsBefore = pickerFavs();
     if (Array.isArray(s.emojiPackFavorites)) {
         nym._emojiPackFavorites = s.emojiPackFavorites.filter(k => typeof k === 'string');
         lsSave('nym_emoji_pack_favorites', JSON.stringify(nym._emojiPackFavorites));
@@ -7282,11 +7309,11 @@ async function applyNostrSettings(s, opts) {
     }
 
     // Merge so an empty or stale remote list can't wipe local picks.
-    if (Array.isArray(s.favoriteGifs) && s.favoriteGifs.length) {
+    if (Array.isArray(s.favoriteGifs) && (s.favoriteGifs.length || setGate)) {
         const remote = s.favoriteGifs
             .filter(g => g && typeof g.url === 'string')
             .map(g => ({ url: g.url, title: typeof g.title === 'string' ? g.title : '' }));
-        const local = typeof nym._getFavoriteGifs === 'function' ? nym._getFavoriteGifs() : (nym._favoriteGifs || []);
+        const local = setGate ? [] : (typeof nym._getFavoriteGifs === 'function' ? nym._getFavoriteGifs() : (nym._favoriteGifs || []));
         const merged = [];
         const seen = new Set();
         for (const g of [...local, ...remote]) {
@@ -7305,6 +7332,10 @@ async function applyNostrSettings(s, opts) {
             .filter(c => typeof c === 'string' && (!allCats || allCats.has(c)));
         lsSave('nym_emoji_category_favorites', JSON.stringify(nym._defaultCategoryFavorites));
     }
+    if (pickerFavs() !== pickerFavsBefore) {
+        nym._emojiPickerDirty = true;
+        if (typeof nym._refreshEmojiFavoritesInPlace === 'function') nym._refreshEmojiFavoritesInPlace();
+    }
 
     if (Array.isArray(s.recentEmojis) && s.recentEmojis.length > 0) {
         nym.recentEmojis = nym.sanitizeRecentEmojis([...s.recentEmojis, ...(nym.recentEmojis || [])]);
@@ -7313,6 +7344,7 @@ async function applyNostrSettings(s, opts) {
 
     if (Array.isArray(s.sidebarSectionOrder) && typeof nym._applySidebarSectionOrder === 'function') {
         nym._applySidebarSectionOrder(s.sidebarSectionOrder);
+        lsSave('nym_sidebar_section_order', JSON.stringify(s.sidebarSectionOrder));
     }
 
     if (typeof s.cachePMs === 'boolean') {
@@ -7359,13 +7391,13 @@ async function applyNostrSettings(s, opts) {
     }
 
     if (Array.isArray(s.closedPMs)) {
-        for (const pk of s.closedPMs) nym.closedPMs.add(pk);
+        for (const pk of s.closedPMs) if (!nym._pmQuietReopenWins(pk, s.closedPMTimes)) nym.closedPMs.add(pk);
         lsSave('nym_closed_pms', JSON.stringify([...nym.closedPMs]));
     }
     if (s.closedPMTimes && typeof s.closedPMTimes === 'object') {
         if (!nym.closedPMTimes) nym.closedPMTimes = new Map();
         for (const [pk, v] of Object.entries(s.closedPMTimes)) {
-            if (typeof v !== 'number' || v <= 0) continue;
+            if (typeof v !== 'number' || v <= 0 || nym._pmQuietReopenWins(pk, s.closedPMTimes)) continue;
             const cur = nym.closedPMTimes.get(pk) || 0;
             if (v > cur) nym.closedPMTimes.set(pk, v);
         }
@@ -7384,6 +7416,9 @@ async function applyNostrSettings(s, opts) {
             if (v > cur) nym.leftGroupTimes.set(gid, v);
         }
         try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(nym.leftGroupTimes))); } catch { }
+    }
+    if (s.leftGroupRoles && typeof s.leftGroupRoles === 'object' && typeof nym._giMergeLeftRoles === 'function') {
+        nym._giMergeLeftRoles(s.leftGroupRoles).catch(() => { });
     }
 
     // Keep the later timestamp per channel so badges don't resurface messages read elsewhere.
@@ -7413,6 +7448,7 @@ async function applyNostrSettings(s, opts) {
                     const syncedBy = nym._cleanGroupMetaBy(group.metaBy);
                     if (syncedBy) g.metaBy = syncedBy;
                     if (typeof nym._mergeSyncedMetaAdmins === 'function') nym._mergeSyncedMetaAdmins(g, group);
+                    if (typeof nym._gnAdopt === 'function') nym._gnAdopt(g, group);
                 }
             } else {
                 const g = nym.groupConversations.get(groupId);
@@ -7583,7 +7619,16 @@ async function applyNostrSettings(s, opts) {
             if (typeof nym._forgetPublishedPrefs === 'function') nym._forgetPublishedPrefs(kept);
             setTimeout(() => { if (!nym._settingsSaveTimer) nym._debouncedNostrSettingsSave(2000); }, 0);
         }
-    } else if (accepted && M && typeof nym._prefStampSet === 'function') {
+    }
+    if (setGate && typeof nym._setStatesAdopt === 'function') {
+        try { nym._setStatesAdopt(setGate.states, setGate.behind); } catch (_) { }
+    }
+    if (colGate && colGate.state) nym._colStateSave(colGate.state);
+    if (colGate && colGate.behind) {
+        if (typeof nym._forgetPublishedPrefs === 'function') nym._forgetPublishedPrefs(['columnsLayout']);
+        setTimeout(() => { if (!nym._settingsSaveTimer) nym._debouncedNostrSettingsSave(2000, { wanted: true }); }, 0);
+    }
+    if (!gate && accepted && M && typeof nym._prefStampSet === 'function') {
         const now = Date.now();
         for (const name of Object.keys(M.STAMPED)) if (M.STAMPED[name].some((k) => k in s)) nym._prefStampSet(name, now);
     }
@@ -7862,6 +7907,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const messagesContainer = document.getElementById('messagesContainer');
     const messagesScroller = document.getElementById('messagesScroller');
     const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
+    if (messagesScroller) nym._readerTrack(messagesScroller);
     if (messagesScroller && scrollToBottomBtn) {
         // rAF-coalesce layout reads to avoid forced reflows on every scroll tick.
         let _scrollRafPending = false;
@@ -8141,7 +8187,7 @@ async function routeToUrlChannel() {
         if (channelInput.startsWith('g:')) {
             channelName = channelInput.substring(2);
         }
-        const parsedLink = window.NymShareLinks ? window.NymShareLinks.parseShareInput('https://web.nymchat.app/#' + channelInput) : null;
+        const parsedLink = window.NymShareLinks ? window.NymShareLinks.parseShareInput('https://web.nymchat.app/#' + channelInput, { fromAddress: true }) : null;
         const namedChannel = parsedLink && parsedLink.kind === 'channel' && !parsedLink.geohash ? parsedLink.channel : '';
         if (parsedLink && parsedLink.kind === 'channel' && parsedLink.geohash) channelName = parsedLink.channel;
         channelName = nym.sanitizeChannelName(channelName);
@@ -8411,7 +8457,6 @@ function renderRelayStats() {
     if (elDataOut) elDataOut.textContent = formatBytes(s.bytesSent || 0);
 
     drawThroughputGraph(s.throughputHistory);
-    renderConnectionChanges();
 
     // Shard fan-in summary: worker count and relays connected to each.
     const listEl = document.getElementById('rsRelayList');
@@ -8438,50 +8483,6 @@ function renderRelayStats() {
 
     renderRelayList(pool, s);
 }
-
-const CONNECTION_CHANGE_TEXT = {
-    proxyDown: 'Direct: the proxy was unreachable',
-    proxyBack: 'Proxy: reachable again',
-    chosenDirect: 'Direct: chosen by you',
-    chosenProxy: 'Proxy: chosen by you'
-};
-
-function connectionChangeTime(at) {
-    const t = new Date(at);
-    const two = (n) => String(n).padStart(2, '0');
-    return `${t.getFullYear()}-${two(t.getMonth() + 1)}-${two(t.getDate())} ${two(t.getHours())}:${two(t.getMinutes())}:${two(t.getSeconds())}`;
-}
-
-function renderConnectionChanges() {
-    const box = document.getElementById('rsConnectionChanges');
-    if (!box || typeof nym === 'undefined' || !nym || typeof nym.connectionChanges !== 'function') return;
-    const ui = (s) => (typeof nym.uiText === 'function' ? nym.uiText(s) : s);
-    const items = nym.connectionChanges();
-    box.textContent = '';
-    if (items.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'relay-stats-change-empty';
-        empty.textContent = ui('No connection changes yet');
-        box.appendChild(empty);
-        return;
-    }
-    for (const e of items) {
-        const row = document.createElement('div');
-        row.className = 'relay-stats-change';
-        row.dataset.reason = e.reason;
-        const when = document.createElement('time');
-        when.className = 'relay-stats-change-time';
-        when.setAttribute('translate', 'no');
-        when.dateTime = new Date(e.at).toISOString();
-        when.textContent = connectionChangeTime(e.at);
-        const what = document.createElement('span');
-        what.className = 'relay-stats-change-text';
-        what.textContent = ui(CONNECTION_CHANGE_TEXT[e.reason] || e.reason);
-        row.append(when, what);
-        box.appendChild(row);
-    }
-}
-window.renderConnectionChanges = renderConnectionChanges;
 
 function drawThroughputGraph(history) {
     const canvas = document.getElementById('rsThroughputCanvas');

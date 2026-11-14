@@ -34,7 +34,12 @@ class PqAnnouncementSource {
     String pubkey, {
     required bool Function(NostrEvent event) ingest,
     required Future<bool> Function() relays,
+    bool workerOnly = false,
   }) async {
+    if (workerOnly) {
+      final event = (await _fromWorker(pubkey)).event;
+      return event != null && ingest(event);
+    }
     if (await fromD1(pubkey, ingest: ingest)) return true;
     return relays();
   }

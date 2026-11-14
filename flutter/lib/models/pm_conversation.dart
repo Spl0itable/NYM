@@ -1,3 +1,5 @@
+import '../core/utils/nym_utils.dart';
+
 /// A 1:1 PM conversation meta entry (`pmConversations`).
 class PMConversation {
   PMConversation({
@@ -17,7 +19,7 @@ class PMConversation {
 
   factory PMConversation.fromJson(Map<String, dynamic> j) => PMConversation(
         pubkey: j['pubkey'] as String,
-        nym: (j['nym'] ?? '') as String,
+        nym: capNym((j['nym'] ?? '') as String),
         lastMessageTime: (j['lastMessageTime'] as num?)?.toInt() ?? 0,
       );
 }

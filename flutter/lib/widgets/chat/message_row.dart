@@ -1,3 +1,4 @@
+import '../../features/groups/group_invited.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -153,7 +154,7 @@ String formatFullTimestamp(DateTime t, String timeFormat, String dateFormat) {
 
 /// Port of the PWA `_formatRelativeTime`: `now`, `{m}m ago`, `{h}h ago`, `{d}d ago`, then a date.
 String formatRelativeTime(DateTime t, {DateTime? now}) {
-  final ref = now ?? DateTime.now();
+  final ref = now ?? RelativeTimeTicker.instance.now();
   final diffMs = ref.difference(t).inMilliseconds;
   final s = (diffMs < 0 ? 0 : diffMs) ~/ 1000;
   if (s < 45) return 'now';
@@ -186,21 +187,62 @@ String formatRelativeTime(DateTime t, {DateTime? now}) {
 const String kGroupInfoSystemPrefix = '\u0000group-info\u0000';
 
 /// Already ordered owner, mods, members (each alphabetized).
-typedef GroupInfoMember = ({String pubkey, List<String> labels});
+typedef GroupInfoMember = ({String pubkey, List<String> labels, String status});
 
 typedef GroupInfoPayload = ({
   String name,
   int count,
+  int invited,
   List<GroupInfoMember> members,
 });
+
+GroupInfoPayload buildGroupInfoPayload({
+  required String name,
+  required List<String> sorted,
+  required String? owner,
+  required List<String> admins,
+  required List<String> mods,
+  required String self,
+  required String Function(String pk) statusOf,
+  required int waiting,
+}) {
+  final members = <GroupInfoMember>[
+    for (final pk in sorted)
+      (
+        pubkey: pk,
+        labels: [
+          if (pk == owner)
+            'owner'
+          else if (admins.contains(pk))
+            'admin'
+          else if (mods.contains(pk))
+            'mod',
+          if (pk == self) 'you',
+        ],
+        status: pk == self ? GroupInvited.memberStatus : statusOf(pk),
+      ),
+  ];
+  return (
+    name: name,
+    count: members.where((m) => m.status == GroupInvited.memberStatus).length,
+    invited: waiting,
+    members: members,
+  );
+}
 
 String encodeGroupInfoSystemMessage(GroupInfoPayload info) {
   return kGroupInfoSystemPrefix +
       jsonEncode({
         'name': info.name,
         'count': info.count,
+        if (info.invited > 0) 'invited': info.invited,
         'members': [
-          for (final m in info.members) {'pk': m.pubkey, 'labels': m.labels},
+          for (final m in info.members)
+            {
+              'pk': m.pubkey,
+              'labels': m.labels,
+              if (m.status != GroupInvited.memberStatus) 'st': m.status,
+            },
         ],
       });
 }
@@ -216,6 +258,7 @@ GroupInfoPayload? decodeGroupInfoSystemMessage(String content) {
     return (
       name: (decoded['name'] as String?) ?? '',
       count: (decoded['count'] as num?)?.toInt() ?? 0,
+      invited: (decoded['invited'] as num?)?.toInt() ?? 0,
       members: <GroupInfoMember>[
         if (rawMembers is List)
           for (final m in rawMembers)
@@ -227,6 +270,9 @@ GroupInfoPayload? decodeGroupInfoSystemMessage(String content) {
                     for (final l in m['labels'] as List)
                       if (l is String) l,
                 ],
+                status: GroupInvited.statuses.contains(m['st'])
+                    ? m['st'] as String
+                    : GroupInvited.memberStatus,
               ),
       ],
     );
@@ -314,15 +360,27 @@ class _MessageRowState extends ConsumerState<MessageRow>
       widget.message.nymMessageId ?? widget.message.id;
 
   bool get _showTranslation =>
+      !_redactBlanked &&
       ref.watch(translatedMessagesProvider
           .select((m) => m.containsKey(_translateKey)));
 
   String? get _translateLangOverride =>
       ref.watch(translatedMessagesProvider.select((m) => m[_translateKey]));
 
-  void _showTranslated({String? lang}) => ref
-      .read(translatedMessagesProvider.notifier)
-      .show(_translateKey, lang: lang);
+  void _showTranslated({String? lang}) {
+    if (_redactBlanked) return;
+    ref
+        .read(translatedMessagesProvider.notifier)
+        .show(_translateKey, lang: lang);
+  }
+
+  bool _redactBlanked = false;
+
+  void _onRedactBlank() {
+    if (!mounted) return;
+    setState(() => _redactBlanked = true);
+    ref.read(translatedMessagesProvider.notifier).hide(_translateKey);
+  }
 
   /// Desktop hover state; only set on hover-capable platforms.
   bool _hovered = false;
@@ -888,8 +946,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
     final base = _authorStyle(c, self: self, size: size);
     final hue = self || _cosmetics.isRedacted ? null : _bitchatColor(c);
     final style = context.highContrast && base.color != null && hue == null
-        ? base.copyWith(
-            color: legibleOnAll(base.color!, [bubbleBgFor(c), c.bg]))
+        ? base.copyWith(color: channelNymColor(c, base.color!, contrast: true))
         : base;
     final bracketColor = style.color;
     final suffix = getPubkeySuffix(message.pubkey);
@@ -927,11 +984,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
   TextStyle _authorStyle(NymColors c,
       {required bool self, required double size}) {
     final genesis = hasGenesisFlair(_cosmetics);
-    // The redacted cosmetic dims the author nym too; light mode uses a dark nym.
     final color = _cosmetics.isRedacted
-        ? (c.isLight
-            ? const Color(0xFF1A1A1A).withValues(alpha: 0.75)
-            : Colors.white.withValues(alpha: 0.8))
+        ? redactedNymColor(c)
         : (self ? c.primary : (_bitchatColor(c) ?? c.secondary));
     return TextStyle(
       color: color,
@@ -1021,6 +1075,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
     if (_cosmetics.isRedacted) {
       body = _RedactedReveal(
         fontSize: fontSize,
+        onBlank: _onRedactBlank,
         child: _selectable(
             _content(context, color, fontSize, deco: deco, bubble: bubble)),
       );
@@ -1265,7 +1320,9 @@ class _MessageRowState extends ConsumerState<MessageRow>
         ),
         const SizedBox(height: 2),
         Text(
-          tr('Members ({count})', {'count': info.count}),
+          info.invited > 0
+              ? '${tr('Members ({count})', {'count': info.count})} · ${tr(GroupInvited.sCount, {'n': info.invited})}'
+              : tr('Members ({count})', {'count': info.count}),
           style: TextStyle(color: c.textDim, fontSize: 12),
         ),
         const SizedBox(height: 6),
@@ -1297,6 +1354,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
           seed: pk,
           size: 22,
           imageUrl: mask.isNotEmpty ? null : users[pk]?.profile?.picture,
+          ring: c.avatarRing,
         ),
         const SizedBox(width: 6),
         Flexible(
@@ -1316,6 +1374,15 @@ class _MessageRowState extends ConsumerState<MessageRow>
               color: c.primary.withValues(alpha: 0.8),
               fontSize: 10,
             ),
+          ),
+        ],
+        if (member.status != GroupInvited.memberStatus) ...[
+          const SizedBox(width: 6),
+          Text(
+            tr(member.status == GroupInvited.expiredStatus
+                ? GroupInvited.sExpired
+                : GroupInvited.sInvited),
+            style: TextStyle(color: c.textDim, fontSize: 10),
           ),
         ],
       ],
@@ -1429,7 +1496,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
                             seed: message.pubkey,
                             size: fontSize + 2,
                             imageUrl: _authorPicture,
-                            localOnly: message.localOnlyRow),
+                            localOnly: message.localOnlyRow,
+                            ring: c.avatarRing),
                         const SizedBox(width: 4),
                         Flexible(
                           child: NymLabel(
@@ -1576,7 +1644,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
                 seed: message.pubkey,
                 size: 18,
                 imageUrl: _authorPicture,
-                localOnly: message.localOnlyRow),
+                localOnly: message.localOnlyRow,
+                ring: c.avatarRing),
             const SizedBox(width: 4),
             Flexible(
               child: _authorLine(
@@ -2111,7 +2180,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
                         seed: message.pubkey,
                         size: 32,
                         imageUrl: _authorPicture,
-                        localOnly: message.localOnlyRow),
+                        localOnly: message.localOnlyRow,
+                        ring: c.avatarRing),
                   )
                 : const SizedBox.shrink(),
           ),
@@ -2275,18 +2345,13 @@ class _MessageRowState extends ConsumerState<MessageRow>
                   for (var i = 0; i < visible.length; i++)
                     Transform.translate(
                       offset: Offset(i == 0 ? 0 : -5.0 * i, 0),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(color: c.bg, width: 1.5),
-                        ),
-                        child: Opacity(
-                          opacity: 0.85,
-                          child: NymAvatar(
-                            seed: visible[i].key,
-                            size: 14,
-                            imageUrl: users[visible[i].key]?.profile?.picture,
-                          ),
+                      child: Opacity(
+                        opacity: 0.85,
+                        child: NymAvatar(
+                          seed: visible[i].key,
+                          size: 14,
+                          imageUrl: users[visible[i].key]?.profile?.picture,
+                          ring: c.avatarRing,
                         ),
                       ),
                     ),
@@ -2434,7 +2499,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
         context,
         ref,
         message,
-        onTranslate: _showTranslated,
+        onTranslate: _redactBlanked ? null : _showTranslated,
         onEdit: () => ref.read(pendingEditProvider.notifier).request(
               messageId: message.id,
               content: message.content,
@@ -2503,7 +2568,9 @@ class _MessageRowState extends ConsumerState<MessageRow>
     final view = ref.read(currentViewProvider);
     final already = _selfReactedLocally(emoji) ||
         reactions.any((r) => r.emoji == emoji && r.userReacted);
-    ref.read(recentEmojisProvider.notifier).record(emoji);
+    if (!controller.anonLaneRecentsQuiet(messageId: message.id)) {
+      ref.read(recentEmojisProvider.notifier).record(emoji);
+    }
     if (already) return;
     unawaited(controller.toggleReaction(
       message.id,
@@ -2529,6 +2596,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
   }
 
   bool _swipeApplies(String action) {
+    if (action == 'translate' && _redactBlanked) return false;
     final self = ref.read(appStateProvider).selfPubkey;
     return swipeActionApplies(
       action,
@@ -2538,6 +2606,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
         hasId: message.id.isNotEmpty,
         hasContent: message.content.isNotEmpty,
         hasAuthor: message.pubkey.isNotEmpty,
+        anonLane: message.anonLane,
       ),
     );
   }
@@ -2556,7 +2625,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
             .requestQuote(
                 fullNym: fullNym,
                 content: message.content,
-                messageId: message.id);
+                messageId: message.id,
+                pubkey: message.pubkey);
         return;
       case 'translate':
         if (message.content.isEmpty) return;
@@ -2597,6 +2667,9 @@ class _MessageRowState extends ConsumerState<MessageRow>
 
   /// Posts a checking note, resolves the LN address fresh (not just cache), then opens the modal or reports failure.
   Future<void> _zapMessage(BuildContext context, String baseNym) async {
+    if (ref.read(nostrControllerProvider).anonLaneZapRefused(message.id)) {
+      return;
+    }
     showToast(
         tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
     final String? lnAddr;
@@ -2633,13 +2706,18 @@ class _MessageRowState extends ConsumerState<MessageRow>
     final baseNym = _baseNym(_displayNym());
     final fullNym = '$baseNym#${getPubkeySuffix(message.pubkey)}';
     ref.read(pendingComposerActionProvider.notifier).requestQuote(
-        fullNym: fullNym, content: message.content, messageId: message.id);
+        fullNym: fullNym,
+        content: message.content,
+        messageId: message.id,
+        pubkey: message.pubkey);
   }
 
   void _openContextMenu(BuildContext context) {
     final app = ref.read(appStateProvider);
     final target = ctxTargetForMessage(message,
-        selfPubkey: app.selfPubkey, liveNym: app.users[message.pubkey]?.nym);
+        selfPubkey: app.selfPubkey,
+        liveNym: app.users[message.pubkey]?.nym,
+        translatable: !_redactBlanked);
     ContextMenuPanel.show(
       context,
       target: target,
@@ -2964,7 +3042,11 @@ class _MessageRowState extends ConsumerState<MessageRow>
           ),
         );
       case DeliveryStatus.sending:
-        return const SizedBox.shrink();
+        return NymTooltip(
+          message: tr('Sending'),
+          child: Icon(Icons.schedule,
+              key: const ValueKey('pmSending'), size: 12, color: c.textDim),
+        );
     }
     return Icon(glyph, size: 12, color: color);
   }
@@ -2979,6 +3061,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
     if (peer == null || peer.isEmpty) return;
     final appState = ref.read(appStateProvider.notifier);
     final controller = ref.read(nostrControllerProvider);
+    if (controller.retryPmWraps(message.nymMessageId)) return;
     // Remove first so the retry produces a single fresh echo.
     appState.removeMessage(message.id);
     // `sendCurrent` publishes to the current view, so switch to the PM thread first.
@@ -3289,9 +3372,11 @@ class _SystemActionButtonState extends State<_SystemActionButton> {
 
 /// Shows the real message for 10 seconds, then a translucent redacted bar.
 class _RedactedReveal extends StatefulWidget {
-  const _RedactedReveal({required this.child, required this.fontSize});
+  const _RedactedReveal(
+      {required this.child, required this.fontSize, this.onBlank});
   final Widget child;
   final double fontSize;
+  final VoidCallback? onBlank;
 
   @override
   State<_RedactedReveal> createState() => _RedactedRevealState();
@@ -3305,7 +3390,9 @@ class _RedactedRevealState extends State<_RedactedReveal> {
   void initState() {
     super.initState();
     _timer = Timer(const Duration(seconds: 10), () {
-      if (mounted) setState(() => _blanked = true);
+      if (!mounted) return;
+      setState(() => _blanked = true);
+      widget.onBlank?.call();
     });
   }
 
@@ -4794,6 +4881,7 @@ class _StickyGroupAvatarState extends ConsumerState<_StickyGroupAvatar> {
             size: _avatar,
             imageUrl: widget.imageUrl,
             localOnly: widget.localOnly,
+            ring: context.nym.avatarRing,
           ),
         ),
       ),
@@ -5860,6 +5948,13 @@ MessageStyleDecoration? messageStyleDecorationFor(
   }
   return null;
 }
+
+Color channelNymColor(NymColors c, Color nym, {required bool contrast}) =>
+    contrast ? legibleOnAll(nym, [bubbleBgFor(c), c.bg]) : nym;
+
+Color redactedNymColor(NymColors c) => c.isLight
+    ? const Color(0xFF1A1A1A).withValues(alpha: 0.75)
+    : Colors.white.withValues(alpha: 0.8);
 
 Color channelBodyColor(NymColors c,
     {required UserCosmetics cosmetics,

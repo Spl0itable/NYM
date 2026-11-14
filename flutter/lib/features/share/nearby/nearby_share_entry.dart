@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../services/mesh/protocol/nym_share_payload.dart'
+    show encodeNymShare;
 import '../../../widgets/nym_icons.dart';
 import '../../mesh/mesh_controller.dart';
 import '../share_actions.dart';
@@ -18,6 +20,7 @@ List<ShareAction> nearbyShareActions(Ref ref) => [
         icon: NymIcons.bluetooth,
         isAvailable: (ref, t) =>
             t.hasCode &&
+            encodeNymShare(t.codeLink) != null &&
             ref.watch(nearbyMeshRunningProvider) &&
             !(t.isOwnProfile && ref.watch(nearbyGhostActiveProvider)),
         run: (context, ref, t) => NearbyShareSheet.open(context, t),

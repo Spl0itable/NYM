@@ -1,6 +1,8 @@
 // Multiplexed relay pool: one client socket fans out to many relays, deduping frames by string extraction.
 
 import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake, sha256 } from './_shared.js';
+import { archiveChannelKey } from './_channel-key.js';
+import { isEncryptedBlobChannelEvent } from './_encrypted-blob.js';
 import { isNymchatClient, clientOriginAllowed } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport, packHit } from './_filters.js';
@@ -249,7 +251,8 @@ function clientIpKey(request) {
 function sanitizeChannelKey(name) {
   if (typeof name !== 'string') return '';
   if (/\s/.test(name)) return '';
-  return name.toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, '').slice(0, 80);
+  const clean = name.toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, '');
+  return clean.length <= 80 ? clean : archiveChannelKey(clean);
 }
 
 const RX_GEOHASH_KEY = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
@@ -997,6 +1000,12 @@ export async function onRequest(context) {
         'DELETE FROM events WHERE pubkey = ? AND id IN (' + ph + ')'
       ).bind(ev.pubkey, ...targets).run();
     } catch {}
+  }
+
+  function outboundBlobRefused(ev) {
+    if (!isEncryptedBlobChannelEvent(ev)) return false;
+    refuseEvent(ev, 'blocked: encrypted blob');
+    return true;
   }
 
   function outboundChannelRefused(ev) {
@@ -1891,7 +1900,7 @@ export async function onRequest(context) {
           }
           seenEvents.set(eventId, 1);
           trimDedup();
-          if (hasBlockedContentPrefix(raw) || isSpamEventFrame(raw)) {
+          if ((verified && isEncryptedBlobChannelEvent(verified)) || hasBlockedContentPrefix(raw) || isSpamEventFrame(raw)) {
             droppedSpamCount++;
             vetoArchive(eventId);
             return;
@@ -2348,6 +2357,7 @@ export async function onRequest(context) {
           } else if (msgType === 'EVENT') {
             if (!msg[1] || typeof msg[1] !== 'object') return;
             if (!outboundRateOk(msg[1])) return;
+            if (outboundBlobRefused(msg[1])) return;
             if (heldOutbound(msg[1])) return;
             if (outboundBadgeRefused(msg[1])) return;
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
@@ -2363,6 +2373,7 @@ export async function onRequest(context) {
             const geoEvt = msg[1];
             if (!geoEvt || typeof geoEvt !== 'object') return;
             if (!outboundRateOk(geoEvt)) return;
+            if (outboundBlobRefused(geoEvt)) return;
             if (heldOutbound(geoEvt)) return;
             if (outboundBadgeRefused(geoEvt)) return;
             const evtKind = geoEvt && typeof geoEvt.kind === 'number' ? geoEvt.kind : -1;
@@ -2407,6 +2418,7 @@ export async function onRequest(context) {
             const dmEvt = msg[1];
             if (!dmEvt || typeof dmEvt !== 'object') return;
             if (!outboundRateOk(dmEvt)) return;
+            if (outboundBlobRefused(dmEvt)) return;
             if (heldOutbound(dmEvt)) return;
             if (isAppRelayOnlyEvent(dmEvt)) { sendAppRelayOnly(JSON.stringify(['EVENT', dmEvt])); return; }
             const evtKind = dmEvt && typeof dmEvt.kind === 'number' ? dmEvt.kind : -1;

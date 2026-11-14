@@ -1,6 +1,7 @@
 (function () {
     const G = (typeof self !== 'undefined' ? self : window);
 
+    const EDIT_SKEW_SEC = 5;
     const LIMITS = Object.freeze({
         savedMax: 500,
         savedTextMax: 4000,
@@ -616,7 +617,7 @@
             const at = Number(ev.created_at) || 0;
             const ref = tagValue(ev.tags, 'edit');
             if (ref) {
-                if (ref !== id || at < at0) continue;
+                if (ref !== id || (at0 && at + EDIT_SKEW_SEC < at0)) continue;
                 const key = ev.id ? 'i:' + ev.id : 'v:' + at + '\n' + ev.content;
                 if (seen.has(key)) continue;
                 seen.add(key);
@@ -646,10 +647,27 @@
         if (!cand || typeof cand.text !== 'string') return 'invalid';
         const at = Number(cand.at) || 0;
         const at0 = Number(originalAt) || 0;
-        if (at && at0 && at < at0) return 'invalid';
+        if (at && at0 && at + EDIT_SKEW_SEC < at0) return 'invalid';
         if (!cur) return 'apply';
         const c = compareEdits(cand, cur);
         return c > 0 ? 'apply' : c < 0 ? 'stale' : 'same';
+    }
+
+    function editHead(m) {
+        if (!m || m.isEdited !== true) return null;
+        return { text: String(m.content == null ? '' : m.content), at: Number(m.editAt) || 0, id: String(m.editId || '') };
+    }
+
+    function newerCopy(a, b) {
+        const hb = editHead(b);
+        if (!hb) return false;
+        const ha = editHead(a);
+        return !ha || compareEdits(hb, ha) > 0;
+    }
+
+    function copyRewrites(m, text) {
+        if (!m || m.isEdited === true || typeof text !== 'string' || !text) return false;
+        return text.length > String(m.content == null ? '' : m.content).length;
     }
 
     function recordStaleEdit(rec, text, at, currentText) {
@@ -820,7 +838,7 @@
         crc32, zipStore,
         savedEntry, emptySaved, normalizeSaved, mergeSaved, addSaved, removeSaved, isSaved, trimSavedPayload,
         recordEdit, editTimeline, pruneEditStore, editHistoryPlan, editSources, mergeEditHistory,
-        compareEdits, editVerdict, recordStaleEdit,
+        compareEdits, editVerdict, recordStaleEdit, EDIT_SKEW_SEC, editHead, newerCopy, copyRewrites,
         keepTags, parseKeep, applyKeep, isKept, pruneKeep, isExpired, keepAvailable, meshKeepId, parseMeshKeepId,
         replyPrivatelyAllowed, wrapExpiration,
     };

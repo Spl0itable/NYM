@@ -33,6 +33,8 @@ import '../../features/onboarding/tutorial_overlay.dart';
 import '../../features/pms/new_pm_modal.dart';
 import '../../features/relays/relay_stats_modal.dart';
 import '../../features/settings/about_screen.dart';
+import '../../features/channels/geohash_place_cache.dart'
+    show geohashPlaceCacheProvider;
 import '../../features/settings/settings_helpers.dart'
     show geohashLocationLabel;
 import '../../features/settings/settings_screen.dart';
@@ -45,6 +47,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../features/layout/layout_model.dart' show kPhoneMax;
 import '../../state/settings_provider.dart';
+import '../chat/bitchat_user_color.dart';
 import '../common/hit_slop.dart';
 import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
@@ -80,6 +83,7 @@ import '../../core/theme/nym_a11y.dart';
 import '../../features/sidebar_folders/folders.dart';
 import '../../features/sidebar_folders/folders_providers.dart';
 import 'sidebar_folders_ui.dart';
+import '../../features/groups/group_invites_sheet.dart';
 
 part 'sidebar_folder_section.dart';
 
@@ -214,6 +218,8 @@ class _SidebarState extends ConsumerState<Sidebar> {
     _rowClock?.cancel();
     _scroll.dispose();
     _psPill.dispose();
+    _psMoreFocus.dispose();
+    _psLessFocus.dispose();
     super.dispose();
   }
 
@@ -324,13 +330,18 @@ class _SidebarState extends ConsumerState<Sidebar> {
     _psTick();
   }
 
+  final _psMoreFocus = FocusNode(debugLabel: 'ps-more');
+  final _psLessFocus = FocusNode(debugLabel: 'ps-less');
+
   void _psMore(PsButton b) {
     final pager = ref.read(publicStreamPagerProvider);
     pager.shown = b.next;
     if (b.kind == 'less') {
+      final refocus = _psLessFocus.hasFocus;
       pager.hold = null;
       pager.release = true;
       _psToHead();
+      if (refocus) _psMoreFocus.requestFocus();
     }
     _psTick();
   }
@@ -707,7 +718,6 @@ class _SidebarState extends ConsumerState<Sidebar> {
       }
       final ids = <Key>[for (final r in page.rows) ValueKey('ps-${r.id}')];
       _trimMemo(_streamMemo, ids);
-      final b = page.button;
       return PublicStreamProbe(
         onLayout: _psOnLayout,
         sliver: SliverSemantics(
@@ -722,14 +732,13 @@ class _SidebarState extends ConsumerState<Sidebar> {
               rowAt: (i) =>
                   _streamRow(page.rows[i], view.texts[i], hide, textSize, i18n),
               trailing: [
-                if (b != null)
-                  KeyedSubtree(
-                    key: const ValueKey('ps-more'),
-                    child: _ViewMoreButton(
-                      more: b.kind == 'less' ? 0 : b.n,
-                      stepMore: b.kind == 'show',
-                      onTap: () => _psMore(b),
-                    ),
+                if (page.buttons.isNotEmpty)
+                  _PsMoreRow(
+                    key: const ValueKey('ps-more-row'),
+                    buttons: page.buttons,
+                    moreFocus: _psMoreFocus,
+                    lessFocus: _psLessFocus,
+                    onTap: _psMore,
                   ),
                 if (page.rows.isEmpty)
                   Padding(
@@ -762,7 +771,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
           if (e.group != null) {
             final g = e.group!;
             final name = app!.groupLabel(g);
-            rendered = '$name · ${_abbreviateNumber(g.members.length)}';
+            rendered = '$name · ${_abbreviateNumber(ref.read(appStateProvider.notifier).groupAccepted(g).length)}';
           } else {
             rendered =
                 '${pickDisplayNym(users![e.pm!.pubkey]?.nym, e.pm!.nym)}'
@@ -961,7 +970,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
             ),
             searchHint: tr('Search PMs...'),
             searchTooltip: tr('Search PMs'),
-            body: _SidebarLive(builder: pmRows),
+            body: SliverMainAxisGroup(
+              slivers: [
+                const SliverToBoxAdapter(child: GroupInvitesRow()),
+                _SidebarLive(builder: pmRows),
+              ],
+            ),
           );
         case _SectionId.nyms:
           return _NavSection(
@@ -2636,6 +2650,12 @@ class _GroupListItem extends ConsumerWidget {
     final pinned = !active &&
         ref.read(chatNavProvider).pinIndexOfChat('group-${group.id}') >= 0;
     final preview = sidebarRowPreview(ref, 'group-${group.id}', 'group');
+    final senderColor = preview.who.isNotEmpty &&
+            ref.watch(settingsProvider.select((s) => s.theme)) ==
+                NymThemeKey.bitchat
+        ? bitchatUserColor(preview.who,
+            isLight: c.isLight, contrast: context.highContrast)
+        : null;
 
     final Widget row = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
@@ -2657,9 +2677,7 @@ class _GroupListItem extends ConsumerWidget {
                         ? Colors.black.withValues(alpha: 0.06)
                         : c.primaryA(0.10))
                     : hovered
-                        ? (c.isLight
-                            ? Colors.black.withValues(alpha: 0.04)
-                            : Colors.white.withValues(alpha: 0.06))
+                        ? sidebarRowHoverFill(c)
                         : pinned
                             ? const Color(0x1A9696A0)
                             : Colors.transparent,
@@ -2708,7 +2726,7 @@ class _GroupListItem extends ConsumerWidget {
                           TextSpan(text: name),
                           TextSpan(
                             text:
-                                ' · ${_abbreviateNumber(group.members.length)}',
+                                ' · ${_abbreviateNumber(ref.read(appStateProvider.notifier).groupAccepted(group).length)}',
                             style: TextStyle(
                               color: context.highContrast
                                   ? legibleOn(c.textDim, sidebarRowBg(c))
@@ -2722,7 +2740,8 @@ class _GroupListItem extends ConsumerWidget {
                     ),
                     if (preview.text.isNotEmpty)
                       rowPreviewLine(context, preview.text, 'group',
-                          preview.dim, preview.sender, preview.bodyAt),
+                          preview.dim, preview.sender, preview.bodyAt,
+                          senderColor),
                     ],
                     ),
                   ),
@@ -2788,17 +2807,113 @@ class _GroupListItem extends ConsumerWidget {
   }
 }
 
+class _PsMoreRow extends StatelessWidget {
+  const _PsMoreRow({
+    super.key,
+    required this.buttons,
+    required this.moreFocus,
+    required this.lessFocus,
+    required this.onTap,
+  });
+
+  final List<PsButton> buttons;
+  final FocusNode moreFocus;
+  final FocusNode lessFocus;
+  final void Function(PsButton) onTap;
+
+  static const double _gap = 6;
+
+  @override
+  Widget build(BuildContext context) {
+    final cells = <Widget>[];
+    final widths = <double>[];
+    final big = context.largeTouchTargets;
+    final base = DefaultTextStyle.of(context).style;
+    final scaler = MediaQuery.textScalerOf(context);
+    final dir = Directionality.of(context);
+    for (final b in buttons) {
+      final less = b.kind == 'less';
+      final more = less ? 0 : b.n;
+      final label = _ViewMoreButton.labelFor(more, b.kind == 'show');
+      final tp = TextPainter(
+        text: TextSpan(
+            text: label,
+            style: base.merge(_ViewMoreButton.styleFor(context.nym.textDim))),
+        textDirection: dir,
+        textScaler: scaler,
+        maxLines: 1,
+      )..layout();
+      widths.add(tp.width.ceilToDouble() + 27);
+      tp.dispose();
+      cells.add(KeyedSubtree(
+        key: ValueKey(less ? 'ps-less' : 'ps-more'),
+        child: _ViewMoreButton(
+          more: more,
+          stepMore: b.kind == 'show',
+          onTap: () => onTap(b),
+          padding: EdgeInsets.zero,
+          minHeight: big ? 44 : 32,
+          focusNode: less ? lessFocus : moreFocus,
+          semanticButton: true,
+        ),
+      ));
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: FocusTraversalGroup(
+        policy: WidgetOrderTraversalPolicy(),
+        child: LayoutBuilder(builder: (context, box) {
+          if (cells.length < 2) return cells.first;
+          final free = box.maxWidth - widths[0] - widths[1] - _gap;
+          if (free < 0) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [cells[0], const SizedBox(height: _gap), cells[1]],
+            );
+          }
+          return Row(children: [
+            SizedBox(width: widths[0] + free / 2, child: cells[0]),
+            const SizedBox(width: _gap),
+            SizedBox(width: widths[1] + free / 2, child: cells[1]),
+          ]);
+        }),
+      ),
+    );
+  }
+}
+
 /// Full-width collapse toggle: "View N more..." first, "Show N more..." per step, "Show less" when expanded.
 class _ViewMoreButton extends StatefulWidget {
   const _ViewMoreButton({
     required this.more,
     required this.onTap,
     this.stepMore = false,
+    this.padding = const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    this.minHeight,
+    this.focusNode,
+    this.semanticButton = false,
   });
   final int more;
   final VoidCallback onTap;
 
   final bool stepMore;
+  final EdgeInsetsGeometry padding;
+  final double? minHeight;
+  final FocusNode? focusNode;
+  final bool semanticButton;
+
+  static String labelFor(int more, bool stepMore) => more > 0
+      ? (stepMore
+          ? tr('SHOW {count} MORE...', {'count': _abbreviateNumber(more)})
+          : tr('VIEW {count} MORE...', {'count': _abbreviateNumber(more)}))
+      : tr('SHOW LESS');
+
+  static TextStyle styleFor(Color color) => TextStyle(
+        color: color,
+        fontSize: 11,
+        letterSpacing: 1,
+        fontWeight: FontWeight.w500,
+      );
 
   @override
   State<_ViewMoreButton> createState() => _ViewMoreButtonState();
@@ -2811,23 +2926,21 @@ class _ViewMoreButtonState extends State<_ViewMoreButton> {
   Widget build(BuildContext context) {
     final c = context.nym;
     // Three ASCII periods, not U+2026, as the PWA writes it.
-    final label = widget.more > 0
-        ? (widget.stepMore
-            ? tr('SHOW {count} MORE...',
-                {'count': _abbreviateNumber(widget.more)})
-            : tr('VIEW {count} MORE...',
-                {'count': _abbreviateNumber(widget.more)}))
-        : tr('SHOW LESS');
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    final label = _ViewMoreButton.labelFor(widget.more, widget.stepMore);
+    final min = widget.minHeight;
+    final body = Padding(
+      padding: widget.padding,
       child: MouseRegion(
         onEnter: (_) => setState(() => _hover = true),
         onExit: (_) => setState(() => _hover = false),
         child: InkWell(
           onTap: widget.onTap,
+          focusNode: widget.focusNode,
           borderRadius: NymRadius.rxs,
           child: Container(
             width: double.infinity,
+            constraints: min == null ? null : BoxConstraints(minHeight: min),
+            alignment: min == null ? null : Alignment.center,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               borderRadius: NymRadius.rxs,
@@ -2838,32 +2951,49 @@ class _ViewMoreButtonState extends State<_ViewMoreButton> {
             child: Text(
               label,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: _hover ? c.text : c.textDim,
-                fontSize: 11,
-                letterSpacing: 1,
-                fontWeight: FontWeight.w500,
-              ),
+              style: _ViewMoreButton.styleFor(_hover ? c.text : c.textDim),
             ),
           ),
         ),
       ),
     );
+    return widget.semanticButton
+        ? Semantics(button: true, container: true, child: body)
+        : body;
   }
 }
 
 /// Discover-by-typing join row shown when the channel search matches nothing.
-class _SearchCreatePrompt extends StatefulWidget {
+class _SearchCreatePrompt extends ConsumerStatefulWidget {
   const _SearchCreatePrompt({required this.term, required this.onTap});
   final String term;
   final VoidCallback onTap;
 
   @override
-  State<_SearchCreatePrompt> createState() => _SearchCreatePromptState();
+  ConsumerState<_SearchCreatePrompt> createState() =>
+      _SearchCreatePromptState();
 }
 
-class _SearchCreatePromptState extends State<_SearchCreatePrompt> {
+class _SearchCreatePromptState extends ConsumerState<_SearchCreatePrompt> {
   bool _hover = false;
+  late final ValueNotifier<int> _placeChanges;
+
+  @override
+  void initState() {
+    super.initState();
+    _placeChanges = ref.read(geohashPlaceCacheProvider).changes
+      ..addListener(_onPlaceNamesChanged);
+  }
+
+  void _onPlaceNamesChanged() {
+    if (mounted && isValidGeohash(widget.term)) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _placeChanges.removeListener(_onPlaceNamesChanged);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2872,7 +3002,10 @@ class _SearchCreatePromptState extends State<_SearchCreatePrompt> {
     final label = isGeo
         ? tr('Join geohash channel "{term}"', {'term': widget.term})
         : tr('Join channel "{term}"', {'term': widget.term});
-    final loc = isGeo ? geohashLocationLabel(widget.term) : '';
+    final loc = isGeo
+        ? (ref.read(geohashPlaceCacheProvider).nameFor(widget.term) ??
+            geohashLocationLabel(widget.term))
+        : '';
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 5, 10, 0),
       child: MouseRegion(

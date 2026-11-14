@@ -11,6 +11,7 @@ import '../group_tools/group_tools.dart';
 import '../../models/nostr_event.dart';
 import '../pms/pm_logic.dart';
 import 'control_answers.dart';
+import 'group_invites.dart';
 
 /// Max retained previous ephemeral keys per group, for post-compromise recovery.
 const int kEphemeralPrevKeysMax = 30;
@@ -238,24 +239,27 @@ class GroupEphemeralKeys {
         ..clear()
         ..addAll(syncedPrev);
     } else {
-      final known = <String>{selfCurrent!.pk, for (final k in selfPrev) k.pk};
-      if (syncedCurrent != null && !known.contains(syncedCurrent.pk)) {
-        if (settle &&
-            ControlAnswers.pickSelf(selfCurrent!.pk, syncedCurrent.pk) ==
-                syncedCurrent.pk) {
-          selfPrev.insert(0, selfCurrent!);
-          selfCurrent = syncedCurrent;
-        } else {
-          selfPrev.add(syncedCurrent);
-        }
-        known.add(syncedCurrent.pk);
+      final byPk = <String, EphemeralKey>{};
+      for (final k in [selfCurrent!, ...selfPrev, ?syncedCurrent, ...syncedPrev]) {
+        byPk.putIfAbsent(k.pk, () => k);
       }
-      for (final k in syncedPrev) {
-        if (!known.contains(k.pk)) {
-          selfPrev.add(k);
-          known.add(k.pk);
-        }
-      }
+      final merged = GroupInvites.settleSelf(
+          {
+            'current': selfCurrent!.pk,
+            'prev': [for (final k in selfPrev) k.pk],
+          },
+          syncedCurrent == null
+              ? null
+              : {
+                  'current': syncedCurrent.pk,
+                  'prev': [for (final k in syncedPrev) k.pk],
+                },
+          settle,
+          kEphemeralPrevKeysMax)!;
+      selfCurrent = byPk[merged['current']];
+      selfPrev
+        ..clear()
+        ..addAll([for (final pk in merged['prev'] as List) byPk[pk]!]);
     }
     if (selfPrev.length > kEphemeralPrevKeysMax) {
       selfPrev.removeRange(kEphemeralPrevKeysMax, selfPrev.length);

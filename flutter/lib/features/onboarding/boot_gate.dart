@@ -13,6 +13,7 @@ import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_label.dart';
 import '../accounts/account_host.dart';
+import '../accounts/account_logic.dart';
 import '../i18n/i18n.dart';
 import '../i18n/language_select.dart';
 import '../i18n/localization_service.dart';
@@ -52,12 +53,8 @@ class _BootGateState extends ConsumerState<BootGate> {
 
   bool _firstIdentity = false;
 
-  bool _noOtherIdentity() {
-    final index = ref.read(accountsProvider)?.changes.value;
-    if (index == null) return true;
-    return !index.accounts
-        .any((a) => a.pubkey.isNotEmpty && a.id != index.active);
-  }
+  bool _noOtherIdentity() => !AccountLogic.hasOtherIdentity(
+      ref.read(accountsProvider)?.changes.value);
 
   void _onSetupComplete() {
     if (!mounted) return;
@@ -179,7 +176,9 @@ class _ShellWithTutorialState extends ConsumerState<_ShellWithTutorial> {
     // Skip if seen, including a flag just restored from remote settings.
     final kv = ref.read(keyValueStoreProvider);
     final seen = kv.getString(StorageKeys.tutorialSeen) == 'true' ||
-        kv.getBool(StorageKeys.tutorialSeen, defaultValue: false);
+        kv.getBool(StorageKeys.tutorialSeen, defaultValue: false) ||
+        AccountLogic.hasOtherIdentity(
+            ref.read(accountsProvider)?.changes.value);
     if (!seen) {
       // Pre-translate the whole tutorial; the static overlay only re-renders via the i18n watch.
       LocalizationService.instance.prime(tutorialStringsForPretranslate());

@@ -1,6 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../../models/message.dart';
+
+const int editSkewSec = 5;
+
 class ChatToolsLimits {
   const ChatToolsLimits._();
 
@@ -1008,7 +1012,7 @@ EditSources editSources({
     final evId = ev['id'] is String ? ev['id'] as String : '';
     final ref = _editTagValue(ev['tags'], 'edit');
     if (ref.isNotEmpty) {
-      if (ref != id || evAt < at) continue;
+      if (ref != id || (at != 0 && evAt + editSkewSec < at)) continue;
       final key = evId.isNotEmpty ? 'i:$evId' : 'v:$evAt\n$content';
       if (!seen.add(key)) continue;
       edits.add(EditVersion(content, evAt));
@@ -1104,11 +1108,32 @@ int compareEdits(EditCandidate a, EditCandidate b) {
 }
 
 String editVerdict(EditCandidate? cur, EditCandidate cand, int originalAt) {
-  if (cand.at != 0 && originalAt != 0 && cand.at < originalAt) return 'invalid';
+  if (cand.at != 0 && originalAt != 0 && cand.at + editSkewSec < originalAt) {
+    return 'invalid';
+  }
   if (cur == null) return 'apply';
   final c = compareEdits(cand, cur);
   return c > 0 ? 'apply' : (c < 0 ? 'stale' : 'same');
 }
+
+EditCandidate? editHead(Message m) =>
+    m.isEdited ? EditCandidate(m.content, m.editAt, m.editId) : null;
+
+EditCandidate? newerEdit(EditCandidate? a, EditCandidate? b) {
+  if (a == null) return b;
+  if (b == null) return a;
+  return compareEdits(b, a) > 0 ? b : a;
+}
+
+bool newerCopy(Message a, Message b) {
+  final hb = editHead(b);
+  if (hb == null) return false;
+  final ha = editHead(a);
+  return ha == null || compareEdits(hb, ha) > 0;
+}
+
+bool copyRewrites(Message m, String text) =>
+    !m.isEdited && text.isNotEmpty && text.length > m.content.length;
 
 EditRecord recordStaleEdit(
     EditRecord? rec, String? text, int at, String? currentText) {

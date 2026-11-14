@@ -21,6 +21,7 @@ import '../../core/crypto/pq.dart' as pq;
 import '../../features/calls/call_signaling.dart';
 import '../../features/groups/wrap_outbox.dart';
 import '../../features/identity/pq_registry.dart';
+import '../../features/messages/encrypted_blob.dart';
 import '../../features/messages/server_quiet.dart';
 import '../../features/messages/trust_graph.dart';
 import '../../features/pms/upload_activity.dart';
@@ -29,7 +30,6 @@ import '../../models/channel.dart' as ch;
 import '../../models/nostr_event.dart';
 import '../api/api_client.dart';
 import '../api/api_config.dart';
-import '../relay/connection_changes.dart';
 import '../relay/relay_connection.dart';
 import '../relay/dm_outbox.dart';
 import '../relay/proxy_down_rule.dart';
@@ -84,9 +84,12 @@ class GiftWrapUnwrapped {
     this.rawWrap,
     this.fromArchive = false,
     this.sealKind = EventKind.seal,
+    this.sealBindsSender = false,
   });
 
   final int sealKind;
+
+  final bool sealBindsSender;
 
   /// Arrived over the hybrid PQ transport; confidentiality, orthogonal to [senderVerified].
   final bool isPq;
@@ -367,7 +370,7 @@ class NostrService {
       ApiClient.apiStatsSink = _apiStats;
     }
     // Set here so a pool swapped in by fallback carries the geo gate too.
-    _pool.geoOriginAllows = geoOriginAllowsEvent;
+    _pool.geoOriginAllows = poolAdmitsEvent;
   }
 
   /// Persistent /api counters kept on the service so they survive a pool swap.
@@ -469,8 +472,6 @@ class NostrService {
 
   final ProxyLinkState _link = ProxyLinkState();
 
-  bool _autoEpisode = false;
-
   Set<String> _blockedRelays = const {};
 
   Set<String> get blockedRelays => _blockedRelays;
@@ -566,8 +567,15 @@ class NostrService {
     final via = pool;
     final n = await via.publishDm(e);
     if (n > 0) QueuedSends.instance.release(e.id);
-    if (n > 0 && _pool is! RelayPoolProxy) _dmOutbox.confirm(e.id);
+    if (n > 0 && _pool is! RelayPoolProxy) _dmAccepted(e.id);
     return n;
+  }
+
+  void Function(String eventId)? onDmAccepted;
+
+  void _dmAccepted(String eventId) {
+    _dmOutbox.confirm(eventId);
+    onDmAccepted?.call(eventId);
   }
 
   final LinkedHashMap<String, int> _sentTiers = LinkedHashMap();
@@ -627,7 +635,7 @@ class NostrService {
       p.heldDrops = dropsQueued;
       p.onPublishCharge = _dmOutbox.charge;
       p.onPublishRateLimited = (id) => _dmOutbox.refused(id);
-      p.onPublishAccepted = _dmOutbox.confirm;
+      p.onPublishAccepted = _dmAccepted;
     }
   }
 
@@ -751,6 +759,11 @@ class NostrService {
 
   bool get d1Backed => _d1Available;
 
+  bool pmD1Down = false;
+
+  bool get pmD1Backed =>
+      _d1Available && identity.loginMethod != null && !pmD1Down;
+
   @visibleForTesting
   List<NostrFilter> criticalFiltersForTest() => _buildCriticalFilters();
 
@@ -769,7 +782,7 @@ class NostrService {
     // Gift wraps to us: NIP-59 backdates created_at, so no `since`; limit 1 under D1.
     filters.add(NostrFilter(
       kinds: [EventKind.giftWrap],
-      limit: d1Available ? 1 : 500,
+      limit: pmD1Backed ? 1 : 500,
       tags: {
         'p': [self],
       },
@@ -1267,6 +1280,30 @@ class NostrService {
     return sub;
   }
 
+  Subscription? pmRelayBackfill() {
+    final self = identity.pubkey;
+    if (self.isEmpty) return null;
+    final sub = pool.subscribe([
+      NostrFilter(
+        kinds: [EventKind.giftWrap],
+        limit: giftWrapCatchUpLimit,
+        tags: {
+          'p': [self],
+        },
+      ),
+    ]);
+    _wrapCatchUpSubs.add(sub);
+    sub.events.listen((wrap) {
+      if (wrap.kind != EventKind.giftWrap) return;
+      unwrapLiveWrap(wrap);
+    }, onError: (_) {});
+    Timer(giftWrapCatchUpWindow, () {
+      _wrapCatchUpSubs.remove(sub);
+      unawaited(sub.close());
+    });
+    return sub;
+  }
+
   /// Proxy unreachable: swap to direct and start the background restore.
   void Function()? onAutoFallback;
 
@@ -1279,8 +1316,6 @@ class NostrService {
       return;
     }
     _poolFallbackActive = true;
-    _autoEpisode = true;
-    connectionChanges.add(ConnectionChangeReason.proxyDown);
     onAutoFallback?.call();
     unawaited(_swapToDirect(_newDirectPool()));
   }
@@ -1309,7 +1344,7 @@ class NostrService {
       _pool = direct;
       _wireCount(direct);
       _wireLiveness(direct);
-      direct.geoOriginAllows = geoOriginAllowsEvent;
+      direct.geoOriginAllows = poolAdmitsEvent;
       direct.connectAll();
       _handOverHeld(old, direct);
       for (final entry in live.values) {
@@ -1507,7 +1542,7 @@ class NostrService {
       _pool = restored;
       restored.goLive();
       _wireCount(restored);
-      restored.geoOriginAllows = geoOriginAllowsEvent;
+      restored.geoOriginAllows = poolAdmitsEvent;
       restored.onProxyUnreachable = _onProxyUnreachable; // Future blips.
       _wireRetract(restored);
       _wireLiveness(restored);
@@ -1524,10 +1559,6 @@ class NostrService {
       resubscribeMain();
       _poolFallbackActive = false;
       _stopBgRestore();
-      if (_autoEpisode) {
-        _autoEpisode = false;
-        connectionChanges.add(ConnectionChangeReason.proxyBack);
-      }
       // Re-shard the geo relays onto the restored proxy.
       applyGeoRelays();
       debugPrint('[NostrService] proxy restored; swapped direct → proxy '
@@ -1591,8 +1622,6 @@ class NostrService {
   Future<RelaySwitchOutcome> setUserDirect(bool direct) async {
     if (!_autoFallback || _stopped) return RelaySwitchOutcome.failed;
     if (direct) {
-      if (!_userDirect) connectionChanges.add(ConnectionChangeReason.chosenDirect);
-      _autoEpisode = false;
       _userDirect = true;
       _poolFallbackActive = false;
       _stopBgRestore();
@@ -1623,8 +1652,6 @@ class NostrService {
       }
       return RelaySwitchOutcome.done;
     }
-    if (_userDirect) connectionChanges.add(ConnectionChangeReason.chosenProxy);
-    _autoEpisode = false;
     _userDirect = false;
     await _settleSwap();
     if (_stopped || _userDirect) return RelaySwitchOutcome.busy;
@@ -1820,7 +1847,7 @@ class NostrService {
 
   List<NostrFilter>? _replayFilters(
       Subscription sub, List<NostrFilter> filters) {
-    if (_wrapCatchUpSubs.contains(sub) && d1Backed) return null;
+    if (_wrapCatchUpSubs.contains(sub) && pmD1Backed) return null;
     final keys = _ephemeralSubKeys[sub];
     if (keys == null || keys.isEmpty) return filters;
     return [ephemeralFilter(keys)];
@@ -2094,9 +2121,17 @@ class NostrService {
 
     // NIP-59 sender auth: native seals must be signed by the claimed author.
     var senderVerified = true;
+    var sealBindsSender = false;
     var emitRumor = rumor;
     if (isBitchat) {
       senderVerified = false;
+      final tags = rumor['tags'];
+      if (tags is List &&
+          tags.any((t) => t is List && t.isNotEmpty && t[0] == 'n') &&
+          seal.kind == EventKind.seal &&
+          seal.pubkey == rumorPubkey) {
+        sealBindsSender = await _verifier.verify(seal);
+      }
       // Decode `bitchat1:` rumor content to text as the PWA does; drop receipt payloads.
       final decoded = _decodeBitchatRumor(rumor);
       if (decoded == null) return;
@@ -2113,6 +2148,7 @@ class NostrService {
       wrapCreatedAt: wrap.createdAt,
       rumor: emitRumor,
       senderVerified: senderVerified,
+      sealBindsSender: sealBindsSender,
       isBitchat: isBitchat,
       isPq: isPq,
       rawWrap: wrap.toJson(),
@@ -2154,7 +2190,8 @@ class NostrService {
   }
 
   /// Requests recent kind-0s for [pubkeys]; best-effort, auto-closing.
-  Future<Set<String>?> fetchProfiles(List<String> pubkeys) {
+  Future<Set<String>?> fetchProfiles(List<String> pubkeys,
+      {Duration? everyRelay}) {
     if (pubkeys.isEmpty) return Future.value(null);
     final sub = pool.subscribe([
       NostrFilter(
@@ -2167,7 +2204,11 @@ class NostrService {
       _routeInbound(event);
     });
     return sub.eose.then((_) async {
-      final answered = sub.answered;
+      if (everyRelay != null) {
+        await sub.everyRelay.timeout(everyRelay, onTimeout: () {});
+      }
+      final answered =
+          everyRelay != null ? sub.everyRelayAnswered : sub.answered;
       await sub.drained;
       await Future<void>.delayed(Duration.zero);
       s.cancel();
@@ -3421,6 +3462,17 @@ class NostrService {
     _geoKeepAliveTimer?.cancel();
     _geoKeepAliveTimer = null;
     _geoKeepAliveGeohash = null;
+  }
+
+  void Function(String id)? onEncryptedBlob;
+
+  bool poolAdmitsEvent(NostrEvent e, String? relayUrl) {
+    if (isEncryptedBlobChannelEvent(e)) {
+      final sink = onEncryptedBlob;
+      if (sink != null && e.id.isNotEmpty && e.computeId() == e.id) sink(e.id);
+      return false;
+    }
+    return geoOriginAllowsEvent(e, relayUrl);
   }
 
   /// Admits kind-20000 geohash messages only from that geohash's nearest relays, failing open whenever it can't judge.

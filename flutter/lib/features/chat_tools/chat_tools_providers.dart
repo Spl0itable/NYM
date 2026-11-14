@@ -73,6 +73,10 @@ final chatToolsProvider = Provider<ChatToolsService>((ref) {
       fetchEditEvents: (surface, id, at) => ref
           .read(nostrControllerProvider)
           .editHistoryEvents(surface, id, at),
+      applyEdit: (id, text, pubkey, at, editId) => ref
+          .read(appStateProvider.notifier)
+          .applyEditOrDefer(id, text,
+              editorPubkey: pubkey, editAt: at, editId: editId),
       notice: (text) => showToast(tr(text)),
       onChanged: () {
         ref.read(chatToolsRevisionProvider.notifier).state++;

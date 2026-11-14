@@ -379,7 +379,11 @@ class ChatToolsActions {
     final hooks = read(pendingComposerActionProvider.notifier);
     final content = s.shownContent(m);
     SchedulerBinding.instance.addPostFrameCallback((_) {
-      hooks.requestQuote(fullNym: nym, content: content);
+      hooks.requestQuote(
+          fullNym: nym,
+          content: content,
+          messageId: (m.nymMessageId?.isNotEmpty ?? false) ? m.nymMessageId! : m.id,
+          pubkey: m.pubkey);
     });
     SchedulerBinding.instance.scheduleFrame();
     final bridgePeer = read(chatToolsProvider).hooks.meshPeerFor?.call(m.pubkey);

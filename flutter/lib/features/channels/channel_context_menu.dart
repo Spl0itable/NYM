@@ -1,15 +1,12 @@
 import 'dart:async';
-import 'dart:convert';
 import '../../widgets/sidebar/sidebar_folders_ui.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/constants/storage_keys.dart';
 import '../../models/channel.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
-import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/nym_icons.dart';
 import '../../widgets/sidebar/pm_context_menu.dart';
@@ -57,6 +54,8 @@ List<ChannelMenuAction> buildChannelMenuActions(
           focusLanding: true,
         ),
       ),
+      for (final p in folderSidebarItems(context, ref, entry.storageKey, at: at))
+        ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
     ];
   }
 
@@ -71,13 +70,8 @@ List<ChannelMenuAction> buildChannelMenuActions(
       label: isHidden ? tr('Unhide channel') : tr('Hide channel'),
       svg: NymIcons.sidebarHide,
       onSelected: () {
-        // Unhide must persist the store itself, or the channel comes back hidden on the next launch.
         if (isHidden) {
-          ref.read(appStateProvider.notifier).unhideChannel(key);
-          ref.read(keyValueStoreProvider).setString(
-                StorageKeys.hiddenChannels,
-                jsonEncode(ref.read(appStateProvider).hiddenChannels.toList()),
-              );
+          controller.unhideChannel(key);
         } else {
           controller.hideChannel(key);
           showUndoToast(tr('#{channel} hidden', {'channel': key}),

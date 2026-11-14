@@ -41,10 +41,12 @@
         _shareTargetChannel(channel) {
             const ch = String(channel || this.currentChannel || 'nymchat');
             const geo = typeof this.isValidGeohash === 'function' && this.isValidGeohash(ch);
+            const codeLink = L().channelCodeLink(ch);
             return {
                 kind: 'channel', title: 'Share channel', subtitle: '#' + ch, detail: geo ? 'Location channel' : '',
+                note: L().isCodeSafe(codeLink) ? '' : L().STRINGS.qrTooLong,
                 link: window.location.origin + window.location.pathname + '#' + ch,
-                codeLink: L().channelCodeLink(ch), channel: ch,
+                codeLink, channel: ch,
             };
         },
 
@@ -149,9 +151,9 @@
             if (!tg || tg.refusal) return false;
             switch (id) {
                 case 'share': return typeof navigator.share === 'function';
-                case 'nearby': return typeof this.shareNearbyAvailable === 'function' && this.shareNearbyAvailable();
+                case 'nearby': return typeof this.shareNearbyAvailable === 'function' && this.shareNearbyAvailable() && L().encodeNearby(tg.codeLink) !== null;
                 case 'sticker': return typeof this.shareNfcAvailable === 'function' && this.shareNfcAvailable();
-                case 'save': return !!tg.codeLink;
+                case 'save': return L().isCodeSafe(tg.codeLink);
                 case 'scan': return typeof this.openShareScanner === 'function';
                 case 'app': return tg.kind === 'profile' && !!tg.isOwnProfile && typeof this.openShareApp === 'function';
                 default: return false;

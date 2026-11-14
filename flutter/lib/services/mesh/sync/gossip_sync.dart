@@ -45,10 +45,14 @@ class GossipSyncConfig {
 }
 
 class GossipSync {
-  GossipSync({this.config = const GossipSyncConfig(), int Function()? nowMs})
-      : _now = nowMs ?? (() => DateTime.now().millisecondsSinceEpoch);
+  GossipSync({
+    this.config = const GossipSyncConfig(),
+    int Function()? nowMs,
+    this.refuses,
+  }) : _now = nowMs ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final GossipSyncConfig config;
+  final bool Function(BitchatPacket packet)? refuses;
   final int Function() _now;
 
   /// Public messages, insertion-ordered so the oldest evicts first.
@@ -59,6 +63,9 @@ class GossipSync {
 
   /// One prekey bundle per device, newest wins, since older ones offer deleted keys.
   final Map<String, BitchatPacket> _prekeyBundles = <String, BitchatPacket>{};
+
+  final Map<String, ({int type, int timestamp, Uint8List id})> _refused =
+      <String, ({int type, int timestamp, Uint8List id})>{};
 
   final Map<String, int> _lastAnsweredAt = <String, int>{};
 
@@ -78,6 +85,10 @@ class GossipSync {
     if (!packet.isBroadcast) return;
     if (!isSyncable(packet.type)) return;
     if (!_isFresh(packet)) return;
+    if (refuses?.call(packet) ?? false) {
+      _noteRefused(packet);
+      return;
+    }
     if (packet.type == MeshMessageType.announce) {
       _announces[_hex(packet.senderID)] = packet;
       return;
@@ -105,13 +116,27 @@ class GossipSync {
       // Bundles must reach senders while the owner is away; signed, so gossip can't forge them.
       type == MeshMessageType.prekeyBundle;
 
-  bool _isFresh(BitchatPacket packet) {
-    final maxAge = switch (packet.type) {
+  void _noteRefused(BitchatPacket packet) {
+    if (!_isFresh(packet)) return;
+    final id = _idFor(packet);
+    final key = _hex(id);
+    if (_refused.containsKey(key)) return;
+    _refused[key] = (type: packet.type, timestamp: packet.timestamp, id: id);
+    while (_refused.length > config.capacity) {
+      _refused.remove(_refused.keys.first);
+    }
+  }
+
+  bool _isFresh(BitchatPacket packet) =>
+      _isFreshAt(packet.type, packet.timestamp);
+
+  bool _isFreshAt(int type, int timestamp) {
+    final maxAge = switch (type) {
       MeshMessageType.announce => config.announceMaxAgeMs,
       MeshMessageType.prekeyBundle => config.prekeyBundleMaxAgeMs,
       _ => config.publicMessageMaxAgeMs,
     };
-    final age = _now() - packet.timestamp;
+    final age = _now() - timestamp;
     // A future-stamped packet is clock skew; keep it.
     if (age < 0) return true;
     return age <= maxAge;
@@ -123,6 +148,7 @@ class GossipSync {
     _messages.removeWhere((_, p) => !_isFresh(p));
     _announces.removeWhere((_, p) => !_isFresh(p));
     _prekeyBundles.removeWhere((_, p) => !_isFresh(p));
+    _refused.removeWhere((_, r) => !_isFreshAt(r.type, r.timestamp));
     return (_messages.length + _announces.length + _prekeyBundles.length) !=
         before;
   }
@@ -152,13 +178,18 @@ class GossipSync {
   /// REQUEST_SYNC for what we hold; newest-first input makes the since-cursor an exact boundary.
   Uint8List buildRequest({SyncTypeFlags? types}) {
     final want = types ?? SyncTypeFlags.publicMessages;
-    final candidates = <BitchatPacket>[
+    ({int timestamp, Uint8List Function() id}) held(BitchatPacket p) =>
+        (timestamp: p.timestamp, id: () => _idFor(p));
+    final candidates = <({int timestamp, Uint8List Function() id})>[
       if (want.contains(MeshMessageType.announce))
-        ..._announces.values.where(_isFresh),
+        ..._announces.values.where(_isFresh).map(held),
       if (want.contains(MeshMessageType.message))
-        ..._messages.values.where(_isFresh),
+        ..._messages.values.where(_isFresh).map(held),
       if (want.contains(MeshMessageType.prekeyBundle))
-        ..._prekeyBundles.values.where(_isFresh),
+        ..._prekeyBundles.values.where(_isFresh).map(held),
+      for (final r in _refused.values)
+        if (want.contains(_flagFor(r.type)) && _isFreshAt(r.type, r.timestamp))
+          (timestamp: r.timestamp, id: () => r.id),
     ]..sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
     if (candidates.isEmpty) {
@@ -176,7 +207,7 @@ class GossipSync {
     final takeN = candidates.length < nMax ? candidates.length : nMax;
     final included = candidates.take(takeN).toList();
     final params = GcsFilter.buildFilter(
-      ids: [for (final pkt in included) _idFor(pkt)],
+      ids: [for (final c in included) c.id()],
       maxBytes: config.gcsMaxBytes,
       targetFpr: config.gcsTargetFpr,
     );
@@ -245,15 +276,21 @@ class GossipSync {
   }
 
   /// Restores an [encodeArchive] blob, skipping undecodable or aged-out rows; never throws.
-  void decodeArchive(String? raw) {
-    if (raw == null || raw.isEmpty) return;
+  bool decodeArchive(String? raw) {
+    var refused = false;
+    if (raw == null || raw.isEmpty) return refused;
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is! List) return;
+      if (decoded is! List) return refused;
       for (final row in decoded) {
         if (row is! String) continue;
         try {
           final pkt = BinaryProtocol.decode(base64Decode(row));
+          if (pkt != null && (refuses?.call(pkt) ?? false)) {
+            refused = true;
+            _noteRefused(pkt);
+            continue;
+          }
           if (pkt != null) onPublicPacketSeen(pkt);
         } catch (_) {
           // One unreadable row costs one message.
@@ -262,7 +299,13 @@ class GossipSync {
     } catch (_) {
       // A corrupt archive costs the history, never the launch.
     }
+    return refused;
   }
+
+  static int _flagFor(int type) =>
+      type == MeshMessageType.announce || type == MeshMessageType.prekeyBundle
+          ? type
+          : MeshMessageType.message;
 
   Uint8List _idFor(BitchatPacket packet) => packetIdFor(
         type: packet.type,

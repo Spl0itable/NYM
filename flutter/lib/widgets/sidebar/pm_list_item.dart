@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -9,6 +10,8 @@ import '../../features/pms/pm_support_tokens.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../../state/settings_provider.dart';
+import '../chat/bitchat_user_color.dart';
 import '../common/nym_avatar.dart';
 import '../common/nym_label.dart';
 import '../context_menu/profile_badges.dart';
@@ -57,6 +60,11 @@ class PMListItem extends ConsumerWidget {
               a.users[pubkey]?.nym,
               a.isFriend(pubkey),
             )));
+    final bitchatTheme =
+        ref.watch(settingsProvider.select((s) => s.theme)) == NymThemeKey.bitchat;
+    final hueColor = bitchatTheme
+        ? bitchatUserColor(pubkey, isLight: c.isLight, contrast: context.highContrast)
+        : null;
     final isDev = controller.isVerifiedDeveloper(pubkey);
     final isBot = controller.isVerifiedBot(pubkey);
     final isSupport = ref.watch(pmSupportPeersProvider).contains(pubkey);
@@ -90,9 +98,7 @@ class PMListItem extends ConsumerWidget {
                         ? Colors.black.withValues(alpha: 0.06)
                         : c.primaryA(0.10))
                     : hovered
-                        ? (c.isLight
-                            ? Colors.black.withValues(alpha: 0.04)
-                            : Colors.white.withValues(alpha: 0.06))
+                        ? sidebarRowHoverFill(c)
                         : pinned
                             ? const Color(0x1A9696A0)
                             : Colors.transparent,
@@ -116,7 +122,10 @@ class PMListItem extends ConsumerWidget {
                     width: kSidebarIcon,
                     height: kSidebarIcon,
                     child: NymAvatar(
-                        seed: pubkey, size: kSidebarIcon, imageUrl: picture),
+                        seed: pubkey,
+                        size: kSidebarIcon,
+                        imageUrl: picture,
+                        ring: c.avatarRing),
                   ),
                   const SizedBox(width: kSidebarGap),
                   Expanded(
@@ -132,7 +141,7 @@ class PMListItem extends ConsumerWidget {
                             base,
                             suffix: suffix,
                             style: TextStyle(
-                              color: c.textDim,
+                              color: hueColor ?? c.textDim,
                               fontSize: textSize,
                               fontWeight: FontWeight.w400,
                               height: 1.3,

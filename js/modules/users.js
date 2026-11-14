@@ -141,6 +141,7 @@ Object.assign(NYM.prototype, {
         const keyword = input.value.trim().toLowerCase();
 
         if (keyword) {
+            if (typeof this._privacyFitsWith === 'function' && !this._privacyFitsWith('blockedKeywords', keyword)) return;
             this.blockedKeywords.add(keyword);
             this.saveBlockedKeywords();
             this.updateKeywordList();
@@ -284,20 +285,19 @@ Object.assign(NYM.prototype, {
     stripPubkeySuffix(nym) {
         if (!nym) return nym;
         // Only strip a trailing #xxxx where xxxx is exactly 4 hex chars (pubkey suffix).
-        return nym.replace(/#[0-9a-f]{4}$/i, '');
+        return window.NymSuffix.capBase(nym.replace(/#[0-9a-f]{4}$/i, ''));
     },
 
     formatNymWithPubkey(nym, pubkey) {
         const S = window.NymSuffix;
-        if (pubkey && /^[0-9a-f]{64}$/i.test(pubkey)) return S.pubkeyHtml(nym, pubkey);
-        const suffixMatch = String(nym).match(/#([0-9a-f]{4})$/i);
-        if (suffixMatch) return S.html(String(nym).slice(0, -5), suffixMatch[1]);
-        const suffix = pubkey ? pubkey.slice(-4) : '????';
-        return `${this.escapeHtml(nym)}<span class="${S.CLASS}">#${this.escapeHtml(suffix)}</span>`;
+        if (pubkey && /^[0-9a-f]{64}$/i.test(pubkey)) return S.sqPubkeyHtml(nym, pubkey);
+        if (/#[0-9a-f]{4}$/i.test(String(nym))) return S.sqLabelHtml(String(nym));
+        const base = S.capBase(nym);
+        return S.sqRaw(this.escapeHtml(base), '#' + this.escapeHtml(pubkey ? pubkey.slice(-4) : '????'), S.guard(base));
     },
 
     nymLabelHtml(label) {
-        return window.NymSuffix.labelHtml(label);
+        return window.NymSuffix.sqLabelHtml(label);
     },
 
     nymTextHtml(text, known) {
@@ -426,16 +426,11 @@ Object.assign(NYM.prototype, {
     },
 
     parseNymFromDisplay(displayNym) {
-        if (!displayNym) return 'nym';
+        return window.NymSuffix.capBase(window.NymSuffix.labelText(displayNym));
+    },
 
-        // [\s\S]* because SVG flair icons contain newlines.
-        let cleaned = displayNym.replace(/<span class="nym-suffix">[\s\S]*$/, '').trim();
-
-        cleaned = cleaned.replace(/<[^>]*>/g, '').trim();
-
-        cleaned = cleaned.replace(/&lt;/g, '').replace(/&gt;/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
-
-        return cleaned.replace(/#[0-9a-f]{4}$/i, '') || cleaned || 'nym';
+    displayTextFromLabel(displayNym) {
+        return window.NymSuffix.labelText(displayNym);
     },
 
     // Deterministic identicon as a data URI, so no external network requests; cached per seed.
@@ -507,6 +502,7 @@ Object.assign(NYM.prototype, {
             this.avatarBlobCache.set(pubkey, blob);
             return blob;
         }
+        if (this._giNoMedia && this._giNoMedia.has(pubkey)) return this.generateAvatarSvg(pubkey);
         const custom = this.userAvatars.get(pubkey);
         if (custom) return this._profileMediaUrl(custom);
         return this.generateAvatarSvg(pubkey);
@@ -606,6 +602,7 @@ Object.assign(NYM.prototype, {
 
     cacheAvatarImage(pubkey, url) {
         if (this.isVerifiedBot(pubkey)) return Promise.resolve();
+        if (this._giNoMedia && this._giNoMedia.has(pubkey)) return Promise.resolve();
         if (this.avatarBlobCache.has(pubkey)) return Promise.resolve();
         if (this._avatarTooBig && this._avatarTooBig.get(pubkey) === url) return Promise.resolve();
         if (this.avatarBlobInflight.has(pubkey)) return this.avatarBlobInflight.get(pubkey);
@@ -641,6 +638,7 @@ Object.assign(NYM.prototype, {
 
     cacheBannerImage(pubkey, url) {
         if (this.isVerifiedBot(pubkey)) return Promise.resolve();
+        if (this._giNoMedia && this._giNoMedia.has(pubkey)) return Promise.resolve();
         if (this.bannerBlobCache.has(pubkey)) return Promise.resolve();
         if (this.bannerBlobInflight.has(pubkey)) return this.bannerBlobInflight.get(pubkey);
         const p = this._fetchProfileMedia(url)
@@ -670,6 +668,7 @@ Object.assign(NYM.prototype, {
         if (this.isVerifiedBot(pubkey)) return this.verifiedBot.banner;
         const blob = this.bannerBlobCache.get(pubkey);
         if (blob) return blob;
+        if (this._giNoMedia && this._giNoMedia.has(pubkey)) return null;
         const banner = this.userBanners.get(pubkey) || null;
         return this._profileMediaUrl(banner);
     },
@@ -970,7 +969,7 @@ Object.assign(NYM.prototype, {
         // Never clobber an authoritative nym the row already shows.
         if (baseNym === 'nym') return;
         const suffix = this.getPubkeySuffix(pubkey);
-        const nameHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
+        const nameHtml = `${window.NymSuffix.sqHtml(baseNym, suffix)}`;
         const reactorEl = row.querySelector('.reactors-modal-nym');
         if (reactorEl) { reactorEl.innerHTML = nameHtml; return; }
         const ctxEl = row.querySelector('.group-ctx-member-name');
@@ -1065,6 +1064,14 @@ Object.assign(NYM.prototype, {
         this._nameSources.set(pubkey, { src, ts: ts || 0, ph });
     },
 
+    _nameAtFor(pubkey, nym) {
+        const rec = this._nameSources && this._nameSources.get(pubkey);
+        if (!rec) return undefined;
+        const base = this.parseNymFromDisplay(nym);
+        if (!base || (this._isPlaceholderNym(base) && !rec.ph)) return undefined;
+        return rec.ts;
+    },
+
     _propagateNymChange(pubkey, nym, prevBase) {
         const nextBase = this.parseNymFromDisplay(nym);
         if (!nextBase || nextBase === prevBase || (this._isPlaceholderNym(nextBase) && !this._isChosenNym(pubkey))) return;
@@ -1091,6 +1098,24 @@ Object.assign(NYM.prototype, {
         this.updateUserList();
     },
 
+    _noteTaggedName(pubkey, raw, ts) {
+        const nym = this.stripPubkeySuffix(String(raw || '').trim());
+        if (!pubkey || !nym || pubkey === this.pubkey) return;
+        if (this._isPlaceholderNym(nym) && this._kind0GuardsName(pubkey)) return;
+        if (!this._nameSourceWins(pubkey, 'message', ts, nym)) return;
+        const user = this.users.get(pubkey);
+        if (user) {
+            const prevBase = this.parseNymFromDisplay(user.nym);
+            user.nym = nym;
+            this._noteNameSource(pubkey, 'message', ts, nym);
+            this._propagateNymChange(pubkey, nym, prevBase);
+            return;
+        }
+        this.users.set(pubkey, { nym, pubkey, lastSeen: 0, status: 'offline', channels: new Set() });
+        this._noteNameSource(pubkey, 'message', ts, nym);
+        this._propagateFirstName(pubkey, nym);
+    },
+
     _propagateFirstName(pubkey, nym) {
         if (this._isPlaceholderNym(nym) && !this._isChosenNym(pubkey)) return;
         if (this.pmConversations && this.pmConversations.has(pubkey)) {
@@ -1102,20 +1127,27 @@ Object.assign(NYM.prototype, {
 
     updateStoredNymsForPubkey(pubkey, baseNym) {
         if (!pubkey || !baseNym) return;
-        const clean = this.parseNymFromDisplay(baseNym).substring(0, 20);
+        const clean = this.parseNymFromDisplay(baseNym);
         if (!clean || (clean.toLowerCase() === 'nym' && !this._isChosenNym(pubkey))) return;
         const display = `${clean}#${this.getPubkeySuffix(pubkey)}`;
         const judge = typeof this.isContentHidden === 'function' && pubkey !== this.pubkey;
         const deltas = new Map();
         let flipped = false;
+        const at = this._nameAtFor(pubkey, display);
         const sweep = (store, persist, channels) => {
             if (!store || typeof store.forEach !== 'function') return;
             store.forEach((list, key) => {
                 if (!Array.isArray(list)) return;
                 const lastRead = (channels && this.channelLastRead && this.channelLastRead.get(key)) || 0;
                 let touched = false;
+                let stamped = false;
                 for (const m of list) {
-                    if (!m || m.pubkey !== pubkey || m.author === display) continue;
+                    if (!m || m.pubkey !== pubkey) continue;
+                    if (!channels && m.nameAt !== at && (m.author === display || m.nameAt !== undefined || at !== undefined)) {
+                        m.nameAt = at;
+                        stamped = true;
+                    }
+                    if (m.author === display) continue;
                     const was = judge ? this.isContentHidden(m) : false;
                     m.author = display;
                     touched = true;
@@ -1127,8 +1159,8 @@ Object.assign(NYM.prototype, {
                     if (!channels || m.isOwn || m.slowHeld || m._spamGated || (m.created_at || 0) <= lastRead) continue;
                     deltas.set(key, (deltas.get(key) || 0) + (now ? -1 : 1));
                 }
-                if (!touched) return;
-                if (this.channelDOMCache) this.channelDOMCache.delete(key);
+                if (!touched && !stamped) return;
+                if (touched && this.channelDOMCache) this.channelDOMCache.delete(key);
                 if (typeof persist === 'function') {
                     try { persist.call(this, key); } catch (_) { }
                 }
@@ -1157,6 +1189,7 @@ Object.assign(NYM.prototype, {
     updateRenderedAvatars(pubkey, avatarUrl) {
         const safePk = this._safePubkey(pubkey);
         if (!safePk) return;
+        if (this._giNoMedia && this._giNoMedia.has(pubkey)) return;
         if (this.isVerifiedBot(pubkey)) avatarUrl = this.verifiedBot.picture;
         else avatarUrl = this._profileMediaUrl(avatarUrl);
         if (!this._avatarUpdateQueue) this._avatarUpdateQueue = new Map();
@@ -1574,7 +1607,7 @@ Object.assign(NYM.prototype, {
     dimNymSuffix(text) {
         const s = String(text == null ? '' : text);
         const m = s.match(/^([\s\S]*?)#([0-9a-f]{4})$/i);
-        return m ? window.NymSuffix.html(m[1], m[2]) : this.escapeHtml(s);
+        return m ? window.NymSuffix.sqHtml(m[1], m[2]) : this.escapeHtml(s);
     },
 
     // Returns 'hidden' when the user opted out of broadcasting status; callers suppress the indicator.
@@ -2203,7 +2236,7 @@ Object.assign(NYM.prototype, {
                 const baseNym = item.dataset.nym || '';
                 const suffix = this.getPubkeySuffix(pk);
                 const flairHtml = this.getFlairForUser(pk);
-                const displayNym = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+                const displayNym = `${window.NymSuffix.sqHtml(baseNym, suffix)}${flairHtml}`;
                 this.showContextMenu(e, displayNym, pk, null, null, true);
             };
             container.addEventListener('click', handler);
@@ -2309,13 +2342,7 @@ Object.assign(NYM.prototype, {
     },
 
     _fillUserLabel(label, baseNym, pubkey, isDev, isBot) {
-        const displayNym = baseNym && baseNym.length > 20 ? baseNym.slice(0, 20) + '...' : baseNym;
-        label.appendChild(document.createTextNode(displayNym));
-        const suffix = this.getPubkeySuffix(pubkey);
-        const suffixSpan = document.createElement('span');
-        suffixSpan.className = 'nym-suffix';
-        suffixSpan.textContent = `#${suffix}`;
-        label.appendChild(suffixSpan);
+        label.insertAdjacentHTML('beforeend', window.NymSuffix.sqHtml(baseNym, this.getPubkeySuffix(pubkey)));
 
         const flairHtml = this.getFlairForUser(pubkey);
         if (flairHtml) {
@@ -2448,6 +2475,7 @@ Object.assign(NYM.prototype, {
             this.unblockByPubkey(pubkey);
             return;
         }
+        if (typeof this._privacyFitsWith === 'function' && !this._privacyFitsWith('blockedUsers', pubkey)) return;
         this.blockedUsers.add(pubkey);
         this.saveBlockedUsers();
         this.hideMessagesFromBlockedUser(pubkey);
@@ -2647,6 +2675,7 @@ Object.assign(NYM.prototype, {
             this.saveFriends();
             this.displaySystemMessage(`Removed <span data-no-i18n>${nymHtml}</span> from friends`, 'system', { html: true });
         } else {
+            if (typeof this._privacyFitsWith === 'function' && !this._privacyFitsWith('friends', targetPubkey)) return;
             this.friends.add(targetPubkey);
             if (typeof this._unreadStale === 'function') this._unreadStale();
             this.saveFriends();

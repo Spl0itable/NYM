@@ -63,7 +63,7 @@ final List<ShareAction> kCoreShareActions = [
     order: kShareOrderSave,
     label: 'Save QR image',
     icon: NymIcons.composerImage,
-    isAvailable: (ref, t) => t.hasCode,
+    isAvailable: (ref, t) => t.hasCode && brandedQrFits(t.codeLink),
     run: saveQrImage,
   ),
   ShareAction(

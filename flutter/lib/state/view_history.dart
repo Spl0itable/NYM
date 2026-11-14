@@ -103,6 +103,15 @@ bool _goToEntry(ProviderContainer c, ViewHistory history, ViewHistoryEntry? entr
   if (entry == null) return false;
   history.navigating = true;
   final view = entry.view;
+  final open = c.read(activeThreadProvider);
+  final app = c.read(appStateProvider.notifier);
+  bool anonRoot(String? id) => id != null && (app.messageById(id)?.anonLane ?? false);
+  if (view != null && open != null && open.view == view && (anonRoot(open.rootId) || anonRoot(entry.threadRoot))) {
+    final root = entry.threadRoot;
+    c.read(activeThreadProvider.notifier).state = root == null ? null : ActiveThread(view: view, rootId: root);
+    history.navigating = false;
+    return true;
+  }
   if (entry.mesh || view == null) {
     c.read(meshScreenOpenProvider.notifier).state = true;
   } else {

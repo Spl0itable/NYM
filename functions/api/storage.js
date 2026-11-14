@@ -56,9 +56,11 @@ import {
 } from "./_shared.js";
 import { isNymchatClient } from "./_client.js";
 import { isPrivateUrl, ssrfSafeFetch, readBounded } from "./proxy.js";
-import { filterSet, rowHit, pubkeyHit, listPayload, packJsonHit, packUrls } from "./_filters.js";
+import { filterSet, rowHit, pubkeyHit, listPayload, packJsonHit, packUrls, forgetReports } from "./_filters.js";
 import { hiddenAmong, hiddenSenders, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
 import { handleScheduleAction } from "./_schedule.js";
+import { archiveChannelKey, legacyArchiveChannelKey } from "./_channel-key.js";
+import { isEncryptedBlobContent } from "./_encrypted-blob.js";
 
 function shopKnown(id) {
   return typeof id === "string" && Object.prototype.hasOwnProperty.call(SHOP_CATALOG, id);
@@ -694,10 +696,12 @@ async function handleSettingsAction(context, body) {
       } catch (e) { }
     }
     var updatedAt = Date.now();
-    await env.DB_SETTINGS.prepare(
+    var written = await env.DB_SETTINGS.prepare(
       "INSERT INTO settings (pubkey, category, blob, content_hash, updated_at) VALUES (?, ?, ?, ?, ?) " +
-      "ON CONFLICT(pubkey, category) DO UPDATE SET blob = excluded.blob, content_hash = excluded.content_hash, updated_at = excluded.updated_at"
-    ).bind(userPubkey, cat, body.blob, contentHash, updatedAt).run();
+      "ON CONFLICT(pubkey, category) DO UPDATE SET blob = excluded.blob, content_hash = excluded.content_hash, " +
+      "updated_at = MAX(excluded.updated_at, settings.updated_at + 1) RETURNING updated_at"
+    ).bind(userPubkey, cat, body.blob, contentHash, updatedAt).first();
+    if (written && Number.isFinite(Number(written.updated_at))) updatedAt = Number(written.updated_at);
     return json({ ok: true, category: cat, updatedAt: updatedAt });
   }
 
@@ -770,10 +774,7 @@ async function handleAccountAction(context, body) {
     removed.archive = await purgeRows(env.DB_CHANNELS, "events");
     removed.emoji = await purgeRows(env.DB_CHANNELS, "emoji_packs");
     removed.attestation = await purgeRows(env.DB_CHANNELS, "app_attestations");
-    removed.reports = 0;
-    if (hasD1(env.DB_REPORT)) {
-      try { removed.reports = changes(await env.DB_REPORT.prepare("DELETE FROM reports WHERE reporter = ?").bind(userPubkey).run()); } catch (e) { }
-    }
+    removed.reports = await forgetReports(env, userPubkey);
     var spamStore = hasD1(env.DB_SPAM) ? env.DB_SPAM : env.DB_NOPE;
     removed.spam = await purgeRows(spamStore, "spam_events") + await purgeRows(spamStore, "spam_pubkeys") + await purgeRows(spamStore, "spam_domains");
     removed.panicMark = 0;
@@ -1132,8 +1133,47 @@ function readCacheDelete(context, path) {
 
 // Channel names become D1 row keys; keep them to a safe, bounded charset.
 function archiveSanitizeChannel(name) {
+  return archiveChannelKey(archiveCleanChannel(name));
+}
+function archiveCleanChannel(name) {
   if (typeof name !== "string") return "";
-  return name.trim().toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, "").slice(0, 80);
+  return name.trim().toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, "");
+}
+function archiveRowName(row) {
+  var ev = null;
+  try { ev = JSON.parse(row.json); } catch (e) { return ""; }
+  if (!ev || !Array.isArray(ev.tags)) return "";
+  var tag = function (n) {
+    for (var i = 0; i < ev.tags.length; i++) {
+      var t = ev.tags[i];
+      if (Array.isArray(t) && t[0] === n && typeof t[1] === "string") return t[1];
+    }
+    return "";
+  };
+  return archiveCleanChannel(ev.kind === 23333 ? tag("d") : (tag("g") || tag("d")));
+}
+function archiveRowsMerged(rows, extra, limit) {
+  if (!extra.length) return rows;
+  var seen = new Set(rows.map(function (r) { return r.id; }));
+  var at = function (r) {
+    if (typeof r.created_at === "number") return r.created_at;
+    try { return Number(JSON.parse(r.json).created_at) || 0; } catch (e) { return 0; }
+  };
+  var all = rows.concat(extra.filter(function (r) { return !seen.has(r.id); }))
+    .map(function (r) { return { r: r, t: at(r) }; });
+  all.sort(function (a, b) { return b.t - a.t; });
+  return all.slice(0, limit).map(function (x) { return x.r; });
+}
+
+var RX_ROW_CONTENT = /"content"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+
+function archivedBlobRow(row) {
+  if (!row || (row.kind !== 20000 && row.kind !== 23333) || typeof row.json !== "string") return false;
+  var m = RX_ROW_CONTENT.exec(row.json);
+  if (!m) return false;
+  var content;
+  try { content = JSON.parse('"' + m[1] + '"'); } catch (e) { return false; }
+  return isEncryptedBlobContent(content);
 }
 
 async function spamAwareActivityRows(db, innerWhere, binds, limit, flagged) {
@@ -1198,7 +1238,8 @@ function buildActivityResult(rows) {
 }
 
 async function topChannelActivityRows(db, kind, now, minTs, channelLimit, flagged) {
-  var rows = await spamAwareActivityRows(db, "kind = ? AND created_at >= ?", [now, kind, minTs], 0, flagged);
+  var rows = (await spamAwareActivityRows(db, "kind = ? AND created_at >= ?", [now, kind, minTs], 0, flagged))
+    .filter(function (r) { return String(r.channel).indexOf(":") < 0; });
   var totals = new Map();
   rows.forEach(function (r) { totals.set(r.channel, (totals.get(r.channel) || 0) + (Number(r.c) || 0)); });
   var keep = new Set(Array.from(totals.keys()).sort(function (a, b) {
@@ -1568,6 +1609,7 @@ async function handleChannelAction(context, body) {
     var engineE = badgeE !== "off" ? spamEngine(env, null) : null;
     for (var ri = 0; ri < idList.length; ri++) {
       var row = idList[ri];
+      if (archivedBlobRow(row)) continue;
       if (rowHit(gateE, row)) continue;
       if (hiddenE.hidden.has(row.id)) continue;
       if (engineE && archivedBadgeRefused(env, row, badgeE, engineE)) continue;
@@ -1593,7 +1635,7 @@ async function handleChannelAction(context, body) {
     var origRow = await editDb.prepare(
       "SELECT id, channel, kind, pubkey, created_at, json, stored_at FROM events WHERE id = ? AND kind IN (20000, 23333) AND created_at >= ? AND created_at <= ?"
     ).bind(editId, editFloor, editCeil).first().catch(function () { return null; });
-    if (!origRow) return json({ events: [] });
+    if (!origRow || archivedBlobRow(origRow)) return json({ events: [] });
     var editRows = [];
     try {
       editRows = (await editDb.prepare(
@@ -1602,7 +1644,7 @@ async function handleChannelAction(context, body) {
       ).bind(origRow.channel, origRow.pubkey, origRow.kind, origRow.created_at, editCeil,
         '["edit","' + editId + '"', CHANNEL_EDITS_MAX).all()).results || [];
     } catch (e) { editRows = []; }
-    var editAll = [origRow].concat(editRows.filter(function (r) { return r.id !== origRow.id; }));
+    var editAll = [origRow].concat(editRows.filter(function (r) { return r.id !== origRow.id && !archivedBlobRow(r); }));
     var gateX = await filterSet(env);
     if (gateX.n) editAll = editAll.filter(function (r) { return !rowHit(gateX, r); });
     var hiddenX = await hiddenAmong(env, [origRow.channel], editFloor * 1000 - HIDDEN_LOOKBACK_MS, editAll.map(function (r) { return r.id; }));
@@ -1625,15 +1667,25 @@ async function handleChannelAction(context, body) {
   // Public, unauthenticated; the origin gate already limits this to Nymchat clients.
   if (body.action === "channel-get") {
     var reqChannels = [];
+    var legacyKeys = [];
+    var legacyNames = new Set();
+    var noteLegacy = function (clean) {
+      var lk = legacyArchiveChannelKey(clean);
+      if (!lk) return;
+      legacyNames.add(clean);
+      if (legacyKeys.indexOf(lk) < 0) legacyKeys.push(lk);
+    };
     if (Array.isArray(body.channels)) {
       var seenC = {};
       for (var ci = 0; ci < body.channels.length && reqChannels.length < 50; ci++) {
-        var cn = archiveSanitizeChannel(body.channels[ci]);
-        if (cn && !seenC[cn]) { seenC[cn] = 1; reqChannels.push(cn); }
+        var cleanC = archiveCleanChannel(body.channels[ci]);
+        var cn = archiveChannelKey(cleanC);
+        if (cn && !seenC[cn]) { seenC[cn] = 1; reqChannels.push(cn); noteLegacy(cleanC); }
       }
     } else {
-      var single = archiveSanitizeChannel(body.channel);
-      if (single) reqChannels.push(single);
+      var cleanS = archiveCleanChannel(body.channel);
+      var single = archiveChannelKey(cleanS);
+      if (single) { reqChannels.push(single); noteLegacy(cleanS); }
     }
     if (!reqChannels.length) return json({ error: "Invalid channel." }, 400);
     var isSingle = reqChannels.length === 1;
@@ -1674,9 +1726,31 @@ async function handleChannelAction(context, body) {
         + authorClause + " AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC LIMIT ?"
       ).bind(...reqChannels, ...reqAuthors, floorSec, Math.floor(Date.now() / 1000) + CHANNEL_FUTURE_SKEW_S, isSingle ? 500 : 1500).all()).results || [];
     } catch (e) { rows = []; }
+    var legacyIds = new Set();
+    if (legacyKeys.length) {
+      try {
+        var legacyRows = (await replica(env.DB_CHANNELS).prepare(
+          "SELECT id, kind, pubkey, json, stored_at, created_at FROM events WHERE channel IN (" + legacyKeys.map(function () { return "?"; }).join(",") + ")"
+          + authorClause + " AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC LIMIT ?"
+        ).bind(...legacyKeys, ...reqAuthors, floorSec, Math.floor(Date.now() / 1000) + CHANNEL_FUTURE_SKEW_S, isSingle ? 500 : 1500).all()).results || [];
+        var legacyOwn = legacyRows.filter(function (r) { return legacyNames.has(archiveRowName(r)); });
+        for (var li = 0; li < legacyOwn.length; li++) legacyIds.add(legacyOwn[li].id);
+        rows = archiveRowsMerged(rows, legacyOwn, isSingle ? 500 : 1500);
+      } catch (e) { }
+    }
+    rows = rows.filter(function (r) { return !archivedBlobRow(r); });
     var gateC = await filterSet(env);
     if (gateC.n) rows = rows.filter(function (r) { return !rowHit(gateC, r); });
-    var hiddenCheck = await hiddenAmong(env, reqChannels, floorSec * 1000 - HIDDEN_LOOKBACK_MS, rows.map(function (r) { return r.id; }));
+    var hiddenFrom = floorSec * 1000 - HIDDEN_LOOKBACK_MS;
+    var hiddenRowIds = rows.map(function (r) { return r.id; });
+    var hiddenCheck;
+    if (new Set(reqChannels.concat(legacyKeys)).size <= 50) {
+      hiddenCheck = await hiddenAmong(env, legacyKeys.length ? reqChannels.concat(legacyKeys) : reqChannels, hiddenFrom, hiddenRowIds);
+    } else {
+      var hiddenNew = await hiddenAmong(env, reqChannels, hiddenFrom, hiddenRowIds);
+      var hiddenLegacy = await hiddenAmong(env, legacyKeys, hiddenFrom, hiddenRowIds.filter(function (id) { return legacyIds.has(id); }));
+      hiddenCheck = { ok: hiddenNew.ok && hiddenLegacy.ok, hidden: new Set([...hiddenNew.hidden, ...hiddenLegacy.hidden]) };
+    }
     if (!hiddenCheck.ok) return json({ error: "Spam check unavailable. Try again shortly." }, 503);
     var hiddenIds = hiddenCheck.hidden;
     if (hiddenIds.size) {
@@ -1716,7 +1790,16 @@ async function handleChannelAction(context, body) {
         var zCeil = Math.floor(Date.now() / 1000) + CHANNEL_FUTURE_SKEW_S;
         var zFull = true;
         var zByStored = false;
-        if (since >= minTsSec - CHANNEL_FUTURE_SKEW_S && await zapsStoredIndexed(env.DB_CHANNELS, zDb)) {
+        var zTargets = null;
+        var zProbe = (await zDb.prepare(
+          "SELECT id FROM events WHERE channel IN (" + zcph + ")" + zAuthorClause
+          + " AND kind IN (20000, 23333) AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC LIMIT " + (CATCHUP_ZAP_WALK + 1)
+        ).bind(...reqChannels, ...reqAuthors, minTsSec, zCeil).all()).results || [];
+        if (zProbe.length <= CATCHUP_ZAP_WALK) {
+          zTargets = zProbe.map(function (r) { return r.id; });
+          zFull = false;
+        }
+        if (zTargets === null && since >= minTsSec - CHANNEL_FUTURE_SKEW_S && await zapsStoredIndexed(env.DB_CHANNELS, zDb)) {
           var zWalk = await zDb.prepare(
             "SELECT COUNT(*) AS walked, COUNT(events.id) AS hits FROM (SELECT target_id FROM zaps WHERE stored_at >= ? LIMIT " + CATCHUP_ZAP_WALK + ") AS z LEFT JOIN events ON events.id = z.target_id AND events.channel IN (" + zcph + ")"
             + (reqAuthors.length ? " AND events.pubkey IN (" + reqAuthors.map(function () { return "?"; }).join(",") + ")" : "")
@@ -1728,7 +1811,9 @@ async function handleChannelAction(context, body) {
             zFull = zByStored;
           }
         }
-        var sinceZaps = !zFull ? [] : ((await zDb.prepare(
+        var sinceZaps = zTargets && zTargets.length ? ((await zDb.prepare(
+          "SELECT id, json, stored_at FROM zaps WHERE target_id IN (" + zTargets.map(function () { return "?"; }).join(",") + ") AND stored_at >= ? ORDER BY created_at DESC LIMIT 1000"
+        ).bind(...zTargets, since * 1000).all()).results || []) : !zFull ? [] : ((await zDb.prepare(
           "SELECT id, json, stored_at FROM zaps WHERE stored_at >= ? AND " + (zByStored ? "+" : "") + "target_id IN (SELECT id FROM events WHERE channel IN (" + zcph + ")"
           + zAuthorClause + " AND kind IN (20000, 23333) AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC LIMIT ?) ORDER BY created_at DESC LIMIT 1000"
         ).bind(since * 1000, ...reqChannels, ...reqAuthors, minTsSec, zCeil, isSingle ? 500 : 1500).all()).results || []);
@@ -1855,7 +1940,9 @@ async function handleChannelAction(context, body) {
 
   // NIP-09: delete only when the archived event's author matches the deletion's signer.
   if (body.action === "channel-delete") {
-    var name2 = archiveSanitizeChannel(body.channel);
+    var clean2 = archiveCleanChannel(body.channel);
+    var name2 = archiveChannelKey(clean2);
+    var legacy2 = legacyArchiveChannelKey(clean2);
     var del = body.deletionEvent;
     if (!name2) return json({ error: "Invalid channel." }, 400);
     if (!del || del.kind !== 5 || typeof del.id !== "string" || typeof del.sig !== "string"
@@ -1874,12 +1961,13 @@ async function handleChannelAction(context, body) {
       var ph4 = targets.map(function () { return "?"; }).join(",");
       try {
         var dr2 = await env.DB_CHANNELS.prepare(
-          "DELETE FROM events WHERE channel = ? AND pubkey = ? AND id IN (" + ph4 + ")"
-        ).bind(name2, del.pubkey, ...targets).run();
+          "DELETE FROM events WHERE " + (legacy2 ? "channel IN (?, ?)" : "channel = ?") + " AND pubkey = ? AND id IN (" + ph4 + ")"
+        ).bind(...(legacy2 ? [name2, legacy2] : [name2]), del.pubkey, ...targets).run();
         removed = (dr2.meta && dr2.meta.changes) || 0;
       } catch (e) { }
     }
     if (removed) readCacheDelete(context, "/channel/" + name2);
+    if (removed && legacy2) readCacheDelete(context, "/channel/" + legacy2);
     return json({ ok: true, removed: removed });
   }
 

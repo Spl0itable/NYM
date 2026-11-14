@@ -47,7 +47,6 @@
     FOLD.set('\u0307', '');
 
     const ASCII = /^[\x00-\x7f]*$/;
-    const NAME_CHARS = /^[\p{L}\p{N}]+$/u;
     const WORD_CHAR = /[\p{L}\p{N}]/u;
     const HEX_KEY = /^[0-9a-f]{8,64}$/;
     const HEX_SUFFIX = /^[0-9a-f]{4}$/;
@@ -149,7 +148,7 @@
     function joinSuggestion(q, items) {
         if (q.mode === 'nym' || q.nameTokens.length !== 1) return null;
         const name = q.bare;
-        if (name.length < 2 || !NAME_CHARS.test(name) || name.startsWith('npub1') || HEX_KEY.test(name)) return null;
+        if (name.length < 2 || !(G.NymChannelName && G.NymChannelName.isChannelName(name)) || name.startsWith('npub1') || HEX_KEY.test(name)) return null;
         for (const it of items || []) {
             if (it && it.kind !== 'group' && String(it.key).toLowerCase() === name) return null;
         }

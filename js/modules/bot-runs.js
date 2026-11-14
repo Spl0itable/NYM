@@ -172,7 +172,12 @@ Object.assign(NYM.prototype, {
             if (clean) localStorage.setItem('nym_botpm_max_runs', String(clean));
             else localStorage.removeItem('nym_botpm_max_runs');
         } catch (_) { }
-        if (!(opts && opts.fromSync) && typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500, { wanted: true });
+        if (!(opts && opts.fromSync) && typeof this.botAnonEnabled === 'function' && this.botAnonEnabled()) {
+            if (typeof this._prefStampSet === 'function') this._prefStampSet('botMaxRuns', Date.now());
+        } else if (!(opts && opts.fromSync)) {
+            if (typeof this.notePrefChanged === 'function') this.notePrefChanged('botMaxRuns');
+            else if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500, { wanted: true });
+        }
         this._botRunsSyncLimitSelect();
     },
 
@@ -233,8 +238,9 @@ Object.assign(NYM.prototype, {
             const extra = Object.assign({}, run.extra);
             delete extra.pqAnnouncement;
             delete extra.wraps;
-            out.push({ id: run.id, eventId: run.eventId, thread: run.thread, content: run.label, startedAt: run.startedAt, extra });
+            out.push({ id: run.id, eventId: run.eventId, thread: run.thread, content: run.label, startedAt: run.startedAt, extra, anon: !!run.anon });
         }
+        for (const e of this._botRunsUnresumed || []) if (!out.some((o) => o.id === String(e.id).toLowerCase())) out.push(e);
         try {
             if (out.length) localStorage.setItem(this._botRunInflightKey(), JSON.stringify(out));
             else localStorage.removeItem(this._botRunInflightKey());
@@ -253,7 +259,7 @@ Object.assign(NYM.prototype, {
             state: 'running',
             cap: null,
             steers: {},
-            anon: !!(typeof this.botAnonReady === 'function' && this.botAnonReady()),
+            anon: typeof spec.anon === 'boolean' ? spec.anon : !!(typeof this.botAnonReady === 'function' && this.botAnonReady()),
             progress: '',
             stopped: false,
             gen: 0,
@@ -296,7 +302,7 @@ Object.assign(NYM.prototype, {
         this._botRunChanged(run);
         let status, data;
         try {
-            ({ status, data } = await this._botMoneyRequest('pm', this._botRunBody(run, maxRuns), { timeout: 180000, signal: ctrl ? ctrl.signal : undefined }));
+            ({ status, data } = await this._botMoneyRequest('pm', this._botRunBody(run, maxRuns), { timeout: 180000, signal: ctrl ? ctrl.signal : undefined, anon: !!run.anon }));
         } catch (_) {
             if (this._botRunGone(run, gen)) return;
             return this._botRunClaim(run);
@@ -336,7 +342,7 @@ Object.assign(NYM.prototype, {
         }
         if (data && data.priceUnavailable) {
             this._botRunEnd(run);
-            if (typeof this._showBotPriceRetry === 'function') this._showBotPriceRetry(run.content, run.eventId, run.extra);
+            if (typeof this._showBotPriceRetry === 'function') this._showBotPriceRetry(run.content, run.eventId, run.extra, !!run.anon);
             return;
         }
         if (status >= 400 || !data || data.error) {
@@ -388,8 +394,11 @@ Object.assign(NYM.prototype, {
         const replyBalance = this._replyBalance(data);
         if (replyBalance !== null) {
             const replyCost = this._replyCost(data);
-            if (data.pro) this._setBotProCreditDisplay(replyBalance);
-            else this._setBotCreditDisplay(replyBalance);
+            const shownLane = !!(typeof this.botAnonEnabled === 'function' && this.botAnonEnabled());
+            if (anonLane === shownLane) {
+                if (data.pro) this._setBotProCreditDisplay(replyBalance);
+                else this._setBotCreditDisplay(replyBalance);
+            }
             if (data.pro && replyCost) {
                 const sel = this._getBotProModel();
                 if (sel && replyCost > (sel.credits || 1)) {
@@ -421,7 +430,7 @@ Object.assign(NYM.prototype, {
             if (this._botRunGone(run, gen)) return;
             let status, data;
             try {
-                ({ status, data } = await this._botMoneyRequest('pm-claim', { eventId: run.eventId }));
+                ({ status, data } = await this._botMoneyRequest('pm-claim', { eventId: run.eventId }, { anon: !!run.anon }));
             } catch (_) { continue; }
             if (this._botRunGone(run, gen)) return;
             data = data || {};
@@ -430,7 +439,7 @@ Object.assign(NYM.prototype, {
             if (status === 404 && data.unknown) return this._botRunFail(run);
             if (status === 429) continue;
             try {
-                ({ status, data } = await this._botMoneyRequest('pm', this._botRunBody(run), { timeout: 180000 }));
+                ({ status, data } = await this._botMoneyRequest('pm', this._botRunBody(run), { timeout: 180000, anon: !!run.anon }));
             } catch (_) { continue; }
             if (this._botRunGone(run, gen)) return;
             data = data || {};
@@ -500,7 +509,7 @@ Object.assign(NYM.prototype, {
         }
         if (run) this._botRunRender(run.id);
         this._botRunsRenderIndicator();
-        this._botRunsSchedulePoll();
+        this._botRunsSchedulePoll(false, !!(run && run.anon));
     },
 
     async botRunStop(id) {
@@ -515,7 +524,7 @@ Object.assign(NYM.prototype, {
             this._botRunEnd(run);
         }
         if (wasSent) {
-            try { await this._botMoneyRequest('pm-cancel', { replyTo: key }); } catch (_) { }
+            try { await this._botMoneyRequest('pm-cancel', { replyTo: key }, run ? { anon: !!run.anon } : undefined); } catch (_) { }
             if (!run && Array.isArray(this._botRemoteRuns)) {
                 this._botRemoteRuns = this._botRemoteRuns.filter((r) => r.replyTo !== key);
                 this._botRunsRenderIndicator();
@@ -585,13 +594,13 @@ Object.assign(NYM.prototype, {
         return map;
     },
 
-    async _botRunsCheckSteers() {
+    async _botRunsCheckSteers(lane) {
         if (this._botSteerChecking) return this._botSteerChecking;
         this._botSteerChecking = (async () => {
             const live = new Set((this._botRemoteRuns || []).map((r) => r.replyTo.toLowerCase()));
             for (const id of this.botRuns().keys()) live.add(id);
             const map = this._botRemoteSteers();
-            const listedAnon = !!(typeof this._botAnonAutoRoute === 'function' && this._botAnonAutoRoute('pm-runs'));
+            const listedAnon = typeof lane === 'boolean' ? lane : this._botRunsToggleLane();
             const groups = new Map();
             for (const [id, s] of map) {
                 if (live.has(s.runId) || s.anon !== listedAnon) continue;
@@ -701,33 +710,49 @@ Object.assign(NYM.prototype, {
         this._botRunStart(Object.assign({}, note.spec, { startedAt: this._botRunNow() }));
     },
 
-    _botRunsResume() {
+    _botRunsResume(lane) {
         const runs = this.botRuns();
         const now = this._botRunNow();
+        const kept = [];
         for (const e of this._botRunLoadInflight()) {
             if (!e || typeof e.id !== 'string' || typeof e.eventId !== 'string') continue;
             if (runs.has(e.id.toLowerCase())) continue;
             if (now - (Number(e.startedAt) || 0) > BOT_RUN_MAX_AGE_MS) continue;
+            if (typeof lane === 'boolean' && !!e.anon !== lane) { kept.push(e); continue; }
             const run = this._botRunMake(e);
             runs.set(run.id, run);
             this._botRunClaim(run);
         }
+        this._botRunsUnresumed = kept;
         this._botRunPersist();
     },
 
-    async _botRunsPoll() {
+    _botRunsToggleLane() {
+        return !!(typeof this._botAnonAutoRoute === 'function' && this._botAnonAutoRoute('pm-runs'));
+    },
+
+    _botRunsLaneLive(anon) {
+        for (const run of this.botRuns().values()) if (!!run.anon === anon) return true;
+        if ((this._botRemoteRuns || []).some((r) => !!r.anon === anon)) return true;
+        for (const s of this._botRemoteSteers().values()) if (!!s.anon === anon) return true;
+        return false;
+    },
+
+    async _botRunsPoll(lane) {
         if (!this.pubkey) return;
+        const anon = typeof lane === 'boolean' ? lane : this._botRunsToggleLane();
         let status, data;
         try {
-            ({ status, data } = await this._botMoneyRequest('pm-runs', {}));
+            ({ status, data } = await this._botMoneyRequest('pm-runs', {}, { anon }));
         } catch (_) { return; }
+        const others = (this._botRemoteRuns || []).filter((r) => !!r.anon !== anon);
         if (status !== 200 || !data || !Array.isArray(data.runs)) {
-            this._botRemoteRuns = [];
+            this._botRemoteRuns = others;
             this._botRunsRenderIndicator();
             return;
         }
-        const rows = data.runs.filter((r) => r && typeof r.replyTo === 'string' && r.app !== 'nymbot' && !this._botRunEndedHere(r));
-        this._botRemoteRuns = rows;
+        const rows = data.runs.filter((r) => r && typeof r.replyTo === 'string' && r.app !== 'nymbot' && !this._botRunEndedHere(r)).map((r) => Object.assign({}, r, { anon }));
+        this._botRemoteRuns = others.concat(rows);
         const runs = this.botRuns();
         for (const r of rows) {
             const run = runs.get(r.replyTo.toLowerCase());
@@ -735,8 +760,8 @@ Object.assign(NYM.prototype, {
             run.progress = typeof r.progress === 'string' ? r.progress : '';
             this._botRunRender(run.id);
         }
-        if (this._botRemoteSteers().size) this._botRunsCheckSteers().catch(() => { });
-        const waiting = [...runs.values()].find((r) => r.state === 'waiting');
+        if (this._botRemoteSteers().size) this._botRunsCheckSteers(anon).catch(() => { });
+        const waiting = [...runs.values()].find((r) => r.state === 'waiting' && !!r.anon === anon);
         if (waiting && waiting.cap && rows.length < waiting.cap.limit) this._botRunSend(waiting);
         this._botRunsRenderIndicator();
     },
@@ -761,29 +786,47 @@ Object.assign(NYM.prototype, {
         return !!(this.inPMMode && this.verifiedBot && this.currentPM === this.verifiedBot.pubkey && !this.currentGroup);
     },
 
-    _botRunsPollWanted() {
+    _botRunsPollWanted(lane) {
         if (!this.pubkey) return false;
-        if (this._botRunsSheetOpen) return true;
+        if (typeof lane !== 'boolean') return this._botRunsPollWanted(false) || this._botRunsPollWanted(true);
+        if (this._botRunsSheetOpen && lane === this._botRunsToggleLane()) return true;
         if (!this._botChatOpen()) return false;
-        return this.botRuns().size > 0 || (this._botRemoteRuns || []).length > 0 || this._botRemoteSteers().size > 0;
+        return this._botRunsLaneLive(lane);
     },
 
-    _botRunsSchedulePoll(immediate) {
-        if (this._botRunsPollTimer || !this._botRunsPollWanted()) return;
-        this._botRunsPollTimer = setTimeout(async () => {
-            this._botRunsPollTimer = null;
-            if (!this._botRunsPollWanted()) return;
-            await this._botRunsPoll();
-            this._botRunsSchedulePoll();
+    _botRunsSchedulePoll(immediate, lane) {
+        if (typeof lane !== 'boolean') {
+            this._botRunsSchedulePoll(immediate, false);
+            this._botRunsSchedulePoll(immediate, true);
+            return;
+        }
+        const timers = this._botRunsPollTimers || (this._botRunsPollTimers = {});
+        const k = lane ? 'anon' : 'nym';
+        if (timers[k] || !this._botRunsPollWanted(lane)) return;
+        timers[k] = setTimeout(async () => {
+            timers[k] = null;
+            if (!this._botRunsPollWanted(lane)) return;
+            await this._botRunsPoll(lane);
+            this._botRunsSchedulePoll(false, lane);
         }, immediate ? 0 : BOT_RUN_POLL_MS);
     },
 
     botRunsOnChatOpen() {
-        if (!this._botRunsResumed) {
-            this._botRunsResumed = true;
-            this._botRunsResume();
+        const bot = this.verifiedBot && this.verifiedBot.pubkey;
+        if (bot && this._anonThreadClosing === bot) {
+            this._botRunsRenderIndicator();
+            return;
         }
-        this._botRunsPoll().then(() => this._botRunsSchedulePoll()).catch(() => { });
+        const quiet = !!(bot && typeof this._anonLaneRead === 'function' && this._anonLaneRead(bot));
+        if (this._botRunsResumed !== true) {
+            this._botRunsResume(quiet ? true : undefined);
+            this._botRunsResumed = quiet ? 'anon' : true;
+        }
+        const lane = quiet ? true : this._botRunsToggleLane();
+        if (!quiet || (typeof this.botAnonIdentity === 'function' && this.botAnonIdentity())) {
+            this._botRunsPoll(lane).then(() => this._botRunsSchedulePoll(false, lane)).catch(() => { });
+        }
+        if (!quiet) this._botRunsSchedulePoll(false, !lane);
         this._botRunsRenderIndicator();
         setTimeout(() => this._botRunRenderAll(), 0);
         setTimeout(() => this._botRunRenderAll(), 400);
@@ -939,7 +982,8 @@ Object.assign(NYM.prototype, {
             });
             modal._botRunsWatch.observe(modal, { attributes: true, attributeFilter: ['class'] });
         }
-        this._botRunsPoll().then(() => this._botRunsSchedulePoll()).catch(() => { });
+        const lane = this._botRunsToggleLane();
+        this._botRunsPoll(lane).then(() => this._botRunsSchedulePoll(false, lane)).catch(() => { });
     },
 
     _botRunsRenderSheet() {

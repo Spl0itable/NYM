@@ -23,7 +23,7 @@
         if (x.content) out.push('translate');
         if (tools) out.push(x.saved ? 'unsave' : 'save');
         if (tools && x.keepOffered) out.push(x.kept ? 'unkeep' : 'keep');
-        if (!x.self && x.id && x.author) out.push('zap');
+        if (!x.self && x.id && x.author && !x.anonLane) out.push('zap');
         if (x.self && x.id && x.content) out.push('edit');
         if (x.id && (x.self || x.modDelete)) out.push('delete');
         if (x.edited && x.id) out.push('editHistory');
@@ -88,7 +88,7 @@
             case 'react':
                 return !!x.id;
             case 'zap':
-                return !!(x.id && x.author);
+                return !!(x.id && x.author && !x.anonLane);
             case 'slap':
             case 'hug':
                 return !!(x.author && !x.self);

@@ -26,7 +26,6 @@ import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import 'added_relays.dart';
 import 'blocked_relays.dart';
-import 'recent_connection_changes.dart';
 import 'relay_add.dart';
 import 'relay_add_check.dart';
 import 'relay_block.dart';
@@ -509,8 +508,6 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                       _ThroughputSection(
                         history: stats?.throughputHistory ?? const [],
                       ),
-                      const SizedBox(height: 14),
-                      const RecentConnectionChanges(),
                       const SizedBox(height: 14),
                       _RelayListSection(
                         relayStatus: relayStatus,

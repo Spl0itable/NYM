@@ -34,6 +34,8 @@ class SecureStore {
 
   Future<void> remove(String key) => _sweep.delete(key: key);
 
+  Future<Map<String, String>> readAll() => _sweep.readAll();
+
   Future<void> wipeAll() => _sweep.deleteAll();
 
   static Future<bool> settleInstall(SharedPreferences prefs,

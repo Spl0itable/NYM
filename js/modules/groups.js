@@ -137,7 +137,8 @@ Object.assign(NYM.prototype, {
     },
 
     _getAllSelfEphemeralPubkeys() {
-        return this._getAllKnownEphemeralPubkeys();
+        const anon = new Set(typeof this.botAnonPubkeys === 'function' ? (this.botAnonPubkeys() || []) : []);
+        return this._getAllKnownEphemeralPubkeys().filter((pk) => !anon.has(pk));
     },
 
     _tryDecryptWithEphemeralKeys(event) {
@@ -256,6 +257,7 @@ Object.assign(NYM.prototype, {
         if (!local) {
             this.groupEphemeralKeys.set(groupId, synced);
             this._invalidateEphPkCache();
+            if (typeof this._gnSeen === 'function') this._gnSeen(groupId);
             return;
         }
 
@@ -273,37 +275,38 @@ Object.assign(NYM.prototype, {
                     local._memberKeyTs[realPk] = remoteTs;
                 }
             }
+            if (typeof this._gnSeen === 'function') this._gnSeen(groupId);
         }
 
         if (synced.self) {
             if (!local.self) {
                 local.self = synced.self;
             } else {
-                const minted = this._answerMinted && this._answerMinted.get(groupId);
+                const nowS = Math.floor(Date.now() / 1000);
+                let minted = this._answerMinted && this._answerMinted.get(groupId);
+                if (!this._answerMintedAt) this._answerMintedAt = new Map();
+                let meta = this._answerMintedAt.get(groupId);
+                if (minted && !meta) { meta = { at: nowS, repaired: false }; this._answerMintedAt.set(groupId, meta); }
+                if (minted && !window.NymGroupInvites.settleOpen(meta, nowS)) {
+                    this._answerMinted.delete(groupId);
+                    this._answerMintedAt.delete(groupId);
+                    minted = null;
+                }
                 const settle = !!(opts && opts.settle) || (!!minted && minted === local.self.current.pk);
-                const knownPks = new Set();
-                knownPks.add(local.self.current.pk);
-                for (const k of local.self.prev) knownPks.add(k.pk);
-
-                if (!knownPks.has(synced.self.current.pk)) {
-                    if (settle && this._ctrlPickSelf(local.self.current.pk, synced.self.current.pk) === synced.self.current.pk) {
-                        local.self.prev.unshift(local.self.current);
-                        local.self.current = synced.self.current;
-                    } else {
-                        local.self.prev.push(synced.self.current);
-                    }
-                    knownPks.add(synced.self.current.pk);
+                const byPk = new Map();
+                for (const k of [local.self.current, ...local.self.prev, synced.self.current, ...synced.self.prev]) {
+                    if (k && k.pk && !byPk.has(k.pk)) byPk.set(k.pk, k);
                 }
-                if (settle && minted) this._answerMinted.set(groupId, local.self.current.pk);
-
-                for (const k of synced.self.prev) {
-                    if (!knownPks.has(k.pk)) {
-                        local.self.prev.push(k);
-                        knownPks.add(k.pk);
+                const view = (s) => ({ current: s.current.pk, prev: s.prev.map((k) => k.pk) });
+                const merged = window.NymGroupInvites.settleSelf(view(local.self), view(synced.self), settle, this.EPHEMERAL_PREV_KEYS_MAX);
+                local.self.current = byPk.get(merged.current);
+                local.self.prev = merged.prev.map((pk) => byPk.get(pk));
+                if (settle && minted) {
+                    this._answerMinted.set(groupId, local.self.current.pk);
+                    if (window.NymGroupInvites.settleDue(meta, view(synced.self), minted, local.self.current.pk, nowS)) {
+                        meta.repaired = true;
+                        this._repairMintedRowSoon(groupId);
                     }
-                }
-                if (local.self.prev.length > this.EPHEMERAL_PREV_KEYS_MAX) {
-                    local.self.prev = local.self.prev.slice(0, this.EPHEMERAL_PREV_KEYS_MAX);
                 }
             }
         }
@@ -316,8 +319,13 @@ Object.assign(NYM.prototype, {
         if (!this.pubkey) return;
         try {
             const data = {};
+            const GI = window.NymGroupInvites;
+            const nowS = Math.floor(Date.now() / 1000);
             for (const [groupId, ek] of this.groupEphemeralKeys) {
                 data[groupId] = this._serializeEphemeralKeys(ek);
+                const keep = GI && this._answerMinted && this._answerMintedAt && this._answerMinted.has(groupId)
+                    ? GI.settleKeep(Object.assign({ pk: this._answerMinted.get(groupId) }, this._answerMintedAt.get(groupId)), nowS) : null;
+                if (keep) data[groupId].settle = keep;
             }
             const storageKey = `nym_ephemeral_keys_${this.pubkey}`;
             const json = JSON.stringify(data);
@@ -351,7 +359,17 @@ Object.assign(NYM.prototype, {
             const data = JSON.parse(raw);
             const cap = this.EPHEMERAL_PREV_KEYS_MAX || 30;
             let trimmed = false;
+            const GI = window.NymGroupInvites;
+            const nowS = Math.floor(Date.now() / 1000);
             for (const [groupId, entry] of Object.entries(data)) {
+                const keep = GI && entry ? GI.settleKeep(entry.settle, nowS) : null;
+                if (keep && !(this._answerMinted && this._answerMinted.has(groupId))) {
+                    if (!this._answerMinted) this._answerMinted = new Map();
+                    if (!this._answerMintedAt) this._answerMintedAt = new Map();
+                    this._answerMinted.set(groupId, keep.pk);
+                    this._answerMintedAt.set(groupId, { at: keep.at, repaired: keep.repaired });
+                }
+                if (entry) delete entry.settle;
                 // Load is async, so merge if settings sync already populated this group.
                 if (this.groupEphemeralKeys.has(groupId)) {
                     this._mergeEphemeralKeys(groupId, entry);
@@ -424,6 +442,7 @@ Object.assign(NYM.prototype, {
                     memberAt: this._gcMemberAtSnapshot(group),
                     memberRemovedAt: this._gcRemovedSnapshot(group),
                     joinedVia: group.joinedVia || null,
+                    ...(group.invited && Object.keys(group.invited).length ? { invited: { ...group.invited } } : {}),
                     ...(typeof this._gtGroupSnapshot === 'function' ? this._gtGroupSnapshot(group) : {}),
                 };
             }
@@ -527,6 +546,7 @@ Object.assign(NYM.prototype, {
         }
         const dropped = this._gcCapApply(g, fresh);
         this._gcHandleDropped(groupId, dropped);
+        if (typeof this._gnAdopt === 'function' && this._gnAdopt(g, incoming)) this._gnSeen(groupId);
         return dropped;
     },
 
@@ -1044,8 +1064,7 @@ Object.assign(NYM.prototype, {
         if (!ok || this.pubkey !== pubkey) return;
         const self = this.groupEphemeralKeys && this.groupEphemeralKeys.get(groupId)?.self;
         if (minted && self && self.current) {
-            if (!this._answerMinted) this._answerMinted = new Map();
-            this._answerMinted.set(groupId, self.current.pk);
+            this._noteMinted(groupId, self.current.pk);
             this._settleMintedKey(groupId).catch(() => { });
         } else if (x && opts && opts.replay) {
             this._syncMintedGroupKey(groupId);
@@ -1142,6 +1161,7 @@ Object.assign(NYM.prototype, {
                         if (group.memberRemovedAt && typeof group.memberRemovedAt === 'object') g.memberRemovedAt = { ...group.memberRemovedAt };
                         if (group.joinedVia) g.joinedVia = group.joinedVia;
                         if (typeof this._gtRestoreGroup === 'function') this._gtRestoreGroup(g, group);
+                        if (typeof this._gnAdopt === 'function') this._gnAdopt(g, group);
                     }
                 }
             }
@@ -1255,7 +1275,8 @@ Object.assign(NYM.prototype, {
             metaAdmins: typeof this._groupMetaAdminList === 'function' ? this._groupMetaAdminList(group) : [],
             modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
             memberAt: this._gcMemberAtSnapshot(group),
-            memberRemovedAt: this._gcRemovedSnapshot(group)
+            memberRemovedAt: this._gcRemovedSnapshot(group),
+            ...(group.invited && Object.keys(group.invited).length ? { invited: { ...group.invited } } : {})
         };
     },
 
@@ -1272,6 +1293,9 @@ Object.assign(NYM.prototype, {
             && (rumor.tags || []).some(t => Array.isArray(t) && t[0] === 'unban' && t[1] === this.pubkey);
         if (!isOwn && this.blockedUsers.has(senderPubkey) && !this.groupConversations.has(groupId)
             && !(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId)) && !unbansSelf) return;
+        const giCtx = { unbansSelf, fromD1, isPqWrap, gap, senderVerified };
+        if (typeof this._giGate === 'function'
+            && !(await this._giGate(rumor, event, senderPubkey, isOwn, giCtx))) return;
 
         // Sender's next ephemeral pubkey (timing-attack mitigation); future messages to them use it.
         if (!isOwn) {
@@ -1280,12 +1304,14 @@ Object.assign(NYM.prototype, {
                 this._updateMemberEphemeralKey(groupId, senderPubkey, ephTag[1], rumor.created_at || 0);
                 this._saveEphemeralKeys();
                 if (!(this.blockedUsers && this.blockedUsers.has(senderPubkey))) this._debouncedNostrSettingsSave(15000);
+                if (typeof this._gnSeen === 'function') this._gnSeen(groupId);
             }
         }
 
         // A group the user is actively joining via invite link bypasses the acceptPMs filter.
         if (!isOwn && this.settings.acceptPMs !== 'enabled' && !this.groupConversations.has(groupId)
-            && !(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId))) {
+            && !(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId))
+            && !(this._giAccepting && this._giAccepting.has(groupId))) {
             if (this.settings.acceptPMs === 'disabled') return;
             if (this.settings.acceptPMs === 'friends' && !this.isFriend(senderPubkey)) return;
         }
@@ -1348,12 +1374,14 @@ Object.assign(NYM.prototype, {
                 }
             }
             if (unbannedPubkey && unbannedPubkey !== this.pubkey) return;
+            if (giCtx.unbanNotice === false) return;
             await this._fetchShownProfile(senderPubkey);
             const unbanMask = this._actorMask(senderPubkey);
             const actorName = unbanMask || this.getNymFromPubkey(senderPubkey);
             const unbanTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
-            const unbanTitle = `Unbanned from ${shownGroupName()}`;
-            const unbanBody = `${actorName} unbanned you from "${shownGroupName()}". You may be re-invited.`;
+            const unbanGroup = giCtx.unbanGeneric ? this.uiText('Group') : shownGroupName();
+            const unbanTitle = `Unbanned from ${unbanGroup}`;
+            const unbanBody = `${actorName} unbanned you from "${unbanGroup}". You may be re-invited.`;
             const unbanChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
             this._selfNotice(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec, unbanMask);
             return;
@@ -1374,7 +1402,8 @@ Object.assign(NYM.prototype, {
             const reqTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'resync_req' && t[1] === '1');
             if (reqTag && !isOwn) {
                 const reqX = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'x' && t[1]);
-                this._maybeReplyKeyResync(groupId, senderPubkey, { replay: fromD1, ts: Math.floor(rumor.created_at || 0), x: reqX ? reqX[1] : null });
+                const reqEph = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'ephemeral_pk' && t[1]);
+                this._maybeReplyKeyResync(groupId, senderPubkey, { replay: fromD1, ts: Math.floor(rumor.created_at || 0), x: reqX ? reqX[1] : null, announced: reqEph ? reqEph[1] : null });
             }
             return;
         }
@@ -1532,13 +1561,15 @@ Object.assign(NYM.prototype, {
                     const inviteX = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'x' && t[1]);
                     this._announceGroupEphemeralKey(groupId, { replay: fromD1, ts: Math.floor(rumor.created_at || 0), x: inviteX ? inviteX[1] : null }).catch(() => { });
                 }
+                if (typeof this._gtDropPendingJoin === 'function') this._gtDropPendingJoin(groupId);
             }
 
-            if (!isOwn && !existingInviteGroup && !this.blockedUsers.has(senderPubkey)) {
+            if (!isOwn && !existingInviteGroup && !this.blockedUsers.has(senderPubkey)
+                && !(this._giAccepting && this._giAccepting.has(groupId))) {
                 await this._fetchShownProfile(senderPubkey);
                 const inviterName = this.getNymFromPubkey(senderPubkey);
                 const inviteShownName = shownGroupName();
-                const inviteBody = rumor.content || `You've been added to group "${inviteShownName}"`;
+                const inviteBody = `You've been added to group "${inviteShownName}"`;
                 const inviteTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
                 const inviteAgeMs = Date.now() - (inviteTsSec * 1000);
                 const isHistorical = this._isGiftWrapBacklog(inviteTsSec) || inviteAgeMs > 30000;
@@ -1667,6 +1698,7 @@ Object.assign(NYM.prototype, {
                 grpAdd.admins = [...addAdmins];
             }
             if (joiningViaInvite) this._pendingInviteJoins.delete(groupId);
+            if (typeof this._gtDropPendingJoin === 'function') this._gtDropPendingJoin(groupId);
             this._saveGroupConversations();
             this._debouncedNostrSettingsSave();
             this._processPendingGroupHistory(groupId);
@@ -1725,6 +1757,8 @@ Object.assign(NYM.prototype, {
                     try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(this.leftGroupTimes))); } catch { }
                 }
                 this._saveLeftGroups();
+                const leftOf = this.groupConversations.get(groupId);
+                if (leftOf && typeof this._giNoteLeft === 'function') this._giNoteLeft(groupId, { createdBy: leftOf.createdBy, mods: Array.isArray(leftOf.mods) ? leftOf.mods.slice() : [] }).catch(() => { });
                 this.groupConversations.delete(groupId);
                 if (typeof this._callGroupRemoved === 'function') this._callGroupRemoved(groupId);
                 this._saveGroupConversations();
@@ -1879,7 +1913,7 @@ Object.assign(NYM.prototype, {
         const groupEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
         if (groupEditTag) {
             const originalId = groupEditTag[1];
-            this.handleIncomingPMEdit(originalId, messageContent, senderPubkey, groupConvKey, senderVerified, tsSec, (rumor && rumor.id) || '');
+            if (this.handleIncomingPMEdit(originalId, messageContent, senderPubkey, groupConvKey, senderVerified, tsSec, (rumor && rumor.id) || '') === 'held') this._unmarkHeldEditWrap(event && event.id);
             return;
         }
 
@@ -1915,7 +1949,8 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        if (!isOwn && !blockedMember && !this.users.has(senderPubkey)) {
+        if (!isOwn && !blockedMember && !this.users.has(senderPubkey)
+            && !(typeof this._profileMissedRecently === 'function' && this._profileMissedRecently(senderPubkey))) {
             const profileFetch = Promise.resolve(this.fetchProfileDirect(senderPubkey)).catch(() => { });
             if (!fromD1 || !this.groupConversations.has(groupId)) await profileFetch;
         }
@@ -1968,6 +2003,7 @@ Object.assign(NYM.prototype, {
         }
         this._recordMsgVerification(nymMsgId, senderVerified);
 
+        if (typeof this._applyPendingEdit === 'function') this._applyPendingEdit(msg);
         if (typeof this._gtAbsorbLive === 'function' && this._gtAbsorbLive(msg, list)) return;
         if (inviteForKnownGroup) {
             list.sort((a, b) => this._compareMessages(a, b));
@@ -2053,9 +2089,9 @@ Object.assign(NYM.prototype, {
                 ...(Array.isArray(msg.quoted) && msg.quoted.length ? { quoted: msg.quoted.slice() } : {})
             };
             if (!treatAsHistorical) {
-                this.showNotification(`${shownGroupName()}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
+                this.showNotification(`${shownGroupName()}: ${msg.author}`, msg.content, groupMsgChannelInfo, tsSec * 1000);
             } else {
-                this._addNotificationToHistory(`${shownGroupName()}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
+                this._addNotificationToHistory(`${shownGroupName()}: ${msg.author}`, msg.content, groupMsgChannelInfo, tsSec * 1000);
             }
         };
         const groupArrivedUnread = () => {
@@ -2143,12 +2179,14 @@ Object.assign(NYM.prototype, {
             ? now + this.settings.dmTTLSeconds : null;
 
         await this._sendGiftWrapsAsync(allMembers, rumor, expirationTs, null, { deposit: true });
+        this._noteKeyGiven(groupId, allMembers, initialEph.pk, true);
         this._saveEphemeralKeys();
 
         this.addGroupConversation(groupId, name, allMembers, Date.now(), { createdBy: this.pubkey, avatar: groupAvatar, banner: groupBanner, description: groupDescription, allowMemberInvites, inviteEnabled, inviteEpoch });
         // Ensure createdBy is set even if a relay echo created the entry first.
         const grp = this.groupConversations.get(groupId);
         if (grp && grp.createdBy !== this.pubkey) grp.createdBy = this.pubkey;
+        if (typeof this._gnMark === 'function') this._gnMark(groupId, allMembers, now);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.openGroup(groupId);
@@ -2195,6 +2233,7 @@ Object.assign(NYM.prototype, {
         if (!this._gcLocalAdds) this._gcLocalAdds = new Set();
         this._gcLocalAdds.add(groupId + ':' + newMemberPubkey);
         this.groupConversations.set(groupId, group);
+        if (typeof this._gnMark === 'function') this._gnMark(groupId, [newMemberPubkey], addAt);
 
         if (!this.users.has(newMemberPubkey)) {
             await this.fetchProfileDirect(newMemberPubkey);
@@ -2239,6 +2278,7 @@ Object.assign(NYM.prototype, {
 
         // The new member has no ephemeral key yet, so their wrap uses the real pubkey.
         await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { newMember: newMemberPubkey });
+        this._noteKeyGiven(groupId, group.members, eph.pk, newMemberPubkey);
         this._saveEphemeralKeys();
         if (minted && opts && opts.replay) this._syncMintedGroupKey(groupId);
 
@@ -2475,12 +2515,21 @@ Object.assign(NYM.prototype, {
             kind: 14, created_at: Math.floor(nowMs / 1000), tags, content: '', pubkey: this.pubkey
         };
         await this._sendGiftWrapsAsync(others, rumor, null, groupId, { forceRealPk: true });
-        if (x) {
+        if (x || minted) {
             this._noteControlAnswered(groupId, x, (opts && opts.ts) || 0, minted, rumor.pubkey);
             return;
         }
         this._saveEphemeralKeys();
-        if (minted) this._syncMintedGroupKey(groupId);
+    },
+
+    _repairMintedRowSoon(groupId) {
+        if (!this._mintRepairs) this._mintRepairs = new Set();
+        if (this._mintRepairs.has(groupId)) return;
+        this._mintRepairs.add(groupId);
+        setTimeout(() => {
+            this._mintRepairs.delete(groupId);
+            this._syncMintedGroupKey(groupId);
+        }, 0);
     },
 
     _holdsGroupKey(groupId) {
@@ -2558,6 +2607,7 @@ Object.assign(NYM.prototype, {
             await this._settleBeforeAnswer(groupId);
             if (this.pubkey !== pubkey) return;
             if (x && this._wasAnswered(groupId, x)) return;
+            if (this._keyAlreadyGiven(groupId, senderPubkey, opts && opts.announced)) { this._keyResyncReplyTs.delete(rlKey); return; }
             const group = answerable();
             if (!group) return;
             const minted = !this._holdsGroupKey(groupId);
@@ -2575,6 +2625,28 @@ Object.assign(NYM.prototype, {
             await this._sendGiftWrapsAsync([senderPubkey], rumor, null, groupId);
             this._noteControlAnswered(groupId, x, ts, minted, pubkey);
         } catch (_) { }
+    },
+
+    _noteKeyGiven(groupId, pubkeys, ephPk, realFor) {
+        if (!ephPk || !this.pubkey) return;
+        if (!this._ephKeyGiven) this._ephKeyGiven = new Map();
+        const at = Date.now();
+        for (const pk of pubkeys || []) {
+            if (!pk || pk === this.pubkey) continue;
+            const to = (realFor === true || realFor === pk) ? pk : this._getEncryptionPubkey(groupId, pk);
+            this._ephKeyGiven.set(`${groupId}:${pk}`, { owner: this.pubkey, eph: ephPk, to, at });
+        }
+    },
+
+    _keyAlreadyGiven(groupId, pk, announced) {
+        const given = this._ephKeyGiven && this._ephKeyGiven.get(`${groupId}:${pk}`);
+        if (!given || given.owner !== this.pubkey) return false;
+        const ek = this.groupEphemeralKeys && this.groupEphemeralKeys.get(groupId);
+        const cur = ek && ek.self && ek.self.current && ek.self.current.pk;
+        if (!cur || given.eph !== cur) return false;
+        const age = Date.now() - given.at;
+        if (!(age >= 0 && age <= 300000)) return false;
+        return given.to === pk || (!!announced && given.to === announced);
     },
 
     _ctrlFresh(kind, nowSec, ts) {
@@ -2671,14 +2743,19 @@ Object.assign(NYM.prototype, {
         if (pubkey && this.pubkey !== pubkey) return;
         const ek = this._getGroupEphemeralKeys(groupId);
         const nowSec = Math.floor(Date.now() / 1000);
-        if (minted && ek.self && ek.self.current) {
-            if (!this._answerMinted) this._answerMinted = new Map();
-            this._answerMinted.set(groupId, ek.self.current.pk);
-        }
+        if (minted && ek.self && ek.self.current) this._noteMinted(groupId, ek.self.current.pk);
         if (x) ek.answered = this._ctrlNoteAnswered(ek.answered, x, ts > 0 ? ts : nowSec, nowSec);
         this._saveEphemeralKeys();
         if (minted || x) this._syncMintedGroupKey(groupId);
         if (minted) this._settleMintedKey(groupId).catch(() => { });
+    },
+
+    _noteMinted(groupId, pk) {
+        if (!this._answerMinted) this._answerMinted = new Map();
+        if (!this._answerMintedAt) this._answerMintedAt = new Map();
+        this._answerMinted.set(groupId, pk);
+        this._answerMintedAt.set(groupId, { at: Math.floor(Date.now() / 1000), repaired: false });
+        if (typeof this._saveEphemeralKeys === 'function') this._saveEphemeralKeys();
     },
 
     _settleDelayMs() {
@@ -2836,7 +2913,7 @@ Object.assign(NYM.prototype, {
             const wrapLocal = async (pubkey) => {
                 // One member's failed wrap must not reject the Promise.all for everyone else.
                 try {
-                    const encryptTo = (groupId && !opts.forceRealPk) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
+                    const encryptTo = (groupId && !opts.forceRealPk && !(opts.newMember && pubkey === opts.newMember)) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
                     // Classical ECDH to the rotating ephemeral pubkey, KEM leg to the long-lived ML-KEM identity key.
                     const memberKemPk = this._pqWrapKeyFor(pubkey);
                     const wrapped = memberKemPk
@@ -2885,7 +2962,7 @@ Object.assign(NYM.prototype, {
 
         const wrapOne = async (pubkey) => {
             try {
-                const encryptTo = (groupId && !opts.forceRealPk) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
+                const encryptTo = (groupId && !opts.forceRealPk && !(opts.newMember && pubkey === opts.newMember)) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
 
                 const sealContent = useExtension
                     ? await window.nostr.nip44.encrypt(encryptTo, rumorJson)
@@ -2947,11 +3024,7 @@ Object.assign(NYM.prototype, {
         }
         const claim = options.claim || (typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null);
 
-        // Wait for reconnect catch-up so we have the latest ephemeral keys before encrypting.
-        await this._dmCatchupReady;
-
-        const group = this.groupConversations.get(groupId);
-        if (!group) return false;
+        if (!this.groupConversations.get(groupId)) return false;
         if (claim && claim.sk && !this._claimHolds(claim)) return false;
         const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
         if (typeof this._gtGroupSendBlocked === 'function' && !options.gtChecked) {
@@ -2967,35 +3040,8 @@ Object.assign(NYM.prototype, {
         const now = Math.floor(nowMs / 1000);
 
         const nymMessageId = this._generateSharedEventId();
-
-        const tags = [['rh', this._rosterHash(groupId, group.members)]];
-        tags.push(['g', groupId]);
-        if (group.name) tags.push(['subject', group.name]);
-        tags.push(['x', nymMessageId]);
-        this._attachGroupMetaTags(tags, group, groupId);
-
-        // Advertise the next ephemeral key in the rumor so recipients encrypt future messages to it.
-        const nextEph = this._rotateSelfEphemeralKey(groupId);
-        tags.push(['ephemeral_pk', nextEph.pk]);
-        tags.push(['ms', String(nowMs)]);
-
-        // NIP-30: declare any custom emoji shortcodes used in the message.
-        tags.push(...this.customEmojiTagsForContent(content));
-        if (typeof this.quoteTagsForContent === 'function') tags.push(...this.quoteTagsForContent(content));
-
-        // NIP-92: imeta tags listing Blossom mirror URLs for any media in the message.
-        if (typeof this.imetaTagsForContent === 'function') {
-            tags.push(...this.imetaTagsForContent(content));
-        }
-
         const fileOffer = options.fileOffer || null;
-        if (fileOffer) tags.push(['offer', JSON.stringify(fileOffer)]);
-
-        // Thread reply marker (root's shared nymMessageId) inside the encrypted rumor; see threads.js.
         const threadRoot = options.threadRoot || null;
-        if (threadRoot) tags.push(['nymthread', threadRoot]);
-
-        const rumor = { kind: 14, created_at: now, tags, content, pubkey: me.pubkey };
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
 
@@ -3021,11 +3067,10 @@ Object.assign(NYM.prototype, {
             threadRoot: threadRoot || undefined,
             expiresAt: expirationTs || undefined,
             senderVerified: true,
-            // Filled in below once the fan-out reports per-member coverage.
             pqEncrypted: false,
             isFileOffer: !!fileOffer,
             fileOffer,
-            deliveryStatus: 'sent'
+            deliveryStatus: 'sending'
         };
 
         const groupList = this.pmMessages.get(groupConvKey);
@@ -3033,14 +3078,56 @@ Object.assign(NYM.prototype, {
         else { groupList.push(msg); groupList.sort((a, b) => this._compareMessages(a, b)); }
         if (groupList.length > this.pmStorageLimit) this.pmMessages.set(groupConvKey, this._storeTrim(groupList, this.pmStorageLimit, undefined, true));
         this.channelDOMCache.delete(groupConvKey);
-        this.persistPMMessages(groupConvKey);
         this.moveGroupToTop(groupId);
 
         if (this.inPMMode && this.currentGroup === groupId) {
             this.displayMessage(msg);
         }
 
-        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { queuedDom: nymMessageId, claim });
+        // Wait for reconnect catch-up so we have the latest ephemeral keys before encrypting.
+        await this._dmCatchupReady;
+
+        const group = this.groupConversations.get(groupId);
+        if (!group || (claim && claim.sk && !this._claimHolds(claim))) {
+            this._groupSendingDrop(groupConvKey, msg);
+            return false;
+        }
+
+        const tags = [['rh', this._rosterHash(groupId, group.members)]];
+        tags.push(['g', groupId]);
+        if (group.name) tags.push(['subject', group.name]);
+        tags.push(['x', nymMessageId]);
+        this._attachGroupMetaTags(tags, group, groupId);
+
+        // Advertise the next ephemeral key in the rumor so recipients encrypt future messages to it.
+        const nextEph = this._rotateSelfEphemeralKey(groupId);
+        tags.push(['ephemeral_pk', nextEph.pk]);
+        tags.push(['ms', String(nowMs)]);
+
+        // NIP-30: declare any custom emoji shortcodes used in the message.
+        tags.push(...this.customEmojiTagsForContent(content));
+        if (typeof this.quoteTagsForContent === 'function') tags.push(...this.quoteTagsForContent(content));
+
+        // NIP-92: imeta tags listing Blossom mirror URLs for any media in the message.
+        if (typeof this.imetaTagsForContent === 'function') {
+            tags.push(...this.imetaTagsForContent(content));
+        }
+
+        if (fileOffer) tags.push(['offer', JSON.stringify(fileOffer)]);
+
+        // Thread reply marker (root's shared nymMessageId) inside the encrypted rumor; see threads.js.
+        if (threadRoot) tags.push(['nymthread', threadRoot]);
+
+        const rumor = { kind: 14, created_at: now, tags, content, pubkey: me.pubkey };
+
+        this.persistPMMessages(groupConvKey);
+
+        try {
+            await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { queuedDom: nymMessageId, claim });
+        } finally {
+            this._groupSendingSettle(groupConvKey, msg);
+        }
+        this._noteKeyGiven(groupId, group.members, nextEph.pk);
         // Post-quantum only if every member got a PQ wrap; one classical copy exposes the plaintext.
         const coverage = this.pqGroupCoverageFor(nymMessageId);
         if (coverage) {
@@ -3060,6 +3147,27 @@ Object.assign(NYM.prototype, {
         this.recordOwnActivity('send', claim);
 
         return true;
+    },
+
+    _groupSendingSettle(convKey, msg) {
+        if (msg.deliveryStatus !== 'sending') return;
+        msg.deliveryStatus = 'sent';
+        const el = this.findMessageElementAnywhere(msg.nymMessageId || msg.id);
+        const mark = el && el.querySelector('.delivery-status.sending');
+        if (mark) mark.remove();
+        this.persistPMMessages(convKey);
+    },
+
+    _groupSendingDrop(convKey, msg) {
+        const list = this.pmMessages.get(convKey);
+        const idx = Array.isArray(list) ? list.indexOf(msg) : -1;
+        if (idx >= 0) {
+            list.splice(idx, 1);
+            if (this._msgIndex) this._msgIndex.delete(list);
+        }
+        this.channelDOMCache.delete(convKey);
+        const el = this.findMessageElementAnywhere(msg.nymMessageId || msg.id);
+        if (el) el.remove();
     },
 
     // Resolve a nym, nym#suffix, hex pubkey or npub to a hex pubkey.
@@ -3109,6 +3217,7 @@ Object.assign(NYM.prototype, {
         if (!this.leftGroupTimes) this.leftGroupTimes = new Map();
         this.leftGroupTimes.set(groupId, Math.floor(Date.now() / 1000));
         this._saveLeftGroups();
+        if (group && typeof this._giNoteLeft === 'function') this._giNoteLeft(groupId, { createdBy: group.createdBy, mods: Array.isArray(group.mods) ? group.mods.slice() : [] }).catch(() => { });
         try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(this.leftGroupTimes))); } catch { }
         const groupConvKeyForRead = this.getGroupConversationKey(groupId);
         if (this.channelLastRead) this.channelLastRead.set(groupConvKeyForRead, Math.floor(Date.now() / 1000));
@@ -4147,7 +4256,7 @@ Object.assign(NYM.prototype, {
 
     _buildGroupItemHTML(groupId, name, members) {
         name = this._groupLabel(Object.assign({}, this.groupConversations.get(groupId) || {}, { name }));
-        const memberCount = members.length;
+        const memberCount = typeof this._gnAccepted === 'function' ? this._gnAccepted(groupId, members).length : members.length;
         const avatarStackHtml = this._groupAvatarHtml(groupId, members);
 
         return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge nm-hidden">0</span><button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Conversation menu" title="More" type="button">${NymMenuDotsIcon.svg({ size: 16 })}</button></div>`;
@@ -4474,7 +4583,7 @@ Object.assign(NYM.prototype, {
             const avatarSrc = this.escapeHtml(this.getAvatarUrl(pubkey));
             return `<div class="reactors-modal-user readers-modal-user" data-pubkey="${safePk}">
                 <img src="${avatarSrc}" class="readers-modal-avatar" data-avatar-pubkey="${safePk}" decoding="async" loading="lazy">
-                <span class="reactors-modal-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span></span>
+                <span class="reactors-modal-nym">${window.NymSuffix.sqHtml(baseNym, suffix)}</span>
                 ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
             </div>`;
         }).join('');
@@ -4510,11 +4619,13 @@ Object.assign(NYM.prototype, {
             ? `bottom:${window.innerHeight - rect.top + 4}px;`
             : `top:${rect.bottom + 6}px;`;
         modal.style.cssText += `right:${right}px;${verticalDecl}`;
+        if (typeof this._anchoredTrack === 'function') this._anchoredTrack(modal, () => { if (this.readersModal === modal) this.closeReadersModal(); });
     },
 
     closeReadersModal() {
         if (this.readersModal) {
             clearTimeout(this.readersModal._hoverClose);
+            if (this.readersModal._anchorRO) this.readersModal._anchorRO.disconnect();
             this.readersModal.remove();
             this.readersModal = null;
         }
@@ -4524,7 +4635,7 @@ Object.assign(NYM.prototype, {
         if (!group) return '';
         const otherMembers = (group.members || []).filter(pk => pk !== this.pubkey);
         const displayPks = otherMembers.slice(0, 3).map(pk => this._safePubkey(pk) + (this._maskOf(pk) ? '!' : '')).join(',');
-        return `${displayPks}|${group.members ? group.members.length : 0}|${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}|${this._groupMetaHidden(group, 'avatar') ? '' : (group.avatar || '')}`;
+        return `${displayPks}|${group.members ? group.members.length : 0}/${group.invited ? Object.keys(group.invited).length : 0}|${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}|${this._groupMetaHidden(group, 'avatar') ? '' : (group.avatar || '')}`;
     },
 
     // Signature for the in-chat group header; changes force a header re-render.
@@ -4533,7 +4644,7 @@ Object.assign(NYM.prototype, {
         if (!group) return '';
         const displayPks = group.members.filter(pk => pk !== this.pubkey)
             .slice(0, 4).map(pk => this._safePubkey(pk) + (this._maskOf(pk) ? '!' : ''));
-        return `${displayPks.join(',')}|${group.members.length}|${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}|${this._groupMetaHidden(group, 'avatar') ? '' : (group.avatar || '')}|${(typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''))}`;
+        return `${displayPks.join(',')}|${group.members.length}/${group.invited ? Object.keys(group.invited).length : 0}|${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}|${this._groupMetaHidden(group, 'avatar') ? '' : (group.avatar || '')}|${(typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''))}`;
     },
 
     _buildGroupHeaderHtml(groupId) {
@@ -4560,7 +4671,7 @@ Object.assign(NYM.prototype, {
             }
         }
         const nameCls = (!customAvatar && otherMembers.length > 0) ? 'nm-grp-ml8' : '';
-        const memberLabel = `<div class="channel-location"><span class="loc-country">${this.escapeHtml(this.uiText('{n} members', { n: this.abbreviateNumber(group.members.length) }))}</span></div>`;
+        const memberLabel = `<div class="channel-location"><span class="loc-country">${this.escapeHtml(this.uiText('{n} members', { n: this.abbreviateNumber(typeof this._gnAccepted === 'function' ? this._gnAccepted(groupId, group.members).length : group.members.length) }))}</span></div>`;
         const descLine = window.NymGroupTools ? window.NymGroupTools.descriptionLine((typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''))) : '';
         const descHtml = descLine
             ? `<div class="gt-desc-line" role="button" tabindex="0" data-action="gtShowDescription" data-group-id="${this.escapeHtml(groupId)}" title="${this.escapeHtml(descLine)}">${this.escapeHtml(descLine)}</div>`
@@ -4731,10 +4842,12 @@ Object.assign(NYM.prototype, {
         document.getElementById('grpCtxName').textContent = (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'));
         const capText = (x, a) => (typeof this.uiText === 'function' ? this.uiText(x, a) : x);
         const capMax = this.MAX_GROUP_MEMBERS || 100;
-        const capCount = group.members.length;
-        const capFull = capCount >= capMax;
+        const capCount = typeof this._gnAccepted === 'function' ? this._gnAccepted(groupId, group.members).length : group.members.length;
+        const capFull = group.members.length >= capMax;
         const capEl = document.getElementById('grpCtxMemberCount');
         const capParts = [document.createTextNode(capText('{n}/{max} members', { n: capCount, max: capMax }).split('{n}').join(String(capCount)).split('{max}').join(String(capMax)))];
+        const invitedLine = typeof this._gnCountLine === 'function' ? this._gnCountLine(groupId) : '';
+        if (invitedLine) capParts.push(document.createTextNode(' · ' + invitedLine));
         if (capFull) {
             const capFullEl = document.createElement('span');
             capFullEl.textContent = capText('Full');
@@ -4746,9 +4859,12 @@ Object.assign(NYM.prototype, {
 
         this._renderGroupCtxActions(groupId);
 
-        const shownMembers = iCanModerate ? group.members.slice() : this._groupVisibleMembers(group);
-        document.getElementById('grpCtxMembersTitle').textContent = `Members · ${shownMembers.length}`;
-        const sorted = [...shownMembers].sort((a, b) => this._roleRank(groupId, a) - this._roleRank(groupId, b));
+        const gnView = typeof this._gnView === 'function' ? this._gnView(groupId) : null;
+        const gnRank = (pk) => (gnView ? window.NymGroupInvited.STATUS.indexOf(window.NymGroupInvited.statusOf(gnView, pk)) : 0);
+        const shownMembers = (iCanModerate ? group.members.slice() : this._groupVisibleMembers(group))
+            .filter((pk) => !gnView || gnView.shown.includes(pk) || window.NymGroupInvited.statusOf(gnView, pk) === 'member');
+        document.getElementById('grpCtxMembersTitle').textContent = `Members · ${shownMembers.filter((pk) => gnRank(pk) === 0).length}`;
+        const sorted = [...shownMembers].sort((a, b) => (gnRank(a) - gnRank(b)) || (this._roleRank(groupId, a) - this._roleRank(groupId, b)));
         document.getElementById('grpCtxMembers').innerHTML = sorted.map(pk => this._groupCtxMemberRowHtml(groupId, pk)).join('');
         if (typeof this.ensureListProfiles === 'function') {
             this.ensureListProfiles(document.getElementById('grpCtxMembers'), sorted.filter((pk) => !this._maskOf(pk)));
@@ -4868,11 +4984,12 @@ Object.assign(NYM.prototype, {
         const mask = this._maskOf(pubkey);
         const baseNym = this.escapeHtml(mask || this.stripPubkeySuffix(this.getNymFromPubkey(pubkey)));
         const suffix = this.getPubkeySuffix(pubkey);
+        const nymHtml = window.NymSuffix.sqHtml(mask || this.stripPubkeySuffix(this.getNymFromPubkey(pubkey)), suffix);
         const avatar = mask
             ? `<img src="${this.escapeHtml((typeof this._maskedAvatar === 'function' ? this._maskedAvatar(pubkey) : ''))}" class="group-ctx-member-avatar" alt="" decoding="async" loading="lazy">`
             : `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="group-ctx-member-avatar" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
         const unban = `<button type="button" class="group-ctx-unban" data-action="groupCtxUnban" data-pubkey="${safePk}">Unban</button>`;
-        return `<div class="group-ctx-member banned">${avatar}<span class="group-ctx-member-name">${baseNym}<span class="nym-suffix">#${suffix}</span></span>${unban}</div>`;
+        return `<div class="group-ctx-member banned">${avatar}<span class="group-ctx-member-name">${nymHtml}</span>${unban}</div>`;
     },
 
     async groupCtxUnban(pubkey) {
@@ -4902,7 +5019,8 @@ Object.assign(NYM.prototype, {
             ? `<img src="${this.escapeHtml((typeof this._maskedAvatar === 'function' ? this._maskedAvatar(pubkey) : ''))}" class="group-ctx-member-avatar" alt="" decoding="async" loading="lazy">`
             : `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="group-ctx-member-avatar" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
         const youTag = isSelf ? '<span class="group-ctx-you">you</span>' : '';
-        return `<div class="group-ctx-member" data-action="groupCtxMemberClick" data-pubkey="${safePk}" data-nym="${baseNym}">${avatar}<span class="group-ctx-member-name">${baseNym}<span class="nym-suffix">#${suffix}</span>${youTag}</span>${roleBadge}</div>`;
+        const invitedTag = !isSelf && typeof this._gnBadge === 'function' ? this._gnBadge(groupId, pubkey, mask || this.stripPubkeySuffix(this.getNymFromPubkey(pubkey))) : '';
+        return `<div class="group-ctx-member" data-action="groupCtxMemberClick" data-pubkey="${safePk}" data-nym="${baseNym}">${avatar}<span class="group-ctx-member-name">${window.NymSuffix.sqHtml(mask || this.stripPubkeySuffix(this.getNymFromPubkey(pubkey)), suffix)}${youTag}</span>${invitedTag}${roleBadge}</div>`;
     },
 
     closeGroupContextMenu() {
@@ -5079,6 +5197,7 @@ Object.assign(NYM.prototype, {
         if (typeof this._closeThreadViewOnSwitch === 'function') this._closeThreadViewOnSwitch();
         this._saveCurrentDraft();
         const prevChannelKey = this.currentGeohash || this.currentChannel;
+        if (typeof this._flushHeldChannelCloses === 'function') this._flushHeldChannelCloses();
         if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {
             this.closeChannelSubscription(prevChannelKey);
         }
@@ -5208,12 +5327,16 @@ Object.assign(NYM.prototype, {
                 const msg = msgs.find(m => m.nymMessageId === lookupId || m.id === lookupId);
                 if (msg) {
                     if (typeof this._noteEdit === 'function') this._noteEdit(msg, newContent, now);
+                    const wasHidden = typeof this.isContentHidden === 'function' && this.isContentHidden(msg);
                     msg.content = newContent;
                     msg.isEdited = true;
-                }
-            }
-
-            this.updateMessageInDOM(lookupId, newContent);
+                    msg.editAt = now;
+                    msg.editId = nymMessageId;
+                    this.persistPMMessages(groupConvKey);
+                    this.updateMessageInDOM(lookupId, newContent);
+                    if (typeof this._applyEditVisibility === 'function') this._applyEditVisibility(lookupId, msg, groupConvKey, wasHidden);
+                } else this.updateMessageInDOM(lookupId, newContent);
+            } else this.updateMessageInDOM(lookupId, newContent);
 
             await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { claim });
             return true;
@@ -5350,24 +5473,27 @@ Object.assign(NYM.prototype, {
             const labelHtml = labels.length
                 ? `<span class="group-info-label">${labels.join(', ')}</span>`
                 : '';
-            return `<div class="group-info-member" data-pubkey="${safePk}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message"${avatarKey} alt="" decoding="async" loading="lazy"><span class="group-info-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}</span>${labelHtml}</div>`;
+            const invitedHtml = typeof this._gnBadge === 'function' ? this._gnBadge(groupId, pk, baseNym) : '';
+            return `<div class="group-info-member" data-pubkey="${safePk}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message"${avatarKey} alt="" decoding="async" loading="lazy"><span class="group-info-nym">${window.NymSuffix.sqHtml(baseNym, suffix)}${flairHtml}</span>${labelHtml}${invitedHtml}</div>`;
         };
         const membersHtml = sorted.map(memberRow).join('');
-        const html = `<div class="group-info-title">Group: "<span data-no-i18n>${this.escapeHtml((typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')))}</span>"</div><div class="group-info-count">Members (${sorted.length})</div><div class="group-info-members">${membersHtml}</div>`;
+        const acceptedCount = typeof this._gnAccepted === 'function' ? this._gnAccepted(groupId, sorted).length : sorted.length;
+        const invitedLine = typeof this._gnCountLine === 'function' ? this._gnCountLine(groupId) : '';
+        const html = `<div class="group-info-title">Group: "<span data-no-i18n>${this.escapeHtml((typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')))}</span>"</div><div class="group-info-count">Members (${acceptedCount})${invitedLine ? ' · ' + this.escapeHtml(invitedLine) : ''}</div><div class="group-info-members">${membersHtml}</div>`;
         return { html, fetch: sorted.filter((pk) => !this._maskOf(pk)) };
     },
 
     toggleGroupMentionsOnly(enabled) {
         this.groupNotifyMentionsOnly = enabled;
         try { localStorage.setItem('nym_group_notify_mentions_only', String(enabled)); } catch (_) { }
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this.notePrefChanged('groupNotifyMentionsOnly');
     },
 
     // Thread-scoped twin of toggleGroupMentionsOnly, applying to replies in any thread.
     toggleThreadMentionsOnly(enabled) {
         this.threadNotifyMentionsOnly = enabled;
         try { localStorage.setItem('nym_thread_notify_mentions_only', String(enabled)); } catch (_) { }
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this.notePrefChanged('threadNotifyMentionsOnly');
     },
 
 });

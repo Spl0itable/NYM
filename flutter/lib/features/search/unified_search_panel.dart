@@ -628,10 +628,10 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
                   Text('  ·  ',
                       style: TextStyle(color: c.textDim, fontSize: 12)),
                   Flexible(
-                    child: NymText(chat,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: c.textDim, fontSize: 12)),
+                    child: NymFitText(chat,
+                        style: TextStyle(color: c.textDim, fontSize: 12),
+                        span: (l) => nymTextSpan(context, l,
+                            style: TextStyle(color: c.textDim, fontSize: 12))),
                   ),
                   const SizedBox(width: 8),
                   Flexible(

@@ -64,26 +64,38 @@
             return !!(this.blockedUsers && this.blockedUsers.has(peer));
         },
 
+        _usListedChannels() {
+            const P = window.NymPublicStream;
+            const listed = new Map();
+            if (P && P.DEFAULT_CHANNEL) listed.set(P.DEFAULT_CHANNEL, { channel: P.DEFAULT_CHANNEL, geohash: P.DEFAULT_CHANNEL });
+            for (const [key, ch] of (this.channels || new Map())) listed.set(key, ch);
+            return listed;
+        },
+
         _usCorpus() {
             const channels = [];
             const seen = new Set();
             const blocked = new Set([...(this.blockedChannels || [])].concat([...(this.hiddenChannels || [])]).map((k) => String(k || '').toLowerCase()));
+            const F = window.NymContentFilter;
+            const cf = F && typeof this._cfCtx === 'function' ? this._cfCtx() : null;
+            const hid = cf ? new Set(Array.from(cf.blockedChannels || []).concat(Array.from(cf.hiddenChannels || [])).map(F.channelKey)) : blocked;
+            const hiddenCh = (k) => hid.has(k);
             const activity = this.channelLastActivity || new Map();
             const nymHidden = (pk, nym) => (typeof this.isPersonHidden === 'function'
                 ? this.isPersonHidden(pk, nym || '')
                 : typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword('', nym || '', pk));
-            for (const [key, ch] of (this.channels || new Map())) {
+            for (const [key, ch] of this._usListedChannels()) {
                 const k = String(key || '').toLowerCase();
-                if (!k || blocked.has(k) || seen.has(k)) continue;
+                if (!k || hiddenCh(k) || seen.has(k)) continue;
                 const storage = ch && ch.geohash ? '#' + ch.geohash : k;
                 if (this._usLocked(storage)) continue;
                 seen.add(k);
                 const geo = typeof this.isValidGeohash === 'function' && this.isValidGeohash(k) && !!(ch && ch.geohash);
-                channels.push({ key: k, name: k, kind: geo ? 'geohash' : 'channel', joined: true, at: activity.get(geo ? '#' + k : k) || activity.get('#' + k) || 0 });
+                channels.push({ key: k, name: k, kind: geo ? 'geohash' : 'channel', joined: true, at: activity.get(geo ? '#' + k : k) || activity.get('#' + k) || 0, channel: (ch && ch.channel) || k, geohash: (ch && ch.geohash) || '' });
             }
             for (const [gh, buckets] of (this._geohashD1Activity || new Map())) {
                 const k = String(gh || '').toLowerCase();
-                if (!k || seen.has(k) || blocked.has(k) || !S().isGeohash(k)) continue;
+                if (!k || seen.has(k) || hiddenCh(k) || !S().isGeohash(k)) continue;
                 seen.add(k);
                 let sum = 0;
                 for (const n of (Array.isArray(buckets) ? buckets : [])) sum += Number(n) || 0;
@@ -217,7 +229,7 @@
                 }
                 return this._usHighlight(label.slice(from, to), rs);
             };
-            return `${slice(0, base.length)}<span class="nym-suffix">${slice(base.length, label.length)}</span>`;
+            return window.NymSuffix.sqRaw(slice(0, base.length), slice(base.length, label.length), window.NymSuffix.guard(base));
         },
 
         _usEnsureModal() {
@@ -461,15 +473,16 @@
                     this.addChannel(it.key, geo);
                     if (this.userJoinedChannels) this.userJoinedChannels.add(it.key);
                     if (typeof this.saveUserChannels === 'function') this.saveUserChannels();
+                    this.switchChannel(it.key, geo);
+                    return;
                 }
-                this.switchChannel(it.key, geo);
+                this.switchChannel(it.channel || it.key, it.geohash || geo);
                 return;
             }
             if (row.kind === 'join') {
                 const j = row.join;
-                const geo = j.geohash ? j.key : '';
-                this.addChannel(j.key, geo);
-                this.switchChannel(j.key, geo);
+                this.addChannel(j.key, j.key);
+                this.switchChannel(j.key, j.key);
                 if (this.userJoinedChannels) this.userJoinedChannels.add(j.key);
                 if (typeof this.saveUserChannels === 'function') this.saveUserChannels();
                 return;
@@ -478,7 +491,7 @@
                 const it = row.item;
                 const fake = { preventDefault() { }, stopPropagation() { }, clientX: 0, clientY: 0, target: document.body };
                 const suffix = this.getPubkeySuffix(it.pubkey);
-                this.showContextMenu(fake, `${this.escapeHtml(it.nym)}<span class="nym-suffix">#${suffix}</span>`, it.pubkey, null, null, true);
+                this.showContextMenu(fake, `${window.NymSuffix.sqHtml(it.nym, suffix)}`, it.pubkey, null, null, true);
                 return;
             }
             if (row.kind === 'message') this.unifiedSearchJump(row.item.key, row.item.msg);

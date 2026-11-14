@@ -4,7 +4,6 @@ import 'dart:math';
 import 'package:cryptography/cryptography.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../services/relay/connection_changes.dart';
 import '../../services/storage/at_rest_cipher.dart';
 import '../../services/storage/cache_store.dart';
 import '../../services/storage/key_value_store.dart';
@@ -101,7 +100,6 @@ class _CacheStoreAdapter implements PanicCacheStore {
   @override
   Future<void> wipe() async {
     // Overwrite and clear every store, then delete the DB file; the open is isolated so a corrupt DB still gets deleted.
-    connectionChanges.clear();
     try {
       if (!_store.isOpen) await _store.open();
     } catch (_) {}

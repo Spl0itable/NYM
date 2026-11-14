@@ -41,6 +41,7 @@ class MsgActionFacts {
     this.edited = false,
     this.hexId = false,
     this.bot = false,
+    this.anonLane = false,
   });
 
   factory MsgActionFacts.fromJson(Map<String, dynamic> j) {
@@ -60,6 +61,7 @@ class MsgActionFacts {
       edited: b('edited'),
       hexId: b('hexId'),
       bot: b('bot'),
+      anonLane: b('anonLane'),
     );
   }
 
@@ -77,6 +79,7 @@ class MsgActionFacts {
   final bool edited;
   final bool hexId;
   final bool bot;
+  final bool anonLane;
 }
 
 List<MsgAction> buildMessageActions(MsgActionFacts f) {
@@ -89,7 +92,7 @@ List<MsgAction> buildMessageActions(MsgActionFacts f) {
     if (f.hasContent) MsgAction.translate,
     if (tools) f.saved ? MsgAction.unsave : MsgAction.save,
     if (tools && f.keepOffered) f.kept ? MsgAction.unkeep : MsgAction.keep,
-    if (!f.isSelf && f.hasId && f.hasAuthor) MsgAction.zap,
+    if (!f.isSelf && f.hasId && f.hasAuthor && !f.anonLane) MsgAction.zap,
     if (f.isSelf && f.hasId && f.hasContent) MsgAction.edit,
     if (f.hasId && (f.isSelf || f.modDelete)) MsgAction.delete,
     if (f.edited && f.hasId) MsgAction.editHistory,
@@ -220,7 +223,7 @@ bool swipeActionApplies(String action, MsgActionFacts f) {
     case 'react':
       return f.hasId;
     case 'zap':
-      return f.hasId && f.hasAuthor;
+      return f.hasId && f.hasAuthor && !f.anonLane;
     case 'slap':
     case 'hug':
       return f.hasAuthor && !f.isSelf;

@@ -40,8 +40,10 @@ void showReactionPicker(
         onClose: () => Navigator.of(dialogCtx).maybePop(),
         onSelect: (emoji) async {
           Navigator.of(dialogCtx).maybePop();
-          ref.read(recentEmojisProvider.notifier).record(emoji);
           final controller = ref.read(nostrControllerProvider);
+          if (!controller.anonLaneRecentsQuiet(messageId: message.id)) {
+            ref.read(recentEmojisProvider.notifier).record(emoji);
+          }
           final view = ref.read(currentViewProvider);
           final already = (ref.read(reactionsProvider)[message.id] ??
                   const <MessageReaction>[])

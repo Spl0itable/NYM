@@ -136,6 +136,203 @@ List<InlineSpan> nymLabelSpans(
   ];
 }
 
+String keepNymBase(String base, int? keep) {
+  if (keep == null) return base;
+  final g = base.characters;
+  if (g.length <= keep) return base;
+  return '${g.take(keep)}\u2026';
+}
+
+String nymLeadOf(String base) {
+  final g = base.characters;
+  return g.take(base.startsWith('@') && g.length > 1 ? 2 : 1).toString();
+}
+
+int? fitNymKeep(String base, double maxWidth, double Function(int? keep) widthOf) {
+  if (!maxWidth.isFinite) return null;
+  final whole = widthOf(null);
+  if (whole <= maxWidth + 0.01) return null;
+  var lo = 1;
+  var hi = base.characters.length - 1;
+  if (hi < 1) return null;
+  while (lo < hi) {
+    final mid = (lo + hi + 1) ~/ 2;
+    if (widthOf(mid) <= maxWidth + 0.01) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return widthOf(lo) < whole ? lo : null;
+}
+
+double nymSpanWidth(BuildContext context, InlineSpan span,
+    [List<PlaceholderDimensions> placeholders = const []]) {
+  final tp = TextPainter(
+    text: span,
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+    maxLines: 1,
+  );
+  if (placeholders.isNotEmpty) tp.setPlaceholderDimensions(placeholders);
+  tp.layout();
+  final w = tp.width;
+  tp.dispose();
+  return w;
+}
+
+typedef NymLineMeasure = ({
+  InlineSpan span,
+  List<PlaceholderDimensions> placeholders
+});
+
+class NymFitLine extends StatelessWidget {
+  const NymFitLine({
+    super.key,
+    required this.base,
+    required this.span,
+    this.measure,
+    this.style,
+    this.textKey,
+  });
+
+  final String base;
+  final InlineSpan Function(int? keep) span;
+  final NymLineMeasure Function(int? keep)? measure;
+  final TextStyle? style;
+  final Key? textKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final root = resolvedNymStyle(context, style);
+    NymLineMeasure measured(int? keep) =>
+        measure?.call(keep) ??
+        (span: span(keep), placeholders: const <PlaceholderDimensions>[]);
+    TextSpan rooted(NymLineMeasure m) =>
+        TextSpan(style: root, children: [m.span]);
+    final whole = measured(null);
+    return _NymLineIntrinsics(
+      line: rooted(whole),
+      placeholders: whole.placeholders,
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      child: LayoutBuilder(builder: (context, box) {
+        final keep = fitNymKeep(base, box.maxWidth, (k) {
+          final m = measured(k);
+          return nymSpanWidth(context, rooted(m), m.placeholders);
+        });
+        return Text.rich(span(keep),
+            key: textKey,
+            style: style,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis);
+      }),
+    );
+  }
+}
+
+class _NymLineIntrinsics extends SingleChildRenderObjectWidget {
+  const _NymLineIntrinsics({
+    required this.line,
+    required this.placeholders,
+    required this.textDirection,
+    required this.textScaler,
+    required super.child,
+  });
+
+  final InlineSpan line;
+  final List<PlaceholderDimensions> placeholders;
+  final TextDirection textDirection;
+  final TextScaler textScaler;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderNymLineIntrinsics(line, placeholders, textDirection, textScaler);
+
+  @override
+  void updateRenderObject(
+          BuildContext context, _RenderNymLineIntrinsics renderObject) =>
+      renderObject.update(line, placeholders, textDirection, textScaler);
+}
+
+class _RenderNymLineIntrinsics extends RenderProxyBox {
+  _RenderNymLineIntrinsics(
+      this._line, this._placeholders, this._dir, this._scaler);
+
+  InlineSpan _line;
+  List<PlaceholderDimensions> _placeholders;
+  TextDirection _dir;
+  TextScaler _scaler;
+  Size? _measured;
+
+  void update(InlineSpan line, List<PlaceholderDimensions> placeholders,
+      TextDirection dir, TextScaler scaler) {
+    _line = line;
+    _placeholders = placeholders;
+    _dir = dir;
+    _scaler = scaler;
+    _measured = null;
+    markNeedsLayout();
+  }
+
+  Size get _size {
+    final hit = _measured;
+    if (hit != null) return hit;
+    final tp = TextPainter(
+        text: _line, textDirection: _dir, textScaler: _scaler, maxLines: 1);
+    if (_placeholders.isNotEmpty) tp.setPlaceholderDimensions(_placeholders);
+    tp.layout();
+    final out = Size(tp.width, tp.height);
+    tp.dispose();
+    return _measured = out;
+  }
+
+  @override
+  double computeMinIntrinsicWidth(double height) => 0;
+
+  @override
+  double computeMaxIntrinsicWidth(double height) => _size.width;
+
+  @override
+  double computeMinIntrinsicHeight(double width) => _size.height;
+
+  @override
+  double computeMaxIntrinsicHeight(double width) => _size.height;
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) =>
+      constraints.constrain(_size);
+}
+
+class NymFitText extends StatelessWidget {
+  const NymFitText(this.label, {super.key, this.style, this.span});
+
+  final String label;
+  final TextStyle? style;
+  final InlineSpan Function(String label)? span;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = splitNymLabel(label);
+    if (p.suffix.isEmpty) {
+      return Text.rich(span?.call(label) ?? TextSpan(text: label),
+          style: style, maxLines: 1, overflow: TextOverflow.ellipsis);
+    }
+    final base = capMentionBase(p.base);
+    return NymFitLine(
+      base: base,
+      style: style,
+      span: (keep) {
+        final b = keepNymBase(base, keep);
+        return span?.call('$b${p.suffix}') ??
+            TextSpan(
+                children: nymLabelSpans(
+                    context, b, p.suffix, resolvedNymStyle(context, style)));
+      },
+    );
+  }
+}
+
 class NymText extends StatelessWidget {
   const NymText(
     this.text, {
@@ -187,6 +384,12 @@ class NymLabel extends StatelessWidget {
   final TextAlign? textAlign;
 
   ({String base, String suffix}) get parts {
+    final p = _parts;
+    if (p.suffix.isEmpty) return p;
+    return (base: capMentionBase(p.base), suffix: p.suffix);
+  }
+
+  ({String base, String suffix}) get _parts {
     if (suffix != null) return (base: nym, suffix: _hashed(suffix!));
     if (pubkey != null) {
       return (
@@ -235,7 +438,7 @@ class NymLabel extends StatelessWidget {
           maxLines: 1,
           softWrap: false,
           overflow: TextOverflow.ellipsis),
-      lead: Text('${p.base.characters.take(1)}\u2026',
+      lead: Text('${nymLeadOf(p.base)}\u2026',
           style: style,
           maxLines: 1,
           softWrap: false,
@@ -320,8 +523,10 @@ class _RenderNymLabelRow extends RenderBox
       child.parentData! as _NymLabelParentData;
 
   @override
-  double computeMinIntrinsicWidth(double height) =>
-      _suffix.getMaxIntrinsicWidth(height);
+  double computeMinIntrinsicWidth(double height) => math.min(
+      _full.getMaxIntrinsicWidth(height),
+      _lead.getMaxIntrinsicWidth(height) +
+          _suffix.getMaxIntrinsicWidth(height));
 
   @override
   double computeMaxIntrinsicWidth(double height) =>

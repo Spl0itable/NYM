@@ -74,6 +74,7 @@ Object.assign(NYM.prototype, {
                 const { messageId, pubkey, nym } = this.contextMenuData;
 
                 this.closeContextMenu();
+                if (this._zapAnonLaneBlocked(messageId)) return;
 
                 this.displaySystemMessage(this.uiText(`Checking if @{nym} can receive zaps...`, { nym }));
 
@@ -174,7 +175,7 @@ Object.assign(NYM.prototype, {
                 const baseNym = this.contextMenuData.nym;
                 const suffix = this.getPubkeySuffix(this.contextMenuData.pubkey);
                 const fullNym = `${baseNym}#${suffix}`;
-                this.setQuoteReply(fullNym, this.contextMenuData.content, this.contextMenuData.messageId);
+                this.setQuoteReply(fullNym, this.contextMenuData.content, this.contextMenuData.messageId, this.contextMenuData.pubkey);
             }
             this.closeContextMenu();
         });
@@ -241,7 +242,9 @@ Object.assign(NYM.prototype, {
                 const nonQuotedContent = data.content.split('\n')
                     .filter(line => !line.startsWith('>'))
                     .join('\n').trim();
-                await this.translateMessage(nonQuotedContent || data.content, data.messageId || data.reactionId);
+                const trId = [data.messageId, data.reactionId].find((id) => id && this.findMessageElementAnywhere(id))
+                    || data.messageId || data.reactionId;
+                await this.translateMessage(nonQuotedContent || data.content, trId);
             } else {
                 this.displaySystemMessage('No message content to translate');
             }
@@ -261,10 +264,138 @@ Object.assign(NYM.prototype, {
         // ctxDeleteMessage is wired via data-action in index.html and dispatched through inline-bindings.js.
     },
 
+    _reportRecordLocal() {
+        return typeof this._settingsSyncLocal === 'function' && this._settingsSyncLocal();
+    },
+
+    _reportRecord() {
+        const R = window.NymReportRecord;
+        const local = this._reportRecordLocal();
+        const owner = local ? '' : (this.pubkey || '');
+        if (!this._reportRec || this._reportRec.local !== local || this._reportRec.owner !== owner) {
+            this._reportRec = { local, owner, map: {} };
+        }
+        if (!local) {
+            let raw = {};
+            try { raw = JSON.parse(localStorage.getItem(R.STORE_KEY) || '{}'); } catch (_) { raw = {}; }
+            this._reportRec.map = R.merge(this._reportRec.map, raw);
+        }
+        return this._reportRec.map;
+    },
+
+    isTargetReported(key) {
+        return !!key && !!window.NymReportRecord && Object.prototype.hasOwnProperty.call(this._reportRecord(), key);
+    },
+
+    _reportRefusal(key) {
+        const s = window.NymReportRecord.refusal(key);
+        if (s === 'You already reported this message.') return this.uiText('You already reported this message.');
+        if (s === 'You already reported this emoji pack.') return this.uiText('You already reported this emoji pack.');
+        return this.uiText('You already reported this user.');
+    },
+
+    _reportEntryKey(data) {
+        const d = data || this.contextMenuData;
+        const R = window.NymReportRecord;
+        if (!R || !d || !d.pubkey) return '';
+        return R.keyFor({ pubkey: d.pubkey, messageId: d.messageId, includeMessage: !!d.messageId });
+    },
+
+    _reportEntryBlocked(data) {
+        const d = data || this.contextMenuData;
+        const R = window.NymReportRecord;
+        if (!R || !d || !d.pubkey) return '';
+        const msg = this._reportEntryKey(d);
+        if (!this.isTargetReported(msg)) return '';
+        const user = R.keyFor({ pubkey: d.pubkey });
+        return msg === user || this.isTargetReported(user) ? msg : '';
+    },
+
+    _reportMessageLocked(data) {
+        const msg = this._reportEntryKey(data);
+        return msg.charAt(0) === 'e' && this.isTargetReported(msg) ? msg : '';
+    },
+
+    _reportModalKey() {
+        const R = window.NymReportRecord;
+        if (!R) return '';
+        const pack = this._reportTarget;
+        if (pack) return R.keyFor({ coord: pack.coord });
+        const d = this.contextMenuData;
+        if (!d) return '';
+        const box = document.getElementById('reportMessage');
+        return R.keyFor({ pubkey: d.pubkey, messageId: d.messageId, includeMessage: !!(box && box.checked) });
+    },
+
+    _noteReported(key) {
+        const R = window.NymReportRecord;
+        if (!R || !key) return;
+        const map = R.add(this._reportRecord(), key, Math.floor(Date.now() / 1000));
+        this._reportRec.map = map;
+        this._syncReportModalState();
+        if (this._reportRec.local) return;
+        try { localStorage.setItem(R.STORE_KEY, JSON.stringify(map)); } catch (_) { }
+        if (typeof nostrSettingsSave === 'function') {
+            try { nostrSettingsSave(); } catch (_) { }
+        }
+    },
+
+    _reportedForSync() {
+        if (!window.NymReportRecord || this._reportRecordLocal()) return {};
+        return this._reportRecord();
+    },
+
+    _applyReportedSync(raw) {
+        const R = window.NymReportRecord;
+        if (!R || this._reportRecordLocal() || !raw || typeof raw !== 'object') return;
+        const cur = this._reportRecord();
+        const next = R.merge(cur, raw);
+        if (JSON.stringify(next) === JSON.stringify(cur)) return;
+        this._reportRec.map = next;
+        try { localStorage.setItem(R.STORE_KEY, JSON.stringify(next)); } catch (_) { }
+        this._syncReportModalState();
+        this._syncCtxReportEntry();
+    },
+
+    _syncCtxReportEntry() {
+        const el = document.getElementById('ctxReport');
+        if (!el) return;
+        const done = !!this._reportEntryBlocked();
+        el.classList.toggle('reported', done);
+        el.setAttribute('aria-disabled', done ? 'true' : 'false');
+        el.style.opacity = done ? '0.55' : '';
+        el.style.cursor = done ? 'default' : '';
+        let label = null;
+        for (const n of el.childNodes) if (n.nodeType === 3 && n.nodeValue.trim()) label = n;
+        if (label) label.nodeValue = done ? this.uiText('Reported') : this.uiText('Report');
+    },
+
+    _syncReportModalState() {
+        const modal = document.getElementById('reportModal');
+        if (!modal || modal.style.display !== 'flex') return;
+        const key = this._reportModalKey();
+        const done = this.isTargetReported(key);
+        const btn = modal.querySelector('[data-action="submitReport"]');
+        if (btn) btn.disabled = done;
+        const locked = !done && !this._reportTarget ? this._reportMessageLocked() : '';
+        const note = document.getElementById('reportAlready');
+        if (note) {
+            note.textContent = done ? this._reportRefusal(key) : (locked ? this._reportRefusal(locked) : '');
+            note.classList.toggle('nm-hidden', !done && !locked);
+        }
+    },
+
     openReportModal(target) {
         const B = typeof window !== 'undefined' ? window.NymEmojiBlock : null;
         const pack = target && target.kind === 'emojiPack' && B && B.validCoord(target.coord) ? target : null;
         if (!pack && !this.contextMenuData) return;
+        const R = window.NymReportRecord;
+        const packKey = R && pack ? R.keyFor({ coord: pack.coord }) : '';
+        const blocked = pack ? (this.isTargetReported(packKey) ? packKey : '') : this._reportEntryBlocked();
+        if (blocked) {
+            this.displaySystemMessage(this._reportRefusal(blocked));
+            return;
+        }
         this._reportTarget = pack;
 
         const modal = document.getElementById('reportModal');
@@ -286,7 +417,7 @@ Object.assign(NYM.prototype, {
             targetNym.innerHTML = this.formatNymWithPubkey(this.contextMenuData.nym, this.contextMenuData.pubkey);
             delete targetNym.dataset.coord;
             if (messageRow) messageRow.style.display = '';
-            if (this.contextMenuData.messageId) {
+            if (this.contextMenuData.messageId && !this._reportMessageLocked()) {
                 reportMessageCheckbox.disabled = false;
                 reportMessageCheckbox.checked = true;
             } else {
@@ -295,7 +426,12 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        if (!reportMessageCheckbox._reportBound) {
+            reportMessageCheckbox._reportBound = true;
+            reportMessageCheckbox.addEventListener('change', () => this._syncReportModalState());
+        }
         modal.style.display = 'flex';
+        this._syncReportModalState();
     },
 
     closeReportModal() {
@@ -309,6 +445,13 @@ Object.assign(NYM.prototype, {
         reportMessage.checked = true;
         const messageRow = typeof reportMessage.closest === 'function' ? reportMessage.closest('.nm-h-11') : null;
         if (messageRow) messageRow.style.display = '';
+        const btn = modal.querySelector('[data-action="submitReport"]');
+        if (btn) btn.disabled = false;
+        const note = document.getElementById('reportAlready');
+        if (note) {
+            note.textContent = '';
+            note.classList.add('nm-hidden');
+        }
     },
 
     async submitReport() {
@@ -342,12 +485,26 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            const signedEvent = await this.signEvent(event);
+            const R = window.NymReportRecord;
+            const key = R ? R.keyOfTags(event.tags) : '';
+            const sending = this._reportSending || (this._reportSending = new Set());
+            if (key && (this.isTargetReported(key) || sending.has(key))) {
+                this.displaySystemMessage(this._reportRefusal(key));
+                this._syncReportModalState();
+                return;
+            }
+            if (key) sending.add(key);
+            try {
+                const signedEvent = await this.signEvent(event);
 
-            if (signedEvent) {
-                this.sendToRelay(["EVENT", signedEvent]);
-                this.displaySystemMessage(`Report submitted successfully`);
-                this.closeReportModal();
+                if (signedEvent) {
+                    this.sendToRelay(["EVENT", signedEvent]);
+                    this._noteReported(key);
+                    this.displaySystemMessage(`Report submitted successfully`);
+                    this.closeReportModal();
+                }
+            } finally {
+                if (key) sending.delete(key);
             }
 
         } catch (err) {
@@ -369,7 +526,7 @@ Object.assign(NYM.prototype, {
         const ctxFriendBadge = pubkey !== this.pubkey && this.isFriend(pubkey)
             ? '<span class="friend-badge" title="Friend"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" class="nm-ctx-2"><circle cx="6" cy="5" r="2.5" /><path d="M 1.5 14 C 1.5 10.5 3.5 9 6 9 C 8.5 9 10.5 10.5 10.5 14" /><line x1="13" y1="6" x2="13" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /><line x1="11" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg></span>'
             : '';
-        let nymHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}${supporterBadge}${verifiedBadge}${ctxFriendBadge}`;
+        let nymHtml = `${window.NymSuffix.sqHtml(baseNym, suffix)}${flairHtml}${supporterBadge}${verifiedBadge}${ctxFriendBadge}`;
         if (this.isVerifiedDeveloper(pubkey)) {
             nymHtml += `<div class="context-menu-dev-label">Nymchat Developer</div>`;
         } else if (this.isVerifiedBot(pubkey)) {
@@ -469,7 +626,7 @@ Object.assign(NYM.prototype, {
         }
         if (ctxAvatarNym) {
             ctxAvatarNym.innerHTML = ctxMask
-                ? `${this.escapeHtml(ctxMask)}<span class="nym-suffix">#${suffix}</span>`
+                ? `${window.NymSuffix.sqHtml(ctxMask, suffix)}`
                 : this._ctxNymHtml(pubkey, baseNym, suffix);
         }
 
@@ -572,7 +729,7 @@ Object.assign(NYM.prototype, {
 
         const zapOption = document.getElementById('ctxZap');
         if (zapOption) {
-            if (pubkey !== this.pubkey && messageId) {
+            if (pubkey !== this.pubkey && messageId && !this._zapAnonLane(messageId)) {
                 zapOption.style.display = 'block';
             } else {
                 zapOption.style.display = 'none';
@@ -638,7 +795,9 @@ Object.assign(NYM.prototype, {
 
         // Hidden for mention/sidebar clicks that carry no message body.
         const ctxTranslateOption = document.getElementById('ctxTranslate');
-        if (ctxTranslateOption) ctxTranslateOption.style.display = content ? 'block' : 'none';
+        const ctxBlanked = typeof this._redactBlankedRow === 'function'
+            && [messageId, reactionId].some((id) => id && this._redactBlankedRow(this.findMessageElementAnywhere(id)));
+        if (ctxTranslateOption) ctxTranslateOption.style.display = content && !ctxBlanked ? 'block' : 'none';
 
         const reactOption = document.getElementById('ctxReact');
         reactOption.style.display = messageId ? 'block' : 'none';
@@ -673,6 +832,7 @@ Object.assign(NYM.prototype, {
         else this._ctxDeleteHome.after(deleteOption);
 
         document.getElementById('ctxReport').style.display = pubkey === this.pubkey ? 'none' : 'block';
+        this._syncCtxReportEntry();
 
         // In profile-only mode (e.g. nyms sidebar) show only PM, Report, Block.
         if (profileOnly) {
@@ -1176,6 +1336,7 @@ Object.assign(NYM.prototype, {
         });
 
         input.addEventListener('keydown', (e) => {
+            if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && (e.altKey || e.ctrlKey || e.metaKey)) return;
             const autocomplete = document.getElementById('autocompleteDropdown');
             const channelAc = document.getElementById('channelAutocomplete');
             const emojiAutocomplete = document.getElementById('emojiAutocomplete');
@@ -1253,7 +1414,10 @@ Object.assign(NYM.prototype, {
                     this.hideCommandPalette();
                 }
             } else {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && (e.isComposing || input._richComposing
+                    || (e.keyCode === 229 && Date.now() - (input._richComposeEndAt || 0) < 80))) {
+                    return;
+                } else if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     this.sendMessage();
                 } else if (e.key === 'Enter' && e.shiftKey) {
@@ -1269,8 +1433,6 @@ Object.assign(NYM.prototype, {
                 } else if (e.key === 'Backspace' || e.key === 'Delete') {
                     // Hidden markers have no caret position, so delete the whole marker (nymRichMarkerDelete).
                     if (this._deleteRichMarker(input, e.key === 'Delete')) e.preventDefault();
-                } else if (e.altKey || e.ctrlKey || e.metaKey) {
-                    return;
                 } else if (e.key === 'ArrowUp' && input.value === '') {
                     e.preventDefault();
                     if (!(typeof this.editLastOwnMessage === 'function' && this.editLastOwnMessage())) this.navigateHistory(-1);
@@ -1375,10 +1537,29 @@ Object.assign(NYM.prototype, {
         });
 
         // Anchored popups dismiss on scroll; capture phase catches inner containers too.
-        document.addEventListener('scroll', () => {
-            if (this.reactorsModal && typeof this.closeReactorsModal === 'function') this.closeReactorsModal();
-            if (this.readersModal && typeof this.closeReadersModal === 'function') this.closeReadersModal();
-            if (this._pollVotersModal && typeof this.closePollVotersModal === 'function') this.closePollVotersModal();
+        const anchoredModals = () => [[this.reactorsModal, 'closeReactorsModal'], [this.readersModal, 'closeReadersModal'], [this._pollVotersModal, 'closePollVotersModal']];
+        const scrollKeys = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ']);
+        const scrollIntent = (e) => {
+            const t = e.target;
+            if (t && t.nodeType === 1 && anchoredModals().some(([m]) => m && m.contains(t))) return;
+            this._scrollIntentAt = performance.now();
+        };
+        document.addEventListener('wheel', scrollIntent, { passive: true, capture: true });
+        document.addEventListener('touchmove', scrollIntent, { passive: true, capture: true });
+        document.addEventListener('pointerdown', scrollIntent, { passive: true, capture: true });
+        document.addEventListener('pointermove', (e) => { if (e.buttons) scrollIntent(e); }, { passive: true, capture: true });
+        document.addEventListener('keydown', (e) => {
+            const t = e.target;
+            if (!scrollKeys.has(e.key) || (t && t.nodeType === 1 && t.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])'))) return;
+            scrollIntent(e);
+        }, { capture: true });
+        document.addEventListener('scroll', (e) => {
+            const t = e.target;
+            const user = performance.now() - (this._scrollIntentAt || 0) < 700;
+            anchoredModals().forEach(([m, close]) => {
+                if (!m || typeof this[close] !== 'function' || (t && t.nodeType === 1 && m.contains(t))) return;
+                if (user || typeof this._anchoredFollow !== 'function' || !this._anchoredFollow(m)) this[close]();
+            });
         }, { passive: true, capture: true });
 
         document.getElementById('fileInput').addEventListener('change', (e) => {
@@ -1609,7 +1790,7 @@ Object.assign(NYM.prototype, {
                 closeAll();
                 removeCloseListeners();
                 await this.sendReaction(messageId, emoji);
-                this.addToRecentEmojis(emoji);
+                this.addToRecentEmojis(emoji, { messageId });
             });
 
             popup.querySelectorAll('.quick-react-emoji').forEach(btn => {
@@ -1620,7 +1801,7 @@ Object.assign(NYM.prototype, {
                     closeAll();
                     removeCloseListeners();
                     await this.sendReaction(messageId, emoji);
-                    this.addToRecentEmojis(emoji);
+                    this.addToRecentEmojis(emoji, { messageId });
                 });
             });
 
@@ -1948,11 +2129,8 @@ Object.assign(NYM.prototype, {
         img.alt = '';
         img.draggable = false;
         span.appendChild(img);
-        span.appendChild(document.createTextNode('@' + base));
-        const sfxSpan = document.createElement('span');
-        sfxSpan.className = 'nym-suffix';
-        sfxSpan.textContent = '#' + sfx;
-        span.appendChild(sfxSpan);
+        span.appendChild(document.createTextNode('@'));
+        span.insertAdjacentHTML('beforeend', window.NymSuffix.sqHtml(base, sfx));
         const flairHtml = this.getFlairForUser(pubkey) || '';
         if (flairHtml) {
             const tmpl = document.createElement('template');
@@ -2257,6 +2435,7 @@ Object.assign(NYM.prototype, {
         el.addEventListener('compositionstart', () => { el._richComposing = true; });
         el.addEventListener('compositionend', () => {
             el._richComposing = false;
+            el._richComposeEndAt = Date.now();
             self._maybeRenderRichFormat(el);
         });
 

@@ -94,12 +94,43 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
 
     final lineStyle = TextStyle(color: c.textDim, fontSize: 12, height: 1);
 
-    List<InlineSpan> typerSpans(String pk) {
+    final cosmetics = {
+      for (final pk in pubkeys.take(2)) pk: ref.watch(userCosmeticsProvider(pk)),
+    };
+    UserCosmetics cosmeticsOf(String pk) =>
+        cosmetics[pk] ?? ref.read(userCosmeticsProvider(pk));
+
+    List<InlineSpan> typerSpans(String pk,
+        {int? keep, List<PlaceholderDimensions>? dims}) {
       final split = splitNymSuffix(nymOf(pk));
+      final base = keepNymBase(capNymBase(split.base), keep);
       final isVerified =
           controller.isVerifiedDeveloper(pk) || controller.isVerifiedBot(pk);
+      if (dims != null) {
+        final cosmetics = cosmeticsOf(pk);
+        final flairs = cosmetics.flairIds.where((id) => id.isNotEmpty).length;
+        dims.add(PlaceholderDimensions(
+            size: Size(flairs * 18.0 + (cosmetics.supporter ? 42 : 0), 14),
+            alignment: PlaceholderAlignment.middle));
+        if (isVerified) {
+          dims.add(const PlaceholderDimensions(
+              size: Size(18, 14), alignment: PlaceholderAlignment.middle));
+        }
+        return [
+          TextSpan(text: isolateNym(base), style: lineStyle),
+          if (split.suffix.isNotEmpty)
+            TextSpan(
+                text: split.suffix,
+                style: nymSuffixStyleOf(context, lineStyle)),
+          const WidgetSpan(
+              alignment: PlaceholderAlignment.middle, child: SizedBox()),
+          if (isVerified)
+            const WidgetSpan(
+                alignment: PlaceholderAlignment.middle, child: SizedBox()),
+        ];
+      }
       return [
-        TextSpan(text: isolateNym(split.base), style: lineStyle),
+        TextSpan(text: isolateNym(base), style: lineStyle),
         if (split.suffix.isNotEmpty)
           WidgetSpan(
             alignment: PlaceholderAlignment.baseline,
@@ -112,7 +143,7 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
           child: CosmeticNymBadges(
-            cosmetics: ref.watch(userCosmeticsProvider(pk)),
+            cosmetics: cosmeticsOf(pk),
             flairSize: 14,
             supporterHeight: 14,
           ),
@@ -139,19 +170,31 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
             bot: pubkeys.length == 1 && controller.isVerifiedBot(pk),
           ),
       ]);
-      final spans = <InlineSpan>[
-        for (final part in _splitTemplate(tr(tpl)))
+      final parts = _splitTemplate(tr(tpl));
+      List<InlineSpan> spansFor(int? keep,
+              [List<PlaceholderDimensions>? dims]) =>
+          <InlineSpan>[
+            for (final part in parts)
+              if (part == '{nym}')
+                ...typerSpans(pubkeys[0], keep: keep, dims: dims)
+              else if (part == '{other}')
+                ...(pubkeys.length > 1
+                    ? typerSpans(pubkeys[1], keep: keep, dims: dims)
+                    : const <InlineSpan>[])
+              else if (part == '{n}')
+                TextSpan(text: '${pubkeys.length}')
+              else if (part.isNotEmpty)
+                TextSpan(text: part),
+          ];
+      final longest = [
+        for (final part in parts)
           if (part == '{nym}')
-            ...typerSpans(pubkeys[0])
-          else if (part == '{other}')
-            ...(pubkeys.length > 1 ? typerSpans(pubkeys[1]) : const <InlineSpan>[])
-          else if (part == '{n}')
-            TextSpan(text: '${pubkeys.length}')
-          else if (part.isNotEmpty)
-            TextSpan(text: part),
-      ];
+            capNymBase(splitNymSuffix(nymOf(pubkeys[0])).base)
+          else if (part == '{other}' && pubkeys.length > 1)
+            capNymBase(splitNymSuffix(nymOf(pubkeys[1])).base),
+      ].fold('', (a, b) => b.characters.length > a.characters.length ? b : a);
       content = Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 3),
         child: Row(
           children: [
             // Fixed-width Stack so overlapping avatars collapse like the CSS negative margin; a Row would reserve full widths.
@@ -164,17 +207,14 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
                     for (var i = 0; i < visible.length; i++)
                       Positioned(
                         left: i * 12.0,
-                        child: Container(
+                        child: SizedBox(
                           width: 18,
                           height: 18,
-                          foregroundDecoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(color: c.bg, width: 1.5),
-                          ),
                           child: NymAvatar(
                             seed: visible[i],
                             size: 18,
                             imageUrl: app.users[visible[i]]?.profile?.picture,
+                            ring: c.avatarRing,
                           ),
                         ),
                       ),
@@ -186,11 +226,15 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
             _TypingDots(color: c.textDim),
             const SizedBox(width: 8),
             Expanded(
-              child: Text.rich(
-                TextSpan(children: spans),
+              child: NymFitLine(
+                base: longest,
                 style: lineStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                span: (keep) => TextSpan(children: spansFor(keep)),
+                measure: (keep) {
+                  final dims = <PlaceholderDimensions>[];
+                  final span = TextSpan(children: spansFor(keep, dims));
+                  return (span: span, placeholders: dims);
+                },
               ),
             ),
           ],

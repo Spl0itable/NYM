@@ -868,23 +868,35 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') {
             try { nostrSettingsSave(); } catch (_) { }
         }
+        this._refreshEmojiFavoritesInPlace();
+    },
+
+    _refreshEmojiFavoritesInPlace() {
         const desiredOrder = this._getOrderedDefaultEmojiEntries().map(([c]) => c);
+        const packFavs = this._getEmojiPackFavorites();
         const reorderIn = (root) => {
             if (!root) return;
             const sections = Array.from(root.querySelectorAll('.emoji-section, .emoji-picker-section'))
                 .filter(el => desiredOrder.includes(el.getAttribute('data-category')));
-            if (sections.length < 2) return;
-            const parent = sections[0].parentNode;
-            const anchor = sections[sections.length - 1].nextSibling;
-            desiredOrder.forEach(cat => {
-                const el = sections.find(s => s.getAttribute('data-category') === cat);
-                if (el) parent.insertBefore(el, anchor);
-            });
+            if (sections.length >= 2) {
+                const parent = sections[0].parentNode;
+                const anchor = sections[sections.length - 1].nextSibling;
+                desiredOrder.forEach(cat => {
+                    const el = sections.find(s => s.getAttribute('data-category') === cat);
+                    if (el) parent.insertBefore(el, anchor);
+                });
+            }
             root.querySelectorAll('.emoji-category-fav-btn').forEach(btn => {
                 const cat = btn.dataset.category;
                 const isFav = this.isEmojiCategoryFavorite(cat);
                 btn.classList.toggle('active', isFav);
                 btn.title = isFav ? 'Unfavorite category' : 'Favorite category';
+                btn.setAttribute('aria-label', btn.title);
+            });
+            root.querySelectorAll('.emoji-pack-fav-btn').forEach(btn => {
+                const isFav = !!(btn.dataset && btn.dataset.packKey) && packFavs.includes(btn.dataset.packKey);
+                btn.classList.toggle('active', isFav);
+                btn.title = isFav ? 'Unfavorite this pack' : 'Favorite this pack';
                 btn.setAttribute('aria-label', btn.title);
             });
         };
@@ -1233,7 +1245,7 @@ Object.assign(NYM.prototype, {
             title: this._ebText('Block emoji pack?'),
             okLabel: this._ebText('Block'),
             danger: true,
-            checkboxLabel: this._ebText('Also report this pack')
+            checkboxLabel: typeof this.isTargetReported === 'function' && window.NymReportRecord && this.isTargetReported(window.NymReportRecord.keyFor({ coord: B.packCoord(pack) })) ? undefined : this._ebText('Also report this pack')
         });
         if (!res || !res.confirmed) return false;
         this._blockEmojiPackNow(pack);

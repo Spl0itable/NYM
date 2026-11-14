@@ -196,13 +196,32 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    addToRecentEmojis(emoji) {
+    addToRecentEmojis(emoji, scope) {
         if (!this.isValidReactionEmoji(emoji)) return;
+        if (scope && this._anonLaneRecentsQuiet(scope)) return;
         this.recentEmojis = (Array.isArray(this.recentEmojis) ? this.recentEmojis : []).filter(e => e !== emoji);
         this.recentEmojis.unshift(emoji);
         this.recentEmojis = this.recentEmojis.slice(0, 24);
         this._emojiRecentsDirty = true;
         this.saveRecentEmojis();
+    },
+
+    _anonLaneRecentsQuiet(scope) {
+        try {
+            const id = scope.messageId;
+            if (id) {
+                if (typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(id)) return true;
+                const el = document.querySelector(`[data-message-id="${id}"]`);
+                return !!(el && typeof this._botAnonReactionLane === 'function' && this._botAnonReactionLane(el, id));
+            }
+            if (!scope.composer || this.currentGroup || !this.currentPM) return false;
+            const pm = this.currentPM;
+            if (typeof this.isVerifiedBot !== 'function' || !this.isVerifiedBot(pm)) return false;
+            return !!((typeof this.botAnonSuppressSendTo === 'function' && this.botAnonSuppressSendTo(pm))
+                || (typeof this._anonLaneTyping === 'function' && this._anonLaneTyping(pm)));
+        } catch (_) {
+            return true;
+        }
     },
 
     _recentEmojisForPicker() {
@@ -510,6 +529,7 @@ Object.assign(NYM.prototype, {
         if (!reactions || reactions.size === 0) {
             const reactionsRow = messageEl.querySelector(':scope > .reactions-row');
             if (reactionsRow) {
+                if (this.reactorsModal && reactionsRow.contains(this.reactorsModal._anchor)) this.closeReactorsModal();
                 reactionsRow.querySelectorAll('.reaction-badge, .add-reaction-btn').forEach(el => el.remove());
                 if (reactionsRow.children.length === 0) {
                     reactionsRow.remove();
@@ -543,9 +563,7 @@ Object.assign(NYM.prototype, {
             else messageEl.appendChild(reactionsRow);
         }
 
-        if (this.reactorsModal && this.reactorsModal._hover && reactionsRow.contains(this.reactorsModal._anchor)) {
-            this.closeReactorsModal();
-        }
+        const rebind = this.reactorsModal && reactionsRow.contains(this.reactorsModal._anchor) ? this.reactorsModal : null;
         reactionsRow.innerHTML = '';
 
         if (zapBadge) {
@@ -660,6 +678,8 @@ Object.assign(NYM.prototype, {
         });
         reactionsRow.appendChild(addBtn);
 
+        if (rebind && this.reactorsModal === rebind) this._rebindReactorsModal(rebind, messageId, reactionsRow);
+
         if (wasAtBottom) {
             this._scheduleScrollToBottom();
         }
@@ -725,19 +745,50 @@ Object.assign(NYM.prototype, {
         }, 300);
     },
 
-    showReactorsModal(messageId, emoji, badge) {
-        const cur = this.reactorsModal;
-        if (cur && cur._hover && cur._anchor === badge) {
-            cur._hover = false;
-            clearTimeout(cur._hoverClose);
-            return;
-        }
-        this.closeReactorsModal();
+    _anchoredTrack(m, close) {
+        if (!m || !m._anchor) return;
+        const r = m._anchor.getBoundingClientRect();
+        m._anchorAt = { top: r.top, left: r.left };
+        m._anchorClose = close;
+        const host = document.getElementById('messagesContainer');
+        if (m._anchorRO || !host || !host.contains(m._anchor) || typeof ResizeObserver !== 'function') return;
+        const ro = new ResizeObserver(() => {
+            if (!m.isConnected) { ro.disconnect(); return; }
+            if (!this._anchoredFollow(m) && m._anchorClose) m._anchorClose();
+        });
+        m._anchorRO = ro;
+        ro.observe(host);
+    },
 
+    _anchoredFollow(m) {
+        const a = m && m._anchor;
+        if (!a || !a.isConnected || !m._anchorAt) return false;
+        const r = a.getBoundingClientRect();
+        const dx = r.left - m._anchorAt.left;
+        const dy = r.top - m._anchorAt.top;
+        if (Math.abs(dx) <= 2 && Math.abs(dy) <= 2) return true;
+        if (!r.width || !r.height) return false;
+        const sc = a.closest('#messagesScroller');
+        const box = sc ? sc.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+        if (r.bottom <= Math.max(0, box.top) || r.top >= Math.min(window.innerHeight, box.bottom)) return false;
+        if (typeof m._place === 'function') {
+            m._place();
+        } else {
+            const s = m.style;
+            if (s.top) s.top = (parseFloat(s.top) + dy) + 'px';
+            if (s.bottom) s.bottom = (parseFloat(s.bottom) - dy) + 'px';
+            if (s.left) s.left = (parseFloat(s.left) + dx) + 'px';
+            if (s.right) s.right = (parseFloat(s.right) - dx) + 'px';
+            m._anchorAt = { top: r.top, left: r.left };
+        }
+        const b = m.getBoundingClientRect();
+        return b.top >= 0 && b.bottom <= window.innerHeight;
+    },
+
+    _fillReactorsModal(modal, messageId, emoji) {
         const reactions = this._visibleReactions(messageId);
-        if (!reactions) return;
-        const reactors = reactions.get(emoji);
-        if (!reactors || reactors.size === 0) return;
+        const reactors = reactions && reactions.get(emoji);
+        if (!reactors || reactors.size === 0) return null;
 
         const MAX_ROWS = 50;
         const entries = Array.from(reactors.entries());
@@ -749,7 +800,7 @@ Object.assign(NYM.prototype, {
             const safePk = this._safePubkey(pubkey);
             return `<div class="reactors-modal-user" data-pubkey="${pubkey}">
                 <img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="readers-modal-avatar" data-avatar-pubkey="${safePk}" decoding="async" loading="lazy">
-                <span class="reactors-modal-nym">${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span></span>
+                <span class="reactors-modal-nym">${window.NymSuffix.sqHtml(baseNym, suffix)}</span>
                 ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
             </div>`;
         }).join('');
@@ -758,20 +809,30 @@ Object.assign(NYM.prototype, {
             ? `<div class="reactors-modal-more">+${overflow} more</div>`
             : '';
 
-        const modal = document.createElement('div');
-        modal.className = 'reactors-modal';
         modal.innerHTML = `
             <div class="reactors-modal-header"><span class="reactors-modal-emoji">${this.renderReactionEmoji(emoji)}</span> <span class="reactors-modal-count">${reactors.size}</span></div>
             <div class="reactors-modal-list">${userItems}${overflowItem}</div>
         `;
 
-        modal._anchor = badge;
-        document.body.appendChild(modal);
-        this.reactorsModal = modal;
+        modal.querySelectorAll('.reactors-modal-user').forEach((el, i) => {
+            el.addEventListener('click', (e) => {
+                const [pubkey, nym] = shown[i];
+                this.closeReactorsModal();
+                const baseNym = this.resolveDisplayNym(pubkey, nym);
+                const suffix = this.getPubkeySuffix(pubkey);
+                this.showContextMenu(e, `${baseNym}#${suffix}`, pubkey, null, null, false);
+            });
+        });
+        return shown;
+    },
 
-        if (typeof this.ensureListProfiles === 'function') {
-            this.ensureListProfiles(modal, shown.map(([pk]) => pk));
-        }
+    _placeReactorsModal(modal) {
+        const badge = modal._anchor;
+        const list = modal.querySelector('.reactors-modal-list');
+        const keep = list ? list.scrollTop : 0;
+        modal.style.top = '';
+        modal.style.bottom = '';
+        modal.style.maxHeight = '';
 
         const rect = badge.getBoundingClientRect();
         const modalRect = modal.getBoundingClientRect();
@@ -787,24 +848,68 @@ Object.assign(NYM.prototype, {
 
         if (spaceAbove > modalRect.height + 10) {
             modal.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
-        } else {
+        } else if (spaceBelow > modalRect.height + 10 || spaceBelow >= spaceAbove) {
             modal.style.top = (rect.bottom + 6) + 'px';
+            if (spaceBelow <= modalRect.height + 10) modal.style.maxHeight = Math.max(96, spaceBelow - 16) + 'px';
+        } else {
+            modal.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+            modal.style.maxHeight = Math.max(96, spaceAbove - 16) + 'px';
+        }
+        if (list) list.scrollTop = keep;
+        modal._anchorAt = { top: rect.top, left: rect.left };
+    },
+
+    _rebindReactorsModal(modal, messageId, row) {
+        const emoji = modal._emoji;
+        const badge = Array.from(row.querySelectorAll('.reaction-badge')).find((b) => b.dataset.emoji === emoji);
+        const list = modal.querySelector('.reactors-modal-list');
+        const keep = list ? list.scrollTop : 0;
+        const shown = badge ? this._fillReactorsModal(modal, messageId, emoji) : null;
+        if (!shown) {
+            this.closeReactorsModal();
+            return;
+        }
+        modal._anchor = badge;
+        const next = modal.querySelector('.reactors-modal-list');
+        if (next) next.scrollTop = keep;
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(modal, shown.map(([pk]) => pk));
+        }
+        if (!this._anchoredFollow(modal)) this.closeReactorsModal();
+    },
+
+    showReactorsModal(messageId, emoji, badge) {
+        const cur = this.reactorsModal;
+        if (cur && cur._hover && cur._anchor === badge) {
+            cur._hover = false;
+            clearTimeout(cur._hoverClose);
+            return;
+        }
+        this.closeReactorsModal();
+
+        const modal = document.createElement('div');
+        modal.className = 'reactors-modal';
+        const shown = this._fillReactorsModal(modal, messageId, emoji);
+        if (!shown) return;
+
+        modal._anchor = badge;
+        modal._emoji = emoji;
+        modal._place = () => this._placeReactorsModal(modal);
+        document.body.appendChild(modal);
+        this.reactorsModal = modal;
+
+        if (typeof this.ensureListProfiles === 'function') {
+            this.ensureListProfiles(modal, shown.map(([pk]) => pk));
         }
 
-        modal.querySelectorAll('.reactors-modal-user').forEach((el, i) => {
-            el.addEventListener('click', (e) => {
-                const [pubkey, nym] = shown[i];
-                this.closeReactorsModal();
-                const baseNym = this.resolveDisplayNym(pubkey, nym);
-                const suffix = this.getPubkeySuffix(pubkey);
-                this.showContextMenu(e, `${baseNym}#${suffix}`, pubkey, null, null, false);
-            });
-        });
+        this._placeReactorsModal(modal);
+        this._anchoredTrack(modal, () => { if (this.reactorsModal === modal) this.closeReactorsModal(); });
     },
 
     closeReactorsModal() {
         if (this.reactorsModal) {
             clearTimeout(this.reactorsModal._hoverClose);
+            if (this.reactorsModal._anchorRO) this.reactorsModal._anchorRO.disconnect();
             this.reactorsModal.remove();
             this.reactorsModal = null;
         }
@@ -879,7 +984,7 @@ ${this._emojiSectionsHtml()}`;
                 this.closeEnhancedEmojiModal();
                 return;
             }
-            this.addToRecentEmojis(emoji);
+            this.addToRecentEmojis(emoji, { messageId: this._activePickerMessageId });
             const onSelect = this._activePickerOnSelect;
             const messageId = this._activePickerMessageId;
             if (typeof onSelect === 'function') {
@@ -1075,6 +1180,12 @@ ${this._emojiSectionsHtml()}`;
         return true;
     },
 
+    _pmPeerForElement(el) {
+        if (typeof this._threadCtxForElement !== 'function') return this.currentPM || null;
+        const ctx = this._threadCtxForElement(el);
+        return ctx && ctx.type === 'pm' ? ctx.pubkey || null : null;
+    },
+
     async sendReaction(messageId, emoji) {
         if (typeof this._emojiStringBlocked === 'function' && this._emojiStringBlocked(emoji)) return;
         try {
@@ -1085,6 +1196,15 @@ ${this._emojiSectionsHtml()}`;
 
             const targetPubkey = messageEl.dataset.pubkey;
             if (!targetPubkey) return;
+            const lane = typeof this._botAnonReactionLane === 'function' ? this._botAnonReactionLane(messageEl, messageId) : null;
+            if (lane === 'anon' && !this.botAnonIdentity()) {
+                this.displaySystemMessage(this.uiText('Reactions are off on this anonymous Nymbot message: its anonymous key is gone, and a reaction from your nym would link the two.'));
+                return;
+            }
+            const groupId = messageEl.dataset.groupId;
+            const isPM = !groupId && (messageEl.dataset.isPM === '1' || messageEl.classList.contains('pm'));
+            const peer = isPM && !lane ? this._pmPeerForElement(messageEl) : null;
+            if (!lane && (isPM || groupId) && !(this._canSendGiftWraps() && (groupId ? this.groupConversations.get(groupId) : peer))) return;
 
             if (!this.reactions.has(messageId)) {
                 this.reactions.set(messageId, new Map());
@@ -1109,7 +1229,7 @@ ${this._emojiSectionsHtml()}`;
 
             this._burstOnBadge(messageId, emoji, messageEl);
 
-            this.recordOwnActivity();
+            if (!lane) this.recordOwnActivity();
 
             let originalKind = '20000';
             if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
@@ -1140,7 +1260,6 @@ ${this._emojiSectionsHtml()}`;
                 pubkey: me.pubkey
             };
 
-            const groupId = messageEl.dataset.groupId;
             if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
                 if (group) {
@@ -1152,9 +1271,9 @@ ${this._emojiSectionsHtml()}`;
                 }
             }
 
-            if (messageEl.dataset.isPM === '1' && !groupId && this._canSendGiftWraps() && this.currentPM) {
-                if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(this.currentPM)) {
-                    this.addToRecentEmojis(emoji);
+            if (isPM && (lane || peer)) {
+                if (lane) {
+                    if (lane === 'anon') await this._botAnonSendReaction(messageId, targetPubkey, emoji, false);
                     return;
                 }
                 const now = Math.floor(Date.now() / 1000);
@@ -1166,7 +1285,7 @@ ${this._emojiSectionsHtml()}`;
                     content: emoji,
                     pubkey: me.pubkey
                 };
-                await this._sendGiftWrapsAsync([me.pubkey, this.currentPM], reactionRumor, null, null, { claim });
+                await this._sendGiftWrapsAsync([me.pubkey, peer], reactionRumor, null, null, { claim });
                 this.addToRecentEmojis(emoji);
                 return;
             }
@@ -1202,6 +1321,15 @@ ${this._emojiSectionsHtml()}`;
 
             const targetPubkey = messageEl.dataset.pubkey;
             if (!targetPubkey) return;
+            const lane = typeof this._botAnonReactionLane === 'function' ? this._botAnonReactionLane(messageEl, messageId) : null;
+            if (lane === 'anon' && !this.botAnonIdentity()) {
+                this.displaySystemMessage(this.uiText('Reactions are off on this anonymous Nymbot message: its anonymous key is gone, and a reaction from your nym would link the two.'));
+                return;
+            }
+            const groupId = messageEl.dataset.groupId;
+            const isPM = !groupId && (messageEl.dataset.isPM === '1' || messageEl.classList.contains('pm'));
+            const peer = isPM && !lane ? this._pmPeerForElement(messageEl) : null;
+            if (!lane && (isPM || groupId) && !(this._canSendGiftWraps() && (groupId ? this.groupConversations.get(groupId) : peer))) return;
 
             const messageReactions = this.reactions.get(messageId);
             if (!messageReactions || !messageReactions.has(emoji)) return;
@@ -1216,7 +1344,7 @@ ${this._emojiSectionsHtml()}`;
 
             this.updateMessageReactions(messageId);
 
-            this.recordOwnActivity();
+            if (!lane) this.recordOwnActivity();
 
             let originalKind = '20000';
             if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
@@ -1247,7 +1375,6 @@ ${this._emojiSectionsHtml()}`;
                 pubkey: this.pubkey
             };
 
-            const groupId = messageEl.dataset.groupId;
             if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
                 if (group) {
@@ -1256,7 +1383,11 @@ ${this._emojiSectionsHtml()}`;
                 }
             }
 
-            if (messageEl.dataset.isPM === '1' && !groupId && this._canSendGiftWraps() && this.currentPM) {
+            if (isPM && (lane || peer)) {
+                if (lane) {
+                    if (lane === 'anon') await this._botAnonSendReaction(messageId, targetPubkey, emoji, true);
+                    return;
+                }
                 const now = Math.floor(Date.now() / 1000);
                 const reactionRumor = {
                     kind: 7,
@@ -1266,7 +1397,7 @@ ${this._emojiSectionsHtml()}`;
                     content: emoji,
                     pubkey: this.pubkey
                 };
-                await this._sendGiftWrapsAsync([this.pubkey, this.currentPM], reactionRumor, null);
+                await this._sendGiftWrapsAsync([this.pubkey, peer], reactionRumor, null);
                 return;
             }
 
@@ -1373,7 +1504,7 @@ ${this._emojiSectionsHtml()}`;
         input.selectionStart = input.selectionEnd = start + emoji.length;
         input.focus();
 
-        this.addToRecentEmojis(emoji);
+        this.addToRecentEmojis(emoji, { composer: true });
     },
 
 });

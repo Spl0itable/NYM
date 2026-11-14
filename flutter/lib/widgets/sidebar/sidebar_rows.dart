@@ -107,7 +107,7 @@ final _pmInputsProvider = Provider<_Inputs>((ref) {
       g.id,
       g.lastMessageTime,
       s.groupLabel(g),
-      g.members.length,
+      ref.read(appStateProvider.notifier).groupAccepted(g).length,
       g.avatar,
       _shownMembers(s, g, users),
       s.unreadCounts[GroupLogic.groupStorageKey(g.id)],
@@ -245,7 +245,7 @@ final sidebarPmRowsProvider = Provider<SidebarRows<SidebarPmEntry>>((ref) {
       rows.add(SidebarRow(e, (
         g,
         app.groupLabel(g),
-        g.members.length,
+        ref.read(appStateProvider.notifier).groupAccepted(g).length,
         g.avatar,
         shown,
         e.active,
@@ -564,7 +564,7 @@ final sidebarFolderSplitProvider = Provider<SidebarFolderSplit>((ref) {
     rowOf[r] = SidebarRow<Object>(e, (
       g,
       app.groupLabel(g),
-      g.members.length,
+      ref.read(appStateProvider.notifier).groupAccepted(g).length,
       g.avatar,
       _shownMembers(app, g, users),
       e.active,

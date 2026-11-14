@@ -698,14 +698,16 @@
         if (!g) return '';
         var max = n.MAX_GROUP_MEMBERS || 100;
         var count = (g.members || []).length;
-        var countText = ui('{n}/{max} members', { n: count, max: max }).split('{n}').join(String(count)).split('{max}').join(String(max));
+        var shown = typeof n._gnAccepted === 'function' ? n._gnAccepted(groupId, g.members || []).length : count;
+        var countText = ui('{n}/{max} members', { n: shown, max: max }).split('{n}').join(String(shown)).split('{max}').join(String(max));
+        var invitedText = typeof n._gnCountLine === 'function' ? n._gnCountLine(groupId) : '';
         var fullText = count >= max ? ui('Full') : '';
         var avatar = typeof n.getGroupAvatarUrl === 'function' ? n.getGroupAvatarUrl(groupId) : '';
         var icon = avatar ? '<img src="' + esc(avatar) + '" class="group-ctx-custom-avatar" alt="" decoding="async">' : GROUP_SVG;
         return '<div class="context-menu-avatar-header group-sheet-head" data-sheet-handle>'
             + '<div class="group-ctx-icon' + (avatar ? ' has-image' : '') + '">' + icon + '</div>'
             + '<div class="context-menu-avatar-nym">' + esc((typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || 'Group'))) + '</div>'
-            + '<div class="ctx-status-row">' + esc(countText) + (fullText ? ' · <span>' + esc(fullText) + '</span>' : '') + '</div>'
+            + '<div class="ctx-status-row">' + esc(countText) + (invitedText ? ' · ' + esc(invitedText) : '') + (fullText ? ' · <span>' + esc(fullText) + '</span>' : '') + '</div>'
             + '</div>'
             + ((typeof n._groupDescription === 'function' ? n._groupDescription(g) : (g.description || '')) ? '<div class="context-menu-bio">' + esc((typeof n._groupDescription === 'function' ? n._groupDescription(g) : (g.description || ''))) + '</div>' : '');
     }

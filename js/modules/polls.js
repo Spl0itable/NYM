@@ -295,7 +295,7 @@ Object.assign(NYM.prototype, {
         });
 
         const safePk = this._safePubkey(pubkey);
-        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml}`;
+        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(baseNym, suffix)}${flairHtml}`;
 
         const reactLabel = this.escapeHtml(this.uiText('React'));
         const hoverButtons = this._canHover() ? `
@@ -488,7 +488,7 @@ Object.assign(NYM.prototype, {
             const sk = this._safePubkey(pubkey);
             return `<div class="reactors-modal-user poll-voters-row" data-pubkey="${pubkey}">
                 <img src="${this.escapeHtml(avatar)}" class="poll-voter-avatar" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">
-                <span class="reactors-modal-nym">${this.escapeHtml(nym)}<span class="nym-suffix">#${suffix}</span></span>
+                <span class="reactors-modal-nym">${window.NymSuffix.sqHtml(nym, suffix)}</span>
                 ${isYou ? '<span class="reactors-modal-you">you</span>' : ''}
                 <span class="poll-voters-choice">${this.escapeHtml(choice)}</span>
             </div>`;
@@ -523,6 +523,8 @@ Object.assign(NYM.prototype, {
         } else {
             modal.style.top = (rect.bottom + 6) + 'px';
         }
+        modal._anchor = anchorEl;
+        if (typeof this._anchoredTrack === 'function') this._anchoredTrack(modal, () => { if (this._pollVotersModal === modal) this.closePollVotersModal(); });
 
         modal.querySelectorAll('.poll-voters-row').forEach(el => {
             el.addEventListener('click', (e) => {
@@ -548,6 +550,7 @@ Object.assign(NYM.prototype, {
 
     closePollVotersModal() {
         if (this._pollVotersModal) {
+            if (this._pollVotersModal._anchorRO) this._pollVotersModal._anchorRO.disconnect();
             this._pollVotersModal.remove();
             this._pollVotersModal = null;
         }

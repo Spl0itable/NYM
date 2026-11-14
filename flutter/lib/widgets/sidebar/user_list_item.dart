@@ -54,9 +54,7 @@ class _UserListItemState extends ConsumerState<UserListItem> {
         ref.watch(settingsProvider.select((s) => s.theme)) ==
         NymThemeKey.bitchat;
 
-    // The base nym is truncated to 20 chars before the `#suffix` and badges are appended.
-    final base = stripPubkeySuffix(user.nym);
-    final displayNym = base.length > 20 ? '${base.substring(0, 20)}...' : base;
+    final displayNym = stripPubkeySuffix(user.nym);
     final suffix = getPubkeySuffix(user.pubkey);
     final hueColor = bitchatTheme && user.pubkey != selfPubkey
         ? bitchatUserColor(user.pubkey, isLight: c.isLight, contrast: context.highContrast)
@@ -182,7 +180,11 @@ class _AvatarWithStatus extends StatelessWidget {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        NymAvatar(seed: seed, size: kSidebarIcon, imageUrl: imageUrl),
+        NymAvatar(
+            seed: seed,
+            size: kSidebarIcon,
+            imageUrl: imageUrl,
+            ring: c.avatarRing),
         if (status != UserStatus.hidden)
           Positioned(
             right: -1,

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/crypto/bech32_codec.dart' show encodeNpub;
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
+import '../../services/filter/content_filter.dart' show ContentFilter;
 import '../../state/app_state.dart';
 import '../chat_tools/chat_tools_service.dart' show chatToolsHidden;
 import 'unified_search.dart';
@@ -123,8 +124,12 @@ SearchCorpus buildSearchCorpus(
   final now = nowSec ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
   final channels = <SearchChannelItem>[];
   final seen = <String>{};
+  final hidden = {
+    for (final k in [...s.blockedChannels, ...s.hiddenChannels])
+      ContentFilter.channelKey(k),
+  };
   for (final ch in s.channels) {
-    if (s.isChannelHidden(ch.key)) continue;
+    if (hidden.contains(ch.key)) continue;
     if (locked(ch.storageKey)) continue;
     if (!seen.add(ch.key)) continue;
     channels.add(SearchChannelItem(
@@ -137,7 +142,7 @@ SearchCorpus buildSearchCorpus(
   }
   for (final e in s.geohashD1Activity.entries) {
     final gh = e.key.toLowerCase();
-    if (seen.contains(gh) || s.isChannelHidden(gh)) continue;
+    if (seen.contains(gh) || hidden.contains(gh)) continue;
     if (!isSearchGeohash(gh)) continue;
     seen.add(gh);
     var sum = 0;

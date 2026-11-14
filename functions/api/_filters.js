@@ -29,7 +29,8 @@ const REPORT_DDL = [
   "CREATE INDEX IF NOT EXISTS reports_status ON reports (status, received_at)",
   "CREATE INDEX IF NOT EXISTS reports_target ON reports (target_pubkey)",
   "CREATE INDEX IF NOT EXISTS reports_reporter ON reports (reporter, received_at)",
-  "ALTER TABLE reports ADD COLUMN target_coord TEXT"
+  "ALTER TABLE reports ADD COLUMN target_coord TEXT",
+  "CREATE INDEX IF NOT EXISTS reports_reporter_group ON reports (reporter, group_key, received_at, id)"
 ];
 
 function emptySet() {
@@ -363,6 +364,17 @@ async function ensureReports(db) {
   reportSchemaReady = true;
 }
 
+export async function forgetReports(env, pubkey) {
+  const db = env && env.DB_REPORT;
+  if (!hasD1(db) || typeof pubkey !== "string" || !pubkey) return 0;
+  try {
+    const r = await db.prepare("DELETE FROM reports WHERE reporter = ?").bind(pubkey.toLowerCase()).run();
+    return r && r.meta && typeof r.meta.changes === "number" ? r.meta.changes : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
 export async function noteReport(env, ev, source) {
   try {
     const db = env && env.DB_REPORT;
@@ -418,9 +430,10 @@ export async function noteReport(env, ev, source) {
     try { raw = JSON.stringify(ev); if (raw.length > 16384) raw = null; } catch (_) { raw = null; }
     const res = await db.prepare(
       "INSERT OR IGNORE INTO reports (id, reporter, target_pubkey, target_event, report_type, content, created_at, received_at, source, " +
-      "channel, target_kind, target_json, status, group_key, raw, target_coord) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)"
+      "channel, target_kind, target_json, status, group_key, raw, target_coord) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ? " +
+      "WHERE NOT EXISTS (SELECT 1 FROM reports WHERE reporter = ? AND group_key = ?)"
     ).bind(ev.id.toLowerCase(), reporter, resolvedPubkey, targetEvent, type, content, ev.created_at || 0, now, source || null,
-      channel, targetKind, targetJson, groupKey, raw, targetCoord).run();
+      channel, targetKind, targetJson, groupKey, raw, targetCoord, reporter, groupKey).run();
     const changes = res && res.meta && typeof res.meta.changes === "number" ? res.meta.changes : 1;
     return changes > 0;
   } catch (e) {

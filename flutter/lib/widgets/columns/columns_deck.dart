@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -10,6 +11,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../../core/constants/storage_keys.dart';
+import '../../features/sync/set_stamps.dart' show ColStamps;
+import '../../features/sync/synced_stores.dart' show columnsLayoutRevisionProvider;
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -182,6 +185,7 @@ class ColumnsDeck extends ConsumerStatefulWidget {
 class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
   final List<_ColumnDesc> _columns = [];
   bool _seeded = false;
+  bool _quietSeed = false;
 
   /// One-shot: points the shared header/composer at the initial focused column.
   bool _syncedInitialView = false;
@@ -358,12 +362,81 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     });
   }
 
+  void _onSyncedLayout() {
+    if (!mounted || !_seeded) return;
+    final saved = _loadLayout();
+    if (saved == null) {
+      _quietSeed = true;
+      _onColumnsReset();
+      return;
+    }
+    final pmOnly = ref.read(settingsProvider).groupChatPMOnlyMode;
+    final lock = ref.read(chatLockProvider);
+    final next = [
+      for (final d in saved)
+        if (!(pmOnly && d.kind == _ColumnKind.channel) &&
+            !lock.blocks(d.storageKey) &&
+            !_descHidden(d))
+          d,
+    ];
+    if (next.isEmpty || listEquals(next, _columns)) return;
+    final focusedDesc = (_focused >= 0 && _focused < _columns.length)
+        ? _columns[_focused]
+        : null;
+    final added = [for (final d in next) if (!_columns.contains(d)) d];
+    setState(() {
+      _columns
+        ..clear()
+        ..addAll(next);
+      final f = focusedDesc == null ? -1 : _columns.indexOf(focusedDesc);
+      _focused = f >= 0 ? f : math.min(_focused, _columns.length - 1);
+    });
+    if (!_columns.any((d) => d.key == _primaryKey)) {
+      _primaryKey = null;
+      for (final d in _columns) {
+        if (d.kind == _ColumnKind.channel) {
+          _primaryKey = d.key;
+          break;
+        }
+      }
+    }
+    _atBottomByKey
+        .removeWhere((k, _) => !_columns.any((d) => d.storageKey == k));
+    for (final d in added) {
+      _subscribeChannel(d);
+    }
+    _syncPageController();
+    if (focusedDesc == null || !_columns.contains(focusedDesc)) {
+      _syncFocusedView();
+    }
+  }
+
   void _saveLayout() {
     final kv = ref.read(keyValueStoreProvider);
     final data = _columns.map((c) => c.toJson()).toList();
-    kv.setString(StorageKeys.columnsLayout, jsonEncode(data));
+    final quiet =
+        _quietLayoutChange(kv.getString(StorageKeys.columnsLayout), data);
+    ColStamps.saveLayout(kv, jsonEncode(data));
     // Every layout save also schedules the synced settings publish, which reads the layout from the KV store.
-    ref.read(settingsProvider.notifier).notifySyncedChange();
+    if (!quiet) ref.read(settingsProvider.notifier).notifySyncedChange();
+  }
+
+  bool _quietLayoutChange(String? before, List<Map<String, dynamic>> after) {
+    final quiet = ref.read(appStateProvider.notifier).readMarkQuiet;
+    if (quiet == null) return false;
+    Set<String> keys(Iterable<dynamic> list) => {
+          for (final d in list)
+            if (d is Map && d['type'] == 'pm' && d['pubkey'] is String)
+              if (quiet(d['pubkey'] as String)) d['pubkey'] as String,
+        };
+    var prev = const <dynamic>[];
+    try {
+      final v = jsonDecode(before ?? '[]');
+      if (v is List) prev = v;
+    } catch (_) {}
+    final a = keys(prev);
+    final b = keys(after);
+    return a.length != b.length || !a.containsAll(b);
   }
 
   /// Null when absent, empty or malformed.
@@ -393,6 +466,8 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
   ) {
     if (_seeded) return;
     _seeded = true;
+    final quiet = _quietSeed;
+    _quietSeed = false;
 
     final saved = _loadLayout();
     if (saved != null && saved.isNotEmpty) {
@@ -432,9 +507,11 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
         _columns.add(_ColumnDesc.group(g.first.id));
       }
       // Post-frame since seeding runs inside the first build.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _saveLayout();
-      });
+      if (!quiet) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _saveLayout();
+        });
+      }
     }
 
     // The primary column is the first channel column at enable time.
@@ -1248,6 +1325,10 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       },
     );
 
+    ref.listen<int>(columnsLayoutRevisionProvider, (prev, next) {
+      if (prev != next) _onSyncedLayout();
+    });
+
     if (_focused >= _columns.length) {
       _focused = _columns.isEmpty ? 0 : _columns.length - 1;
     }
@@ -1658,6 +1739,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   final AnchoredUnits _anchors = AnchoredUnits();
   late final ListAnchorKeeper _keeper =
       ListAnchorKeeper(controller: _itemScroll, units: _anchors);
+  final ReaderAway _reader = ReaderAway();
+  final OwnSend _own = OwnSend();
+  bool _ownPin = false;
   Map<int, String> _unitByIndex = const {};
   _ColumnGroups? _groups;
   int _seenScrolls = 0;
@@ -1672,7 +1756,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   /// Detects appended messages for autoscroll.
   int _lastMessageCount = 0;
 
-  late final ChatNavListBinding _nav = ChatNavListBinding(ref, _positions, inset: _bottomInset);
+  late final ChatNavListBinding _nav =
+      ChatNavListBinding(ref, _positions, inset: _bottomInset)
+        ..readerAway = (() => _reader.away);
   late final ChatNavService _navService;
   String? _navBreak;
   final DayFloatController _dayFloat = DayFloatController();
@@ -1710,6 +1796,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       _restore = null;
       _groups = null;
       _keeper.reset();
+      _reader.reset();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (_itemScroll.isAttached) {
@@ -1857,6 +1944,17 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     }
     final scroller =
         ref.read(messageListScrollerProvider(widget.desc.storageKey));
+    _reader.sync(scroller.readerJumps);
+    if (_own.arrived(_messagesNow(ref.read(appStateProvider))) && !_ownPin) {
+      _reader.reset();
+      _ownPin = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _ownPin = false;
+        if (!mounted || !_itemScroll.isAttached) return;
+        _itemScroll.jumpTo(index: 0);
+        _keeper.reset(target: 0);
+      });
+    }
     if (scroller.scrollCount != _seenScrolls) {
       _seenScrolls = scroller.scrollCount;
       _keeper.reset();
@@ -1873,7 +1971,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
         break;
       }
     }
-    final follow = newest != null &&
+    final follow = !_reader.away &&
+        newest != null &&
         _bottomInset - newest.itemLeadingEdge * _viewportHeight < 120;
     final old = _unitByIndex;
     _keeper.keep(
@@ -1917,6 +2016,13 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   }
 
   bool _onScroll(ScrollNotification n) {
+    if (!_keeper.retargeting) {
+      _reader
+        ..sync(ref
+            .read(messageListScrollerProvider(widget.desc.storageKey))
+            .readerJumps)
+        ..observe(n);
+    }
     _keeper.observe(n);
     if (n.depth == 0) _dayFloat.observe(n);
     if ((n is ScrollUpdateNotification && n.dragDetails != null) ||
@@ -1960,12 +2066,16 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     }
 
     // Autoscroll new messages while at bottom, unless `settings.autoscroll` is off.
+    _own.prime(messages);
     if (messages.length != _lastMessageCount) {
       final added = messages.length > _lastMessageCount;
       _lastMessageCount = messages.length;
-      if (added && settings.autoscroll && _atBottom) {
+      if (added && settings.autoscroll && _atBottom && !_reader.away) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _atBottom && _itemScroll.isAttached) {
+          if (mounted &&
+              _atBottom &&
+              !_reader.away &&
+              _itemScroll.isAttached) {
             _itemScroll.jumpTo(index: 0);
             _keeper.reset(target: 0);
           }
@@ -2059,6 +2169,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                             if (!_listBuilt) {
                               _listBuilt = true;
                               _seenScrolls = scroller.scrollCount;
+                              _reader
+                                ..sync(scroller.readerJumps)
+                                ..reset();
                               _keeper.reset(
                                 target: restore?.index ?? 0,
                                 anchorUnit: restore == null

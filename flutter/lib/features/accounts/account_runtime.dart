@@ -9,7 +9,6 @@ import '../../services/storage/at_rest_cipher.dart';
 import '../../services/storage/cache_store.dart';
 import '../../services/storage/key_value_store.dart';
 import '../../services/storage/mesh_file_store.dart';
-import '../../services/relay/connection_changes.dart';
 import '../../services/storage/secure_store.dart';
 import '../globe/street_cache.dart';
 import '../identity/biometric_secret_store.dart';
@@ -84,7 +83,6 @@ class AccountRuntime {
   static int _wallClock() => DateTime.now().millisecondsSinceEpoch;
 
   static Future<void> _defaultDropFiles(String ns) async {
-    connectionChanges.clear();
     try {
       await CacheStore.deleteAccountFiles(ns);
     } catch (_) {}

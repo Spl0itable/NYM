@@ -202,9 +202,9 @@
         return el;
     }
 
-    function paintPreview(pv, text, dim, sender, bodyAt) {
+    function paintPreview(pv, text, dim, sender, bodyAt, who) {
         var at = bodyAt > 1 && bodyAt <= text.length ? bodyAt : 0;
-        var sig = text + '\u0000' + JSON.stringify(dim) + '\u0000' + (sender ? sender.join(',') : '') + '\u0000' + at;
+        var sig = text + '\u0000' + JSON.stringify(dim) + '\u0000' + (sender ? sender.join(',') : '') + '\u0000' + at + '\u0000' + (who || '');
         if (pv._lySig === sig) return;
         pv._lySig = sig;
         pv.classList.toggle('has-sender', at > 0);
@@ -212,9 +212,15 @@
         if (at > 0) {
             var nameEnd = sender ? sender[0] : at - 2;
             var name = previewPart('bdi', 'row-preview-name');
-            name.textContent = text.slice(0, nameEnd);
+            name.textContent = window.NymSuffix.capBase(text.slice(0, nameEnd));
             frag.appendChild(name);
-            frag.appendChild(fillDimmed(previewPart('span', 'row-preview-tag'), text, dim, nameEnd, at));
+            var tag = fillDimmed(previewPart('span', 'row-preview-tag'), text, dim, nameEnd, at);
+            if (who) {
+                name.classList.add(who);
+                var sx = tag.querySelector('.nym-suffix');
+                if (sx) sx.classList.add(who);
+            }
+            frag.appendChild(tag);
         }
         if (text) {
             var body = fillDimmed(previewPart('span', 'row-preview-body'), text, dim, at, text.length);
@@ -236,6 +242,7 @@
         var dim = [];
         var sender = null;
         var bodyAt = 0;
+        var who = '';
         if (m) {
             var body = m.content;
             try { body = typeof n._previewBody === 'function' ? n._previewBody(body, Array.isArray(m.quoted) ? m.quoted : []) : n._notifPreviewText(body); } catch (_) { }
@@ -246,11 +253,12 @@
             } catch (_) { }
             var redacted = '';
             if (locked) { try { redacted = n._clRedactText().body; } catch (_) { redacted = ui('New message'); } }
-            var parts = LM().rowPreviewParts({ kind: conv.kind, author: author, pubkey: m.pubkey, self: !!m.isOwn, text: body, hide: hide, locked: locked, redacted: redacted }, ui);
+            var parts = LM().rowPreviewParts({ kind: conv.kind, author: author, pubkey: m.pubkey, self: !!m.isOwn, text: typeof body === 'string' && window.NymSuffix ? window.NymSuffix.capMentions(body) : body, hide: hide, locked: locked, redacted: redacted }, ui);
             text = parts.text;
             dim = parts.dim;
             sender = parts.sender || null;
             bodyAt = parts.bodyAt || 0;
+            if (conv.kind === 'group' && bodyAt > 0 && !m.isOwn && typeof n.getUserColorClass === 'function') who = n.getUserColorClass(m.pubkey) || '';
             var from = bodyAt || (sender ? -1 : 0);
             if (text && !hide && !locked && from >= 0 && window.NymSuffix && typeof n.isVerifiedBot === 'function' && n.isVerifiedBot(m.pubkey)) {
                 var bot = window.NymSuffix.ranges(text.slice(from), '*').map(function (r) { return [r[0] + from, r[1] + from]; })
@@ -258,7 +266,7 @@
                 if (bot.length) dim = dim.concat(bot).sort(function (a, b) { return a[0] - b[0]; });
             }
         }
-        paintPreview(els.pv, text, dim, sender, bodyAt);
+        paintPreview(els.pv, text, dim, sender, bodyAt, who);
         item.classList.toggle('has-preview', !!text);
         var ts = m ? (m._ms || (m.created_at ? m.created_at * 1000 : (m.timestamp instanceof Date ? m.timestamp.getTime() : 0))) : 0;
         var when = ts ? LM().relativeTime(now, ts, ui) : '';
@@ -1358,7 +1366,8 @@
             if (gimg) av.appendChild(gimg.cloneNode(true));
             else av.innerHTML = PEOPLE_SVG;
             title.textContent = g ? (typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || uiT(n, 'Group'))) : textOf(src.querySelector('.group-name-text'));
-            var count = g ? (typeof n.abbreviateNumber === 'function' ? n.abbreviateNumber(g.members.length) : g.members.length) : '';
+            var shownCount = g ? (typeof n._gnAccepted === 'function' ? n._gnAccepted(n.currentGroup, g.members).length : g.members.length) : 0;
+            var count = g ? (typeof n.abbreviateNumber === 'function' ? n.abbreviateNumber(shownCount) : shownCount) : '';
             var desc = g && window.NymGroupTools ? window.NymGroupTools.descriptionLine((typeof n._groupDescription === 'function' ? n._groupDescription(g) : (g.description || ''))) : '';
             subText = joinSub([count !== '' ? uiT(n, '{count} members', { count: count }) : '', desc ? userPart(desc) : enc]);
         } else if (kind === 'geohash') {

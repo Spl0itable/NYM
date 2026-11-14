@@ -55,6 +55,8 @@ class CtxTarget {
     this.targetIsAdmin = false,
     this.targetIsMod = false,
     this.backToGroupId,
+    this.translatable = true,
+    this.anonLane = false,
   });
 
   final String pubkey;
@@ -83,6 +85,10 @@ class CtxTarget {
 
   /// Group id when opened from a group's member list, enabling a back chevron to that group's menu.
   final String? backToGroupId;
+
+  final bool translatable;
+
+  final bool anonLane;
 
   bool get iCanAdminister => iAmOwner || iAmAdmin;
   bool get iCanModerate => iCanAdminister || iAmMod;
@@ -139,11 +145,11 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
     if (!t.isSelf) CtxAction.slap,
     if (!t.isSelf) CtxAction.hug,
     if (showAddToGroup) CtxAction.addToGroup,
-    if (!t.isSelf && hasMessage) CtxAction.zap,
+    if (!t.isSelf && hasMessage && !t.anonLane) CtxAction.zap,
     if (showGiftCredits) CtxAction.giftCredits,
     if (hasContent) CtxAction.quote,
     if (hasContent) CtxAction.copyMessage,
-    if (hasContent) CtxAction.translate,
+    if (hasContent && t.translatable) CtxAction.translate,
     if (!t.isSelf) CtxAction.friend,
     if (!t.isSelf && !showKickOrBan) CtxAction.report,
     if (t.isSelf && hasMessage && hasContent) CtxAction.edit,
@@ -321,6 +327,7 @@ CtxTarget ctxTargetForMessage(
   bool isFriend = false,
   bool isBlocked = false,
   String? liveNym,
+  bool translatable = true,
 }) {
   return CtxTarget(
     pubkey: message.pubkey,
@@ -332,6 +339,8 @@ CtxTarget ctxTargetForMessage(
     isBlocked: isBlocked,
     isBot: message.isBot,
     inGroup: message.isGroup || message.groupId != null,
+    translatable: translatable,
+    anonLane: message.anonLane,
   );
 }
 

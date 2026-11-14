@@ -1632,6 +1632,7 @@ class RelayPoolProxy implements PoolTransport {
       eoseQuorum: eoseQuorum,
       eoseTimeout: eoseTimeout,
       onRejected: (event) => _deduper.forget(copyKey(event)),
+      countsRelays: false,
     );
     _subscriptions[id] = sub;
     _activeFilters[id] = filters;

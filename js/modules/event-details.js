@@ -233,7 +233,7 @@
             l.textContent = label;
             const v = document.createElement('span');
             v.className = 'event-detail-value' + ((opts && opts.mono) ? ' mono' : '');
-            if (opts && opts.nym && window.NymSuffix) v.innerHTML = window.NymSuffix.labelHtml(value);
+            if (opts && opts.nym && window.NymSuffix) v.innerHTML = window.NymSuffix.sqLabelHtml(value);
             else v.textContent = value;
             row.appendChild(l);
             row.appendChild(v);

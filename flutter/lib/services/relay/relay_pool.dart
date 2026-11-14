@@ -134,6 +134,7 @@ class Subscription {
     required this._eoseQuorum,
     required this._eoseTimeout,
     this._onRejected,
+    this._countsRelays = true,
   });
 
   /// Transport-agnostic constructor used by both pool transports.
@@ -145,6 +146,7 @@ class Subscription {
     required double eoseQuorum,
     required Duration eoseTimeout,
     void Function(NostrEvent event)? onRejected,
+    bool countsRelays = true,
   }) =>
       Subscription._(
         subId,
@@ -154,6 +156,7 @@ class Subscription {
         eoseQuorum: eoseQuorum,
         eoseTimeout: eoseTimeout,
         onRejected: onRejected,
+        countsRelays: countsRelays,
       );
 
   final String subId;
@@ -163,6 +166,7 @@ class Subscription {
   final double _eoseQuorum;
   final Duration _eoseTimeout;
   final void Function(NostrEvent event)? _onRejected;
+  final bool _countsRelays;
 
   final EventDeduper _deduper = EventDeduper();
   final EventDeduper _delivered = EventDeduper();
@@ -171,6 +175,8 @@ class Subscription {
   final Completer<void> _eose = Completer<void>();
   final Completer<void> _firstEose = Completer<void>();
   final Set<String> _eosedRelays = <String>{};
+  final Set<String> _relaysAnswered = <String>{};
+  Completer<void>? _everyRelay;
   Timer? _eoseTimer;
   bool _closed = false;
   bool _answered = false;
@@ -187,6 +193,19 @@ class Subscription {
       : (_drained ??= Completer<void>()).future;
 
   Future<void> get eose => _eose.future;
+
+  bool get everyRelayAnswered =>
+      _countsRelays && _relaysAnswered.length >= max(1, _relayCount);
+
+  Future<void> get everyRelay => everyRelayAnswered || _closed
+      ? Future<void>.value()
+      : (_everyRelay ??= Completer<void>()).future;
+
+  void _settleEveryRelay() {
+    final waiting = _everyRelay;
+    _everyRelay = null;
+    waiting?.complete();
+  }
 
   Future<void> get firstEose => _firstEose.future;
 
@@ -236,6 +255,8 @@ class Subscription {
     if (!closed) {
       _answered = true;
       if (!_firstEose.isCompleted) _firstEose.complete();
+      _relaysAnswered.add(relayUrl);
+      if (everyRelayAnswered) _settleEveryRelay();
     }
     _eosedRelays.add(relayUrl);
     final needed = max(1, (_relayCount * _eoseQuorum).ceil());
@@ -258,6 +279,7 @@ class Subscription {
     _transport.closeSubscription(this);
     if (!_eose.isCompleted) _eose.complete();
     if (!_firstEose.isCompleted) _firstEose.complete();
+    _settleEveryRelay();
     await _events.close();
   }
 }

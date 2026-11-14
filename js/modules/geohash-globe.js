@@ -1769,6 +1769,12 @@ Object.assign(NYM.prototype, {
                 updateStreetButton();
                 requestDraw();
             },
+            setStreetDetail: (on) => {
+                if (!street || street.enabled === on) return;
+                street.setEnabled(on);
+                updateStreetButton();
+                requestDraw();
+            },
             flyToBounds: (bounds, animate, opts) => {
                 const o = opts || {};
                 const t = targetForBounds(bounds, o.padding || 0.7);
@@ -1859,8 +1865,14 @@ Object.assign(NYM.prototype, {
         try { return localStorage.getItem('nym_street_detail') !== '0'; } catch (_) { return true; }
     },
 
-    _setStreetDetail(on) {
+    _setStreetDetail(on, opts) {
         try { localStorage.setItem('nym_street_detail', on ? '1' : '0'); } catch (_) { }
+        if (!(opts && opts.fromSync) && typeof this.notePrefChanged === 'function') this.notePrefChanged('streetDetail');
+    },
+
+    _applySyncedStreetDetail(on) {
+        this._setStreetDetail(!!on, { fromSync: true });
+        if (this.geohashMap && typeof this.geohashMap.setStreetDetail === 'function') this.geohashMap.setStreetDetail(!!on);
     },
 
     _selectGeohashCell(geohash, opts = {}) {
@@ -2427,6 +2439,7 @@ Object.assign(NYM.prototype, {
                 if (run.cancelled) return;
                 if (roomBlocked || this._gxPeekHidden(ev)) continue;
                 if (typeof this._quietHit === 'function' && this._quietHit(ev)) continue;
+                if (typeof this._encryptedBlobDrop === 'function' && this._encryptedBlobDrop(ev)) continue;
                 if (!(await this._verifyRelayEventAsync(ev))) continue;
                 const clean = cf && typeof ev.content === 'string' ? this._gxPeekContent(ev, cf) : ev.content;
                 ok.push(clean === ev.content ? ev : Object.assign({}, ev, { content: clean }));
@@ -2442,6 +2455,7 @@ Object.assign(NYM.prototype, {
             summary = window.NymGeoExplore.summarizePeek(ok, {
                 geohash: gh, nowSec: Math.floor(now / 1000), blocked: [...(this.blockedUsers || [])], localOnline: local,
                 capped: window.NymGeoExplore.peekCapped(events),
+                verifyLabel: this._gxL('bitchat verification link'),
             });
         } catch (_) {
             summary = null;

@@ -4,10 +4,13 @@ import 'dart:convert';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../core/utils/channel_name.dart';
 import '../../models/channel.dart';
 import '../../features/group_tools/group_tools.dart';
 import '../../models/group.dart';
 import '../../features/share/share_links.dart' show strictNpubPubkey;
+
+export '../../core/utils/channel_name.dart' show isChannelName, sanitizeChannelName;
 
 /// Deep-link routing mirroring the PWA's URL-fragment routing (`#gjoin=`, `#<e|g|c>:<id>`, `#<channel>`).
 // TODO(verify): the PWA has no PM deep-link form (`#pm:`), so none is implemented.
@@ -103,12 +106,13 @@ class NymLink {
   int get hashCode => Object.hash(kind, channel, refPrefix, inviteToken);
 }
 
-/// Lowercases, then rejects (returns '') anything with non-letter/digit characters, as the PWA does.
-String sanitizeChannelName(String name) {
-  if (name.isEmpty) return '';
-  final lower = name.toLowerCase();
-  if (!RegExp(r'^[\p{L}\p{N}]+$', unicode: true).hasMatch(lower)) return '';
-  return lower;
+String _decodedFragment(String s) {
+  if (!s.contains('%')) return s;
+  try {
+    return Uri.decodeComponent(s);
+  } catch (_) {
+    return '';
+  }
 }
 
 /// Parses an invite token (v1, 64-hex/UUID group, 64-hex approver) as the PWA does; null on failure.
@@ -198,13 +202,13 @@ NymLink? parseNymLink(String url) {
       RegExp(r'^([egc]):(.+)$', caseSensitive: false).firstMatch(fragment);
   if (ref != null) {
     final prefix = ref.group(1)!.toLowerCase();
-    final channel = sanitizeChannelName(ref.group(2)!);
+    final channel = sanitizeChannelName(_decodedFragment(ref.group(2)!));
     if (channel.isEmpty) return null;
     return NymLink.channelRef(prefix, channel);
   }
 
   // 3) Plain channel or geohash.
-  var channelInput = fragment.toLowerCase();
+  var channelInput = _decodedFragment(fragment).toLowerCase();
   if (channelInput.startsWith('g:')) {
     channelInput = channelInput.substring(2);
   }

@@ -171,7 +171,7 @@ Object.assign(NYM.prototype, {
         input.selectionStart = input.selectionEnd = replaced.length;
         input.focus();
         this.hideEmojiAutocomplete();
-        this.addToRecentEmojis(emoji);
+        this.addToRecentEmojis(emoji, { composer: true });
     },
 
     showKaomojiAutocomplete(search) {
@@ -252,7 +252,8 @@ Object.assign(NYM.prototype, {
         if (this.inPMMode && this.currentGroup) {
             const g = this.groupConversations.get(this.currentGroup);
             if (g && Array.isArray(g.members)) {
-                return new Set(g.members.filter(pk => pk !== this.pubkey));
+                const roster = typeof this._gnAccepted === 'function' ? this._gnAccepted(this.currentGroup, g.members) : g.members;
+                return new Set(roster.filter(pk => pk !== this.pubkey));
             }
         }
         return null;
@@ -392,14 +393,7 @@ Object.assign(NYM.prototype, {
             if (strong.dataset.label !== label) {
                 strong.dataset.label = label;
                 strong.textContent = '';
-                const nameSpan = document.createElement('span');
-                nameSpan.className = 'ac-name-text';
-                nameSpan.textContent = `@${user.baseNym}`;
-                strong.appendChild(nameSpan);
-                const sfx = document.createElement('span');
-                sfx.className = 'nym-suffix';
-                sfx.textContent = `#${user.suffix}`;
-                strong.appendChild(sfx);
+                strong.insertAdjacentHTML('beforeend', '<span class="ac-at">@</span>' + window.NymSuffix.sqHtml(user.baseNym, user.suffix, 'ac-name-text'));
                 if (flairHtml) {
                     const tmpl = document.createElement('template');
                     tmpl.innerHTML = flairHtml;
@@ -541,12 +535,17 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        const validChannelPattern = /^[\p{L}\p{N}]+$/u;
         const searchLower = search.toLowerCase();
+        const US = window.NymUnifiedSearch;
+        const fold = (s) => (US && typeof US.fold === 'function' ? US.fold(String(s || '')) : String(s || '').toLowerCase());
+        const searchFold = fold(search);
+        const placeMatch = (name) => !!searchFold && this.isValidGeohash(name) &&
+            typeof this._geoPlaceName === 'function' && fold(this._geoPlaceName(name)).includes(searchFold);
         const CF = window.NymContentFilter;
         const cfCtx = CF && typeof this._cfCtx === 'function' ? this._cfCtx() : null;
         let matches = Array.from(channelMap.values())
-            .filter(ch => validChannelPattern.test(ch.name) && ch.name.toLowerCase().includes(searchLower) &&
+            .filter(ch => window.NymChannelName.isChannelName(ch.name) &&
+                (ch.name.toLowerCase().includes(searchLower) || placeMatch(ch.name)) &&
                 !(cfCtx && CF.channelHidden(cfCtx, ch.name)));
 
         matches.sort((a, b) => {
@@ -588,10 +587,15 @@ Object.assign(NYM.prototype, {
                 item.appendChild(badge);
             }
 
-            const locationName = this.isValidGeohash(ch.name) ? this.getGeohashLocation(ch.name) : '';
+            const isGeo = this.isValidGeohash(ch.name);
+            const geoKey = ch.name.toLowerCase();
+            const locationName = isGeo
+                ? (typeof this._geoPlaceLabel === 'function' ? this._geoPlaceLabel(geoKey) : this.getGeohashLocation(ch.name))
+                : '';
             if (locationName) {
                 const loc = document.createElement('span');
                 loc.className = 'channel-ac-location';
+                loc.dataset.geohash = geoKey;
                 loc.textContent = locationName;
                 item.appendChild(loc);
             }

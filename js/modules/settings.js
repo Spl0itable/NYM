@@ -9,7 +9,7 @@ const NYM_SETTINGS_SECTION_KEYS = {
         'wallpaperType', 'wallpaperCustomUrl', 'textSize', 'transparencyEnabled', 'columnsWallpaper',
         'sidebarSectionOrder', 'uiLanguage', 'colorfulMessages', 'colorfulMessagesTs', 'pubkeyFormat',
         'pubkeyFormatTs', 'largeTargets', 'largeTargetsTs', 'highContrast', 'highContrastTs', 'sidebarChannelsMode',
-        'sidebarChannelsModeTs'],
+        'sidebarChannelsModeTs', 'streetDetail'],
     privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'blockedEmojiPacks', 'blockedRelays', 'addedRelays', 'hiddenChannels',
         'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
         'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
@@ -24,9 +24,11 @@ const NYM_SETTINGS_SECTION_KEYS = {
         'keepCallHistory', 'keepCallHistoryTs'],
     channels: ['pinnedChannels', 'userJoinedChannels', 'sortByProximity', 'pinnedLandingChannel',
         'hideNonPinned', 'closedPMs', 'leftGroups', 'closedPMTimes',
-        'leftGroupTimes'],
-    data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed', 'botPmClearedAt', 'botMaxRuns']
+        'leftGroupTimes', 'leftGroupRoles'],
+    data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed', 'botPmClearedAt', 'botMaxRuns', 'botAnonEnabled', 'botProModel', 'reportedTargets']
 };
+
+const NYM_SETTINGS_NEVER_SYNCED = new Set(['connectionMode', 'relayUrl', 'relayDirectMode', 'relayDirectAck', 'relayFallbackNoticeOff', 'meshEnabled', 'meshGhostMode', 'ghostMode', 'attestAuthority', 'sidebarSectionCollapsed', 'settingsSectionsCollapsed', 'settingsSectionsSplit', 'globalEmojiBlocks', 'globalEmojiBlockUrls', 'aiConsent', 'aiTranslateConsent', 'keypairMode', 'randomKeypairPerSession', 'autoEphemeral', 'vault', 'screenSecurity', 'incognitoKeyboard', 'syncDevice', 'pqDeviceId', 'backgroundConnectivity', 'backgroundConnectivityChosen', 'backgroundConnectivityTs', 'backgroundConnectivityFp']);
 
 // Sealed classically, never to the root-derived key (a circular lock). Spec §5.1.
 const NYM_PQ_ROOT_CATEGORY = 'nymchat-pq-root';
@@ -34,7 +36,16 @@ const SETTINGS_DELTA_OVERLAP_MS = 120000;
 const SETTINGS_HAVE_MAX = 5000;
 
 const NYM_PREF_STAMPS_KEY = 'nym_pref_sync_ts';
+const NYM_SET_STAMPS_KEY = 'nym_set_sync';
+const NYM_COLUMNS_SET_KEY = 'nym_columns_set';
 const NYM_SETTINGS_DIRTY_KEY = 'nym_settings_dirty';
+const NYM_PRIVACY_ROW = Object.freeze({
+    d1Bytes: 65535,
+    listBytes: 61440,
+    keys: Object.freeze(['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'hiddenChannels']),
+    full: 'Your block lists are full. Remove some blocked users, friends, keywords or channels to make room.',
+    tooLarge: 'Your block lists are too large to sync to your other devices. Remove some to sync them again.',
+});
 const NYM_PREF_SYNC_DEBOUNCE_MS = 1500;
 const NYM_PREF_SYNC_HOLD_MAX_MS = 30000;
 
@@ -69,14 +80,86 @@ Object.assign(NYM.prototype, {
         return this.isIndicatorAllowedFor(this.settings?.typingIndicatorsScope, context);
     },
 
+    _throwawayNeedles() {
+        if (!this._settingsSyncLocal()) {
+            const was = this._twNeedles;
+            this._twNeedles = null;
+            if (was && was.pks.size) this._releaseThrowaway(was);
+            return null;
+        }
+        const st = this._twNeedles || (this._twNeedles = { pks: new Set(), list: [] });
+        const pk = this.pubkey;
+        if (typeof pk === 'string' && /^[0-9a-f]{64}$/.test(pk) && !st.pks.has(pk)) {
+            st.pks.add(pk);
+            st.list.push(pk);
+            try { st.list.push(window.NostrTools.nip19.npubEncode(pk)); } catch (_) { }
+        }
+        return st.list;
+    },
+
+    _releaseThrowaway(st) {
+        const S = window.NymStorage;
+        if (!S || typeof S.releaseSession !== 'function') return;
+        const cur = this.pubkey;
+        const retired = [];
+        for (const p of st.pks) {
+            if (p === cur) continue;
+            retired.push(p);
+            try { retired.push(window.NostrTools.nip19.npubEncode(p)); } catch (_) { }
+        }
+        S.releaseSession(retired);
+    },
+
+    _dropThrowawayLeftovers() {
+        if (!this._settingsSyncLocal()) return;
+        const self = this.pubkey || '';
+        const rx = /^(nym_ephemeral_keys_|nym_groups_|nym_left_groups_|nym_last_pm_sync_|nym_nickname_|nym_image_blur_|nym_pq_link_prompt_|nym_pm_support_tokens_|nym_botanon_|nym_locked_chats:|nym_locked_pending:|nym_pinned_chats:|nym_pinned_pending:|nym_scheduled_cache:|nym_seen_marks:|nym_seen_first:|nym_unread_mentions:|nym_sidebar_folders_pending:)([0-9a-f]{64})$/;
+        const old = new Set();
+        const drop = [];
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                const m = k ? rx.exec(k) : null;
+                if (m && m[2] !== self) { drop.push(k); old.add(m[2]); }
+            }
+        } catch (_) { }
+        try {
+            const A = window.NymAccounts;
+            const cur = A && typeof A.activeOf === 'function' ? A.activeOf(A.read()) : null;
+            if (cur && /^[0-9a-f]{64}$/.test(cur.pubkey || '') && cur.pubkey !== self) old.add(cur.pubkey);
+        } catch (_) { }
+        for (const k of drop) { try { localStorage.removeItem(k); } catch (_) { } }
+        if (!old.size) return;
+        const names = (v) => { for (const p of old) if (String(v || '').includes(p)) return true; return false; };
+        for (const k of ['nym_attest_badge', 'nym_shop_active_cache']) {
+            try { if (names(localStorage.getItem(k))) localStorage.removeItem(k); } catch (_) { }
+        }
+        try {
+            const raw = localStorage.getItem('nym_channel_last_read');
+            const marks = raw ? JSON.parse(raw) : null;
+            if (marks && typeof marks === 'object' && !Array.isArray(marks)) {
+                let hit = false;
+                for (const k of Object.keys(marks)) if (names(k)) { delete marks[k]; hit = true; }
+                if (hit) localStorage.setItem('nym_channel_last_read', JSON.stringify(marks));
+            }
+        } catch (_) { }
+        if (typeof this._cacheDropNaming === 'function') this._cacheDropNaming([...old]);
+    },
+
+    _settingsSyncLocal() {
+        if (this.connectionMode !== 'ephemeral') return false;
+        let keypairMode = 'random';
+        try {
+            keypairMode = localStorage.getItem('nym_keypair_mode') || (localStorage.getItem('nym_random_keypair_per_session') === 'true' ? 'random' : 'persistent');
+        } catch (_) { }
+        return keypairMode === 'random' || keypairMode === 'hardcore';
+    },
+
     async saveSyncedSettings() {
         if (!this.pubkey) return;
 
         // Skip sync for hardcore mode (keypair changes every message) and random-per-session.
-        if (this.connectionMode === 'ephemeral') {
-            const keypairMode = localStorage.getItem('nym_keypair_mode') || (localStorage.getItem('nym_random_keypair_per_session') === 'true' ? 'random' : 'persistent');
-            if (keypairMode === 'random' || keypairMode === 'hardcore') return;
-        }
+        if (this._settingsSyncLocal()) return;
 
         try {
             await this._publishEncryptedSettings(this._buildSettingsPayload());
@@ -89,7 +172,7 @@ Object.assign(NYM.prototype, {
             if (!Array.isArray(this.notificationHistory) || this.notificationHistory.length === 0) return [];
             const cutoff = Date.now() - 24 * 60 * 60 * 1000;
             return this.notificationHistory
-                .filter(n => n && n.timestamp > cutoff)
+                .filter(n => n && n.timestamp > cutoff && !(n.channelInfo && n.channelInfo.type === 'group-invite'))
                 .slice(-100)
                 .map(n => {
                     const out = {
@@ -117,7 +200,7 @@ Object.assign(NYM.prototype, {
     },
 
     _buildSettingsPayload() {
-        return this._withPrefStamps({
+        return this._withSetStamps(this._withPrefStamps({
             v: 2,
             theme: this.settings.theme,
             sound: this.settings.sound,
@@ -130,6 +213,7 @@ Object.assign(NYM.prototype, {
             pinnedChannels: Array.from(this.pinnedChannels),
             blockedChannels: Array.from(this.blockedChannels),
             blockedEmojiPacks: typeof this._emojiBlockSyncPayload === 'function' ? this._emojiBlockSyncPayload() : [],
+            reportedTargets: typeof this._reportedForSync === 'function' ? this._reportedForSync() : {},
             userJoinedChannels: Array.from(this.userJoinedChannels),
             hiddenChannels: Array.from(this.hiddenChannels || []),
             blockedUsers: Array.from(this.blockedUsers || []),
@@ -147,7 +231,7 @@ Object.assign(NYM.prototype, {
             chatLayout: this.settings.chatLayout || 'irc',
             chatViewMode: this.settings.chatViewMode === 'columns' ? 'columns' : 'single',
             columnsWallpaper: this.settings.columnsWallpaper === true,
-            columnsLayout: Array.isArray(this.columnsLayout) ? this.columnsLayout : [],
+            columnsLayout: this._colListForSync(),
             nickStyle: this.settings.nickStyle || 'fancy',
             colorMode: localStorage.getItem('nym_color_mode') || 'auto',
             wallpaperType: localStorage.getItem('nym_wallpaper_type') || 'geometric',
@@ -196,6 +280,7 @@ Object.assign(NYM.prototype, {
             leftGroups: Array.from(this.leftGroups || []),
             closedPMTimes: this.closedPMTimes ? Object.fromEntries(this.closedPMTimes) : {},
             leftGroupTimes: this.leftGroupTimes ? Object.fromEntries(this.leftGroupTimes) : {},
+            leftGroupRoles: typeof this._giLeftRolesForSync === 'function' ? this._giLeftRolesForSync() : {},
             acceptPMs: this.settings.acceptPMs || 'enabled',
             acceptCalls: this.settings.acceptCalls || 'enabled',
             seenCalls: this._seenCallsForSync(),
@@ -207,10 +292,118 @@ Object.assign(NYM.prototype, {
             botPmWelcomed: localStorage.getItem('nym_botpm_welcomed') === 'true',
             botPmClearedAt: this._getBotPmClearedAt() || 0,
             botMaxRuns: typeof this.botMaxRuns === 'function' ? this.botMaxRuns() : 0,
+            botProModel: localStorage.getItem('nym_botpm_pro_model') || '',
+            streetDetail: localStorage.getItem('nym_street_detail') !== '0',
             encryptAtRestPreferred: localStorage.getItem('nym_encrypt_at_rest_pref') === '1',
             remotePanic: typeof this.remotePanicEnabled === 'function' ? this.remotePanicEnabled() : false,
             ...this._stampedPrefsForSync()
-        });
+        }));
+    },
+
+    _setListsForSync() {
+        return {
+            blockedUsers: Array.from(this.blockedUsers || []),
+            friends: Array.from(this.friends || []),
+            blockedKeywords: Array.from(this.blockedKeywords || []),
+            blockedChannels: Array.from(this.blockedChannels || []),
+            hiddenChannels: Array.from(this.hiddenChannels || []),
+            pinnedChannels: Array.from(this.pinnedChannels || []),
+            userJoinedChannels: Array.from(this.userJoinedChannels || []),
+            translateFavoriteLanguages: typeof this._getTranslateFavorites === 'function' ? this._getTranslateFavorites() : [],
+            emojiPackFavorites: typeof this._getEmojiPackFavorites === 'function' ? this._getEmojiPackFavorites() : [],
+            emojiCategoryFavorites: typeof this._getDefaultCategoryFavorites === 'function' ? this._getDefaultCategoryFavorites() : [],
+            favoriteGifs: typeof this._getFavoriteGifs === 'function' ? this._getFavoriteGifs().slice(0, 100) : [],
+            blockedEmojiPacks: typeof this._emojiBlockSyncPayload === 'function' ? this._emojiBlockSyncPayload() : [],
+        };
+    },
+
+    _setStates() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(NYM_SET_STAMPS_KEY) || 'null');
+            return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+        } catch (_) { return {}; }
+    },
+
+    _setStatesSave(states) {
+        try { localStorage.setItem(NYM_SET_STAMPS_KEY, JSON.stringify(states)); } catch (_) { }
+    },
+
+    _withSetStamps(payload) {
+        const M = window.NymSyncMerge;
+        if (!M || typeof M.setObserve !== 'function' || !payload) return payload;
+        const lists = this._setListsForSync();
+        const prev = this._setStates();
+        const now = Date.now();
+        const next = {};
+        for (const name of Object.keys(M.SETS)) next[name] = M.setObserve(prev[name], name, lists[name] || [], now);
+        if (JSON.stringify(next) !== JSON.stringify(prev)) this._setStatesSave(next);
+        Object.assign(payload, M.setWires(Object.assign({}, lists, payload), next));
+        if (typeof M.colObserve === 'function' && Array.isArray(payload.columnsLayout)) {
+            const prevCol = this._colState();
+            const col = M.colObserve(prevCol, payload.columnsLayout, now, 0, this._prefStamps().columnsLayout || 0);
+            if (JSON.stringify(col) !== JSON.stringify(prevCol)) this._colStateSave(col);
+            payload[M.COL_WIRE] = M.colWire(col, payload.columnsLayout, payload.columnsLayoutTs || 0);
+        }
+        return payload;
+    },
+
+    _colListForSync() {
+        if (Array.isArray(this.columnsLayout)) return this.columnsLayout;
+        try {
+            const v = JSON.parse(localStorage.getItem('nym_columns_layout') || '[]');
+            return Array.isArray(v) ? v : [];
+        } catch (_) { return []; }
+    },
+
+    _colState() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(NYM_COLUMNS_SET_KEY) || 'null');
+            return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+        } catch (_) { return null; }
+    },
+
+    _colEnsure() {
+        const M = window.NymSyncMerge;
+        if (!M || typeof M.colObserve !== 'function' || this._colState()) return;
+        this._colStateSave(M.colObserve(null, this._colListForSync(), Date.now(), 0, this._prefStamps().columnsLayout || 0));
+    },
+
+    _colNote(list) {
+        const M = window.NymSyncMerge;
+        if (!M || typeof M.colObserve !== 'function') return;
+        const prev = this._colState();
+        const next = M.colObserve(prev, list, Date.now(), 0, this._prefStamps().columnsLayout || 0);
+        if (JSON.stringify(next) !== JSON.stringify(prev)) this._colStateSave(next);
+    },
+
+    _colStateSave(state) {
+        try { localStorage.setItem(NYM_COLUMNS_SET_KEY, JSON.stringify(state)); } catch (_) { }
+    },
+
+    _colNoteReset(now) {
+        const M = window.NymSyncMerge;
+        if (!M || typeof M.colObserve !== 'function') return;
+        const at = now > 0 ? now : Date.now();
+        this._colStateSave(M.colObserve(this._colState(), [], at, at, at));
+    },
+
+    _setStatesAdopt(states, behind) {
+        const M = window.NymSyncMerge;
+        if (!M || !states) return;
+        const lists = this._setListsForSync();
+        const cur = this._setStates();
+        const now = Date.now();
+        for (const name of Object.keys(states)) cur[name] = M.setAdopt(states[name], name, lists[name] || [], now);
+        this._setStatesSave(cur);
+        if (!behind) return;
+        const lookup = this._settingsSectionLookup || (this._splitSettingsBySection({}), this._settingsSectionLookup) || {};
+        if (this._publishedSectionJson) {
+            for (const name of Object.keys(states)) {
+                const section = lookup[name];
+                if (section) delete this._publishedSectionJson[`nymchat-settings-${section}`];
+            }
+        }
+        setTimeout(() => { if (!this._settingsSaveTimer) this._debouncedNostrSettingsSave(2000, { wanted: true }); }, 0);
     },
 
     _withPrefStamps(payload) {
@@ -227,10 +420,24 @@ Object.assign(NYM.prototype, {
 
     _prefStamps() {
         const M = window.NymSyncMerge;
+        let m;
         try {
             const raw = JSON.parse(localStorage.getItem(NYM_PREF_STAMPS_KEY) || '{}');
-            return M ? M.tsMapNorm(raw) : {};
-        } catch (_) { return {}; }
+            m = M ? M.tsMapNorm(raw) : {};
+        } catch (_) { m = {}; }
+        return this._withEarlierPrefChoices(m);
+    },
+
+    _withEarlierPrefChoices(m) {
+        try {
+            if (!(m.botProModel > 0) && localStorage.getItem('nym_botpm_pro_model')) m.botProModel = 1;
+            if (!(m.streetDetail > 0) && localStorage.getItem('nym_street_detail') === '0') m.streetDetail = 1;
+            if (!(m.columnsLayout > 0)) {
+                const cols = JSON.parse(localStorage.getItem('nym_columns_layout') || '[]');
+                if (Array.isArray(cols) && cols.length) m.columnsLayout = 1;
+            }
+        } catch (_) { }
+        return m;
     },
 
     _prefStampSet(name, ts) {
@@ -450,6 +657,7 @@ Object.assign(NYM.prototype, {
 
     // Clear the ephemeral keys (security-relevant) but keep history wraps so the user's backlog stays in D1.
     _clearGroupSyncData(groupId) {
+        if (this._settingsSyncLocal()) return;
         try { this._saveSettingsBlobToD1(this._groupSyncDTag('nymchat-keys', groupId), JSON.stringify({})); } catch (_) { }
     },
 
@@ -466,11 +674,14 @@ Object.assign(NYM.prototype, {
                     o[name + 'Ts'] = section;
                     o[name + 'Fp'] = section;
                 }
+                for (const name of Object.keys(M.SETS || {})) if (o[name]) o[name + M.SET_SUFFIX] = o[name];
+                if (M.COL_WIRE && o.columnsLayout) o[M.COL_WIRE] = o.columnsLayout;
             }
             return o;
         })());
         const out = {};
         for (const [key, val] of Object.entries(settingsData)) {
+            if (NYM_SETTINGS_NEVER_SYNCED.has(key)) continue;
             const section = lookup[key] || 'misc';
             (out[section] || (out[section] = { v: settingsData.v || 2 }))[key] = val;
         }
@@ -675,6 +886,43 @@ Object.assign(NYM.prototype, {
             && typeof this.pqSelfUsesPq2 === 'function' && this.pqSelfUsesPq2());
     },
 
+    _privacyListsBytes(lists) {
+        const o = {};
+        for (const k of NYM_PRIVACY_ROW.keys) o[k] = Array.from((lists && lists[k]) || []);
+        return new TextEncoder().encode(JSON.stringify(o)).length;
+    },
+
+    _privacyFitsWith(field, value) {
+        const lists = {
+            blockedUsers: this.blockedUsers, friends: this.friends, blockedKeywords: this.blockedKeywords,
+            blockedChannels: this.blockedChannels, hiddenChannels: this.hiddenChannels,
+        };
+        const cur = lists[field];
+        if (cur && typeof cur.has === 'function' && cur.has(value)) return true;
+        lists[field] = Array.from(cur || []).concat([value]);
+        if (this._privacyListsBytes(lists) <= NYM_PRIVACY_ROW.listBytes) return true;
+        this.displaySystemMessage(typeof this.uiText === 'function' ? this.uiText(NYM_PRIVACY_ROW.full) : NYM_PRIVACY_ROW.full);
+        return false;
+    },
+
+    _settingsOversizeText(dTag) {
+        if (dTag === 'nymchat-settings-privacy') return NYM_PRIVACY_ROW.tooLarge;
+        const F = window.NymFolders, L = window.NymChatLock;
+        if (F && dTag === F.KEYS.dTag) return F.STRINGS.capSize;
+        if (L && dTag === L.KEYS.lockedDTag) return L.STRINGS.lockFull;
+        return '';
+    },
+
+    _settingsRowOversize(dTag) {
+        if (this._publishedSectionJson) delete this._publishedSectionJson[dTag];
+        const text = this._settingsOversizeText(dTag);
+        if (!text) return;
+        if (!this._oversizeNoticed) this._oversizeNoticed = new Set();
+        if (this._oversizeNoticed.has(dTag)) return;
+        this._oversizeNoticed.add(dTag);
+        this.displaySystemMessage(typeof this.uiText === 'function' ? this.uiText(text) : text);
+    },
+
     async _publishCategoryWrap(payload, dTag, createdAt, trimFns) {
         const RUMOR_OVERHEAD = 256;
         const MAX_RUMOR_BYTES =
@@ -685,7 +933,14 @@ Object.assign(NYM.prototype, {
             return encoder.encode(JSON.stringify(json)).length + RUMOR_OVERHEAD;
         };
 
-        if (Array.isArray(trimFns) && trimFns.length) {
+        const M = window.NymSyncMerge;
+        const shed = M && typeof M.setShed === 'function' && Object.keys(M.SETS).some((n) => payload[n + M.SET_SUFFIX]);
+        const over = rumorByteSize(payload) > MAX_RUMOR_BYTES;
+        const d1Bytes = (p) => encoder.encode(JSON.stringify(Object.assign({}, p, { __cat: dTag }))).length;
+        const keep = over && d1Bytes(payload) <= NYM_PRIVACY_ROW.d1Bytes;
+        const before = shed && !keep ? JSON.parse(JSON.stringify(payload)) : null;
+        if (shed) trimFns = (Array.isArray(trimFns) ? trimFns : []).concat([M.setShed]);
+        if (!keep && Array.isArray(trimFns) && trimFns.length) {
             let guard = 0;
             while (rumorByteSize(payload) > MAX_RUMOR_BYTES && guard++ < 500) {
                 let trimmed = false;
@@ -696,8 +951,12 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        if (rumorByteSize(payload) > MAX_RUMOR_BYTES) {
+        if (before) payload = M.setRealign(before, payload);
+
+        const relay = !keep && rumorByteSize(payload) <= MAX_RUMOR_BYTES;
+        if (!relay && !keep && d1Bytes(payload) > NYM_PRIVACY_ROW.d1Bytes) {
             console.warn(`[NostrSync] ${dTag} exceeds NIP-44 plaintext limit after trimming; skipping publish`);
+            this._settingsRowOversize(dTag);
             return false;
         }
 
@@ -707,7 +966,7 @@ Object.assign(NYM.prototype, {
         if (this._publishedSectionJson[dTag] === finalJson) return false;
 
         // Mark as published only after it succeeds, so a failed write is retried.
-        const ok = await this._publishWrappedNostrEvent(payload, dTag, createdAt);
+        const ok = await this._publishWrappedNostrEvent(payload, dTag, createdAt, relay ? undefined : { skipRelay: true });
         if (!ok) {
             delete this._publishedSectionJson[dTag];
             return false;
@@ -722,8 +981,12 @@ Object.assign(NYM.prototype, {
         const prev = this._lastInboundSections && this._lastInboundSections[dTag];
         if (!prev || typeof prev !== 'object') return payload;
         const out = { ...payload };
+        const M = window.NymSyncMerge;
+        const sets = (M && M.SETS) || {};
+        const suffix = (M && M.SET_SUFFIX) || 'Set';
         for (const [k, v] of Object.entries(prev)) {
-            if (k === 'v' || k === '__cat') continue;
+            if (k === 'v' || k === '__cat' || NYM_SETTINGS_NEVER_SYNCED.has(k)) continue;
+            if (k in sets || (k.endsWith(suffix) && k.slice(0, -suffix.length) in sets)) continue;
             if (!(k in out)) out[k] = v;
         }
         return out;
@@ -744,8 +1007,12 @@ Object.assign(NYM.prototype, {
         };
         const trimMemberKeyTs = (p) => {
             const entry = Object.values(p.groupEphemeralKeys || {})[0];
-            if (entry && entry.memberKeyTs) { delete entry.memberKeyTs; return true; }
-            return false;
+            if (!entry || !entry.memberKeyTs) return false;
+            const GN = window.NymGroupInvited;
+            const next = GN && typeof GN.trimKeyTs === 'function' ? GN.trimKeyTs(entry.memberKeyTs, group && group.invited) : {};
+            if (Object.keys(next).length) entry.memberKeyTs = next;
+            else delete entry.memberKeyTs;
+            return true;
         };
         const entry = this._serializeEphemeralKeys(ek);
         const group = this.groupConversations?.get(groupId);
@@ -778,8 +1045,10 @@ Object.assign(NYM.prototype, {
         const ek = this.groupEphemeralKeys && this.groupEphemeralKeys.get(groupId);
         if (!ek || !ek.self || !ek.self.current) return Promise.resolve(false);
         const sent = { self: { current: { pk: ek.self.current.pk }, prev: (ek.self.prev || []).map((k) => ({ pk: k.pk })) } };
-        return this._publishGroupKeysRow(groupId, Math.floor(Date.now() / 1000)).then((ok) => {
+        const now = Math.floor(Date.now() / 1000);
+        return this._publishGroupKeysRow(groupId, now).then((ok) => {
             if (ok !== false && typeof this._noteD1Self === 'function') this._noteD1Self(groupId, sent);
+            if (ok === true && typeof this._publishSettingsChangedPing === 'function') this._publishSettingsChangedPing(['groupKeys'], now).catch(() => { });
             return ok;
         }).catch(() => false);
     },
@@ -824,14 +1093,15 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        if (this._botAnon && this._botAnon.current) {
+        const changed = [];
+        const anonPayload = typeof this.botAnonSyncPayload === 'function' ? this.botAnonSyncPayload() : null;
+        if (anonPayload) {
             try {
-                await this._publishCategoryWrap(
-                    { botAnon: this.botAnonSerialize() },
-                    'nymchat-botanon',
-                    now,
-                    []
-                );
+                const wrap = { botAnon: anonPayload };
+                if (await this._publishCategoryWrap(wrap, 'nymchat-botanon', now, [])) changed.push('botanon');
+                if (this._publishedSectionJson && this._publishedSectionJson['nymchat-botanon'] === JSON.stringify(wrap)) {
+                    this.botAnonMarkSynced(anonPayload.current.pk);
+                }
             } catch (_) { }
         }
 
@@ -865,7 +1135,9 @@ Object.assign(NYM.prototype, {
                     const base = this._groupSyncDTag('nymchat-groups', groupId);
                     const members = Array.isArray(g.members) ? g.members : [];
                     const at = g.memberAt || {};
+                    const inv = g.invited || {};
                     const head = { ...g, members: [], memberAt: {} };
+                    delete head.invited;
                     const perShard = Math.max(1,
                         Math.floor((BUDGET - entryBytes(head)) / 150));
                     let shard = 0;
@@ -873,9 +1145,12 @@ Object.assign(NYM.prototype, {
                         const chunk = members.slice(i, i + perShard);
                         const chunkAt = {};
                         for (const pk of chunk) if (at[pk] !== undefined) chunkAt[pk] = at[pk];
+                        const chunkInv = {};
+                        for (const pk of chunk) if (inv[pk] !== undefined) chunkInv[pk] = inv[pk];
+                        const invPart = Object.keys(chunkInv).length ? { invited: chunkInv } : {};
                         const payload = shard === 0
-                            ? { ...head, members: chunk, memberAt: chunkAt }
-                            : { members: chunk, memberAt: chunkAt };
+                            ? { ...head, members: chunk, memberAt: chunkAt, ...invPart }
+                            : { members: chunk, memberAt: chunkAt, ...invPart };
                         await this._publishCategoryWrap(
                             { groupConversations: { [groupId]: payload } },
                             `${base}-${shard}`, now, [trimGroupModLogs]);
@@ -963,7 +1238,6 @@ Object.assign(NYM.prototype, {
             }
         } catch (_) { }
 
-        const changed = [];
         try {
             if (await this._publishCallsRow(now)) changed.push('calls');
         } catch (_) { }
@@ -1045,6 +1319,7 @@ Object.assign(NYM.prototype, {
     _applySyncExtras(s) {
         if (!s || typeof s !== 'object') return;
         if (s.threadLastRead && typeof s.threadLastRead === 'object') this._applyThreadLastReadSync(s.threadLastRead);
+        if (s.reportedTargets && typeof s.reportedTargets === 'object' && typeof this._applyReportedSync === 'function') this._applyReportedSync(s.reportedTargets);
         if (s.seenMarks && typeof s.seenMarks === 'object') this._applySeenMarksSync(s.seenMarks);
         if (s.callHistory && typeof s.callHistory === 'object' && typeof this._chApplySynced === 'function') this._chApplySynced(s.callHistory);
         if (s.groupTools && typeof s.groupTools === 'object' && typeof this._applyGroupToolsSync === 'function') this._applyGroupToolsSync(s.groupTools);
@@ -1145,7 +1420,6 @@ Object.assign(NYM.prototype, {
     _onSettingsChangedPing(ping, rumorTs) {
         if (!ping || typeof ping !== 'object') return;
         if (ping.src && ping.src === this._syncInstanceId()) return;
-        if (this._applyingRemoteSettings) return;
 
         const ts = Number(ping.ts) || rumorTs || 0;
         const src = typeof ping.src === 'string' ? ping.src : '';
@@ -1155,22 +1429,31 @@ Object.assign(NYM.prototype, {
             && ts * 1000 < sync.fullAt - SETTINGS_DELTA_OVERLAP_MS) return;
         if (!this._syncPingSeen) this._syncPingSeen = new Map();
         const seenKey = src || '?';
-        if (ts && ts <= (this._syncPingSeen.get(seenKey) || 0)) return;
+        const seq = Number.isSafeInteger(ping.n) && ping.n > 0 ? ping.n : 0;
+        const last = this._syncPingSeen.get(seenKey);
+        if (ts && last && (seq > 0 && last.n > 0 ? seq <= last.n : ts <= last.ts)) return;
         this._syncPingSeen.delete(seenKey);
-        this._syncPingSeen.set(seenKey, ts);
+        this._syncPingSeen.set(seenKey, { ts: last ? Math.max(ts, last.ts) : ts, n: last ? Math.max(seq, last.n) : seq });
         while (this._syncPingSeen.size > 200) this._syncPingSeen.delete(this._syncPingSeen.keys().next().value);
 
         if (this._syncPingTimer) clearTimeout(this._syncPingTimer);
-        this._syncPingTimer = setTimeout(async () => {
+        const pull = async () => {
+            if (this._applyingRemoteSettings) {
+                this._syncPingTimer = setTimeout(pull, 1200);
+                return;
+            }
             this._syncPingTimer = null;
             try {
                 if (typeof this.settingsLoadFromD1 === 'function') {
+                    const earlier = this._settingsLoadInFlight;
+                    if (earlier && earlier.promise) await earlier.promise.catch(() => { });
                     await this.settingsLoadFromD1({ delta: true });
                 }
             } catch (_) {
                 // A failed pull just leaves the next scheduled read to catch up.
             }
-        }, 1200);
+        };
+        this._syncPingTimer = setTimeout(pull, 1200);
     },
 
     // Session-scoped id so a device ignores the echo of its own ping.
@@ -1199,7 +1482,7 @@ Object.assign(NYM.prototype, {
         if (!this.pubkey) return;
         try {
             await this._publishWrappedNostrEvent(
-                { src: this._syncInstanceId(), sections, ts: createdAt },
+                { src: this._syncInstanceId(), sections, ts: createdAt, n: (this._syncPingSeq = (this._syncPingSeq || 0) + 1) },
                 'nymchat-sync-ping',
                 createdAt,
                 { skipD1: true }
@@ -1212,6 +1495,16 @@ Object.assign(NYM.prototype, {
     // Trim auto-growing state so the payload fits instead of being skipped.
     _trimChannelsReadState(p) {
         const joined = p.userJoinedChannels;
+        const longest = () => {
+            let at = -1, bytes = 0;
+            if (Array.isArray(joined)) joined.forEach((c, i) => { const b = new TextEncoder().encode(String(c)).length; if (b > bytes) { bytes = b; at = i; } });
+            return { at, bytes };
+        };
+        const big = longest();
+        if (big.bytes > 1024) {
+            p.userJoinedChannels = joined.filter((_, i) => i !== big.at);
+            return true;
+        }
         if (Array.isArray(joined) && joined.length > 20) {
             const activity = this.channelLastActivity instanceof Map
                 ? this.channelLastActivity
@@ -1223,6 +1516,10 @@ Object.assign(NYM.prototype, {
             return true;
         }
 
+        if (p.leftGroupRoles && typeof p.leftGroupRoles === 'object' && Object.keys(p.leftGroupRoles).length) {
+            p.leftGroupRoles = {};
+            return true;
+        }
         const pairs = [['closedPMs', 'closedPMTimes'], ['leftGroups', 'leftGroupTimes']];
         for (const [setKey, timeKey] of pairs) {
             const arr = p[setKey];
@@ -1251,6 +1548,10 @@ Object.assign(NYM.prototype, {
                 }
             }
         }
+        if (big.at >= 0) {
+            p.userJoinedChannels = joined.filter((_, i) => i !== big.at);
+            return true;
+        }
         return false;
     },
 
@@ -1277,6 +1578,7 @@ Object.assign(NYM.prototype, {
         // Durable means the source this client reads back from: D1 under proxy mode, the relay wrap in direct mode.
         const d1Available = !!(this._getApiHost && this._getApiHost());
         const durable = () => (d1Available ? d1Ok : true);
+        if (opts.skipRelay) return d1Ok;
 
         const rumor = {
             kind: 30078,
@@ -1702,11 +2004,64 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _syncReadStateToD1(immediate = false) {
-        if (!this.pubkey) return;
+    _readMarkQuiet(key) {
+        if (this._readAnonHeld && this._readAnonHeld.has(key)) return true;
+        if (this._anonLaneNewest(key)) return true;
+        if (typeof this.botAnonEnabled !== 'function' || !this.botAnonEnabled() || typeof this.isVerifiedBot !== 'function') return false;
+        const head = String(key || '').split('|')[0];
+        return (head.match(/[0-9a-f]{64}/g) || []).some((pk) => pk !== this.pubkey && this.isVerifiedBot(pk));
+    },
+
+    _readAnonHold(key, anon) {
+        if (!this._readAnonHeld) this._readAnonHeld = new Set();
+        if (anon) this._readAnonHeld.add(key);
+        else this._readAnonHeld.delete(key);
+        return !!anon;
+    },
+
+    _readBotList(key) {
+        if (typeof this.isVerifiedBot !== 'function' || !this.pmMessages) return null;
+        const head = String(key || '').split('|')[0];
+        if (!(head.match(/[0-9a-f]{64}/g) || []).some((pk) => pk !== this.pubkey && this.isVerifiedBot(pk))) return null;
+        const list = this.pmMessages.get(head);
+        return Array.isArray(list) ? list : null;
+    },
+
+    _anonLaneNewest(key) {
+        const list = this._readBotList(key);
+        const last = list ? list[list.length - 1] : null;
+        return !!(last && (last.anonSender || last.anonWrap));
+    },
+
+    _anonLaneAdvance(key, lo, covered, atOf) {
+        const list = this._readBotList(key);
+        if (!Array.isArray(list)) return false;
+        for (let i = list.length - 1; i >= 0; i--) {
+            const m = list[i];
+            if (!m) continue;
+            if ((atOf ? atOf(m) : (m.created_at || 0)) < lo) break;
+            if (covered(m) && (m.anonSender || m.anonWrap)) return true;
+        }
+        return false;
+    },
+
+    _readStateLoud(payload) {
+        const strip = (o) => {
+            const out = {};
+            for (const [k, v] of Object.entries(o || {})) if (!this._readMarkQuiet(k)) out[k] = v;
+            return out;
+        };
+        const p = payload || {};
+        return JSON.stringify([strip(p.channelLastRead), strip(p.threadLastRead), strip(p.seenMarks)]);
+    },
+
+    _syncReadStateToD1(immediate = false, key) {
+        if (!this.pubkey || this._anonThreadClosing) return;
         if (!this._getApiHost || !this._getApiHost()) return;
+        if (key && this._readMarkQuiet(key)) return;
         const flush = () => {
             this._readStateSyncTimer = null;
+            if (this._settingsSyncLocal()) return;
             const threadLastRead = this._threadReadsForSync();
             const seenMarks = this._seenMarksForSync();
             let entries = [];
@@ -1728,9 +2083,11 @@ Object.assign(NYM.prototype, {
             const payload = this._mergeUnknownSectionKeys('nymchat-readstate', { channelLastRead, threadLastRead, seenMarks });
             const json = JSON.stringify(payload);
             if (json === this._readStateJson) return;
+            if (this._readStateSent && this._readStateLoud(payload) === this._readStateLoud(this._readStateSent)) return;
             this._saveSettingsBlobToD1('nymchat-readstate', json).then((ok) => {
                 if (!ok) return;
                 this._readStateJson = json;
+                this._readStateSent = payload;
                 this._publishSettingsChangedPing(['readstate'], Math.floor(Date.now() / 1000));
             }).catch(() => { });
         };
@@ -1968,7 +2325,7 @@ Object.assign(NYM.prototype, {
             try {
                 await applyNostrSettingsAdditive(d.payload);
                 // Sections are disjoint (bar `v`), so a newest-last merge equals applying them in order.
-                Object.assign(merged, window.NymSyncMerge ? window.NymSyncMerge.prefRowStamp(d.payload, d.updatedAt) : d.payload);
+                Object.assign(merged, window.NymSyncMerge ? window.NymSyncMerge.setRowStamp(window.NymSyncMerge.prefRowStamp(d.payload, d.updatedAt), d.updatedAt) : d.payload);
                 coreApplied++;
                 const ts = d.updatedAt ? Math.floor(d.updatedAt / 1000) : Math.floor(Date.now() / 1000);
                 if (ts > newestCoreTs) newestCoreTs = ts;
@@ -2098,7 +2455,7 @@ Object.assign(NYM.prototype, {
         for (const d of sections) {
             try {
                 await applyNostrSettingsAdditive(d.payload);
-                Object.assign(merged, window.NymSyncMerge ? window.NymSyncMerge.prefRowStamp(d.payload, d.updatedAt) : d.payload);
+                Object.assign(merged, window.NymSyncMerge ? window.NymSyncMerge.setRowStamp(window.NymSyncMerge.prefRowStamp(d.payload, d.updatedAt), d.updatedAt) : d.payload);
                 applied++;
                 const ts = d.updatedAt ? Math.floor(d.updatedAt / 1000) : 0;
                 if (ts > newestCoreTs) newestCoreTs = ts;
@@ -2139,7 +2496,7 @@ Object.assign(NYM.prototype, {
         this.notificationsEnabled = enabled;
         try { localStorage.setItem('nym_notifications_enabled', String(enabled)); } catch (_) { }
         this._updateNotificationBadge();
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this.notePrefChanged('notificationsEnabled');
     },
 
     setNotificationSound(sound) {
@@ -2158,7 +2515,7 @@ Object.assign(NYM.prototype, {
     toggleNotifyFriendsOnly(enabled) {
         this.notifyFriendsOnly = enabled;
         try { localStorage.setItem('nym_notify_friends_only', String(enabled)); } catch (_) { }
-        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this.notePrefChanged('notifyFriendsOnly');
         if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
 
@@ -2305,6 +2662,14 @@ Object.assign(NYM.prototype, {
                 document.body.style.setProperty('--wp-g', rgb.g);
                 document.body.style.setProperty('--wp-b', rgb.b);
             }
+        }
+        if (window.NymNameContrast) {
+            window.NymNameContrast.apply(document.body, {
+                primary: selectedTheme ? selectedTheme.primary : this.themeToken('--primary'),
+                secondary: selectedTheme ? selectedTheme.secondary : this.themeToken('--secondary'),
+                isLight,
+                ghost: theme === 'ghost'
+            });
         }
         this.refreshMessages();
         this._emitThemeChange();
@@ -2552,4 +2917,8 @@ if (typeof window !== 'undefined') {
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchSettingsModal);
         else watchSettingsModal();
     }
+}
+
+if (typeof self !== 'undefined' && self.NymStorage) {
+    self.NymStorage.sessionNeedles = () => (self.nym && typeof self.nym._throwawayNeedles === 'function' ? self.nym._throwawayNeedles() : null);
 }

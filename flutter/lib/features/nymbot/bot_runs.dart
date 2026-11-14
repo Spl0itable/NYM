@@ -150,13 +150,14 @@ class BotRun {
 
 class BotRunNote {
   const BotRunNote(this.kind,
-      {this.text = '', this.steerText, this.spec, this.thread});
+      {this.text = '', this.steerText, this.spec, this.thread, this.anon = false});
 
   final BotRunNoteKind kind;
   final String text;
   final String? steerText;
   final BotRunSpec? spec;
   final String? thread;
+  final bool anon;
 }
 
 class _FarSteer {
@@ -202,6 +203,7 @@ class BotRunsEngine {
     this.onResponse,
     this.onPersist,
     this.anonNow,
+    this.laneOf,
     int Function()? maxRuns,
     void Function(int n)? setMaxRuns,
     Future<void> Function(Duration d)? sleep,
@@ -224,6 +226,7 @@ class BotRunsEngine {
   final void Function()? onResponse;
   final void Function(List<Map<String, dynamic>> inflight)? onPersist;
   final bool Function()? anonNow;
+  final bool Function(BotRunSpec spec)? laneOf;
   final int Function() _maxRuns;
   final void Function(int n) _setMaxRuns;
   final Future<void> Function(Duration d) _sleep;
@@ -253,13 +256,13 @@ class BotRunsEngine {
           r.state == BotRunState.running || r.state == BotRunState.claiming)
       .length;
 
-  BotRun? start(BotRunSpec spec) {
+  BotRun? start(BotRunSpec spec, {bool? anon}) {
     final id = spec.id.toLowerCase();
     if (id.isEmpty || spec.eventId.isEmpty) return null;
     final existing = runs[id];
     if (existing != null) return existing;
     final run = BotRun(spec, spec.startedAt ?? _now())
-      ..anon = anonNow?.call() ?? false;
+      ..anon = anon ?? anonNow?.call() ?? false;
     runs[id] = run;
     notes.remove(id);
     _persist();
@@ -293,7 +296,8 @@ class BotRunsEngine {
     BotRunResponse res;
     try {
       res =
-          await transport('pm', _body(run, maxRuns), timeout: kBotRunPmTimeout);
+          await transport('pm', _body(run, maxRuns),
+              timeout: kBotRunPmTimeout, asAnon: run.anon);
     } catch (_) {
       if (_gone(run, gen)) return;
       return _claim(run);
@@ -389,7 +393,8 @@ class BotRunsEngine {
       if (_gone(run, gen)) return;
       BotRunResponse res;
       try {
-        res = await transport('pm-claim', {'eventId': run.eventId});
+        res = await transport('pm-claim', {'eventId': run.eventId},
+            asAnon: run.anon);
       } catch (_) {
         continue;
       }
@@ -401,7 +406,8 @@ class BotRunsEngine {
       if (status == 404 && data['unknown'] == true) return _fail(run);
       if (status == 429) continue;
       try {
-        res = await transport('pm', _body(run), timeout: kBotRunPmTimeout);
+        res = await transport('pm', _body(run),
+            timeout: kBotRunPmTimeout, asAnon: run.anon);
       } catch (_) {
         continue;
       }
@@ -414,7 +420,7 @@ class BotRunsEngine {
   }
 
   void _fail(BotRun run) {
-    _note(run, BotRunNote(BotRunNoteKind.failed, spec: run.spec));
+    _note(run, BotRunNote(BotRunNoteKind.failed, spec: run.spec, anon: run.anon));
     _end(run);
   }
 
@@ -483,7 +489,7 @@ class BotRunsEngine {
     }
     if (!wasSent) return;
     try {
-      await transport('pm-cancel', {'replyTo': key});
+      await transport('pm-cancel', {'replyTo': key}, asAnon: run?.anon);
     } catch (_) {}
     if (run == null) {
       remote = [
@@ -642,7 +648,7 @@ class BotRunsEngine {
       content: spec.content,
       extra: spec.extra,
       startedAt: _now(),
-    ));
+    ), anon: note.anon);
   }
 
   void dismissNote(String id) {
@@ -659,7 +665,8 @@ class BotRunsEngine {
       if (now - (spec.startedAt ?? 0) > kBotRunMaxAge.inMilliseconds) {
         continue;
       }
-      final run = BotRun(spec, spec.startedAt ?? now);
+      final run = BotRun(spec, spec.startedAt ?? now)
+        ..anon = laneOf?.call(spec) ?? false;
       runs[id] = run;
       run.done = _claim(run);
     }

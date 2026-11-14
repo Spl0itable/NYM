@@ -64,9 +64,8 @@ html .nm-hidden { display: none; }
 .nm-h-38 { flex: 1; padding: 11px 14px; font-family: var(--font-sans); font-size: 15px; }
 .nm-h-39 { padding: 8px 12px; background: transparent; border: 0; white-space: nowrap; cursor: pointer; position: relative; }
 .nm-h-40 { display: flex; gap: 6px; flex-wrap: wrap; }
-.nm-h-41 { cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid var(--glass-border, var(--border-color)); border-radius: 12px; background: rgba(255,255,255,0.02); }
-.nm-h-42 { font-size: 14px; color: var(--secondary); font-weight: 500; }
 .nm-h-43 { margin-top: 10px; padding: 14px; border: 1px solid var(--glass-border, var(--border-color)); border-radius: 12px; background: rgba(255,255,255,0.02); }
+.nm-signer-only > div > br:first-child { display: none; }
 .nm-h-44 { color: var(--warning); font-size: 12px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid rgba(255, 255, 0, 0.2); border-radius: 8px; background: rgba(255, 255, 0, 0.04); }
 .nm-h-45 { vertical-align: middle; margin-right: 4px; flex-shrink: 0; }
 .nm-h-46 { font-size: 12px; margin-bottom: 4px; }

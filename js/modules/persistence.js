@@ -101,16 +101,46 @@
             }
         },
 
+        async _cacheDropNaming(pks) {
+            if (this._cacheDisabled || !Array.isArray(pks) || !pks.length) return;
+            const names = (r) => { let t = ''; try { t = JSON.stringify(r); } catch (_) { return false; } for (const p of pks) if (t.includes(p)) return true; return false; };
+            try {
+                const db = await this._cacheOpen();
+                for (const name of ['meta', 'profiles', 'channels', 'pms', 'reactions']) {
+                    await new Promise((resolve) => {
+                        try {
+                            const tx = db.transaction(name, 'readwrite');
+                            const req = tx.objectStore(name).openCursor();
+                            req.onsuccess = () => { const c = req.result; if (!c) return; if (names(c.key) || names(c.value)) c.delete(); c.continue(); };
+                            tx.oncomplete = () => resolve();
+                            tx.onabort = () => resolve();
+                            tx.onerror = () => resolve();
+                        } catch (_) { resolve(); }
+                    });
+                }
+            } catch (_) { }
+        },
+
         async _cachePut(storeName, value) {
             if (this._cacheDisabled) return;
             if (!STORES.includes(storeName)) return;
+            let named = false;
+            const S = self.NymStorage;
+            if (S && typeof S.namesSession === 'function') {
+                try { named = S.namesSession('', JSON.stringify(value)); } catch (_) { named = false; }
+            }
             try {
                 const db = await this._cacheOpen();
                 return await new Promise((resolve) => {
                     try {
                         const tx = db.transaction(storeName, 'readwrite');
                         const store = tx.objectStore(storeName);
-                        store.put({ ...value, lastTouched: Date.now() });
+                        if (named) {
+                            const id = typeof store.keyPath === 'string' && value ? value[store.keyPath] : undefined;
+                            if (id !== undefined && id !== null) store.delete(id);
+                        } else {
+                            store.put({ ...value, lastTouched: Date.now() });
+                        }
                         tx.oncomplete = () => resolve();
                         tx.onabort = () => resolve();
                         tx.onerror = () => resolve();
@@ -163,7 +193,11 @@
             const c = m.__serCache;
             if (c
                 && c.content === m.content
+                && c.author === m.author
+                && c.nameAt === m.nameAt
                 && c.isEdited === m.isEdited
+                && c.editAt === m.editAt
+                && c.editId === m.editId
                 && c.deliveryStatus === m.deliveryStatus
                 && c.nymMessageId === m.nymMessageId
                 && c.senderVerified === m.senderVerified
@@ -202,6 +236,8 @@
                 nymMessageId: m.nymMessageId,
                 deliveryStatus: m.deliveryStatus,
                 isEdited: m.isEdited,
+                ...(m.isEdited && m.editAt ? { editAt: m.editAt } : {}),
+                ...(m.isEdited && m.editId ? { editId: m.editId } : {}),
                 channel: m.channel,
                 geohash: m.geohash,
                 isFileOffer: m.isFileOffer,
@@ -215,8 +251,11 @@
                 _anchorMs: m._anchorMs,
                 // NIP-13 target from the sender's nonce tag; dropping it makes reloads report "no proof of work".
                 powTarget: m.powTarget,
+                ...(Number.isFinite(m.nameAt) ? { nameAt: m.nameAt } : {}),
                 ...(m.expiresAt ? { expiresAt: m.expiresAt } : {}),
                 ...(m.slowHeld ? { slowHeld: true } : {}),
+                ...(m.anonSender ? { anonSender: true } : {}),
+                ...(m.anonWrap ? { anonWrap: true } : {}),
                 ...(m.pqPending ? { pqPending: true } : {}),
                 ...(Array.isArray(m.people) && m.people.length ? { people: m.people.slice() } : {}),
                 ...(m.isNotice && m.notice ? { isNotice: true, notice: { type: m.notice.type, target: m.notice.target, actor: m.notice.actor } } : {}),
@@ -228,7 +267,11 @@
                 value: {
                     ser,
                     content: m.content,
+                    author: m.author,
+                    nameAt: m.nameAt,
                     isEdited: m.isEdited,
+                    editAt: m.editAt,
+                    editId: m.editId,
                     deliveryStatus: m.deliveryStatus,
                     nymMessageId: m.nymMessageId,
                     senderVerified: m.senderVerified,
@@ -247,21 +290,33 @@
         },
 
         // Merge rather than skip a key live events already created; the live object wins on a shared id.
-        _mergeCachedMessages(existing, cached) {
+        _mergeCachedMessages(existing, cached, key) {
             if (!Array.isArray(existing) || existing.length === 0) return cached;
             if (!Array.isArray(cached) || cached.length === 0) return existing;
-            const seen = new Set();
+            const seen = new Map();
             for (const m of existing) {
                 if (!m) continue;
-                if (m.id) seen.add(m.id);
-                if (m.nymMessageId) seen.add(m.nymMessageId);
+                if (m.id) seen.set(m.id, m);
+                if (m.nymMessageId) seen.set(m.nymMessageId, m);
             }
+            const T = window.NymChatTools;
             const merged = existing.slice();
             for (const m of cached) {
                 if (!m) continue;
-                if ((m.id && seen.has(m.id)) || (m.nymMessageId && seen.has(m.nymMessageId))) continue;
-                if (m.id) seen.add(m.id);
-                if (m.nymMessageId) seen.add(m.nymMessageId);
+                const live = (m.id && seen.get(m.id)) || (m.nymMessageId && seen.get(m.nymMessageId)) || null;
+                if (live) {
+                    if (T && live.pubkey === m.pubkey && T.newerCopy(live, m)) {
+                        const wasHidden = typeof this.isContentHidden === 'function' && this.isContentHidden(live);
+                        live.content = m.content;
+                        live.isEdited = true;
+                        live.editAt = m.editAt;
+                        live.editId = m.editId;
+                        this._showMergedEdit(live, key, wasHidden);
+                    }
+                    continue;
+                }
+                if (m.id) seen.set(m.id, m);
+                if (m.nymMessageId) seen.set(m.nymMessageId, m);
                 merged.push(m);
             }
             if (merged.length === existing.length) return existing;
@@ -272,6 +327,48 @@
             return merged;
         },
 
+        _showMergedEdit(m, key, wasHidden) {
+            const domId = m.nymMessageId || m.id;
+            if (typeof this.updateMessageInDOM === 'function') {
+                this.updateMessageInDOM(domId, m.content);
+                if (m.id && m.id !== domId) this.updateMessageInDOM(m.id, m.content);
+            }
+            if (typeof this._notifRetext === 'function') this._notifRetext([m.id, m.nymMessageId], m.content);
+            if (typeof this._applyEditVisibility === 'function') this._applyEditVisibility(domId, m, key, wasHidden);
+        },
+
+        _cachedBlobMessage(m) {
+            const B = typeof window !== 'undefined' ? window.NymEncryptedBlob : null;
+            const BV = typeof window !== 'undefined' ? window.NymBitchatVerify : null;
+            return !!(m && ((B && B.isEncryptedBlobContent(m.content)) || (BV && BV.isBitchatVerifyContent(m.content))));
+        },
+
+        _cachedBlobFilter(channels) {
+            for (const c of channels || []) {
+                if (!c || !Array.isArray(c.messages)) continue;
+                for (const m of c.messages) {
+                    if (m && m.id && this._cachedBlobMessage(m) && typeof this._noteDroppedBlobId === 'function') this._noteDroppedBlobId(m.id);
+                }
+            }
+            return (m) => this._cachedBlobMessage(m)
+                || !!(m && m.threadRoot && this._blobDroppedIds instanceof Set && this._blobDroppedIds.has(m.threadRoot));
+        },
+
+        _healHydratedEdits(list, cached) {
+            if (!Array.isArray(list)) return false;
+            const T = window.NymChatTools;
+            let changed = false;
+            if (this.editedMessages && this.editedMessages.size && typeof this._applyPendingEdit === 'function') {
+                for (const m of list) if (m && this._applyPendingEdit(m)) changed = true;
+            }
+            if (!changed && T && Array.isArray(cached) && cached.length) {
+                const byId = new Map();
+                for (const m of list) if (m && m.id) byId.set(m.id, m);
+                changed = cached.some((c) => c && byId.has(c.id) && byId.get(c.id) !== c && T.newerCopy(c, byId.get(c.id)));
+            }
+            return changed;
+        },
+
         _hydrateMessage(m) {
             if (m.timestamp && !(m.timestamp instanceof Date)) {
                 try { m.timestamp = new Date(m.timestamp); } catch (_) { }
@@ -279,6 +376,9 @@
             // Legacy false positive: a real event id means it reached the relays.
             if (m.deliveryStatus === 'failed' && m.id && !String(m.id).startsWith('failed-')) {
                 m.deliveryStatus = 'sent';
+            }
+            if (m.deliveryStatus === 'sending') {
+                m.deliveryStatus = /^[0-9a-f]{64}$/i.test(String(m.id || '')) ? 'sent' : 'failed';
             }
             return m;
         },
@@ -676,6 +776,7 @@
                     if (!p || !p.pubkey) continue;
                     if (profileCount++ >= STORE_LIMITS.profiles) break;
                     const cached = p.profile || p;
+                    if (typeof cached.nym === 'string' && typeof window !== 'undefined' && window.NymSuffix) cached.nym = window.NymSuffix.capBase(cached.nym);
                     const shownUser = this.users.get(p.pubkey);
                     const cachedReal = !!cached.nym && !this._isPlaceholderNym(cached.nym);
                     const cachedChosen = !cachedReal && !!cached.nym && typeof cached.kind0Name === 'string'
@@ -759,19 +860,25 @@
                 }
 
                 const loadedChannelKeys = [];
+                const dropCached = this._cachedBlobFilter(channels);
                 for (const c of channels) {
                     if (!c || !c.key || !Array.isArray(c.messages)) continue;
                     let msgs = [];
+                    let blobs = 0;
                     for (const m of c.messages) {
                         await breathe();
+                        if (dropCached(m)) { blobs++; continue; }
                         msgs.push(this._hydrateMessage(m));
                     }
+                    if (blobs) this._purgedCachedBlobs = (this._purgedCachedBlobs || 0) + blobs;
                     // Old or stale caches must not put aged-out history back into memory.
                     msgs = this._pruneChannelWindow(msgs);
                     if (!msgs.length) { this._cacheDelete('channels', c.key); continue; }
                     // breathe() may have let a live event land for this key; merge so neither side is dropped.
-                    this.messages.set(c.key, this._mergeCachedMessages(this.messages.get(c.key), msgs));
+                    this.messages.set(c.key, this._mergeCachedMessages(this.messages.get(c.key), msgs, c.key));
                     loadedChannelKeys.push(c.key);
+                    if (this._healHydratedEdits(this.messages.get(c.key), msgs) || blobs) this.persistChannelMessages(c.key);
+                    if (this.pendingQuote && typeof this._refreshPendingQuote === 'function') this._refreshPendingQuote();
                 }
 
                 // Columns only append after first paint, so ask them to reconcile now rather than at the end.
@@ -817,7 +924,9 @@
                             msgs.push(this._hydrateMessage(m));
                         }
                         // Merged, not skipped, same as the channels above.
-                        this.pmMessages.set(p.key, this._mergeCachedMessages(this.pmMessages.get(p.key), msgs));
+                        this.pmMessages.set(p.key, this._mergeCachedMessages(this.pmMessages.get(p.key), msgs, p.key));
+                        if (this._healHydratedEdits(this.pmMessages.get(p.key), msgs)) this.persistPMMessages(p.key);
+                        if (this.pendingQuote && typeof this._refreshPendingQuote === 'function') this._refreshPendingQuote();
                         if (typeof this._pruneForeignBotThreads === 'function') this._pruneForeignBotThreads(p.key);
                     }
                     for (const k of migrateKeys) this.persistPMMessages(k);
@@ -944,7 +1053,13 @@
                         if (this.closedPMs && this.closedPMs.has(peer)
                             && lastSec <= ((this.closedPMTimes && this.closedPMTimes.get(peer)) || 0)) continue;
                         const ts = (lastSec || (sample.created_at || 0)) * 1000;
-                        const nym = this.users.has(peer)
+                        const said = msgs.reduce((a, m) => (m && m.pubkey === peer && typeof m.author === 'string' && m.author
+                            && (!a || (m.created_at || 0) >= (a.created_at || 0)) ? m : a), null);
+                        const nameAt = said && Number.isFinite(said.nameAt) ? said.nameAt : null;
+                        if (said && (nameAt !== null || !this._isPlaceholderNym(said.author)) && !(this._nameSources && this._nameSources.has(peer))) {
+                            this._noteNameSource(peer, 'message', nameAt !== null ? nameAt : Math.floor(said.created_at || 0), this.parseNymFromDisplay(said.author));
+                        }
+                        const nym = said ? said.author : this.users.has(peer)
                             ? this.users.get(peer).nym
                             : `nym#${(peer || '').slice(0, 4)}`;
                         this.addPMConversation(nym, peer, ts || Date.now());

@@ -22,6 +22,10 @@ const POOL_RESUME_FRESH_MS = 5000;
 const POOL_RESUME_PROBE_TIMEOUT_MS = 3000;
 const POOL_FRESH_REDIAL_WAIT_MS = 1000;
 const POOL_LIVE_WAIT_MS = 5000;
+const CHANNEL_CATCH_UP_FIRST = 4;
+const CHANNEL_CATCH_UP_BATCH = 4;
+const CHANNEL_CATCH_UP_PAUSE_MS = 120;
+const CHANNEL_CATCH_UP_CONCURRENCY = 4;
 const POOL_UNACKED_MAX = 200;
 const POOL_UNACKED_TTL_MS = 60000;
 const POOL_PROBE_BACKOFF_MAX_MS = 10 * 60 * 1000;
@@ -1539,6 +1543,7 @@ Object.assign(NYM.prototype, {
             const subId = Math.random().toString(36).substring(2);
             if (!relay.subscriptions) relay.subscriptions = new Set();
             relay.subscriptions.add(subId);
+            relay.historySubId = subId;
             const filters = this._buildGeoFilters(since24h);
             this._safeWsSend(ws, JSON.stringify(this._normalizeReqPayload(["REQ", subId, ...filters])), { critical: true });
             this._sendPresenceSubToRelay(relay);
@@ -1551,6 +1556,7 @@ Object.assign(NYM.prototype, {
             relay.subscriptions = new Set();
         }
         relay.subscriptions.add(subId);
+        relay.historySubId = subId;
 
         const filters = this._buildCriticalFilters(since24h);
         this._safeWsSend(ws, JSON.stringify(["REQ", subId, ...filters]), { critical: true });
@@ -1697,6 +1703,7 @@ Object.assign(NYM.prototype, {
         if (this.useRelayProxy || this.inPMMode) return;
         const key = String(this.currentGeohash || this.currentChannel || '').toLowerCase();
         if (!key || !Array.isArray(names) || !names.includes(key)) return;
+        if (new TextEncoder().encode(key).length > 255) return;
         if (!this._relayBackfilledChannels) this._relayBackfilledChannels = new Set();
         if (this._relayBackfilledChannels.has(key)) return;
         this._relayBackfilledChannels.add(key);
@@ -1883,6 +1890,21 @@ Object.assign(NYM.prototype, {
         return !!(this._getApiHost && this._getApiHost()) && !!this.useRelayProxy;
     },
 
+    _pmD1Restores() {
+        return this._d1Backed() && typeof this._pmArchiveAllowed === 'function' && this._pmArchiveAllowed()
+            && !(this._pmD1DownPks && this._pmD1DownPks.has(this.pubkey));
+    },
+
+    _pmRelayBackfill() {
+        if (typeof this.pubkey !== 'string' || !this.pubkey) return null;
+        const subId = 'nym-gap-' + Math.random().toString(36).slice(2, 12);
+        this.sendRequestToAllRelays(['REQ', subId, { kinds: [1059], '#p': [this.pubkey], limit: this._giftWrapCatchUpLimit }]);
+        setTimeout(() => {
+            try { this.sendRequestToAllRelays(['CLOSE', subId]); } catch (_) { }
+        }, this._giftWrapCatchUpWindowMs);
+        return subId;
+    },
+
     _ensureChatViewMode() {
         if (this._cvActive || !this.settings || this.settings.chatViewMode !== 'columns') return;
         if (typeof this.applyChatViewMode === 'function') this.applyChatViewMode('columns');
@@ -1915,7 +1937,6 @@ Object.assign(NYM.prototype, {
     PROXY_DOWN: { minFailures: 4, windowMs: 45000, resumeGraceMs: 10000, maxGapMs: 20000 },
     RESTORE_EVERY_MS: 30000,
     RELAY_SWITCH_LIMIT_MS: 25000,
-    CONNECTION_CHANGES_MAX: 20,
 
     _proxyLinkState() {
         if (!this._proxyLink) this._proxyLink = { foreground: true, online: true, graceUntil: 0, epoch: 0 };
@@ -1990,25 +2011,6 @@ Object.assign(NYM.prototype, {
         window.addEventListener('pageshow', () => this._proxyLinkResumed(Date.now()));
         window.addEventListener('offline', () => this._proxyLinkOffline());
         window.addEventListener('online', () => this._proxyLinkOnline(Date.now()));
-    },
-
-    _noteConnectionChange(reason) {
-        if (!Array.isArray(this._connectionChanges)) this._connectionChanges = [];
-        this._connectionChanges.unshift({ at: Date.now(), reason });
-        if (this._connectionChanges.length > this.CONNECTION_CHANGES_MAX) {
-            this._connectionChanges.length = this.CONNECTION_CHANGES_MAX;
-        }
-        if (typeof window !== 'undefined' && typeof window.renderConnectionChanges === 'function') {
-            try { window.renderConnectionChanges(); } catch (_) { }
-        }
-    },
-
-    connectionChanges() {
-        return Array.isArray(this._connectionChanges) ? this._connectionChanges.slice() : [];
-    },
-
-    clearConnectionChanges() {
-        this._connectionChanges = [];
     },
 
     _fallbackToDirectConnections() {
@@ -2097,10 +2099,6 @@ Object.assign(NYM.prototype, {
                     }
                     this._bgPoolReconnectAttempts = 0;
                     this._poolFallbackActive = false;
-                    if (this._autoEpisode) {
-                        this._autoEpisode = false;
-                        this._noteConnectionChange('proxyBack');
-                    }
                     console.log('[NYM] Pool mode restored');
                     this._fallbackNoticeEpisode = false;
                     this._startPoolShardHealthCheck();
@@ -2157,10 +2155,6 @@ Object.assign(NYM.prototype, {
     },
 
     _noteAutoFallback() {
-        if (!this._userDirectMode) {
-            this._autoEpisode = true;
-            this._noteConnectionChange('proxyDown');
-        }
         if (this._userDirectMode || this._fallbackNoticeEpisode) return;
         this._fallbackNoticeEpisode = true;
         if (!this.fallbackNoticeEnabled() || typeof this.showToast !== 'function') return;
@@ -2230,8 +2224,6 @@ Object.assign(NYM.prototype, {
         this._writeUserDirectPref(!!direct);
         this._fallbackNoticeEpisode = !direct;
         if (direct) {
-            if (!this._userDirectMode) this._noteConnectionChange('chosenDirect');
-            this._autoEpisode = false;
             this._userDirectMode = true;
             this._poolFallbackActive = false;
             this._stopPoolReconnectInBackground();
@@ -2242,8 +2234,6 @@ Object.assign(NYM.prototype, {
             this.updateConnectionStatus();
             return this.useRelayProxy ? 'failed' : 'done';
         }
-        if (this._userDirectMode) this._noteConnectionChange('chosenProxy');
-        this._autoEpisode = false;
         this._userDirectMode = false;
         if (this.useRelayProxy) return 'done';
         this._poolFallbackActive = true;
@@ -3676,7 +3666,7 @@ Object.assign(NYM.prototype, {
         const lim = (n) => d1Available ? 1 : n;
 
         if (this.pubkey) {
-            filters.push({ kinds: [1059], "#p": [this.pubkey], limit: d1Available ? 1 : 500 });
+            filters.push({ kinds: [1059], "#p": [this.pubkey], limit: this._pmD1Restores() ? 1 : 500 });
         }
         if (channelMode) {
             // Deliberately unscoped: the sidebar discovers channels by watching this stream.
@@ -3938,15 +3928,15 @@ Object.assign(NYM.prototype, {
             const from = this._liveGapSettleSince;
             this._liveGapSettleTimer = null;
             this._liveGapSettleSince = 0;
-            this._liveGapD1Pass(from, true);
+            this._liveGapD1Pass(from, this._d1Backed());
         }, this._liveGapSettleMs || 35000);
     },
 
     _liveGapD1Pass(from, channels) {
         const passes = [];
-        if (channels && typeof this.channelRestoreManyFromD1 === 'function') {
+        if (channels && typeof this._restoreListedChannels === 'function') {
             passes.push(Promise.resolve()
-                .then(() => this.channelRestoreManyFromD1(this._liveGapChannelKeys(), { force: true, since: from }))
+                .then(() => this._restoreListedChannels({ force: true, since: from, paced: true }))
                 .then((ok) => !!ok, () => false));
         }
         const gap = this._d1Backed() && Number.isFinite(from) && from > 0 && typeof this._pmGapRestore === 'function';
@@ -3988,7 +3978,7 @@ Object.assign(NYM.prototype, {
 
     _giftWrapCatchUpFilter(floorSec) {
         const anon = this._botAnonKeySet();
-        const eph = (typeof this._getAllSelfEphemeralPubkeys === 'function'
+        const eph = (!this._d1Backed() && typeof this._getAllSelfEphemeralPubkeys === 'function'
             ? (this._getAllSelfEphemeralPubkeys() || []) : []).filter((pk) => !anon.has(pk));
         const pks = [...new Set([this.pubkey, ...eph].filter(pk => typeof pk === 'string' && pk))]
             .slice(0, this._giftWrapCatchUpMaxKeys);
@@ -4064,11 +4054,11 @@ Object.assign(NYM.prototype, {
         const seqAt = this._liveGapSeq;
         const since = Math.floor(this._liveGapAt / 1000) - 300;
         const d1Only = this._d1Backed();
-        if (!d1Only) this._catchUpGiftWraps(since);
+        if (!this._pmD1Restores()) this._catchUpGiftWraps(since);
         if (!this._getApiHost || !this._getApiHost()) return;
         this._liveGapInFlight = true;
         if (d1Only) this._gapD1Floor = since;
-        this.backfillFromD1OnReconnect({ force: true, since, socketLost: !!this._liveGapSocketLost, gap: d1Only, channels: this._liveGapChannelKeys() }).then((ok) => {
+        this.backfillFromD1OnReconnect({ force: true, since, socketLost: !!this._liveGapSocketLost, gap: d1Only, channels: this._liveGapChannelKeys(), paced: true, lossAt: this._liveGapAt }).then((ok) => {
             if (!ok) return;
             if (this._liveGapSeq === seqAt) {
                 this._liveGapAt = 0;
@@ -4164,15 +4154,18 @@ Object.assign(NYM.prototype, {
             st = { pk, map: {}, loaded: false, holds: [], heldSince: 0 };
             this._pmInboxCur = st;
         }
-        if (st.loaded) return st;
+        if (st.loaded) return this._pmCursorAdopt(st);
         if (typeof this.hydrateGate === 'function') {
             await Promise.race([this.hydrateGate(), new Promise((r) => setTimeout(r, 20000))]);
         }
-        if (st.loaded || this.pubkey !== pk) return st;
+        if (st.loaded) return this._pmCursorAdopt(st);
+        if (this.pubkey !== pk) return st;
         st.loaded = true;
         const rec = typeof this._pmCursorMetaFor === 'function' ? this._pmCursorMetaFor('pmInboxCursors', pk) : null;
         if (rec && rec.map && typeof rec.map === 'object') {
-            st.map = window.NymD1Cursor.inboxStore(rec.map, [], null, null);
+            const opened = this._pmCursorOpen(rec.map, pk);
+            st.opaque = opened.opaque;
+            st.map = window.NymD1Cursor.inboxStore(opened.map, [], null, null);
             if (Number.isFinite(rec.heldSince) && rec.heldSince > 0) st.heldSince = rec.heldSince;
         }
         return st;
@@ -4372,7 +4365,46 @@ Object.assign(NYM.prototype, {
                 else out[k] = D.older(out[k], h.after);
             }
         }
-        this._pmMetaCommit({ key: 'pmInboxCursors', pk: st.pk, map: out, heldSince: active.length ? st.heldSince || now : 0 });
+        this._pmMetaCommit({ key: 'pmInboxCursors', pk: st.pk, map: this._pmCursorSeal(out, st), heldSince: active.length ? st.heldSince || now : 0 });
+    },
+
+    _pmCursorOpaque(owner, k) {
+        const h = window.NostrTools._sha256(new TextEncoder().encode('nym-pm-cursor:' + owner + ':' + k));
+        let s = '';
+        for (let i = 0; i < 16; i++) s += h[i].toString(16).padStart(2, '0');
+        return 'o:' + s;
+    },
+
+    _pmCursorSeal(map, st) {
+        const out = {};
+        const anon = (k) => typeof this.isBotAnonPubkey === 'function' && this.isBotAnonPubkey(k);
+        for (const k of Object.keys(map)) out[anon(k) ? this._pmCursorOpaque(st.pk, k) : k] = map[k];
+        const opaque = st.opaque || {};
+        for (const k of Object.keys(opaque)) if (!(k in out)) out[k] = opaque[k];
+        return out;
+    },
+
+    _pmCursorAdopt(st) {
+        if (!st.opaque || !Object.keys(st.opaque).length) return st;
+        const opened = this._pmCursorOpen(st.opaque, st.pk);
+        if (!Object.keys(opened.map).length) return st;
+        st.map = Object.assign(window.NymD1Cursor.inboxStore(opened.map, [], null, null), st.map);
+        st.opaque = opened.opaque;
+        return st;
+    },
+
+    _pmCursorOpen(map, owner) {
+        const ids = new Map();
+        const anon = typeof this.botAnonPubkeys === 'function' ? this.botAnonPubkeys() : [];
+        for (const a of anon) ids.set(this._pmCursorOpaque(owner, a), a);
+        const out = {};
+        const opaque = {};
+        for (const k of Object.keys(map)) {
+            if (k.indexOf('o:') !== 0) out[k] = map[k];
+            else if (ids.has(k)) out[ids.get(k)] = map[k];
+            else opaque[k] = map[k];
+        }
+        return { map: out, opaque };
     },
 
     async _recoverEphemeralHistory(ephPks, opts) {
@@ -4394,6 +4426,9 @@ Object.assign(NYM.prototype, {
             return;
         }
 
+        const anon = this._botAnonKeySet();
+        ephPks = ephPks.filter((k) => !anon.has(k));
+        if (!ephPks.length) return;
         const filter = { kinds: [1059], '#p': ephPks, limit: Math.min(ephPks.length * 20, 1000) };
         if (since > 0) filter.since = since;
         const subId = Math.random().toString(36).substring(2);
@@ -4578,6 +4613,89 @@ Object.assign(NYM.prototype, {
         this.backfillFromD1OnReconnect();
     },
 
+    _relayHistoryEnded() {
+        if (this._getApiHost && this._getApiHost()) return;
+        if (this.settings && this.settings.groupChatPMOnlyMode) return;
+        const keys = typeof this._liveGapChannelKeys === 'function' ? this._liveGapChannelKeys() : [];
+        const fresh = keys.filter((k) => !this._channelHistoryKnown(k));
+        if (!fresh.length) return;
+        this._noteChannelHistoryLoaded(fresh);
+        if (typeof this.recomputeAllUnreadCounts === 'function') this.recomputeAllUnreadCounts();
+    },
+
+    _planChannelCatchUp(keys, opts = {}) {
+        const open = String(opts.open || '').toLowerCase();
+        const lossAt = Number(opts.lossAt) > 0 ? Number(opts.lossAt) : 0;
+        const restoredAt = this._archiveRestoredAt instanceof Map ? this._archiveRestoredAt : new Map();
+        const seen = new Set();
+        const todo = [];
+        const skipped = [];
+        for (const k of keys || []) {
+            const name = String(k || '').toLowerCase();
+            if (!name || seen.has(name)) continue;
+            seen.add(name);
+            if (name !== open && lossAt > 0 && (restoredAt.get(name) || 0) >= lossAt) {
+                skipped.push(name);
+                continue;
+            }
+            todo.push([name, todo.length]);
+        }
+        const activity = this.channelLastActivity instanceof Map ? this.channelLastActivity : new Map();
+        const last = (k) => activity.get('#' + k) || activity.get(k) || 0;
+        todo.sort((a, b) => {
+            const ao = a[0] === open, bo = b[0] === open;
+            if (ao !== bo) return ao ? -1 : 1;
+            return (last(b[0]) - last(a[0])) || (a[1] - b[1]);
+        });
+        const ordered = todo.map((e) => e[0]);
+        const first = ordered.slice(0, CHANNEL_CATCH_UP_FIRST);
+        const rest = ordered.slice(CHANNEL_CATCH_UP_FIRST);
+        const batches = [];
+        for (let i = 0; i < rest.length; i += CHANNEL_CATCH_UP_BATCH) batches.push(rest.slice(i, i + CHANNEL_CATCH_UP_BATCH));
+        return { first, batches, skipped };
+    },
+
+    async _channelRestoreEach(names, opts = {}) {
+        const list = [...new Set((names || []).filter(Boolean))];
+        let next = 0;
+        let ok = true;
+        const limit = this._channelRestoreTimeoutMs || 10000;
+        const worker = async () => {
+            while (next < list.length) {
+                const name = list[next++];
+                let done = false;
+                let timer = null;
+                const cap = new Promise((resolve) => { timer = setTimeout(() => resolve(false), limit); });
+                try { done = await Promise.race([this.channelRestoreManyFromD1([name], { force: !!opts.force, since: opts.since }), cap]); } catch (_) { done = false; }
+                clearTimeout(timer);
+                if (!done) ok = false;
+            }
+        };
+        const count = Math.min(CHANNEL_CATCH_UP_CONCURRENCY, list.length);
+        await Promise.all(Array.from({ length: count }, worker));
+        return ok;
+    },
+
+    async _restoreListedChannels(opts = {}) {
+        if (!this._getApiHost || !this._getApiHost()) return false;
+        const keys = typeof this._liveGapChannelKeys === 'function' ? this._liveGapChannelKeys() : [];
+        if (Array.isArray(opts.extra)) keys.push(...opts.extra);
+        const blocked = this.blockedChannels instanceof Set ? this.blockedChannels : null;
+        const wanted = blocked ? keys.filter((k) => !blocked.has(String(k || '').toLowerCase()) && !blocked.has(k)) : keys;
+        const open = this.inPMMode ? '' : (this.currentGeohash || this.currentChannel || '');
+        const plan = this._planChannelCatchUp(wanted, { open, lossAt: opts.lossAt });
+        const restore = (batch) => this._channelRestoreEach(batch, opts);
+        if (!opts.paced) return restore([...plan.first, ...plan.batches.flat()]);
+        const pk = this.pubkey;
+        let ok = await restore(plan.first);
+        for (const batch of plan.batches) {
+            if (this.pubkey !== pk) return false;
+            await new Promise((r) => setTimeout(r, CHANNEL_CATCH_UP_PAUSE_MS));
+            if (!await restore(batch)) ok = false;
+        }
+        return ok;
+    },
+
     backfillFromD1OnReconnect(opts = {}) {
         if (!this._getApiHost || !this._getApiHost()) return Promise.resolve(false);
         const force = !!opts.force;
@@ -4610,24 +4728,20 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        let channelsRestored = Promise.resolve(true);
-        if (typeof this.channelRestoreManyFromD1 === 'function') {
-            const channels = new Set(Array.isArray(opts.channels) ? opts.channels : []);
-            const current = this.currentGeohash || this.currentChannel;
-            if (current) channels.add(current);
-            if (this.userJoinedChannels) this.userJoinedChannels.forEach(k => channels.add(k));
-            if (channels.size) {
-                channelsRestored = this.channelRestoreManyFromD1([...channels], { force, since: opts.since }).catch(() => false);
-                restorePromises.push(channelsRestored);
-            }
-        }
-
         const seedPromises = [];
         if (typeof this.fetchGeohashActivityFromD1 === 'function') {
             seedPromises.push(this.fetchGeohashActivityFromD1().catch(() => { }));
         }
         if (typeof this.fetchNamedChannelActivityFromD1 === 'function') {
             seedPromises.push(this.fetchNamedChannelActivityFromD1().catch(() => { }));
+        }
+
+        let channelsRestored = Promise.resolve(true);
+        if (typeof this._restoreListedChannels === 'function') {
+            channelsRestored = Promise.allSettled(seedPromises)
+                .then(() => this._restoreListedChannels({ force, since: opts.since, extra: opts.channels, paced: !!opts.paced, lossAt: opts.lossAt }))
+                .catch(() => false);
+            restorePromises.push(channelsRestored);
         }
 
         const settled = Promise.allSettled([...restorePromises, ...seedPromises]).then(() => {
@@ -5887,9 +6001,18 @@ Object.assign(NYM.prototype, {
     sendDMToRelays(message, opts) {
         const ev = Array.isArray(message) && message[0] === 'EVENT' ? message[1] : null;
         if (!ev || typeof ev.id !== 'string' || !ev.id) return this._sendDMNow(message);
+        if (typeof this._anonLane === 'function' && this._anonLaneEvent(ev)) return this._anonLaneDM(ev);
         const tier = opts && Number.isInteger(opts.tier) ? opts.tier : 0;
         this._dmOutboxPush(message, tier, 0);
         return this._dmOutboxDrain();
+    },
+
+    _anonLaneDM(ev) {
+        let lane = this._anonDMLane;
+        if (!lane || lane.dead) lane = this._anonDMLane = this._anonLane('');
+        lane.hold();
+        Promise.resolve().then(() => lane.publish(ev)).catch(() => { }).then(() => lane.release());
+        return 1;
     },
 
     _dmOutboxW() {
@@ -6508,6 +6631,7 @@ Object.assign(NYM.prototype, {
 
     _dispatchRelayMessage(msg, relayUrl) {
         const [type, ...data] = msg;
+        if (type === 'EVENT' && typeof this._encryptedBlobDrop === 'function' && this._encryptedBlobDrop(data[1])) return;
 
         if (this._subscriptionHandlers && this._subscriptionHandlers.size) {
             const handler = this._subscriptionHandlers.get(data[0]);
@@ -6573,6 +6697,7 @@ Object.assign(NYM.prototype, {
                 const r = typeof reason === 'string' ? reason : '';
                 const hasEventId = typeof okEventId === 'string' && okEventId.length > 0;
                 if (accepted === true && hasEventId && this._dmInflight) this._dmInflight.delete(okEventId);
+                if (accepted === true && hasEventId && typeof this._pmWrapAccepted === 'function') this._pmWrapAccepted(okEventId);
                 if (this._isUnsupportedKind(reason)) {
                     if (hasEventId) this._recordEventKindRejection(attributedRelay, okEventId);
                     else this._permanentlyBlacklistRelay(attributedRelay, reason);
@@ -6598,6 +6723,8 @@ Object.assign(NYM.prototype, {
             case 'EOSE': {
                 const eoseSubId = data[0];
                 this._notePoolSubLive(eoseSubId);
+                const histRelay = relayUrl && this.relayPool instanceof Map ? this.relayPool.get(relayUrl) : null;
+                if (histRelay && histRelay.historySubId === eoseSubId) this._relayHistoryEnded();
                 if (this._eoseWaiters && this._eoseWaiters.has(eoseSubId)) {
                     const w = this._eoseWaiters.get(eoseSubId);
                     clearTimeout(w.timer);

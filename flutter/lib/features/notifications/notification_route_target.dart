@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../groups/group_invites_sheet.dart';
 import '../toasts/event_toast_center.dart';
 import 'notification_routing.dart';
 
@@ -34,6 +35,15 @@ class AppNotificationRouteTarget implements NotificationRouteTarget {
     }
     appState.switchView(ChatView.group(groupId));
     return true;
+  }
+
+  @override
+  bool openGroupInvite(String groupId) {
+    if (appState.groupById(groupId) != null &&
+        !appState.isLeftGroup(groupId)) {
+      return openGroup(groupId);
+    }
+    return openGroupInvitesFromRoute(groupId);
   }
 
   @override

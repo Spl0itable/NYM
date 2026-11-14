@@ -183,14 +183,6 @@ Object.assign(NYM.prototype, {
         for (const [name, buckets] of Object.entries(data.activity)) {
             if (Array.isArray(buckets)) this._d1UnreadBuckets.set(String(name).toLowerCase(), buckets);
         }
-        if (data.last && typeof data.last === 'object') {
-            if (!this._d1UnreadLast) this._d1UnreadLast = new Map();
-            for (const [name, ts] of Object.entries(data.last)) {
-                const sec = Number(ts) || 0;
-                const k = String(name).toLowerCase();
-                if (sec > (this._d1UnreadLast.get(k) || 0)) this._d1UnreadLast.set(k, sec);
-            }
-        }
         this._mergeD1Last(data.last);
     },
 
@@ -261,7 +253,7 @@ Object.assign(NYM.prototype, {
         const candidates = [];
         const consider = (name, buckets) => {
             const nm = String(name).toLowerCase();
-            if (!nm || !/^[\p{L}\p{N}]+$/u.test(nm)) return;
+            if (!window.NymChannelName.isChannelName(nm)) return;
             const ts = this._d1ChannelLastActivityMs(nm, buckets);
             const key = '#' + nm;
             if (this.channels.has(nm)) {
@@ -480,24 +472,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         infoPanel.style.display = 'flex';
         if (typeof this._gxAfterSelect === 'function') this._gxAfterSelect(channel);
 
+        const selected = this.selectedGeohash;
+        let place = '';
         try {
-            const data = await this.fetchGeocode(channel.lat, channel.lng, 10);
-
-            const city = data.address.city || data.address.town || data.address.village || data.address.county || '';
-            const country = data.address.country || '';
-
-            locationInfo = [city, country].filter(x => x).join(', ')
-                || this.getGeohashLocation(channel.geohash) || 'Unknown location';
-
-            const locationInfoItem = document.getElementById('locationInfoItem');
-            if (locationInfoItem) {
-                locationInfoItem.innerHTML = `<strong>Location:</strong> <span data-no-i18n>${this.escapeHtml(locationInfo)}</span>`;
-            }
-        } catch (error) {
-            const locationInfoItem = document.getElementById('locationInfoItem');
-            if (locationInfoItem) {
-                locationInfoItem.innerHTML = `<strong>Location:</strong> Unknown`;
-            }
+            place = await this._resolveGeohashPlaceName(selected);
+        } catch (_) {
+            place = await this._geoPlaceFallbackLabel(selected);
+        }
+        if (this.selectedGeohash !== selected) return;
+        locationInfo = place || this.getGeohashLocation(selected) || 'Unknown location';
+        const locationInfoItem = document.getElementById('locationInfoItem');
+        if (locationInfoItem) {
+            locationInfoItem.innerHTML = `<strong>Location:</strong> <span data-no-i18n>${this.escapeHtml(locationInfo)}</span>`;
         }
 
     },
@@ -583,11 +569,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             resultsDiv.innerHTML = '';
 
             if (isGeohash && !exists) {
-                const location = this.getGeohashLocation(term) || 'Unknown location';
+                const location = this._geoPlaceLabel(term) || 'Unknown location';
                 const prompt = document.createElement('div');
                 prompt.className = 'search-create-prompt';
                 prompt.innerHTML = `
-        <span>Join geohash channel "${term}" (${location})</span>
+        <span>Join geohash channel "${term}" (${this.escapeHtml(location)})</span>
     `;
                 prompt.onclick = async () => {
                     this.addChannel(term, term);
@@ -622,10 +608,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     sanitizeChannelName(name) {
-        if (!name) return '';
-        const lower = name.toLowerCase();
-        if (!/^[\p{L}\p{N}]+$/u.test(lower)) return '';
-        return lower;
+        return window.NymChannelName.sanitizeChannelName(name);
     },
 
     truncateText(text, max) {
@@ -715,14 +698,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (typeof this._navOpenThread === 'function') this._navOpenThread(entry);
                 return;
             }
-            if (typeof this.closeThreadView === 'function') this.closeThreadView({ nav: false });
-            if (entry.type === 'channel') {
-                this.switchChannel(entry.channel, entry.geohash);
-            } else if (entry.type === 'pm') {
-                this.openUserPM(entry.nym, entry.pubkey);
-            } else if (entry.type === 'group') {
-                this.openGroup(entry.groupId);
-            }
+            const at = this.activeThread;
+            const same = entry.type === 'pm' && (this._anonThreadClosing === entry.pubkey
+                || !!(at && at.ctx && at.ctx.pubkey === entry.pubkey && typeof this._threadAnonLane === 'function' && this._threadAnonLane(at)));
+            const go = () => {
+                if (typeof this.closeThreadView === 'function') this.closeThreadView({ nav: false });
+                if (entry.type === 'channel') {
+                    this.switchChannel(entry.channel, entry.geohash);
+                } else if (entry.type === 'pm') {
+                    this.openUserPM(entry.nym, entry.pubkey);
+                } else if (entry.type === 'group') {
+                    this.openGroup(entry.groupId);
+                }
+            };
+            if (typeof this._threadQuietClose === 'function') this._threadQuietClose(same ? entry.pubkey : null, go);
+            else go();
         } finally {
             this._navigating = false;
         }
@@ -791,12 +781,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             wrapper.classList.toggle('has-value', term.length > 0);
         }
 
-        const validChannelPattern = /^#[\p{L}\p{N}]+$/u;
         items.forEach(item => {
             // Match on the row's identity, not its text, which includes the location subline.
             const key = (item.dataset.geohash || item.dataset.channel || '').toLowerCase();
             const channelName = key ? `#${key}` : '';
-            if (!validChannelPattern.test(channelName)) {
+            if (!window.NymChannelName.isChannelName(key)) {
                 item.style.display = 'none';
                 item.classList.add('search-hidden');
             } else if (term.length === 0 || channelName.includes(term)) {
@@ -934,6 +923,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.hiddenChannels.has(key)) {
             this.hiddenChannels.delete(key);
         } else {
+            if (typeof this._privacyFitsWith === 'function' && !this._privacyFitsWith('hiddenChannels', key)) return;
             this.hiddenChannels.add(key);
         }
 
@@ -1041,11 +1031,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     blockChannel(channel, geohash) {
         const key = geohash || channel;
+        if (typeof this._privacyFitsWith === 'function' && !this._privacyFitsWith('blockedChannels', key)) return false;
         this.blockedChannels.add(key);
         this.saveBlockedChannels();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this._dropBlockedChannelRow(channel, geohash);
         this.updateViewMoreButton('channelList');
+        return true;
     },
 
     _dropBlockedChannelRow(channel, geohash) {
@@ -1130,8 +1122,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } else {
             container.innerHTML = Array.from(this.hiddenChannels).map(key => {
                 const displayName = `#${key}`;
-                const location = this.getGeohashLocation(key);
-                const label = location ? `${this.escapeHtml(displayName)} (${this.escapeHtml(location)})` : this.escapeHtml(displayName);
+                const location = this._geoPlaceLabel(key);
+                const label = location ? `${this.escapeHtml(displayName)} (<span data-geo-place="${this.escapeHtml(key.toLowerCase())}">${this.escapeHtml(location)}</span>)` : this.escapeHtml(displayName);
                 return `
         <div class="blocked-item">
             <span>${label}</span>
@@ -1148,8 +1140,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const ui = (s) => (typeof this.uiText === 'function' ? this.uiText(s) : s);
         const keys = ['nymchat'].concat([...(this.pinnedChannels || [])].filter((k) => k && k !== 'nymchat'));
         container.innerHTML = keys.map((key) => {
-            const location = key === 'nymchat' ? '' : this.getGeohashLocation(key);
-            const label = location ? `${this.escapeHtml('#' + key)} (${this.escapeHtml(location)})` : this.escapeHtml('#' + key);
+            const location = key === 'nymchat' ? '' : this._geoPlaceLabel(key);
+            const label = location ? `${this.escapeHtml('#' + key)} (<span data-geo-place="${this.escapeHtml(key.toLowerCase())}">${this.escapeHtml(location)}</span>)` : this.escapeHtml('#' + key);
             const control = key === 'nymchat'
                 ? `<span class="nm-dim12">${this.escapeHtml(ui('Always favorited'))}</span>`
                 : `<button class="unblock-btn" data-action="unfavoriteChannelFromSettings" data-channel-key="${this.escapeHtml(key)}">${this.escapeHtml(ui('Unfavorite'))}</button>`;
@@ -1227,8 +1219,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             });
 
-            const cached = this._loadGeohashPlaceCache().get(ghLower);
-            this._fillLocationLink(link, cached || 'Loading location...');
+            const known = this._geoPlaceKnown(ghLower);
+            const cached = known && known.place;
+            this._fillLocationLink(link, cached || (known ? (known.label || this.getGeohashLocation(safeGeohash) || '') : 'Loading location...'));
             locWrap.appendChild(link);
 
             if (this.userLocation && this.settings.sortByProximity) {
@@ -1250,9 +1243,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (!cached) {
                 this._resolveGeohashPlaceName(safeGeohash).then(place => {
                     if (link.isConnected) this._fillLocationLink(link, place);
-                }).catch(() => {
-                    if (link.isConnected) this._fillLocationLink(link, this.getGeohashLocation(safeGeohash));
-                });
+                }).catch(() => this._geoPlaceFallbackLabel(safeGeohash).then(label => {
+                    if (link.isConnected) this._fillLocationLink(link, label);
+                }));
             }
         }
 
@@ -1284,7 +1277,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
-    // localStorage key for the persisted geohash → "City, Country" map.
     _GEO_PLACE_KEY: 'nym_geohash_places',
     _GEO_PLACE_MAX: 500,
     // Nominatim's documented rate limit plus headroom, for the direct fallback path.
@@ -1292,21 +1284,94 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     _GEO_PLACE_RETRY_BASE_MS: 45 * 1000,
     _GEO_PLACE_RETRY_MAX_MS: 30 * 60 * 1000,
     _GEO_PLACE_MAX_ATTEMPTS: 4,
+    _GEO_PLACE_SETTLED_MS: 30 * 24 * 60 * 60 * 1000,
+    _GEO_PLACE_TOUCH_MS: 60 * 60 * 1000,
 
-    _geoPlaceRetryAt(key) {
-        const miss = this._geoPlaceMisses && this._geoPlaceMisses.get(key);
-        if (!miss) return 0;
-        if (miss.attempts >= this._GEO_PLACE_MAX_ATTEMPTS) return Infinity;
-        const backoff = Math.min(
+    _geoPlaceBackoff(attempts) {
+        return Math.min(
             this._GEO_PLACE_RETRY_MAX_MS,
-            this._GEO_PLACE_RETRY_BASE_MS * Math.pow(3, miss.attempts - 1));
-        return miss.at + backoff;
+            this._GEO_PLACE_RETRY_BASE_MS * Math.pow(3, Math.max(0, attempts - 1)));
     },
 
-    _geoPlaceNoteMiss(key) {
-        if (!this._geoPlaceMisses) this._geoPlaceMisses = new Map();
-        const prev = this._geoPlaceMisses.get(key);
-        this._geoPlaceMisses.set(key, { at: Date.now(), attempts: (prev ? prev.attempts : 0) + 1 });
+    _geoPlaceMiss(key) {
+        const e = this._loadGeohashPlaceCache().get(key);
+        return e && typeof e.p !== 'string' ? e : null;
+    },
+
+    _geoPlaceRetryAt(key) {
+        const miss = this._geoPlaceMiss(key);
+        const fail = this._geoPlaceFailures && this._geoPlaceFailures.get(key);
+        let at = 0;
+        if (miss) {
+            if (miss.n >= this._GEO_PLACE_MAX_ATTEMPTS) return Infinity;
+            at = miss.t + this._geoPlaceBackoff(miss.n);
+        }
+        if (fail) {
+            if (fail.n >= this._GEO_PLACE_MAX_ATTEMPTS) return Infinity;
+            at = Math.max(at, fail.t + this._geoPlaceBackoff(fail.n));
+        }
+        return at;
+    },
+
+    _geoPlaceLookupAllowed(key, force) {
+        const e = this._loadGeohashPlaceCache().get(key);
+        if (e && typeof e.p === 'string') return false;
+        const now = Date.now();
+        if (e && e.n >= this._GEO_PLACE_MAX_ATTEMPTS) {
+            if (now < e.t + this._GEO_PLACE_SETTLED_MS) return false;
+        } else if (e && !force && now < e.t + this._geoPlaceBackoff(e.n)) {
+            return false;
+        }
+        const fail = this._geoPlaceFailures && this._geoPlaceFailures.get(key);
+        if (fail && !force && (fail.n >= this._GEO_PLACE_MAX_ATTEMPTS || now < fail.t + this._geoPlaceBackoff(fail.n))) {
+            return false;
+        }
+        return true;
+    },
+
+    _geoPlaceKnown(key) {
+        const e = this._loadGeohashPlaceCache().get(key);
+        if (!e) return null;
+        const now = Date.now();
+        if (!(now - e.u < this._GEO_PLACE_TOUCH_MS)) {
+            e.u = now;
+            this._saveGeohashPlaceCache();
+        }
+        if (typeof e.p === 'string') return { place: e.p };
+        return { place: null, label: e.l, settled: e.n >= this._GEO_PLACE_MAX_ATTEMPTS };
+    },
+
+    _geoPlaceNoteAnswer(key, place) {
+        const m = this._loadGeohashPlaceCache();
+        m.delete(key);
+        m.set(key, { p: place, u: Date.now() });
+        if (this._geoPlaceFailures) this._geoPlaceFailures.delete(key);
+        if (this._geoPlacePending) this._geoPlacePending.delete(key);
+        this._saveGeohashPlaceCache();
+        this._geoPlacePaintLists(key);
+    },
+
+    _geoPlaceNoteNoName(key, label, water) {
+        const m = this._loadGeohashPlaceCache();
+        const prev = this._geoPlaceMiss(key);
+        const max = this._GEO_PLACE_MAX_ATTEMPTS;
+        const n = (water || (prev && prev.n >= max)) ? max : Math.min(max, (prev ? prev.n : 0) + 1);
+        const now = Date.now();
+        m.delete(key);
+        m.set(key, { l: label || (prev ? prev.l : ''), n, t: now, u: now });
+        if (this._geoPlaceFailures) this._geoPlaceFailures.delete(key);
+        if (!this._geoPlacePending) this._geoPlacePending = new Set();
+        if (n >= max) this._geoPlacePending.delete(key);
+        else this._geoPlacePending.add(key);
+        this._saveGeohashPlaceCache();
+        this._scheduleGeoPlaceSweep();
+        this._geoPlacePaintLists(key);
+    },
+
+    _geoPlaceNoteFailure(key) {
+        if (!this._geoPlaceFailures) this._geoPlaceFailures = new Map();
+        const prev = this._geoPlaceFailures.get(key);
+        this._geoPlaceFailures.set(key, { t: Date.now(), n: (prev ? prev.n : 0) + 1 });
         if (!this._geoPlacePending) this._geoPlacePending = new Set();
         this._geoPlacePending.add(key);
         this._scheduleGeoPlaceSweep();
@@ -1315,7 +1380,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Re-resolves rows still showing a fallback and repaints them in place.
     _scheduleGeoPlaceSweep() {
         if (this._geoPlaceSweepTimer || !this._geoPlacePending || this._geoPlacePending.size === 0) return;
-        // Exhausted keys stay pending for a forced retry, so scheduling for them would spin forever.
         const anyRetryable = [...this._geoPlacePending]
             .some(k => this._geoPlaceRetryAt(k) !== Infinity);
         if (!anyRetryable) return;
@@ -1330,21 +1394,47 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const pending = this._geoPlacePending;
         if (!pending || pending.size === 0) return;
         const cache = this._loadGeohashPlaceCache();
-        const now = Date.now();
         for (const key of [...pending]) {
-            if (cache.has(key)) { pending.delete(key); continue; }
-            const retryAt = this._geoPlaceRetryAt(key);
-            if (retryAt === Infinity) {
-                // Out of automatic attempts: skip it, don't drop it, so an explicit retry still gets one more chance.
-                if (!force) continue;
-                this._geoPlaceMisses.delete(key);
-            } else if (now < retryAt && !force) {
-                continue;
-            }
-            this._resolveGeohashPlaceName(key)
+            const e = cache.get(key);
+            if (e && typeof e.p === 'string') { pending.delete(key); continue; }
+            if (!this._geoPlaceLookupAllowed(key, !!force)) continue;
+            this._resolveGeohashPlaceName(key, !!force)
                 .then(place => { if (place) this._paintPlaceEverywhere(key, place); })
                 .catch(() => { });
         }
+    },
+
+    _geoPlaceName(geohash) {
+        const key = String(geohash || '').toLowerCase();
+        const known = this._geoPlaceKnown(key);
+        return (known && (known.place || known.label)) || (this._geoPlaceRegions && this._geoPlaceRegions.get(key)) || '';
+    },
+
+    _geoPlaceLabel(geohash) {
+        return this._geoPlaceName(geohash) || this.getGeohashLocation(String(geohash || '').toLowerCase()) || '';
+    },
+
+    _geoPlacePaintLists(key) {
+        if (typeof document === 'undefined' || typeof CSS === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+        const label = this._geoPlaceLabel(key);
+        if (!label) return;
+        const sel = CSS.escape(key);
+        document.querySelectorAll(`#channelAutocomplete .channel-ac-location[data-geohash="${sel}"], [data-geo-place="${sel}"]`)
+            .forEach(el => { el.textContent = label; });
+        document.querySelectorAll(`#pinnedLandingChannelDropdown .channel-dropdown-option[data-geohash="${sel}"]`)
+            .forEach(el => { el.textContent = `#${key} (${label})`; });
+        const field = document.getElementById('pinnedLandingChannelSearch');
+        if (field && document.activeElement !== field && field.value.startsWith(`#${key} (`)) field.value = `#${key} (${label})`;
+    },
+
+    _geoPlaceNoteRegion(key, label) {
+        if (!this._geoPlaceRegions) this._geoPlaceRegions = new Map();
+        if (this._geoPlaceRegions.get(key) === label) return;
+        this._geoPlaceRegions.delete(key);
+        if (this._geoPlaceRegions.size >= this._GEO_PLACE_MAX) this._geoPlaceRegions.delete(this._geoPlaceRegions.keys().next().value);
+        this._geoPlaceRegions.set(key, label);
+        this._geoPlacePaintLists(key);
+        if (typeof document !== 'undefined' && typeof CSS !== 'undefined') this._paintPlaceEverywhere(key, this._geoPlaceLabel(key));
     },
 
     _paintPlaceEverywhere(key, place) {
@@ -1358,41 +1448,63 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Concurrent lookups via our proxy, which edge-caches and is itself Nominatim's client.
     _GEO_PLACE_CONCURRENCY: 4,
 
+    _geoPlaceEntryFrom(v, order) {
+        const poison = 'Unknown location';
+        if (typeof v === 'string') return v && v !== poison ? { p: v, u: order } : null;
+        if (!v || typeof v !== 'object') return null;
+        const u = Number.isFinite(v.u) ? Math.floor(v.u) : order;
+        if (typeof v.p === 'string') return v.p && v.p !== poison ? { p: v.p, u } : null;
+        if (Number.isInteger(v.n) && v.n > 0 && Number.isFinite(v.t)) {
+            return {
+                l: typeof v.l === 'string' ? v.l : '',
+                n: Math.min(v.n, this._GEO_PLACE_MAX_ATTEMPTS),
+                t: Math.floor(v.t),
+                u
+            };
+        }
+        return null;
+    },
+
     _loadGeohashPlaceCache() {
         if (this._geohashPlaceCache) return this._geohashPlaceCache;
-        this._geohashPlaceCache = new Map();
+        const m = new Map();
+        this._geohashPlaceCache = m;
         try {
             const raw = localStorage.getItem(this._GEO_PLACE_KEY);
-            if (raw) {
-                const obj = JSON.parse(raw);
-                for (const k in obj) {
-                    if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
-                    if (typeof obj[k] !== 'string') continue;
-                    // Drop negatives written by earlier builds so "Unknown location" rows can resolve.
-                    if (obj[k] === 'Unknown location') continue;
-                    this._geohashPlaceCache.set(k, obj[k]);
+            const obj = raw ? JSON.parse(raw) : null;
+            if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+                let order = 0;
+                for (const k of Object.keys(obj)) {
+                    const e = this._geoPlaceEntryFrom(obj[k], order++);
+                    if (e) m.set(k, e);
                 }
             }
         } catch (_) { }
-        return this._geohashPlaceCache;
+        return m;
     },
 
     _saveGeohashPlaceCache() {
         if (this._geoPlaceSaveTimer) return;
         this._geoPlaceSaveTimer = setTimeout(() => {
             this._geoPlaceSaveTimer = null;
-            try {
-                const m = this._geohashPlaceCache;
-                if (!m) return;
-                let entries = [...m.entries()];
-                if (entries.length > this._GEO_PLACE_MAX) {
-                    // Keep the most recently resolved; Map preserves insertion order.
-                    entries = entries.slice(-this._GEO_PLACE_MAX);
-                    this._geohashPlaceCache = new Map(entries);
-                }
-                localStorage.setItem(this._GEO_PLACE_KEY, JSON.stringify(Object.fromEntries(entries)));
-            } catch (_) { }
+            this._geoPlacePersistNow();
         }, 1000);
+    },
+
+    _geoPlacePersistNow() {
+        try {
+            const m = this._geohashPlaceCache;
+            if (!m) return;
+            const drop = m.size - this._GEO_PLACE_MAX;
+            if (drop > 0) {
+                const byUse = [...m.entries()].sort((a, b) =>
+                    (a[1].u - b[1].u) || (a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0)));
+                for (const [k] of byUse.slice(0, drop)) m.delete(k);
+            }
+            const out = {};
+            for (const [k, e] of m) out[k] = e;
+            localStorage.setItem(this._GEO_PLACE_KEY, JSON.stringify(out));
+        } catch (_) { }
     },
 
     // Nominatim `zoom` granularity (3 country, 5 state, 8 county, 10 city), matched to the cell size.
@@ -1442,72 +1554,75 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return this._worldPlaceFeatures;
     },
 
-    // Label for cells the geocoder can't name, from the bundled map data instead of raw coordinates.
-    async _geoPlaceDescribeRegion(geohash) {
+    async _geoPlaceRegion(geohash) {
         try {
             const feats = await this._loadWorldPlaceFeatures();
-            if (!feats || !feats.length || !window.NymGeoDecode) return '';
+            const G = window.NymGeoDecode;
+            if (!feats || !feats.length || !G) return { label: '', water: false };
             const c = this.decodeGeohash(geohash);
-            return window.NymGeoDecode.describeRegion(feats, c.lat, c.lng) || '';
-        } catch (_) { return ''; }
+            const label = G.describeRegion(feats, c.lat, c.lng) || '';
+            return { label, water: !!label && c.lat > -85.5 && !G.countryAt(feats, c.lat, c.lng) };
+        } catch (_) { return { label: '', water: false }; }
     },
 
     async _geoPlaceFallbackLabel(geohash) {
-        const described = await this._geoPlaceDescribeRegion(geohash);
-        return described || this.getGeohashLocation(geohash) || '';
+        const region = await this._geoPlaceRegion(geohash);
+        if (region.label) this._geoPlaceNoteRegion(String(geohash || '').toLowerCase(), region.label);
+        return region.label || this.getGeohashLocation(geohash) || '';
     },
 
-    async _resolveGeohashPlaceName(geohash) {
+    async _resolveGeohashPlaceName(geohash, force) {
         const key = String(geohash || '').toLowerCase();
         if (!key) return 'Unknown location';
-        const cache = this._loadGeohashPlaceCache();
-        if (cache.has(key)) return cache.get(key);
-        // A recorded miss short-circuits only while its backoff is unexpired.
-        if (Date.now() < this._geoPlaceRetryAt(key)) {
-            return this._geoPlaceFallbackLabel(geohash);
-        }
+        const known = this._geoPlaceKnown(key);
+        if (known && known.place) return known.place;
 
-        // Collapse concurrent callers for the same geohash.
         if (!this._geoPlaceInflight) this._geoPlaceInflight = new Map();
         const existing = this._geoPlaceInflight.get(key);
         if (existing) return existing;
 
-        const p = this._geoPlaceRun(async () => {
-            // Probes are sequential and, on the direct Nominatim path, spaced to respect its 1/s limit.
-            const viaProxy = typeof this._getProxyBaseUrl === 'function' && !!this._getProxyBaseUrl();
-            let first = true;
-            for (const pt of this._geoPlaceProbePoints(geohash)) {
-                if (!first && !viaProxy) {
-                    const gap = (this._geoPlaceLastAt || 0) + this._GEO_PLACE_MIN_INTERVAL_MS - Date.now();
-                    if (gap > 0) await new Promise(r => setTimeout(r, gap));
-                }
-                first = false;
-                this._geoPlaceLastAt = Date.now();
-                const data = await this.fetchGeocode(pt.lat, pt.lng, pt.zoom);
-                const place = this._geoPlaceFromAddress(data);
-                if (place) return place;
+        if (!this._geoPlaceLookupAllowed(key, !!force)) {
+            if (known && !known.settled) {
+                if (!this._geoPlacePending) this._geoPlacePending = new Set();
+                this._geoPlacePending.add(key);
+                this._scheduleGeoPlaceSweep();
             }
-            return '';
-        })
-            .then(place => {
-                this._geoPlaceInflight.delete(key);
-                // A geocode with no city/country is a non-answer; don't cache it permanently.
-                if (!place) {
-                    this._geoPlaceNoteMiss(key);
-                    return this._geoPlaceFallbackLabel(geohash);
+            return known ? (known.label || this.getGeohashLocation(geohash) || '') : this._geoPlaceFallbackLabel(geohash);
+        }
+
+        const p = (async () => {
+            try {
+                const place = await this._geoPlaceRun(async () => {
+                    // Probes are sequential and, on the direct Nominatim path, spaced to respect its 1/s limit.
+                    const viaProxy = typeof this._getProxyBaseUrl === 'function' && !!this._getProxyBaseUrl();
+                    let first = true;
+                    for (const pt of this._geoPlaceProbePoints(geohash)) {
+                        if (!first && !viaProxy) {
+                            const gap = (this._geoPlaceLastAt || 0) + this._GEO_PLACE_MIN_INTERVAL_MS - Date.now();
+                            if (gap > 0) await new Promise(r => setTimeout(r, gap));
+                        }
+                        first = false;
+                        this._geoPlaceLastAt = Date.now();
+                        const data = await this.fetchGeocode(pt.lat, pt.lng, pt.zoom);
+                        const named = this._geoPlaceFromAddress(data);
+                        if (named) return named;
+                    }
+                    return '';
+                });
+                if (place) {
+                    this._geoPlaceNoteAnswer(key, place);
+                    return place;
                 }
-                cache.set(key, place);
-                this._saveGeohashPlaceCache();
-                if (this._geoPlaceMisses) this._geoPlaceMisses.delete(key);
-                if (this._geoPlacePending) this._geoPlacePending.delete(key);
-                return place;
-            })
-            .catch(err => {
-                this._geoPlaceInflight.delete(key);
-                // A hard failure is a miss too, so it earns a retry.
-                this._geoPlaceNoteMiss(key);
+                const region = await this._geoPlaceRegion(geohash);
+                this._geoPlaceNoteNoName(key, region.label, region.water);
+                return region.label || this.getGeohashLocation(geohash) || '';
+            } catch (err) {
+                this._geoPlaceNoteFailure(key);
                 throw err;
-            });
+            } finally {
+                this._geoPlaceInflight.delete(key);
+            }
+        })();
         this._geoPlaceInflight.set(key, p);
         return p;
     },
@@ -1609,9 +1724,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         let ok = true;
         for (const [since, group] of bySince) {
-            if (!await this._channelRestoreGroupFromD1(group, since)) ok = false;
+            if (!await this._channelRestoreShared(group, since)) ok = false;
         }
         return ok;
+    },
+
+    async _channelRestoreShared(names, since) {
+        if (names.length !== 1) return this._channelRestoreGroupFromD1(names, since);
+        if (!(this._channelRestoreInFlight instanceof Map)) this._channelRestoreInFlight = new Map();
+        const name = names[0];
+        const held = this._channelRestoreInFlight.get(name);
+        if (held && (!held.since || (since > 0 && held.since <= since))) return held.run;
+        const entry = { since, run: this._channelRestoreGroupFromD1(names, since) };
+        this._channelRestoreInFlight.set(name, entry);
+        try {
+            return await entry.run;
+        } finally {
+            if (this._channelRestoreInFlight.get(name) === entry) this._channelRestoreInFlight.delete(name);
+        }
     },
 
     _channelCoveredSince(name) {
@@ -1643,6 +1773,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     async _channelRestoreGroupFromD1(names, since) {
+        const startedAt = Date.now();
         let resp;
         try {
             resp = await this._storageApiStream('channel-get', since ? { channels: names, since } : { channels: names }, false);
@@ -1654,7 +1785,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         let newest = 0;
 
         let applied = false;
-        const applyBatch = async (batch) => {
+        const applyBatch = async (got) => {
+            for (const ev of got) {
+                if (ev && Number.isFinite(ev.created_at)) {
+                    const storedSec = Number(ev.stored_at) > 0 ? Math.floor(Number(ev.stored_at) / 1000) : 0;
+                    const at = storedSec > 0 ? Math.min(ev.created_at, storedSec) : ev.created_at;
+                    if (at > newest) newest = at;
+                }
+            }
+            const batch = got.filter((ev) => !(typeof this._encryptedBlobDrop === 'function' && this._encryptedBlobDrop(ev)));
             if (!batch.length) return;
             if (typeof this._preformatBatch === 'function') {
                 for (const ev of batch) {
@@ -1667,11 +1806,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 try { await this._preformatBatch(batch.map(ev => ev && ev.content)); } catch (_) { }
             }
             for (const ev of batch) {
-                if (ev && Number.isFinite(ev.created_at)) {
-                    const storedSec = Number(ev.stored_at) > 0 ? Math.floor(Number(ev.stored_at) / 1000) : 0;
-                    const at = storedSec > 0 ? Math.min(ev.created_at, storedSec) : ev.created_at;
-                    if (at > newest) newest = at;
-                }
                 if (typeof this._quietHit === 'function' && this._quietHit(ev)) continue;
                 if (await this._verifyRelayEventAsync(ev)) {
                     if (!this._archiveEvents) this._archiveEvents = new WeakSet();
@@ -1722,6 +1856,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (applied) this._repaintActiveChannelIfEmpty(names);
         if (completed) this._noteChannelCovered(names, newest);
         if (completed) this._noteChannelHistoryLoaded(names);
+        if (completed) {
+            if (!(this._archiveRestoredAt instanceof Map)) this._archiveRestoredAt = new Map();
+            for (const name of names) this._archiveRestoredAt.set(name, startedAt);
+        }
         this._noteArchiveResult(names, completed);
         return completed;
     },
@@ -1759,6 +1897,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     switchChannel(channel, geohash = '') {
         if (typeof this._syncGeoPresenceSend === 'function') setTimeout(() => this._syncGeoPresenceSend(), 0);
         if (this._cvActive) { this._cvOpenConversation({ type: 'channel', channel, geohash: geohash || '' }); return; }
+        if (typeof this._flushHeldChannelCloses === 'function') this._flushHeldChannelCloses();
         if (typeof this._closeThreadViewOnSwitch === 'function') this._closeThreadViewOnSwitch();
         this._saveCurrentDraft();
         const previousChannel = this.currentChannel;
@@ -1917,7 +2056,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const list = document.getElementById('channelList');
         const key = geohash || channel;
 
-        if (key && !/^[\p{L}\p{N}]+$/u.test(key)) {
+        if (key && !window.NymChannelName.isChannelName(key)) {
             return;
         }
 
@@ -1965,9 +2104,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 item.classList.add('pinned');
             }
 
-            const subText = isGeo
-                ? (this._loadGeohashPlaceCache().get(geoKey) || this.getGeohashLocation(geoKey) || '')
-                : 'Not a geohash';
+            const known = isGeo ? this._geoPlaceKnown(geoKey) : null;
+            const cachedPlace = known && known.place;
+            const subText = isGeo ? this._geoPlaceLabel(geoKey) : 'Not a geohash';
 
             item.innerHTML = `
     <span class="channel-tile" aria-hidden="true">${this._channelGlyphSvg(isGeo, 10)}</span>
@@ -1978,7 +2117,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     </div>
 `;
 
-            const cachedPlace = isGeo ? this._loadGeohashPlaceCache().get(geoKey) : null;
             const subEl = item.querySelector('.channel-sub');
             if (subEl) {
                 if (cachedPlace) {
@@ -1991,7 +2129,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     subEl.appendChild(only);
                 }
             }
-            if (isGeo && !this._loadGeohashPlaceCache().has(geoKey)) {
+            if (isGeo && !cachedPlace) {
                 this._resolveGeohashPlaceName(geoKey).then(place => {
                     if (place && subEl && subEl.isConnected) this._fillLocationParts(subEl, place);
                 }).catch(() => { });
@@ -2233,7 +2371,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 const channels = JSON.parse(saved);
                 // Drop invalid legacy names and migrate the legacy default channel key.
                 return [...new Set(channels
-                    .filter(ch => ch && /^[\p{L}\p{N}]+$/u.test(ch))
+                    .filter(ch => window.NymChannelName.isChannelName(ch))
                     .map(ch => ch === 'nym' ? 'nymchat' : ch))];
             } catch (error) {
                 return [];
@@ -2530,7 +2668,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (next > cur) {
             this.channelLastRead.set(channel, next);
             this._persistUnreadCounts();
-            if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
+            const anonOnly = typeof this._anonLaneAdvance === 'function' && this._anonLaneAdvance(channel, 0, (m) => m.created_at > cur && m.created_at <= next);
+            if (typeof this._readAnonHold === 'function') this._readAnonHold(channel, anonOnly);
+            if (!anonOnly && typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1(false, channel);
             if (typeof this._markConversationNotificationsSeen === 'function') {
                 this._markConversationNotificationsSeen(channel, next);
             }
@@ -2672,7 +2812,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     clearUnreadCount(channel) {
         if (!this.channelLastRead) this.channelLastRead = new Map();
-        let lastTs = Math.max(Math.floor(Date.now() / 1000), this.channelLastRead.get(channel) || 0);
+        const prevRead = this.channelLastRead.get(channel) || 0;
+        let lastTs = Math.max(Math.floor(Date.now() / 1000), prevRead);
         let messages;
         if (channel.startsWith('pm-') || channel.startsWith('group-')) {
             messages = this.pmMessages && this.pmMessages.get(channel);
@@ -2687,7 +2828,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.channelLastRead.set(channel, lastTs);
         this._setUnreadCount(channel, 0);
         this._persistUnreadCounts(true);
-        if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
+        const anonRead = typeof this._anonLaneAdvance === 'function' && this._anonLaneAdvance(channel, 0, (m) => (m.created_at || 0) > prevRead && (m.created_at || 0) <= lastTs);
+        if (typeof this._readAnonHold === 'function') this._readAnonHold(channel, anonRead);
+        if (!anonRead && typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1(false, channel);
         this._renderUnreadBadge(channel, 0);
         if (typeof this._markConversationNotificationsSeen === 'function') {
             this._markConversationNotificationsSeen(channel, lastTs);

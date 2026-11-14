@@ -24,9 +24,10 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart' show bootEpochProvider;
 import '../../state/settings_provider.dart';
 import '../chat/bitchat_user_color.dart';
-import '../chat/message_row.dart' show channelBodyTextColor;
+import '../chat/message_row.dart' show channelBodyTextColor, channelNymColor, redactedNymColor;
 import 'row_preview.dart';
 import 'sidebar_chrome.dart' show kSidebarSubLine;
+import 'sidebar_row_gestures.dart';
 
 @immutable
 class _Sig {
@@ -151,9 +152,10 @@ final publicStreamViewProvider = Provider<PublicStreamView>((ref) {
       codes,
       null,
       ...page.pendingIds,
+      page.pendingMore,
       null,
       page.remaining,
-      page.button,
+      ...page.buttons,
     ]),
   );
 });
@@ -263,8 +265,6 @@ class PublicStreamRow extends StatefulWidget {
 }
 
 class _PublicStreamRowState extends State<PublicStreamRow> {
-  bool _hover = false;
-
   List<InlineSpan> _body(BuildContext context, WidgetRef ref, TextStyle style,
       TextStyle suffix) {
     final codes =
@@ -369,7 +369,8 @@ class _PublicStreamRowState extends State<PublicStreamRow> {
       final line = TextStyle(
           fontSize: size, height: 1.4, color: c.text, fontWeight: FontWeight.w400);
       final who = line.copyWith(
-          color: bitchat ?? c.secondary, fontWeight: FontWeight.w600);
+          color: widget.own ? channelNymColor(c, cos.isRedacted ? redactedNymColor(c) : c.primary, contrast: contrast) : (bitchat ?? channelNymColor(c, c.secondary, contrast: contrast)),
+          fontWeight: FontWeight.w600);
       final body = TextStyle(
         fontSize: size,
         height: kSidebarSubLine / size,
@@ -405,19 +406,16 @@ class _PublicStreamRowState extends State<PublicStreamRow> {
           onPointerDown: (_) => widget.onPointer?.call(true),
           onPointerUp: (_) => widget.onPointer?.call(false),
           onPointerCancel: (_) => widget.onPointer?.call(false),
-          child: MouseRegion(
-            onEnter: (_) => setState(() => _hover = true),
-            onExit: (_) => setState(() => _hover = false),
-            child: InkWell(
-              onTap: widget.onTap,
-              borderRadius: NymRadius.rxs,
-              child: Container(
+          child: SidebarRowGestures(
+            onTap: widget.onTap,
+            onShowMenu: (_) => false,
+            builder: (context, hovered) => Container(
                 constraints: BoxConstraints(
                     minHeight: context.largeTouchTargets ? 44 : 32),
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   borderRadius: NymRadius.rxs,
-                  color: _hover ? c.primaryA(0.08) : null,
+                  color: hovered ? sidebarRowHoverFill(c) : null,
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.baseline,
@@ -472,7 +470,6 @@ class _PublicStreamRowState extends State<PublicStreamRow> {
                   ],
                 ),
               ),
-            ),
           ),
         ),
       );

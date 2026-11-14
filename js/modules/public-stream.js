@@ -4,6 +4,7 @@
     const FIRST = 20;
     const STEP = 50;
     const MAX = 500;
+    const PENDING_MAX = 99;
     const CLIP = 240;
     const MEDIA_MAX = 4;
     const WINDOW_SEC = 86400;
@@ -190,6 +191,7 @@
     function walk(lists, o, visit) {
         const acc = { at: o.at || defAt, ms: o.ms || defMs, id: o.id || defId, visible: o.visible || defVisible };
         const floor = typeof o.floorSec === 'number' ? o.floorSec : -Infinity;
+        const seek = typeof o.seek === 'function' ? o.seek : null;
         const cur = [];
         for (const l of (Array.isArray(lists) ? lists : [])) {
             if (!l || typeof l.key !== 'string' || !Array.isArray(l.msgs) || !l.msgs.length) continue;
@@ -205,6 +207,17 @@
             }
             c.head = null;
         };
+        const below = (c, sec) => {
+            let lo = 0;
+            let hi = c.i;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const m = c.msgs[mid];
+                if (!m || acc.at(m) <= sec) lo = mid + 1;
+                else hi = mid - 1;
+            }
+            return hi;
+        };
         cur.forEach(advance);
         let live = cur.filter((c) => c.head);
         while (live.length) {
@@ -212,6 +225,16 @@
             for (let j = 1; j < live.length; j++) if (compareNewest(live[j].head.s, best.head.s) < 0) best = live[j];
             const h = best.head;
             if (visit(h.s, h.m) === false) return;
+            const sec = seek ? seek() : null;
+            if (typeof sec === 'number' && h.s.t > sec) {
+                for (const c of live) {
+                    if (!c.head || c.head.s.t <= sec) continue;
+                    c.i = Math.min(c.i, below(c, sec));
+                    advance(c);
+                }
+                live = live.filter((c) => c.head);
+                continue;
+            }
             advance(best);
             if (!best.head) live = live.filter((c) => c.head);
         }
@@ -230,14 +253,20 @@
         const nowSec = typeof opt.nowSec === 'number' ? opt.nowSec : Math.floor(Date.now() / 1000);
         const rows = [];
         const pendingIds = [];
+        let pendingMore = false;
         let eligible = 0;
         let pastTail = false;
         walk(lists, {
             floorSec: nowSec - WINDOW_SEC, at: opt.at, ms: opt.ms, id: opt.id, visible: opt.visible,
+            seek: () => (pendingMore ? anchor.t : null),
         }, (s, m) => {
             if (held && !frozen.has(s.id)) {
                 const older = pastTail || (tail ? compareNewest(s, tail) > 0 : false);
-                if (!older) { pendingIds.push(s.id); return true; }
+                if (!older) {
+                    if (pendingIds.length < PENDING_MAX) pendingIds.push(s.id);
+                    else pendingMore = true;
+                    return true;
+                }
             }
             if (tail && s.id === tail.id) pastTail = true;
             if (eligible >= cap) return false;
@@ -246,15 +275,16 @@
             return true;
         });
         const remaining = Math.max(0, Math.min(eligible, cap) - rows.length);
-        return { rows, pending: pendingIds.length, pendingIds, remaining, shown, held, button: moreButton(shown, remaining, max) };
+        return { rows, pending: pendingIds.length + (pendingMore ? 1 : 0), pendingIds, pendingMore, remaining, shown, held, buttons: moreButton(shown, remaining, max) };
     }
 
     function moreButton(shown, remaining, max) {
         const cap = typeof max === 'number' ? max : MAX;
-        if (remaining > 0 && shown <= FIRST) return { kind: 'view', n: remaining, next: Math.min(cap, FIRST + STEP) };
-        if (remaining > 0) return { kind: 'show', n: Math.min(remaining, STEP), next: Math.min(cap, shown + STEP) };
-        if (shown > FIRST) return { kind: 'less', n: 0, next: FIRST };
-        return null;
+        const out = [];
+        if (remaining > 0 && shown <= FIRST) out.push({ kind: 'view', n: remaining, next: Math.min(cap, FIRST + STEP) });
+        else if (remaining > 0) out.push({ kind: 'show', n: Math.min(remaining, STEP), next: Math.min(cap, shown + STEP) });
+        if (shown > FIRST) out.push({ kind: 'less', n: 0, next: FIRST });
+        return out;
     }
 
     function hold(rows, cur) {
@@ -284,6 +314,7 @@
     function pillLabel(n) {
         const c = Math.max(0, Math.floor(Number(n) || 0));
         if (c <= 0) return null;
+        if (c > PENDING_MAX) return { template: '99+ new messages', vars: {} };
         return c === 1 ? { template: '1 new message', vars: {} } : { template: '{n} new messages', vars: { n: c } };
     }
 
@@ -293,7 +324,7 @@
     }
 
     G.NymPublicStream = Object.freeze({
-        FIRST, STEP, MAX, CLIP, MEDIA_MAX, WINDOW_SEC, DEFAULT_CHANNEL, SETTING, LOCAL_KEY, MODES, HIDE_FLAGS, LABELS,
+        FIRST, STEP, MAX, PENDING_MAX, CLIP, MEDIA_MAX, WINDOW_SEC, DEFAULT_CHANNEL, SETTING, LOCAL_KEY, MODES, HIDE_FLAGS, LABELS,
         isMode, normalizeMode, streamKeys, flagsVisible, graphemes, parts, partsText, clip, compareNewest, walk, page, moreButton, hold, isHeld,
         rowLabel, pillLabel, tagLabel,
     });

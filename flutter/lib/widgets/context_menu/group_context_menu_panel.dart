@@ -12,6 +12,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/chat_tools/chat_tools_ui.dart';
+import '../../features/groups/group_invited.dart';
 import '../../features/groups/group_logic.dart';
 import '../../features/group_tools/group_tools_providers.dart';
 import '../../features/group_tools/group_tools_ui.dart';
@@ -165,10 +166,18 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final iCanAdminister = GroupLogic.canAdminister(group, self);
     final iCanModerate = GroupLogic.canModerate(group, self);
 
+    final gn = ref.read(appStateProvider.notifier).groupInvitedView(group);
     final sorted = (iCanModerate
-        ? List<String>.of(group.members)
-        : s.groupVisibleMembers(group))
-      ..sort((a, b) => _roleRank(group, a).compareTo(_roleRank(group, b)));
+            ? List<String>.of(group.members)
+            : s.groupVisibleMembers(group))
+        .where((pk) =>
+            gn.shown.contains(pk) ||
+            gn.statusOf(pk) == GroupInvited.memberStatus)
+        .toList()
+      ..sort((a, b) {
+        final r = _roleRank(group, a).compareTo(_roleRank(group, b));
+        return r != 0 ? r : gn.rankOf(a).compareTo(gn.rankOf(b));
+      });
 
     final description = s.groupDescription(group).trim();
 
@@ -224,7 +233,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
             for (final pk in sorted)
               if (pk != self) _memberRow(c, group, pk, self, iCanModerate),
           ] else
-            ..._memberSections(c, group, sorted, self, iCanModerate),
+            ..._memberSections(c, group, sorted, self, iCanModerate, gn),
           if (!_transferMode && iCanModerate && group.banned.isNotEmpty) ...[
             Container(
               width: double.infinity,
@@ -308,8 +317,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
           ),
           const SizedBox(height: 2),
           Text(
-            tr('{n}/{max} members', {'n': group.members.length, 'max': kMaxGroupMembers}) +
-                (group.members.length >= kMaxGroupMembers ? ' · ${tr('Full')}' : ''),
+            _countLine(group),
             style: TextStyle(
               color: group.members.length >= kMaxGroupMembers ? c.warning : c.textDim,
               fontSize: 12,
@@ -772,7 +780,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         seed: pubkey,
         size: 30,
         imageUrl: user?.profile?.picture,
-        label: mask.isEmpty && base.isNotEmpty ? base[0] : null,
+        label: mask.isEmpty ? nymInitial(base) : null,
       ),
       base: base.isEmpty ? tr('(unknown)') : base,
       suffix: '#${getPubkeySuffix(pubkey)}',
@@ -789,7 +797,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   }
 
   List<Widget> _memberSections(NymColors c, Group group, List<String> sorted,
-      String self, bool canModerate) {
+      String self, bool canModerate, GroupInvitedView gn) {
     String roleOf(String pk) {
       if (group.createdBy == pk) return 'owner';
       if (group.admins.contains(pk)) return 'admin';
@@ -816,7 +824,8 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
             ? BoxDecoration(border: Border(top: BorderSide(color: c.hairline)))
             : null,
         child: Text(
-          '${tr(titles[sec.key]!)} · ${sec.items.length}'.toUpperCase(),
+          '${tr(titles[sec.key]!)} · ${sec.items.where((i) => gn.statusOf(sorted[i]) == GroupInvited.memberStatus).length}'
+              .toUpperCase(),
           style: TextStyle(
             color: c.textDim,
             fontSize: NymType.xs,
@@ -826,14 +835,14 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         ),
       ));
       for (final idx in sec.items) {
-        out.add(_memberRow(c, group, sorted[idx], self, canModerate));
+        out.add(_memberRow(c, group, sorted[idx], self, canModerate, gn));
       }
     }
     return out;
   }
 
   Widget _memberRow(NymColors c, Group group, String pubkey, String self,
-      [bool canModerate = false]) {
+      [bool canModerate = false, GroupInvitedView? gn]) {
     final mask = pubkey == self
         ? ''
         : ref.watch(appStateProvider).personMaskLabel(pubkey);
@@ -858,7 +867,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       seed: pubkey,
       size: 30,
       imageUrl: user?.profile?.picture,
-      label: mask.isEmpty && base.isNotEmpty ? base[0] : null,
+      label: mask.isEmpty ? nymInitial(base) : null,
     );
     return _MemberTile(
       colors: c,
@@ -908,10 +917,52 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       base: base.isEmpty ? tr('(unknown)') : base,
       suffix: '#$suffix',
       isSelf: isSelf,
+      badge: isSelf || gn == null
+          ? null
+          : _invitedBadge(c, gn.statusOf(pubkey), base.isEmpty ? tr('(unknown)') : base),
       roleBadge:
           isOwner ? 'Owner' : (isAdmin ? 'Admin' : (isMod ? 'Mod' : null)),
       onTap: () => _onMemberTap(group, pubkey, base, isSelf),
     );
+  }
+
+  Widget? _invitedBadge(NymColors c, String status, String nym) {
+    if (status == GroupInvited.memberStatus) return null;
+    final expired = status == GroupInvited.expiredStatus;
+    return Semantics(
+      container: true,
+      image: true,
+      label: tr(expired ? GroupInvited.sExpiredLabel : GroupInvited.sInvitedLabel,
+          {'nym': nym}),
+      excludeSemantics: true,
+      child: Container(
+        key: ValueKey('invitedBadge-$status'),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        decoration: BoxDecoration(
+          borderRadius: const BorderRadius.all(Radius.circular(10)),
+          border: Border.all(
+              color: c.textDim.withValues(alpha: expired ? 0.45 : 0.8)),
+        ),
+        child: Text(
+          tr(expired ? GroupInvited.sExpired : GroupInvited.sInvited)
+              .toUpperCase(),
+          style: TextStyle(
+            color: c.textDim,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.3,
+            fontStyle: expired ? FontStyle.italic : FontStyle.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _countLine(Group group) {
+    final gn = ref.read(appStateProvider.notifier).groupInvitedView(group);
+    return tr('{n}/{max} members', {'n': gn.count, 'max': kMaxGroupMembers}) +
+        (gn.waiting > 0 ? ' · ${tr(GroupInvited.sCount, {'n': gn.waiting})}' : '') +
+        (group.members.length >= kMaxGroupMembers ? ' · ${tr('Full')}' : '');
   }
 
   void _onMemberTap(Group group, String pubkey, String base, bool isSelf) {
@@ -1123,6 +1174,7 @@ class _MemberTile extends StatefulWidget {
     required this.suffix,
     required this.isSelf,
     this.roleBadge,
+    this.badge,
     this.trailing,
     this.dimmed = false,
     required this.onTap,
@@ -1134,6 +1186,7 @@ class _MemberTile extends StatefulWidget {
   final String suffix;
   final bool isSelf;
   final String? roleBadge;
+  final Widget? badge;
   final Widget? trailing;
   final bool dimmed;
   final VoidCallback? onTap;
@@ -1183,6 +1236,10 @@ class _MemberTileState extends State<_MemberTile> {
                   ],
                 ),
               ),
+              if (widget.badge != null) ...[
+                const SizedBox(width: 8),
+                widget.badge!,
+              ],
               if (widget.roleBadge != null) ...[
                 const SizedBox(width: 8),
                 _RoleBadge(label: widget.roleBadge!, colors: c),
@@ -1434,7 +1491,8 @@ class _RecipientChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(nym, style: TextStyle(color: c.text, fontSize: 13)),
+          Flexible(
+              child: NymLabel(nym, style: TextStyle(color: c.text, fontSize: 13))),
           const SizedBox(width: 2),
           InkWell(
             onTap: onRemove,
@@ -1525,6 +1583,7 @@ class GroupSheetHeader extends ConsumerWidget {
             )
           : picture,
     );
+    final gn = ref.read(appStateProvider.notifier).groupInvitedView(group);
     final count = group.members.length;
     final labels = ref.read(appStateProvider);
     final description = labels.groupDescription(group).trim();
@@ -1552,7 +1611,10 @@ class GroupSheetHeader extends ConsumerWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                tr('{n}/{max} members', {'n': count, 'max': kMaxGroupMembers}) +
+                tr('{n}/{max} members', {'n': gn.count, 'max': kMaxGroupMembers}) +
+                    (gn.waiting > 0
+                        ? ' · ${tr(GroupInvited.sCount, {'n': gn.waiting})}'
+                        : '') +
                     (count >= kMaxGroupMembers ? ' · ${tr('Full')}' : ''),
                 style: TextStyle(
                   color: count >= kMaxGroupMembers ? c.warning : c.textDim,

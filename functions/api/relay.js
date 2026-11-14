@@ -5,6 +5,19 @@ import { ipv6Blocked } from './_shared.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
 import { reviewSpamReport, spamEngine, frameBadgeRefused } from './_spam.js';
 import { verifySignedEvent } from './relay-pool.js';
+import { isEncryptedBlobChannelEvent } from './_encrypted-blob.js';
+
+const RX_BLOB_KIND_FRAME = /"kind"\s*:\s*(?:20000|23333)\b/;
+
+function isBlobFrame(data) {
+  if (typeof data !== 'string' || !RX_BLOB_KIND_FRAME.test(data)) return false;
+  try {
+    const arr = JSON.parse(data);
+    return Array.isArray(arr) && isEncryptedBlobChannelEvent(arr[2]);
+  } catch {
+    return false;
+  }
+}
 
 const APP_RELAY = 'wss://relay.nymchat.app';
 
@@ -89,10 +102,16 @@ export async function onRequest(context) {
   server.accept();
 
   function heldOutbound(data) {
-    if (typeof data !== 'string' || !data.startsWith('["EVENT"')) return false;
+    if (typeof data !== 'string') return false;
     let ev = null;
-    try { const arr = JSON.parse(data); ev = Array.isArray(arr) ? arr[1] : null; } catch { return false; }
+    try { const arr = JSON.parse(data); ev = Array.isArray(arr) && arr[0] === 'EVENT' ? arr[1] : null; } catch { return false; }
     if (!ev) return false;
+    if (isEncryptedBlobChannelEvent(ev)) {
+      if (typeof ev.id === 'string') {
+        try { server.send(JSON.stringify(['OK', ev.id, false, 'blocked: encrypted blob'])); } catch {}
+      }
+      return true;
+    }
     if (ev.kind === 1984) context.waitUntil(noteReport(env, ev, 'relay').then((ok) => (ok ? reviewSpamReport(env, ev) : null)).catch(() => null));
     let mode = sockHeld;
     if (!mode) {
@@ -142,6 +161,7 @@ export async function onRequest(context) {
   upstream.addEventListener('message', (event) => {
     try {
       if (typeof event.data === 'string' && event.data.startsWith('["EVENT"') && frameHit(gate, event.data)) return;
+      if (isBlobFrame(event.data)) return;
       if (frameBadgeRefused(env, spam, event.data, verifySignedEvent)) return;
       if (server.readyState === 1) {
         server.send(event.data);

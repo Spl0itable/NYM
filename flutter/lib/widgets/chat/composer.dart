@@ -29,6 +29,8 @@ import '../../features/ai_consent/ai_consent.dart';
 import '../../features/autocomplete/autocomplete_dropdown.dart';
 import '../../features/mesh/mesh_controller.dart';
 import '../../features/autocomplete/autocomplete_queries.dart';
+import '../../features/channels/geohash_place_cache.dart'
+    show geohashPlaceCacheProvider;
 import '../../features/autocomplete/autocomplete_triggers.dart';
 import '../../features/autocomplete/pending_edit.dart';
 import '../../features/shortcuts/escape_layers.dart';
@@ -50,9 +52,9 @@ import '../../features/dm_polls/dm_polls_providers.dart';
 import '../../features/dm_polls/dm_polls_service.dart' show DmPollsService;
 import '../../features/emoji/custom_emoji.dart';
 import '../../features/emoji/emoji_block.dart';
-import '../../features/emoji/emoji_data.dart';
 import '../../features/emoji/emoji_picker.dart';
 import '../../features/emoji/gif_picker.dart';
+import '../../features/sync/synced_stores.dart';
 import '../../features/groups/group_logic.dart';
 import '../../features/chat_nav/chat_nav_ui.dart';
 import '../../features/chat_nav/chat_nav_providers.dart';
@@ -79,6 +81,7 @@ import '../../features/translate/translate_service.dart';
 import '../../features/zaps/zap_modal.dart';
 import '../../features/search/unified_search_panel.dart';
 import '../../models/user.dart' show UserStatus;
+import '../../models/group.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
@@ -86,7 +89,7 @@ import '../context_menu/interaction_hooks.dart';
 import 'clipboard_image_paste.dart';
 import 'composer_format.dart';
 import 'composer_markdown.dart';
-import 'message_row.dart' show GroupInfoMember, encodeGroupInfoSystemMessage;
+import 'message_row.dart' show buildGroupInfoPayload, encodeGroupInfoSystemMessage;
 import '../../features/chat_lock/chat_lock_providers.dart';
 import '../common/hollow_bullet.dart';
 import '../common/nym_field.dart';
@@ -99,7 +102,8 @@ export '../../features/composer/composer_drafts.dart' show ComposerDrafts;
 final composerOverhangProvider = StateProvider<double>((ref) => 0);
 
 List<ChannelResult> channelAutocompleteResults(
-    AppState state, String query, String currentKey) {
+    AppState state, String query, String currentKey,
+    {String? Function(String geohash)? placeName}) {
   final counts = <String, int>{};
   state.messages.forEach((key, msgs) {
     if (key.startsWith('#') && !state.isChannelHidden(key)) {
@@ -115,10 +119,16 @@ List<ChannelResult> channelAutocompleteResults(
       ],
       messageChannelCounts: counts,
       currentKey: currentKey,
+      placeName: placeName,
     ))
       if (!state.isChannelHidden(r.name)) r,
   ];
 }
+
+Set<String> groupMentionPriority(AppStateNotifier app, Group g) => app
+    .groupAccepted(g)
+    .where((p) => p != app.currentState.selfPubkey)
+    .toSet();
 
 class ComposerOverhangInset extends ConsumerWidget {
   const ComposerOverhangInset({super.key, required this.child});
@@ -157,14 +167,25 @@ class _ComposerState extends ConsumerState<Composer>
   final GlobalKey _sendSplitKey = GlobalKey();
 
   SharedPreferences? _prefs;
+  SyncedStores? _stores;
   List<String> _recents = const [];
 
   // Live NIP-30 custom emoji, a superset of the cached state, synced each build.
   CustomEmojiState _customEmojis = CustomEmojiState.empty;
 
   // Quote/edit are deferred to send: a chip sits above the input while the typed text stays clean.
-  ({String author, String text, String fullText})? _pendingQuote;
+  ({String author, String text, String fullText})? _pendingQuoteValue;
+  ({String author, String text, String fullText})? get _pendingQuote =>
+      _pendingQuoteValue;
+  set _pendingQuote(({String author, String text, String fullText})? v) {
+    _pendingQuoteValue = v;
+    ref
+        .read(nostrControllerProvider)
+        .noteComposerQuote(_chatView(), v == null ? null : _pendingQuoteId);
+  }
   String _pendingQuoteId = '';
+  String _pendingQuoteRaw = '';
+  String _pendingQuotePubkey = '';
   PendingEdit? _pendingEdit;
 
   // Each conversation switch stashes the outgoing draft, clears quote/edit, and restores the incoming draft.
@@ -207,6 +228,13 @@ class _ComposerState extends ConsumerState<Composer>
     _clearQuote();
     if (_pendingEdit != null) _cancelEdit();
     _restoreDraftForContext(view);
+    if (_focus.hasPrimaryFocus) ComposerShortcutHooks.parked = _focus;
+  }
+
+  void _unpark() {
+    if (identical(ComposerShortcutHooks.parked, _focus)) {
+      ComposerShortcutHooks.parked = null;
+    }
   }
 
   final _translatePortal = OverlayPortalController();
@@ -553,6 +581,7 @@ class _ComposerState extends ConsumerState<Composer>
     if (identical(ComposerShortcutHooks.text, _controller)) {
       ComposerShortcutHooks.text = null;
     }
+    _unpark();
     if (identical(ComposerShortcutHooks.focus, _focus)) {
       ComposerShortcutHooks.focus = null;
     }
@@ -584,16 +613,15 @@ class _ComposerState extends ConsumerState<Composer>
         _controller.text = existing + insert;
         _controller.selection =
             TextSelection.collapsed(offset: _controller.text.length);
-      case QuoteAction(:final fullNym, content: final raw, :final messageId):
-        final content =
-            ref.read(appStateProvider.notifier).shownTextFor(raw, messageId);
-        _pendingQuoteId = messageId;
-        ref.read(nostrControllerProvider).noteQuoteSource(fullNym, messageId);
-        _pendingQuote = (
-          author: fullNym,
-          text: _strippedQuoteText(content),
-          fullText: content.contains('#nym:') ? previewText(content) : content,
-        );
+      case QuoteAction(
+          :final fullNym,
+          content: final raw,
+          :final messageId,
+          :final pubkey
+        ):
+        if (_setQuote(fullNym, raw, messageId, pubkey)) {
+          ref.read(nostrControllerProvider).noteQuoteSource(fullNym, messageId);
+        }
       case InsertTextAction(:final text):
         final existing = _controller.text;
         final needsSpace = existing.isNotEmpty && !existing.endsWith(' ')
@@ -621,6 +649,57 @@ class _ComposerState extends ConsumerState<Composer>
     }
     _focus.requestFocus();
     setState(() {});
+  }
+
+  bool _setQuote(String fullNym, String raw, String messageId,
+      [String author = '']) {
+    final app = ref.read(appStateProvider.notifier);
+    final src = app.quoteSourceFor(messageId, fullNym, pubkey: author);
+    final pubkey = author.isNotEmpty ? author : src?.pubkey ?? '';
+    if (app.quoteSourceDeleted(messageId, pubkey, fullNym)) {
+      if (_pendingQuote != null && _pendingQuoteId == messageId) {
+        _pendingQuote = null;
+      }
+      _onSystemMessage(tr('That message was deleted, so it can\'t be quoted.'));
+      return false;
+    }
+    final text = src != null && src.isEdited && src.content.isNotEmpty
+        ? src.content
+        : raw;
+    final content = app.shownTextFor(text, messageId);
+    _pendingQuoteId = messageId;
+    _pendingQuoteRaw = text;
+    _pendingQuotePubkey = pubkey;
+    _pendingQuote = (
+      author: fullNym,
+      text: _strippedQuoteText(content),
+      fullText: content.contains('#nym:') ? previewText(content) : content,
+    );
+    return true;
+  }
+
+  bool _refreshQuote() {
+    final quote = _pendingQuote;
+    final id = _pendingQuoteId;
+    if (quote == null || id.isEmpty) return true;
+    final app = ref.read(appStateProvider.notifier);
+    final pk = _pendingQuotePubkey;
+    final src = app.quoteSourceFor(id, quote.author, pubkey: pk);
+    if (app.quoteSourceDeleted(
+        id, pk.isNotEmpty ? pk : src?.pubkey ?? '', quote.author)) {
+      if (mounted) setState(() => _pendingQuote = null);
+      _onSystemMessage(tr(
+          'The message you were quoting was deleted, so the quote was removed.'));
+      return false;
+    }
+    if (src != null &&
+        src.isEdited &&
+        src.content.isNotEmpty &&
+        src.content != _pendingQuoteRaw &&
+        mounted) {
+      setState(() => _setQuote(quote.author, src.content, id, pk));
+    }
+    return true;
   }
 
   /// Keeps only top-level quote lines, collapses blank runs and trims.
@@ -852,30 +931,22 @@ class _ComposerState extends ConsumerState<Composer>
         if (ra != rb) return ra - rb;
         return nymOf(a).toLowerCase().compareTo(nymOf(b).toLowerCase());
       });
-    final members = <GroupInfoMember>[
-      for (final pk in sorted)
-        (
-          pubkey: pk,
-          labels: [
-            if (pk == ownerPk)
-              'owner'
-            else if (group.admins.contains(pk))
-              'admin'
-            else if (mods.contains(pk))
-              'mod',
-            if (pk == app.selfPubkey) 'you',
-          ],
-        ),
-    ];
+    final gn = ref.read(appStateProvider.notifier).groupInvitedView(group);
+    final info = buildGroupInfoPayload(
+      name: app.groupLabel(group),
+      sorted: sorted,
+      owner: ownerPk,
+      admins: group.admins,
+      mods: mods,
+      self: app.selfPubkey,
+      statusOf: gn.statusOf,
+      waiting: gn.waiting,
+    );
     ref.read(nostrControllerProvider).ensureProfiles(
         [for (final pk in sorted) if (app.personMaskLabel(pk).isEmpty) pk]);
     ref
         .read(appStateProvider.notifier)
-        .addSystemMessage(encodeGroupInfoSystemMessage((
-          name: app.groupLabel(group),
-          count: sorted.length,
-          members: members,
-        )));
+        .addSystemMessage(encodeGroupInfoSystemMessage(info));
   }
 
   void _onFocusChanged() {
@@ -884,6 +955,8 @@ class _ComposerState extends ConsumerState<Composer>
     if (_focus.hasFocus) {
       ComposerShortcutHooks.focus = _focus;
       ComposerShortcutHooks.text = _controller;
+    } else {
+      _unpark();
     }
     _keyboardClosed = false;
     if (mounted) setState(() {});
@@ -920,11 +993,27 @@ class _ComposerState extends ConsumerState<Composer>
 
   Future<SharedPreferences> _ensurePrefs() async {
     if (_prefs != null) return _prefs!;
-    final prefs = await ref.read(emojiPrefsProvider.future);
+    final stores = await ref.read(syncedStoresProvider.future);
+    final prefs = stores.prefs;
+    _stores = stores;
     _prefs = prefs;
-    _recents = EmojiRecentsStore(prefs).load();
+    _recents = stores.recents.load();
     _translateFavorites = _loadTranslateFavorites(prefs);
     return prefs;
+  }
+
+  Future<SyncedStores> _ensureStores() async {
+    await _ensurePrefs();
+    return _stores!;
+  }
+
+  void _syncedStoresChanged() {
+    final prefs = _prefs;
+    if (!mounted || prefs == null) return;
+    setState(() {
+      _recents = _stores!.recents.load();
+      _translateFavorites = _loadTranslateFavorites(prefs);
+    });
   }
 
   static List<String> _loadTranslateFavorites(SharedPreferences prefs) {
@@ -942,8 +1031,7 @@ class _ComposerState extends ConsumerState<Composer>
     final next = [..._translateFavorites];
     if (!next.remove(code)) next.add(code);
     setState(() => _translateFavorites = next);
-    _ensurePrefs().then(
-        (prefs) => prefs.setString(kTranslateFavoritesKey, jsonEncode(next)));
+    _ensureStores().then((s) => s.translateLanguages.toggle(code));
   }
 
   void _insertAtCaret(String insert) {
@@ -981,10 +1069,10 @@ class _ComposerState extends ConsumerState<Composer>
       _hideEmojiPicker();
       return;
     }
-    final prefs = await _ensurePrefs();
+    final stores = await _ensureStores();
     if (!mounted) return;
     setState(() {
-      _recents = EmojiRecentsStore(prefs).load();
+      _recents = stores.recents.load();
       _pickerTab = 'emoji';
     });
     _emojiPortal.show();
@@ -998,8 +1086,9 @@ class _ComposerState extends ConsumerState<Composer>
   Future<void> _onEmojiSelected(String emoji) async {
     _insertAtCaret(emoji);
     _emojiPortal.hide();
-    final prefs = await _ensurePrefs();
-    final next = await EmojiRecentsStore(prefs).add(emoji);
+    if (ref.read(nostrControllerProvider).anonLaneRecentsQuiet(view: ref.read(currentViewProvider))) return;
+    final stores = await _ensureStores();
+    final next = await stores.recents.add(emoji);
     if (!mounted) return;
     setState(() => _recents = next);
   }
@@ -1151,8 +1240,8 @@ class _ComposerState extends ConsumerState<Composer>
         } else if (view.kind == ViewKind.group) {
           final g = state.groups.where((g) => g.id == view.id);
           if (g.isNotEmpty) {
-            priority =
-                g.first.members.where((p) => p != state.selfPubkey).toSet();
+            priority = groupMentionPriority(
+                ref.read(appStateProvider.notifier), g.first);
           }
         }
         final results = queryMentions(
@@ -1183,7 +1272,8 @@ class _ComposerState extends ConsumerState<Composer>
         return AutocompleteView.mentions([...broadcast, ...results]);
       case TriggerKind.channel:
         return AutocompleteView.channels(
-            channelAutocompleteResults(state, trigger.query, currentKey));
+            channelAutocompleteResults(state, trigger.query, currentKey,
+                placeName: ref.read(geohashPlaceCacheProvider).nameFor));
       case TriggerKind.emoji:
         final results = queryEmoji(
           search: trigger.query,
@@ -1312,8 +1402,9 @@ class _ComposerState extends ConsumerState<Composer>
   }
 
   void unawaitedRecents(String emoji) async {
-    final prefs = await _ensurePrefs();
-    final next = await EmojiRecentsStore(prefs).add(emoji);
+    if (ref.read(nostrControllerProvider).anonLaneRecentsQuiet(view: ref.read(currentViewProvider))) return;
+    final stores = await _ensureStores();
+    final next = await stores.recents.add(emoji);
     if (!mounted) return;
     setState(() => _recents = next);
   }
@@ -1321,6 +1412,12 @@ class _ComposerState extends ConsumerState<Composer>
   /// Esc also cancels a pending edit/quote chip when no dropdown is open.
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final hk = HardwareKeyboard.instance;
+    if ((event.logicalKey == LogicalKeyboardKey.arrowUp ||
+            event.logicalKey == LogicalKeyboardKey.arrowDown) &&
+        (hk.isAltPressed || hk.isControlPressed || hk.isMetaPressed)) {
       return KeyEventResult.ignored;
     }
     if (_handleFormatShortcut(event)) return KeyEventResult.handled;
@@ -1420,6 +1517,7 @@ class _ComposerState extends ConsumerState<Composer>
     // Attachment URLs are appended here; failed tiles contribute nothing.
     final urls = attachmentUrls;
 
+    if (!_refreshQuote()) return;
     // The PWA allows sending a bare quote.
     if (typed.trim().isEmpty && urls.isEmpty && _pendingQuote == null) return;
     final blocked = controller.groupSendBlockReason(typed);
@@ -1434,12 +1532,13 @@ class _ComposerState extends ConsumerState<Composer>
       composed = '$composed${needsSpace ? ' ' : ''}${urls.join(' ')}';
     }
     final quote = _pendingQuote;
+    final quoteSource = quote != null ? _pendingQuoteId : null;
     final content = _composeOutgoing(composed);
     if (!await _consentFor(content, quote)) return;
     if (!mounted) return;
 
     // `?`/@Nymbot interception and `/` commands are handled inside sendCurrent.
-    controller.sendCurrent(content);
+    controller.sendCurrent(content, quoteSource: quoteSource);
     Haptics.light();
     // Recall history records the final content, quote prepend included.
     _pushSentHistory(content);
@@ -1505,7 +1604,9 @@ class _ComposerState extends ConsumerState<Composer>
       final quoteRest = lines.length > 1
           ? '\n${lines.skip(1).map((l) => '> $l').join('\n')}'
           : '';
-      final quoteLine = '> @${quote.author}: ${lines.first}$quoteRest';
+      final quoteLine = ref.read(nostrControllerProvider).anonLaneMessage(_pendingQuoteId)
+          ? '> ${lines.first}$quoteRest'
+          : '> @${capNym(quote.author)}: ${lines.first}$quoteRest';
       content = content.isNotEmpty ? '$quoteLine\n\n$content' : quoteLine;
       _pendingQuote = null;
     }
@@ -1521,6 +1622,7 @@ class _ComposerState extends ConsumerState<Composer>
       return;
     }
     final urls = attachmentUrls;
+    if (!_refreshQuote()) return;
     if (typed.trim().isEmpty && urls.isEmpty && _pendingQuote == null) return;
     final controller = ref.read(nostrControllerProvider);
     var composed = typed;
@@ -1561,6 +1663,7 @@ class _ComposerState extends ConsumerState<Composer>
       final needsSpace = composed.isNotEmpty && !composed.endsWith(' ');
       composed = '$composed${needsSpace ? ' ' : ''}${urls.join(' ')}';
     }
+    if (!_refreshQuote()) return;
     final quote = _pendingQuote;
     final content = _composeOutgoing(composed);
     _pendingQuote = quote;
@@ -1870,6 +1973,7 @@ class _ComposerState extends ConsumerState<Composer>
     // Lets the controller resolve sentinel chars to emoji images and recognize real `:code:`s.
     _controller.codeToUrl = _customEmojis.codeToUrl;
 
+    ref.listen(syncedStoresRevisionProvider, (_, _) => _syncedStoresChanged());
     ref.listen(pendingComposerActionProvider, (_, action) {
       if (action == null) return;
       _applyComposerAction(action);
@@ -1885,6 +1989,9 @@ class _ComposerState extends ConsumerState<Composer>
     ref.listen(currentViewProvider, (prev, next) {
       if (prev == next) return;
       _onViewSwitched(next);
+    });
+    ref.listen(appStateProvider, (_, _) {
+      if (_pendingQuote != null) _refreshQuote();
     });
 
     // `compact` spans <=1024, so the phone padding keys off the real 768px width.
@@ -2486,6 +2593,25 @@ class _ComposerState extends ConsumerState<Composer>
     );
   }
 
+  TextStyle? _lineStyle;
+  TextScaler? _lineScaler;
+  double _lineHeight = 0;
+
+  double _singleLineHeight(TextStyle style, TextScaler scaler) {
+    if (style == _lineStyle && scaler == _lineScaler) return _lineHeight;
+    final painter = TextPainter(
+      text: TextSpan(style: style),
+      strutStyle: StrutStyle.fromTextStyle(style, forceStrutHeight: true),
+      textDirection: TextDirection.ltr,
+      textScaler: scaler,
+    );
+    _lineHeight = painter.preferredLineHeight;
+    painter.dispose();
+    _lineStyle = style;
+    _lineScaler = scaler;
+    return _lineHeight;
+  }
+
   Widget _textField(
       BuildContext context, bool inputEnabled, double topRadius) {
     final c = context.nym;
@@ -2508,10 +2634,15 @@ class _ComposerState extends ConsumerState<Composer>
       math.min(math.min(visible * 0.4, 360.0), available),
     );
     // Grow to fill that box and no further.
-    final popoutLineHeight = mq.textScaler.scale(fontSize) * 1.5;
+    final lineHeight = _singleLineHeight(
+      (Theme.of(context).textTheme.bodyLarge ?? const TextStyle())
+          .copyWith(fontSize: fontSize),
+      mq.textScaler,
+    );
+    final padY = math.max(10.0, (_kControlHeight - lineHeight) / 2);
     final popoutMaxLines = math.max(
       1,
-      ((popoutMaxHeight - 20) / popoutLineHeight).floor(),
+      ((popoutMaxHeight - 2 * padY) / lineHeight).floor(),
     );
     final flatFill = c.isLight
         ? Colors.black.withValues(alpha: 0.04)
@@ -2533,6 +2664,8 @@ class _ComposerState extends ConsumerState<Composer>
     final field = ImagePasteScope(
       limit: _maxUploadBytes,
       onImage: _pasteImage,
+      child: Listener(
+      onPointerDown: (_) => _unpark(),
       child: TextField(
       // Reparent rather than remount across the popout flip, or the keyboard closes.
       key: _fieldKey,
@@ -2560,6 +2693,7 @@ class _ComposerState extends ConsumerState<Composer>
       // Deletes a hidden markdown marker as a whole rather than one invisible char at a time.
       inputFormatters: const [RichMarkerDeleteFormatter()],
       onChanged: (_) {
+        _unpark();
         _onInputChanged();
         // `sendTypingStart` self-throttles and gates itself, so calling it per keystroke is safe.
         final meshBridge = ref.read(meshControllerProvider.notifier).bridge;
@@ -2583,6 +2717,7 @@ class _ComposerState extends ConsumerState<Composer>
       cursorColor: c.isLight ? Colors.black : Colors.white,
       decoration: InputDecoration(
         isDense: true,
+        visualDensity: VisualDensity.standard,
         // Inside an open thread the composer replies into it, so the placeholder says so.
         hintText: ref.watch(activeThreadProvider) != null
             ? tr('Reply in thread...')
@@ -2599,12 +2734,12 @@ class _ComposerState extends ConsumerState<Composer>
         hoverColor: Colors.transparent,
         focusColor: Colors.transparent,
         contentPadding: EdgeInsets.fromLTRB(
-            _pillOn ? _pillTextPad : 16, 10, _pillWanted ? 16 : 38, 10),
+            _pillOn ? _pillTextPad : 16, padY, _pillWanted ? 16 : 38, padY),
         border: border,
         enabledBorder: border,
         focusedBorder: border,
       ),
-    ),
+    )),
     );
 
     Widget stack = Stack(
@@ -3275,6 +3410,7 @@ class _ComposerState extends ConsumerState<Composer>
     }
     final typed = _draftText();
     final urls = attachmentUrls;
+    if (!_refreshQuote()) return;
     if (typed.trim().isEmpty && urls.isEmpty && _pendingQuote == null) return;
     var composed = typed;
     if (urls.isNotEmpty) {
@@ -3283,6 +3419,7 @@ class _ComposerState extends ConsumerState<Composer>
     }
     final quote = _pendingQuote;
     final quoteId = _pendingQuoteId;
+    final quotePk = _pendingQuotePubkey;
     final content = _composeOutgoing(composed);
     final controller = ref.read(nostrControllerProvider);
     _pushSentHistory(content);
@@ -3297,11 +3434,12 @@ class _ComposerState extends ConsumerState<Composer>
     final result =
         await controller.sendChannelAs(accountId, content, draft: composed);
     if (!mounted) return;
-    _onSendAsResult(result, composed, quote, quoteId);
+    _onSendAsResult(result, composed, quote, quoteId, quotePk);
   }
 
   bool _restoreSendAsDraft(String composed,
-      ({String author, String text, String fullText})? quote, String quoteId) {
+      ({String author, String text, String fullText})? quote, String quoteId,
+      String quotePk) {
     if (_controller.text.isNotEmpty || _pendingQuote != null) return false;
     _controller.value = TextEditingValue(
       text: composed,
@@ -3309,6 +3447,7 @@ class _ComposerState extends ConsumerState<Composer>
     );
     _pendingQuote = quote;
     _pendingQuoteId = quoteId;
+    _pendingQuotePubkey = quotePk;
     _onInputChanged();
     setState(() {});
     return true;
@@ -3318,19 +3457,25 @@ class _ComposerState extends ConsumerState<Composer>
       SendAsResult result,
       String composed,
       ({String author, String text, String fullText})? quote,
-      String quoteId) {
+      String quoteId,
+      String quotePk) {
     if (result.ok) {
       Haptics.light();
       showToast(tr(SendAsStrings.sentAs, {'nym': result.label}),
           kind: ToastKind.success);
       return;
     }
-    final back = _restoreSendAsDraft(composed, quote, quoteId);
+    final back = _restoreSendAsDraft(composed, quote, quoteId, quotePk);
     if (result.status == 'failed') {
       final placeholder = result.placeholder;
       if (placeholder.isNotEmpty) {
         ComposerDrafts.failedSendAs[placeholder] =
-            (composed: composed, quote: quote, quoteId: quoteId);
+            (
+              composed: composed,
+              quote: quote,
+              quoteId: quoteId,
+              quotePubkey: quotePk
+            );
       }
       _sendAsFailedToast(result.label, placeholder, back);
       return;
@@ -3370,7 +3515,8 @@ class _ComposerState extends ConsumerState<Composer>
       final back = mounted &&
           draft != null &&
           (_controller.text == draft.composed ||
-              _restoreSendAsDraft(draft.composed, draft.quote, draft.quoteId));
+              _restoreSendAsDraft(draft.composed, draft.quote, draft.quoteId,
+                  draft.quotePubkey));
       _sendAsFailedToast(result.label, placeholder, back);
       return;
     }
@@ -3396,7 +3542,8 @@ class _ComposerState extends ConsumerState<Composer>
     ref.read(appStateProvider.notifier).dropSendAsPlaceholder(placeholder);
     if (text == null || text.isEmpty) return;
     if (_controller.text.trim().isEmpty && _pendingQuote == null) {
-      _restoreSendAsDraft(text, draft?.quote, draft?.quoteId ?? '');
+      _restoreSendAsDraft(text, draft?.quote, draft?.quoteId ?? '',
+          draft?.quotePubkey ?? '');
       return;
     }
     if (_controller.text.contains(text)) return;
@@ -3458,7 +3605,7 @@ class _ComposerState extends ConsumerState<Composer>
 
   Widget _pickerOverlay(BuildContext context) {
     final tabs = PickerTabs(active: _pickerTab, onSelect: _switchPickerTab);
-    final gif = _pickerTab == 'gif' && _prefs != null;
+    final gif = _pickerTab == 'gif' && _stores != null;
     final media = MediaQuery.of(context);
     final isPhone = media.size.width <= NymDimens.mobileBreakpoint;
     final inBar = _pillWanted ? globalRectOf(_toolbarEmojiKey) : null;
@@ -3493,7 +3640,7 @@ class _ComposerState extends ConsumerState<Composer>
       child: gif
           ? GifPicker(
               key: const ValueKey('gifPicker'),
-              favoritesStore: FavoriteGifsStore(_prefs!),
+              favoritesStore: _stores!.gifs,
               onSelect: _onGifSelected,
               onClose: _hideEmojiPicker,
               tabs: tabs,
@@ -3570,6 +3717,10 @@ class _ComposerState extends ConsumerState<Composer>
   }
 }
 
+const double _kControlBorder = 1;
+const double _kControlInner = 42;
+const double _kControlHeight = _kControlInner + 2 * _kControlBorder;
+
 class _IconBtn extends StatefulWidget {
   const _IconBtn({
     super.key,
@@ -3639,7 +3790,7 @@ class _IconBtnState extends State<_IconBtn> {
           decoration: BoxDecoration(
             color: shownFill,
             borderRadius: NymRadius.rsm,
-            border: Border.all(color: shownBorder),
+            border: Border.all(color: shownBorder, width: _kControlBorder),
             boxShadow: hovered && keep > 0.5
                 ? [BoxShadow(color: c.primaryA(0.10), blurRadius: 15)]
                 : null,
@@ -3653,7 +3804,7 @@ class _IconBtnState extends State<_IconBtn> {
               excludeFromSemantics: true,
               borderRadius: NymRadius.rsm,
               child: Container(
-                height: 42,
+                height: _kControlInner,
                 constraints: const BoxConstraints(minWidth: 42),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 alignment: Alignment.center,
@@ -3829,7 +3980,7 @@ class _SendButtonState extends State<_SendButton> {
                         radius: left,
                         width: NymFocusable.ringWidth,
                         child: Container(
-                          height: 42 - 2 * widget.inset,
+                          height: _kControlInner - 2 * widget.inset,
                           padding: const EdgeInsets.symmetric(horizontal: 14),
                           alignment: Alignment.center,
                           child: NymSvgIcon(ComposerIcons.paperPlane,
@@ -3870,7 +4021,7 @@ class _SendButtonState extends State<_SendButton> {
               borderRadius: right,
               child: SizedBox(
                 width: 24,
-                height: 42 - 2 * widget.inset,
+                height: _kControlInner - 2 * widget.inset,
                 child: Center(
                   child: NymSvgIcon(ComposerIcons.chevronUp,
                       size: 14, color: c.primary),
@@ -4050,6 +4201,7 @@ class _QuotePreviewChip extends ConsumerWidget {
                     seed: t.pubkey,
                     size: 12,
                     imageUrl: users[t.pubkey]?.profile?.picture,
+                    ring: context.nym.avatarRing,
                   ),
                 ),
               Flexible(
@@ -4750,7 +4902,11 @@ class _InputMentionChip extends ConsumerWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        NymAvatar(seed: pubkey, size: size, imageUrl: picture),
+        NymAvatar(
+            seed: pubkey,
+            size: size,
+            imageUrl: picture,
+            ring: context.nym.avatarRing),
         const SizedBox(width: 3),
         Text.rich(
           TextSpan(

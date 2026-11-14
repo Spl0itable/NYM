@@ -296,12 +296,14 @@
             this.gcsTargetFpr = opts.gcsTargetFpr || GCS_TARGET_FPR;
             this.syncIntervalMs = opts.syncIntervalMs || SYNC_INTERVAL_MS;
             this.responseRateLimitMs = opts.responseRateLimitMs || RESPONSE_RATE_LIMIT_MS;
+            this.refuses = typeof opts.refuses === 'function' ? opts.refuses : null;
             // idHex -> { packet, hash }
             this.messages = new Map();
             // senderHex -> { packet, hash }
             this.announces = new Map();
             // senderHex -> { packet, hash }; one bundle per device, newest only.
             this.prekeyBundles = new Map();
+            this.refused = new Map();
             this.lastAsked = new Map();
             this.lastAnswered = new Map();
         }
@@ -321,6 +323,10 @@
             if (isBroadcastFn && !isBroadcastFn(packet)) return false;
             if (!isSyncable(packet.type)) return false;
             if (!this._fresh(packet)) return false;
+            if (this.refuses && this.refuses(packet)) {
+                await this.noteRefused(packet);
+                return false;
+            }
             const id = await packetId(packet);
             const hash = await h64(id);
             if (packet.type === 0x01) {
@@ -344,6 +350,17 @@
             return true;
         }
 
+        async noteRefused(packet) {
+            if (!this._fresh(packet)) return;
+            const id = await packetId(packet);
+            const key = hexOf(id);
+            if (this.refused.has(key)) return;
+            this.refused.set(key, { packet: { type: packet.type, timestamp: packet.timestamp }, hash: await h64(id) });
+            while (this.refused.size > this.capacity) {
+                this.refused.delete(this.refused.keys().next().value);
+            }
+        }
+
         /// Drops what has aged out. Returns whether anything went.
         prune() {
             const size = () => this.messages.size + this.announces.size + this.prekeyBundles.size;
@@ -351,6 +368,7 @@
             for (const [k, v] of [...this.messages]) if (!this._fresh(v.packet)) this.messages.delete(k);
             for (const [k, v] of [...this.announces]) if (!this._fresh(v.packet)) this.announces.delete(k);
             for (const [k, v] of [...this.prekeyBundles]) if (!this._fresh(v.packet)) this.prekeyBundles.delete(k);
+            for (const [k, v] of [...this.refused]) if (!this._fresh(v.packet)) this.refused.delete(k);
             return size() !== before;
         }
 
@@ -381,6 +399,10 @@
             }
             if (syncFlagsContains(want, 0x24)) {
                 for (const v of this.prekeyBundles.values()) if (this._fresh(v.packet)) candidates.push(v);
+            }
+            for (const v of this.refused.values()) {
+                const t = v.packet.type;
+                if (syncFlagsContains(want, t === 0x01 || t === 0x24 ? t : 0x02) && this._fresh(v.packet)) candidates.push(v);
             }
             candidates.sort((a, b) => b.packet.timestamp - a.packet.timestamp);
             if (!candidates.length) {

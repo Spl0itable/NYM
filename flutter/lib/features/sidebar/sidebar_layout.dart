@@ -77,5 +77,8 @@ final sidebarSectionOrderProvider =
   ref.watch(bootEpochProvider);
   final kv = ref.watch(keyValueStoreProvider);
   return SidebarSectionOrder(
-      kv, () => ref.read(settingsProvider.notifier).pushSyncedChange());
+      kv,
+      () => ref
+          .read(settingsProvider.notifier)
+          .notePrefChanged('sidebarSectionOrder'));
 });

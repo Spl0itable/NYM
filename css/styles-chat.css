@@ -626,6 +626,8 @@
 
 .reactors-modal-list {
     overflow-y: auto;
+    overscroll-behavior: contain;
+    min-height: 0;
     padding: 4px 0;
 }
 
@@ -766,7 +768,7 @@
     height: 14px;
     border-radius: 50%;
     object-fit: cover;
-    border: 1.5px solid var(--bg-primary, var(--background, #000));
+    border: 1.5px solid var(--avatar-ring);
     opacity: 0.85;
     transition: opacity 0.15s;
 }
@@ -808,6 +810,11 @@
 
 .delivery-status.sent {
     color: var(--text-dim);
+}
+
+.delivery-status.sending {
+    color: var(--text-dim);
+    opacity: 0.8;
 }
 
 .delivery-status .delivery-ticks {
@@ -858,6 +865,49 @@
 
 :is(.pm-name, .uh-title, .row-preview, .mesh-row-name, .us-sender, .us-name, .nym-value, .msg-sheet-author, .group-ctx-member-name, .ch-name, .nym-toast-title) .nym-suffix {
     display: inline-block;
+}
+
+.nym-sq {
+    display: inline-grid;
+    grid-template-columns: minmax(auto, max-content) max-content;
+    align-items: baseline;
+    max-width: 100%;
+    white-space: nowrap;
+    unicode-bidi: isolate;
+}
+
+.nym-sq[data-f]::before {
+    content: attr(data-f) "\2026";
+    grid-area: 1 / 1;
+    align-self: start;
+    height: 0;
+    overflow: visible;
+    visibility: hidden;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.nym-sq > .nym-b {
+    grid-area: 1 / 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nym-sq:not([data-f]) > .nym-b {
+    min-width: max-content;
+}
+
+.nym-sq > .nym-suffix {
+    grid-area: 1 / 2;
+}
+
+:is(.typing-indicator-text, .nym-toast-title):has(> .nym-sq) {
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
+    white-space: pre;
 }
 
 .uh-title:has(> .pm-name-text) {
@@ -935,7 +985,8 @@
     background: rgba(255, 255, 255, 0.14);
 }
 
-.message-author.self {
+.message-author.self,
+.ps-who.self {
     color: var(--primary);
 }
 
@@ -2082,6 +2133,7 @@ body.chat-bubbles .read-more-btn {
 
 .nm-mention {
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .message-content h1,
@@ -2196,6 +2248,12 @@ body.chat-bubbles .read-more-btn {
     white-space: nowrap;
     z-index: 20;
     pointer-events: none;
+}
+
+.bitchat-verify-link {
+    color: var(--text-dim);
+    font-style: italic;
+    cursor: default;
 }
 
 .game-token {
@@ -6319,4 +6377,80 @@ body:has(#gtCallLinksModal.active):has(.call-overlay.active) #appDialogModal.act
 
 .system-message.cf-hidden-row {
     display: none;
+}
+
+.gi-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    margin-bottom: 6px;
+}
+
+.gi-row[hidden] {
+    display: none;
+}
+
+.gi-row:hover,
+.gi-row:focus-visible {
+    border-color: var(--primary);
+}
+
+.gi-row-icon {
+    display: inline-flex;
+    color: var(--primary);
+}
+
+.gi-row-label {
+    flex: 1;
+}
+
+.gi-row-count {
+    min-width: 22px;
+    padding: 0 6px;
+    border-radius: 11px;
+    border: 1px solid var(--primary);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 20px;
+    text-align: center;
+}
+
+.gi-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.gi-card .gt-inv-actions button,
+.gi-menu button {
+    min-height: 44px;
+    min-width: 44px;
+}
+
+.gi-menu {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.gi-menu[hidden] {
+    display: none;
+}
+
+#gtGroupInvitesModal .modal-close {
+    width: 44px;
+    height: 44px;
 }

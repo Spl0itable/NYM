@@ -215,7 +215,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _cvSeedDefaults() {
+    _cvSeedDefaults(opts) {
         const pmOnly = this.settings && this.settings.groupChatPMOnlyMode;
         const descs = pmOnly ? [] : [{ type: 'channel', channel: 'nymchat', geohash: 'nymchat' }];
         const pm = this._cvMostRecent(this.pmConversations);
@@ -224,7 +224,7 @@ Object.assign(NYM.prototype, {
         if (grp) descs.push({ type: 'group', groupId: grp.key });
         for (const d of descs) this.cvAddColumn(d, { render: false, save: false, focus: false });
         this._cvSeeded = true;
-        this._cvSaveLayout();
+        if (!opts || opts.save !== false) this._cvSaveLayout();
     },
 
     _cvDescHidden(desc, includeHidden) {
@@ -435,18 +435,21 @@ Object.assign(NYM.prototype, {
         this._cvRecheckShown();
     },
 
-    cvResetColumns() {
+    cvResetColumns(opts) {
+        const quiet = !!(opts && opts.fromSync === true);
         try { localStorage.removeItem('nym_columns_layout'); } catch (_) { }
         this.columnsLayout = [];
         this._cvSeeded = false;
+        if (!quiet && typeof this._colNoteReset === 'function') this._colNoteReset(Date.now());
+        if (!quiet && typeof this.notePrefChanged === 'function') this.notePrefChanged('columnsLayout');
         if (!this._cvActive) {
-            if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
+            if (!quiet && typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
             return;
         }
         for (const c of [...this._cvColumns]) { if (c._observer) c._observer.disconnect(); if (c.el) c.el.remove(); }
         this._cvColumns = [];
         this._cvKeyToList.clear();
-        this._cvSeedDefaults();
+        this._cvSeedDefaults({ save: !quiet });
         this._cvRenderAll();
         const firstChannel = this._cvColumns.find(c => c.type === 'channel');
         this._cvPrimaryId = firstChannel ? firstChannel.id : null;
@@ -491,7 +494,7 @@ Object.assign(NYM.prototype, {
         scrollBtn.className = 'cv-scroll-bottom';
         scrollBtn.title = 'Scroll to bottom';
         scrollBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
-        scrollBtn.addEventListener('click', (e) => { e.stopPropagation(); scroller.scrollTo({ top: 0, behavior: 'smooth' }); });
+        scrollBtn.addEventListener('click', (e) => { e.stopPropagation(); if (typeof this._cnUnpin === 'function') this._cnUnpin(col.key); scroller.scrollTo({ top: 0, behavior: 'smooth' }); });
         const fabRow = document.createElement('div');
         fabRow.className = 'cn-fabs cn-fabs-col';
         fabRow.appendChild(scrollBtn);
@@ -522,12 +525,12 @@ Object.assign(NYM.prototype, {
         let pending = false;
         col._observer = new MutationObserver((mutations) => {
             if (this.settings && this.settings.autoscroll === false) return;
-            if (!col._atBottom || pending) return;
+            if (!col._atBottom || pending || this._readerAwayOn(col.scrollerEl)) return;
             if (!mutations.some(m => m.addedNodes && m.addedNodes.length)) return;
             pending = true;
             requestAnimationFrame(() => {
                 pending = false;
-                if (col._atBottom && col.scrollerEl) col.scrollerEl.scrollTop = 0;
+                if (col._atBottom && col.scrollerEl && !this._readerAwayOn(col.scrollerEl)) col.scrollerEl.scrollTop = 0;
             });
         });
         col._observer.observe(col.listEl, { childList: true });
@@ -581,7 +584,7 @@ Object.assign(NYM.prototype, {
             : this.isVerifiedBot(pubkey)
                 ? `<span class="verified-badge" data-tip="${this.verifiedBot.title}">✓</span>`
                 : '';
-        return `${title}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
+        return `${window.NymSuffix.sqHtml(this._cvColTitle(col), suffix)}${flairHtml}${verifiedBadge}${friendBadge}`;
     },
 
     // A column title is otherwise composed only at build/navigate; pass [pubkey] to limit to that peer.
@@ -813,12 +816,13 @@ Object.assign(NYM.prototype, {
     },
 
     _cvAttachColumnScroll(col) {
+        this._readerTrack(col.scrollerEl);
         let pending = false;
         const handler = () => {
             const sc = col.scrollerEl;
             const distanceFromBottom = Math.abs(sc.scrollTop);
             const wasBottom = col._atBottom;
-            col._atBottom = distanceFromBottom < 120;
+            col._atBottom = distanceFromBottom < 120 && !this._readerAwayOn(sc);
             if (col._atBottom && !wasBottom) this._cvMarkColumnRead(col.key);
             if (col.scrollBtn) col.scrollBtn.classList.toggle('visible', distanceFromBottom > 150);
             const distanceFromTop = (sc.scrollHeight - sc.clientHeight) - distanceFromBottom;
@@ -1165,10 +1169,61 @@ Object.assign(NYM.prototype, {
     },
 
     _cvSaveLayout() {
+        if (typeof this._colEnsure === 'function') this._colEnsure();
         const data = this._cvColumns.map(c => this._cvDescForSave(c));
+        const prev = Array.isArray(this.columnsLayout) ? this.columnsLayout : [];
+        const changed = JSON.stringify(data) !== JSON.stringify(prev);
+        const quiet = changed && this._cvQuietLayoutChange(prev, data);
         try { localStorage.setItem('nym_columns_layout', JSON.stringify(data)); } catch (_) { }
         this.columnsLayout = data;
-        if (typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
+        if (quiet) {
+            if (!this._applyingRemoteSettings && typeof this._prefStampSet === 'function') this._prefStampSet('columnsLayout', Date.now());
+        } else if (changed && typeof this.notePrefChanged === 'function') this.notePrefChanged('columnsLayout');
+        if (typeof this._colNote === 'function') this._colNote(data);
+        if (!quiet && typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
+    },
+
+    _cvQuietLayoutChange(prev, next) {
+        if (typeof this._readMarkQuiet !== 'function') return false;
+        const quietKeys = (list) => JSON.stringify(list.filter(d => d && d.type === 'pm' && this._readMarkQuiet(d.pubkey)).map(d => d.pubkey).sort());
+        return quietKeys(prev) !== quietKeys(next);
+    },
+
+    _cvApplySyncedLayout() {
+        if (!this._cvActive) return;
+        const want = [];
+        for (const d of (Array.isArray(this.columnsLayout) ? this.columnsLayout : [])) {
+            const desc = this._cvNormaliseDesc(d);
+            const key = desc && this._cvColKey(desc);
+            if (key && !want.some(w => w.key === key)) want.push({ key, desc });
+        }
+        if (!want.length) { this.cvResetColumns({ fromSync: true }); return; }
+        const keys = want.map(w => w.key);
+        if (keys.join('\n') === this._cvColumns.map(c => c.key).join('\n')) return;
+        const focused = this._cvColumns.find(c => c.id === this._cvFocusedId);
+        const focusAt = Math.max(0, this._cvColumns.indexOf(focused));
+        for (const c of [...this._cvColumns]) {
+            if (keys.includes(c.key)) continue;
+            this._cvKeyToList.delete(c.key);
+            if (c._observer) c._observer.disconnect();
+            if (c.el) c.el.remove();
+            this._cvColumns.splice(this._cvColumns.indexOf(c), 1);
+            if (this._cvPrimaryId === c.id) this._cvPrimaryId = null;
+        }
+        for (const w of want) {
+            if (!this._cvColumns.some(c => c.key === w.key)) this.cvAddColumn(w.desc, { save: false, focus: false });
+        }
+        this._cvColumns.sort((a, b) => keys.indexOf(a.key) - keys.indexOf(b.key));
+        const addBtn = this._cvStrip && this._cvStrip.querySelector('.cv-add-column');
+        if (this._cvStrip) for (const c of this._cvColumns) if (c.el) this._cvStrip.insertBefore(c.el, addBtn || null);
+        if (!this._cvPrimaryId) {
+            const ch = this._cvColumns.find(c => c.type === 'channel');
+            this._cvPrimaryId = ch ? ch.id : null;
+        }
+        const keep = (focused && this._cvColumns.includes(focused)) ? focused : this._cvColumns[Math.min(focusAt, this._cvColumns.length - 1)];
+        if (keep && keep !== focused) this._cvFocusColumn(keep.id);
+        this._cvRebuildHeaderDots();
+        this._cvRecheckShown();
     },
 
     _cvLoadLayout() {

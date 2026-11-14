@@ -1,4 +1,6 @@
 import { ledgerCall } from "./_ledger.js";
+import { archiveChannelKey } from "./_channel-key.js";
+import { isEncryptedBlobChannelEvent } from "./_encrypted-blob.js";
 import { closestRelayUrls, loadGeoDirectory } from "./_georelays.js";
 import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
 import { translateText } from "./_translate.js";
@@ -177,6 +179,7 @@ async function publishEventToRelays(evt) {
 }
 
 async function botPublishChannelReply(evt, channelKey) {
+  if (isEncryptedBlobChannelEvent(evt)) return false;
   var urls = FETCH_RELAYS.slice();
   if (isGeohashName(channelKey)) {
     var near = [];
@@ -5548,6 +5551,39 @@ function botAskerTag(askerPubkey, senderNym) {
 var BOT_NYM_MAX = 20;
 var BOT_NYM_MENTION_RE = /@nymbot(?:#[a-f0-9]{4})?/gi;
 
+function botCapNym(nym) {
+  if (typeof nym !== "string") return nym;
+  var m = nym.match(/^([\s\S]*)#([0-9a-f]{4})$/i);
+  var base = (m ? m[1] : nym).replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "");
+  if (base.length > BOT_NYM_MAX) {
+    var end = 0;
+    if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+      if (!botCapNym.seg) botCapNym.seg = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+      for (var g of botCapNym.seg.segment(base)) {
+        if (g.index + g.segment.length > BOT_NYM_MAX) break;
+        end = g.index + g.segment.length;
+      }
+    } else {
+      var ri = /^[\u{1f1e6}-\u{1f1ff}]/u;
+      var joins = function (i) {
+        var c = base.charCodeAt(i);
+        if (c >= 0xdc00 && c <= 0xdfff && base.charCodeAt(i - 1) >= 0xd800 && base.charCodeAt(i - 1) <= 0xdbff) return true;
+        var at = base.slice(i, i + 2);
+        if (/^(?:\p{M}|[\u200d\u{1f3fb}-\u{1f3ff}\u{e0020}-\u{e007f}])/u.test(at)) return true;
+        if (base.charCodeAt(i - 1) === 0x200d && /^\p{Extended_Pictographic}/u.test(at)) return true;
+        if (!ri.test(at)) return false;
+        var n = 0;
+        for (var j = i - 2; j >= 0 && ri.test(base.slice(j, j + 2)); j -= 2) n++;
+        return n % 2 === 1;
+      };
+      end = BOT_NYM_MAX;
+      while (end > 0 && joins(end)) end--;
+    }
+    base = base.slice(0, end).replace(/\s+$/, "");
+  }
+  return m ? base + "#" + m[2] : base;
+}
+
 function botSenderNym(senderNym) {
   if (typeof senderNym !== "string" || senderNym.length > BOT_NYM_MAX + 5) return undefined;
   var m = senderNym.match(/^([\s\S]*)#[0-9a-f]{4}$/i);
@@ -5831,7 +5867,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "A: No. Each session generates a random nym (identity). Just open the app and start chatting.",
   "",
   "Q: How do I save my identity?",
-  "A: Click your nym in the sidebar > Profile Edit Modal > 'Reveal this nym's private key' > copy your nsec and store it safely. To restore: click the ASCII logo > Nostr Login Modal > paste your nsec.",
+  "A: Click your nym in the sidebar > Profile Edit Modal > private key section (shown when the modal opens) > copy your nsec and store it safely. To restore: click the ASCII logo > Nostr Login Modal > paste your nsec.",
   "",
   "Q: How do I encrypt or protect my saved identity key?",
   "A: Turn on Identity Encryption in Settings > Privacy & Security > 'Encrypt identity (nsec) key on this device…'. Pick a password, PIN, passkey, or biometric (Face/Touch ID). Your saved nsec is then stored encrypted and you'll be asked to unlock on each launch. It's off by default and protects the key at rest on that one device. If you forget your password/passkey you can 'Forget identity' to wipe it and start fresh — the encrypted key is unrecoverable, so keep a separate nsec backup.",
@@ -5912,7 +5948,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Banner: click 'Choose banner' to upload a banner image",
   "- Bio: text area (max 150 chars)",
   "- Lightning Address: your Bitcoin Lightning address for receiving zaps",
-  "- 'Reveal this nym's private key' expandable section:",
+  "- Private key section, shown as soon as the modal opens:",
   "  - Shows your nsec (Nostr secret key) — view-only, with eye toggle and copy button",
   "  - IMPORTANT: This is for VIEWING/COPYING your nsec to back it up. To LOGIN with an nsec, use the Nostr Login Modal (click ASCII logo)",
   "- Buttons: Randomize (new random nym), Cancel, Change (saves profile to Nostr)",
@@ -5959,7 +5995,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "=== IDENTITY & PRIVACY ===",
   "Each session creates a fresh Nostr keypair. Your nym is random and pseudonymous by default.",
   "Change your nym: type /nick <newname> in chat, or click your nym > Profile Edit Modal > edit Nickname > click 'Change'.",
-  "To SAVE your identity: click your nym > Profile Edit Modal > expand 'Reveal this nym's private key' > copy your nsec and store it safely (e.g. password manager).",
+  "To SAVE your identity: click your nym > Profile Edit Modal > private key section > copy your nsec and store it safely (e.g. password manager).",
   "To RESTORE/LOGIN with a saved identity: click the ASCII logo at the top of the sidebar > Nostr Login Modal > paste your nsec.",
   "You can also login with a Nostr browser extension (Alby, nos2x) via the same Nostr Login Modal.",
   "Messages use Nostr ephemeral events (kind 20000) so relays do not store them long-term.",
@@ -6199,7 +6235,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Multiple relays for redundancy. Nostr is censorship-resistant — no central server.",
   "",
   "=== IMPORTANT REMINDERS ===",
-  "- To VIEW/COPY your nsec: click your nym > Profile Edit Modal > 'Reveal this nym's private key'",
+  "- To VIEW/COPY your nsec: click your nym > Profile Edit Modal > private key section",
   "- To LOGIN with an nsec: click the ASCII logo > Nostr Login Modal > paste nsec",
   "- To change settings: click 'Settings' button in sidebar > Settings modal",
   "- Lightning address is in Settings (NOT in Profile Edit Modal)",
@@ -8750,7 +8786,7 @@ async function fetchRecentEvents(filter, timeoutMs) {
 
 function extractNym(event) {
   var nTag = event.tags ? event.tags.find(function(t) { return t[0] === "n"; }) : null;
-  return nTag ? nTag[1] : null;
+  return nTag ? botCapNym(nTag[1]) : null;
 }
 
 function extractGeohash(event) {
@@ -8813,7 +8849,9 @@ async function fetchChannelEventsFromD1(context, kinds, since, limit, channel, h
     var binds = kinds.slice();
     binds.push(since);
     binds.push(since * 1000);
-    if (channel) { where.push("channel = ?"); binds.push(String(channel).toLowerCase()); }
+    var chKey = channel ? String(channel).toLowerCase() : "";
+    if (chKey.length > 80) chKey = archiveChannelKey(chKey.replace(/[^\p{L}\p{N}_\-.]/gu, ""));
+    if (channel) { where.push("channel = ?"); binds.push(chKey); }
     binds.push(limit || 1000);
     var rows = (await replica(env.DB_CHANNELS).prepare(
       "SELECT id, pubkey, json, stored_at FROM events WHERE " + where.join(" AND ") +
@@ -8821,7 +8859,7 @@ async function fetchChannelEventsFromD1(context, kinds, since, limit, channel, h
     ).bind(...binds).all()).results || [];
     var gate = await filterSet(env);
     if (gate.n) rows = rows.filter(function (r) { return botKeepRow(hiddenInto, r, rowHit(gate, r)); });
-    var hidden = await hiddenAmong(env, channel ? [String(channel).toLowerCase()] : [], since * 1000 - 3600000, rows.map(function (r) { return r.id; }));
+    var hidden = await hiddenAmong(env, channel ? [chKey] : [], since * 1000 - 3600000, rows.map(function (r) { return r.id; }));
     if (!hidden.ok) return null;
     if (hidden.hidden.size) rows = rows.filter(function (r) { return botKeepRow(hiddenInto, r, hidden.hidden.has(r.id)); });
     var flagged = await botFlaggedSenders(context);
@@ -8830,7 +8868,7 @@ async function fetchChannelEventsFromD1(context, kinds, since, limit, channel, h
     for (var i = 0; i < rows.length; i++) {
       try {
         var e = JSON.parse(rows[i].json);
-        if (!e) continue;
+        if (!e || isEncryptedBlobChannelEvent(e)) continue;
         if (typeof rows[i].stored_at === "number" && rows[i].stored_at > 0) e.stored_at = rows[i].stored_at;
         events.push(e);
       } catch (_) { }

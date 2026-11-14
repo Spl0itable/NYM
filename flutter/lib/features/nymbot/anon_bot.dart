@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import '../../core/crypto/keys.dart';
@@ -12,8 +14,71 @@ import 'nymbot_models.dart';
 import 'nymbot_service.dart';
 
 const int kAnonPrevMax = 4;
+const int kAnonRunLanesMax = 64;
 const int kAnonAnnounceTtlSec = 7 * 24 * 3600;
 const int kAnonTokenMax = 200;
+const int kAnonQuietMs = 10 * 60 * 1000;
+const int kAnonSyncMinMs = 15 * 60 * 1000;
+const int kAnonSyncSpanMs = 30 * 60 * 1000;
+
+Map<String, Object?> settleAnonKeys(
+    Map<String, dynamic> local, Map<String, dynamic> incoming, int max) {
+  final cap = max > 0 ? max : 4;
+  ({String? current, List<String> prev, num at}) norm(Map<String, dynamic> side) {
+    final cur = side['current'];
+    final rawAt = side['createdAt'];
+    final rawPrev = side['prev'];
+    final prev = <String>[
+      if (rawPrev is List)
+        for (final p in rawPrev)
+          if (p is String && p.isNotEmpty) p.toLowerCase(),
+    ];
+    return (
+      current: cur is String && cur.isNotEmpty ? cur.toLowerCase() : null,
+      prev: prev,
+      at: rawAt is num && rawAt > 0 ? rawAt : 0,
+    );
+  }
+
+  List<String> uniq(List<String?> list, String? skip) {
+    final out = <String>[];
+    for (final pk in list) {
+      if (pk != null && pk != skip && !out.contains(pk)) out.add(pk);
+    }
+    return out.take(cap).toList();
+  }
+
+  final l = norm(local);
+  final i = norm(incoming);
+  if (i.current == null) {
+    return {'current': l.current, 'prev': uniq(l.prev, l.current), 'loser': null, 'rule': 'keep'};
+  }
+  if (l.current == null) {
+    return {'current': i.current, 'prev': uniq(i.prev, i.current), 'loser': null, 'rule': 'adopt'};
+  }
+  if (l.current == i.current) {
+    return {
+      'current': l.current,
+      'prev': uniq([...l.prev, ...i.prev], l.current),
+      'loser': null,
+      'rule': 'same',
+    };
+  }
+  final iNext = i.prev.contains(l.current);
+  final lNext = l.prev.contains(i.current);
+  final aged = iNext && lNext && i.at > 0 && l.at > 0 && i.at != l.at;
+  final takeIncoming = iNext != lNext
+      ? iNext
+      : (aged ? i.at > l.at : i.current!.compareTo(l.current!) < 0);
+  final w = takeIncoming ? i : l;
+  final x = takeIncoming ? l : i;
+  return {
+    'current': w.current,
+    'prev': uniq([x.current, ...w.prev, ...x.prev], w.current),
+    'loser': x.current,
+    'rule': iNext != lNext ? 'next' : (iNext ? 'newer' : 'lower'),
+  };
+}
 
 class AnonBotIdentity {
   const AnonBotIdentity({
@@ -179,13 +244,24 @@ class AnonBotState {
     List<AnonBotIdentity>? prev,
     List<AnonVoucherToken>? tokens,
     this.pending,
+    this.unsent = false,
+    this.sent = false,
+    this.quietAt = 0,
+    this.sweepDue = false,
+    List<String>? runs,
   })  : prev = prev ?? <AnonBotIdentity>[],
-        tokens = tokens ?? <AnonVoucherToken>[];
+        tokens = tokens ?? <AnonVoucherToken>[],
+        runs = runs ?? <String>[];
 
   AnonBotIdentity? current;
   List<AnonBotIdentity> prev;
   List<AnonVoucherToken> tokens;
   AnonVoucherRequest? pending;
+  bool unsent;
+  bool sent;
+  int quietAt;
+  bool sweepDue;
+  List<String> runs;
 
   static AnonBotState? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -212,8 +288,26 @@ class AnonBotState {
       prev: prev,
       tokens: tokens,
       pending: AnonVoucherRequest.fromJson(raw['pending']),
+      unsent: raw['unsent'] == true,
+      sent: raw['sent'] == true,
+      quietAt: (raw['quietAt'] as num?)?.toInt() ?? 0,
+      sweepDue: raw['sweepDue'] == true,
+      runs: [
+        if (raw['runs'] is List)
+          for (final r in raw['runs'] as List)
+            if (r is String && r.isNotEmpty) r,
+      ].take(kAnonRunLanesMax).toList(),
     );
   }
+
+  Map<String, dynamic> toLocalJson() => {
+        ...toJson(),
+        'unsent': unsent,
+        'sent': sent,
+        'quietAt': quietAt,
+        'sweepDue': sweepDue,
+        if (runs.isNotEmpty) 'runs': runs.take(kAnonRunLanesMax).toList(),
+      };
 
   Map<String, dynamic> toJson() => {
         'current': current?.toJson(),
@@ -258,6 +352,87 @@ class AnonBotManager {
   void Function()? onKeysChanged;
   void Function()? requestSync;
   Future<void> Function(String message)? onNotice;
+  int Function() nowMs = () => DateTime.now().millisecondsSinceEpoch;
+  Future<int> Function()? settleSweep;
+  Timer? _syncTimer;
+  int? _syncDue;
+  Timer? _sweepTimer;
+  static final Random _rng = Random.secure();
+
+  int? get scheduledSyncAt => _syncDue;
+  bool get unsent => _state?.unsent ?? false;
+  bool get syncHeld {
+    final st = _state;
+    return st != null && st.unsent && nowMs() - st.quietAt < kAnonQuietMs;
+  }
+
+  int _syncDelayMs() => kAnonSyncMinMs + _rng.nextInt(kAnonSyncSpanMs);
+
+  void _armSync() {
+    _syncTimer?.cancel();
+    _syncTimer = null;
+    _syncDue = null;
+    final st = _state;
+    if (st == null || st.current == null || !st.unsent) return;
+    final delay = _syncDelayMs();
+    _syncDue = nowMs() + delay;
+    _syncTimer = Timer(Duration(milliseconds: delay), () {
+      _syncTimer = null;
+      _syncDue = null;
+      if (!identical(_state, st) || !st.unsent) return;
+      if (syncHeld) {
+        _armSync();
+        return;
+      }
+      requestSync?.call();
+      _armSync();
+    });
+  }
+
+  void _armSweep() {
+    _sweepTimer?.cancel();
+    _sweepTimer = null;
+    final st = _state;
+    if (st == null || !st.sweepDue) return;
+    _sweepTimer = Timer(Duration(milliseconds: _syncDelayMs()), () async {
+      _sweepTimer = null;
+      if (!identical(_state, st) || !st.sweepDue) return;
+      var ok = true;
+      try {
+        final run = settleSweep;
+        if (run != null) {
+          await run();
+        } else {
+          await sweepPrevious(quiet: true);
+        }
+      } catch (_) {
+        ok = false;
+      }
+      if (!identical(_state, st)) return;
+      if (ok && st.pending == null) {
+        st.sweepDue = false;
+        _save();
+      } else {
+        _armSweep();
+      }
+    });
+  }
+
+  void markSynced(String pk) {
+    final st = _state;
+    if (st == null || !st.unsent || st.current?.pk != pk) return;
+    st.unsent = false;
+    _save();
+    _armSync();
+  }
+
+  void dispose() {
+    _syncTimer?.cancel();
+    _syncTimer = null;
+    _syncDue = null;
+    _sweepTimer?.cancel();
+    _sweepTimer = null;
+  }
 
   bool get enabled => _enabled;
   bool get loaded => _loaded;
@@ -275,6 +450,18 @@ class AnonBotManager {
 
   bool isLane(String id) => _lane.contains(id);
 
+  bool runLane(String eventId) =>
+      eventId.isNotEmpty && (_state?.runs.contains(eventId) ?? false);
+
+  void keepRunLanes(Iterable<String> eventIds) {
+    final st = _state;
+    if (st == null) return;
+    final next = eventIds.where((e) => e.isNotEmpty).take(kAnonRunLanesMax).toList();
+    if (next.join(',') == st.runs.join(',')) return;
+    st.runs = next;
+    _save();
+  }
+
   void markLane(String id) {
     if (id.isEmpty) return;
     _lane.remove(id);
@@ -289,13 +476,12 @@ class AnonBotManager {
 
   void setEnabled(bool on) {
     _enabled = on;
-    if (on) ensureIdentity();
     onKeysChanged?.call();
-    requestSync?.call();
   }
 
   void reset(String? owner) {
     if (_owner != owner) {
+      dispose();
       _state = null;
       _kemCache.clear();
       _announcement = null;
@@ -309,23 +495,46 @@ class AnonBotManager {
   void hydrate(String json) {
     try {
       final parsed = AnonBotState.fromJson(jsonDecode(json));
-      if (parsed != null) applySynced(parsed.toJson());
+      if (parsed != null) {
+        if (_state?.current == null) {
+          _state = parsed;
+          _kemCache.clear();
+          _announcement = null;
+          _announcementExp = 0;
+          _announcementPk = null;
+          onKeysChanged?.call();
+        } else {
+          applySynced(parsed.toJson());
+          if (_state!.runs.isEmpty) _state!.runs = parsed.runs;
+        }
+      }
     } catch (_) {
     }
     _loaded = true;
+    _armSync();
+    _armSweep();
   }
 
   void markLoaded() {
     _loaded = true;
   }
 
-  AnonBotIdentity? ensureIdentity() {
+  AnonBotIdentity? ensureIdentity({bool send = false}) {
     if (!_loaded) return null;
     final st = _state ??= AnonBotState();
     if (st.current == null) {
       st.current = AnonBotIdentity.generate();
+      st.unsent = true;
+      st.sent = send;
+      st.quietAt = nowMs();
       _save();
       onKeysChanged?.call();
+      _armSync();
+    } else if (send && st.unsent && !st.sent) {
+      st.sent = true;
+      st.quietAt = nowMs();
+      _save();
+      _armSync();
     }
     return st.current;
   }
@@ -333,24 +542,41 @@ class AnonBotManager {
   void applySynced(Object? raw) {
     final parsed = AnonBotState.fromJson(raw);
     if (parsed == null || parsed.current == null) return;
-    final st = _state;
-    final cur = st?.current;
+    final st = _state ??= AnonBotState();
+    final cur = st.current;
+    Map<String, dynamic> pks(AnonBotState s) => {
+          'current': s.current?.pk,
+          'prev': s.prev.map((p) => p.pk).toList(),
+          'createdAt': s.current?.createdAt ?? 0,
+        };
+    final out = settleAnonKeys(pks(st), pks(parsed), kAnonPrevMax);
+    final byPk = <String, AnonBotIdentity>{
+      for (final e in [parsed.current!, ...parsed.prev, ?cur, ...st.prev]) e.pk: e,
+    };
+    final prevBefore = st.prev.map((p) => p.pk).join(',');
+    st.current = byPk[out['current']] ?? cur;
+    st.prev = [
+      for (final pk in (out['prev'] as List).cast<String>())
+        if (byPk[pk] != null) byPk[pk]!,
+    ];
+    final same = cur != null && cur.pk == st.current!.pk;
     if (cur != null && cur.pk == parsed.current!.pk) {
-      if (st!.tokens.isEmpty) st.tokens = parsed.tokens;
-      return;
-    }
-    if (cur != null && cur.createdAt > parsed.current!.createdAt) {
-      _adoptPrev(parsed.current!);
+      if (st.tokens.isEmpty) st.tokens = parsed.tokens;
+    } else {
       _mergeTokens(parsed.tokens);
-      _save();
-      // The unwrap candidate set changed; announce it or replies wrapped to the adopted key never decrypt.
-      onKeysChanged?.call();
+    }
+    if ((out['rule'] == 'lower' || out['rule'] == 'newer') && !st.sweepDue) {
+      st.sweepDue = true;
+      _armSweep();
+    }
+    if (same) {
+      if (st.prev.map((p) => p.pk).join(',') != prevBefore ||
+          out['loser'] != null) {
+        _save();
+        onKeysChanged?.call();
+      }
       return;
     }
-    if (cur != null) {
-      parsed.prev = [cur, ...parsed.prev].take(kAnonPrevMax).toList();
-    }
-    _state = parsed;
     _kemCache.clear();
     _announcement = null;
     _announcementExp = 0;
@@ -388,11 +614,10 @@ class AnonBotManager {
     onKeysChanged?.call();
     var moved = 0;
     if (sweep) moved = await sweepPrevious();
-    requestSync?.call();
     return moved;
   }
 
-  Future<int> sweepPrevious() async {
+  Future<int> sweepPrevious({bool quiet = false}) async {
     final st = _state;
     if (st == null || st.current == null || st.prev.isEmpty) return 0;
     final waiting = st.pending;
@@ -446,6 +671,13 @@ class AnonBotManager {
           }
         }
       }
+    }
+    final after = _state;
+    if (quiet && issued > 0 && after != null) {
+      after.unsent = true;
+      after.quietAt = nowMs();
+      _save();
+      _armSync();
     }
     return issued;
   }
@@ -840,7 +1072,7 @@ class AnonBotManager {
 
   Map<String, dynamic>? syncPayload() {
     final st = _state;
-    if (st == null || st.current == null) return null;
+    if (st == null || st.current == null || syncHeld) return null;
     return st.toJson();
   }
 
@@ -849,7 +1081,7 @@ class AnonBotManager {
     final write = persist;
     if (st == null || write == null) return;
     try {
-      write(jsonEncode(st.toJson()));
+      write(jsonEncode(st.toLocalJson()));
     } catch (_) {
     }
   }

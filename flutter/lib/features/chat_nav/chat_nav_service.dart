@@ -64,6 +64,7 @@ class ChatNavBlockContext {
 class ChatNavHooks {
   const ChatNavHooks({
     required this.selfPubkey,
+    this.selfWrapPq2,
     this.online = _never,
     this.hydrated = _always,
     this.syncAllowed = _always,
@@ -82,6 +83,7 @@ class ChatNavHooks {
     this.blockContext,
     this.sendText,
     this.groupSendBlocked,
+    this.laneRefusal,
     this.notice,
     this.undoNotice,
     this.chatName,
@@ -111,6 +113,7 @@ class ChatNavHooks {
   final bool Function(Message m)? messageHidden;
   final Object? Function()? scanEpoch;
   final bool Function(Message m, bool rootLocal)? replyVisible;
+  final bool Function()? selfWrapPq2;
   final int Function(String key)? lastRead;
   final int Function(String key)? badge;
   final bool Function(Message m)? isMention;
@@ -124,6 +127,7 @@ class ChatNavHooks {
   final ChatNavBlockContext Function(String key)? blockContext;
   final Future<bool> Function(String key, String text)? sendText;
   final String? Function(String key, String text)? groupSendBlocked;
+  final String? Function(String key, String? threadRoot)? laneRefusal;
   final void Function(String text)? notice;
   final void Function(String text, void Function() undo)? undoNotice;
   final String Function(String kind, String id)? chatName;
@@ -355,13 +359,18 @@ class ChatNavService {
     return e;
   }
 
-  void release(String key) {
+  void release(String key, {bool quiet = false}) {
     final e = _entries.remove(key);
     if (e == null) return;
+    final hook = onMarksChanged;
+    if (quiet) onMarksChanged = null;
     try {
       _saveMark(key, e.mark);
       flushMarks();
-    } on StateError catch (_) {}
+    } on StateError catch (_) {
+    } finally {
+      if (quiet) onMarksChanged = hook;
+    }
     _changed();
   }
 
@@ -439,6 +448,8 @@ class ChatNavService {
   SeenMark storedMark(String key) => markNorm(_marks()[key]);
 
   void Function()? onMarksChanged;
+
+  bool Function(String key, num at, Iterable<String> ids)? quietAdvance;
 
   Map<String, Map<String, Object>> marksForSync() => markStoreNorm(_marks());
 
@@ -520,7 +531,14 @@ class ChatNavService {
       return false;
     }
     e.mark = next;
-    _saveMark(key, next);
+    final hush = quietAdvance?.call(key, at, ids) ?? false;
+    final hook = onMarksChanged;
+    if (hush) onMarksChanged = null;
+    try {
+      _saveMark(key, next);
+    } finally {
+      if (hush) onMarksChanged = hook;
+    }
     if (sweep) sweepMentions(key);
     return true;
   }
@@ -948,12 +966,16 @@ class ChatNavService {
       );
       return true;
     } else {
-      final r = pinAdd(s, key, _nowMs);
+      final r = pinAdd(s, key, _nowMs, pq2: _wrapPq2);
       if (r.error == 'cap') {
         final isChannel = pinParse(key)!.kind == 'channel';
         _notice(t(
             isChannel ? ChatNavStrings.favoriteCap : ChatNavStrings.favoriteChatCap,
             {'n': isChannel ? ChatNavLimits.pinChannelMax : ChatNavLimits.pinMax}));
+        return false;
+      }
+      if (r.error == 'size') {
+        _notice(t(ChatNavStrings.favoriteFull));
         return false;
       }
       s = r.state;
@@ -962,10 +984,12 @@ class ChatNavService {
     return true;
   }
 
+  bool get _wrapPq2 => hooks.selfWrapPq2?.call() ?? true;
+
   void restorePin(String key, int index) {
     final s = pinState();
     if (isPinned(s, key)) return;
-    final r = pinAdd(s, key, _nowMs);
+    final r = pinAdd(s, key, _nowMs, pq2: _wrapPq2);
     if (r.error != null) return;
     _commitPins(pinMove(r.state, key, index, _nowMs));
   }
@@ -1171,6 +1195,8 @@ class ChatNavService {
       final blocked = hooks.groupSendBlocked?.call(key, content);
       if (blocked != null) return refuse(blocked);
     }
+    final laneBlocked = hooks.laneRefusal?.call(key, threadRoot);
+    if (laneBlocked != null) return refuse(laneBlocked);
     final build = hooks.buildScheduled;
     final api = hooks.scheduleApi;
     if (build == null || api == null) return refuse(t(ChatNavStrings.serverBlocked));
@@ -1267,7 +1293,10 @@ class ChatNavService {
         text: text,
       ));
     }
+    final failedNow = scheduleNewFailures(
+        _rawItems(), [for (final x in out) x.toJson()]);
     _setScheduled(out);
+    if (failedNow.isNotEmpty) _notice(t(ChatNavStrings.failedNotice));
     _armRefresh();
     return out;
   }
@@ -1275,14 +1304,8 @@ class ChatNavService {
   void _armRefresh() {
     _refreshTimer?.cancel();
     _refreshTimer = null;
-    final open = scheduledItems()
-        .where((x) => x.status == 'pending' || x.status == 'sending')
-        .toList();
-    if (open.isEmpty) return;
-    final next = open.map((x) => x.at).reduce(min);
-    var wait = (next - _nowSec) * 1000 + 15000;
-    if (wait < 5000) wait = 5000;
-    if (wait > 60000) wait = 60000;
+    final wait = scheduleRefreshWaitMs(_rawItems(), _nowSec);
+    if (wait <= 0) return;
     _refreshTimer = Timer(Duration(milliseconds: wait), () {
       _refreshTimer = null;
       unawaited(refreshScheduled());
@@ -1332,6 +1355,9 @@ class ChatNavService {
     return schedule(scheduleChatKey(it.chat), it.text, at, replaces: id);
   }
 
+  String scheduledItemStatus(ScheduledItem it) =>
+      scheduleItemStatus(it, _nowSec);
+
   String scheduleFailText(ScheduledItem it) {
     const map = {
       'spam': 'The spam filter held it back.',
@@ -1341,7 +1367,10 @@ class ChatNavService {
       'retry': 'Retrying.',
     };
     final s = map[it.error];
-    return s == null ? '' : t(s);
+    if (s != null) return t(s);
+    return scheduleItemStatus(it, _nowSec) == 'overdue'
+        ? t(ChatNavStrings.overdueDetail)
+        : '';
   }
 
   String formatScheduleTime(int at) {

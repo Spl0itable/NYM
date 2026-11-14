@@ -1,6 +1,6 @@
 (function () {
     'use strict';
-    const G = typeof window !== 'undefined' ? window : globalThis;
+    const G = typeof window !== 'undefined' ? window : typeof self !== 'undefined' ? self : globalThis;
 
     const CLASS = 'nym-suffix';
     const LABEL = /^([\s\S]*[^\s#])(#[0-9a-f]{4})$/i;
@@ -40,6 +40,254 @@
 
     function strip(name) {
         return String(name == null ? '' : name).replace(/#[0-9a-f]{4}$/i, '');
+    }
+
+    const MAX = 20;
+    const CAPPED = /^([\s\S]*)#([0-9a-f]{4})$/i;
+
+    const LONE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+    const LONE_ONE = new RegExp(LONE.source);
+    const JOINS = /^(?:\p{M}|[\u200d\u{1f3fb}-\u{1f3ff}\u{e0020}-\u{e007f}])/u;
+    const PICT = /^\p{Extended_Pictographic}/u;
+    const RI = /^[\u{1f1e6}-\u{1f1ff}]/u;
+    let cutSegmenter = null;
+
+    function wellFormed(v) {
+        return String(v == null ? '' : v).replace(LONE, '');
+    }
+
+    function boundary(s, i) {
+        if (i <= 0 || i >= s.length) return true;
+        const c = s.charCodeAt(i);
+        if (c >= 0xdc00 && c <= 0xdfff && s.charCodeAt(i - 1) >= 0xd800 && s.charCodeAt(i - 1) <= 0xdbff) return false;
+        const at = s.slice(i, i + 2);
+        if (JOINS.test(at)) return false;
+        if (s.charCodeAt(i - 1) === 0x200d && PICT.test(at)) return false;
+        if (RI.test(at)) {
+            let n = 0;
+            for (let j = i - 2; j >= 0 && RI.test(s.slice(j, j + 2)); j -= 2) n++;
+            if (n % 2 === 1) return false;
+        }
+        return true;
+    }
+
+    function cutAt(text, max) {
+        const s = String(text == null ? '' : text);
+        const room = Math.max(0, Math.floor(max));
+        if (s.length <= room) return s.length;
+        if (G.Intl && typeof G.Intl.Segmenter === 'function') {
+            if (!cutSegmenter) cutSegmenter = new G.Intl.Segmenter(undefined, { granularity: 'grapheme' });
+            let end = 0;
+            for (const g of cutSegmenter.segment(s)) {
+                const next = g.index + g.segment.length;
+                if (next > room) break;
+                end = next;
+            }
+            return end;
+        }
+        let i = room;
+        while (i > 0 && !boundary(s, i)) i--;
+        return i;
+    }
+
+    function capBase(base) {
+        const s = wellFormed(base);
+        if (s.length <= MAX) return s;
+        return s.slice(0, cutAt(s, MAX)).replace(/\s+$/, '');
+    }
+
+    function fitInsert(value, start, end, data, max) {
+        const v = String(value == null ? '' : value);
+        const limit = max == null ? MAX : max;
+        const a = Math.max(0, Math.min(v.length, start == null ? v.length : start));
+        const b = Math.max(a, Math.min(v.length, end == null ? a : end));
+        const raw = String(data == null ? '' : data);
+        const text = wellFormed(raw.replace(/[\r\n]+/g, ''));
+        const room = limit - a - (v.length - b);
+        if (text.length <= room && !LONE_ONE.test(raw)) return null;
+        const put = text.slice(0, cutAt(text, room));
+        return { value: v.slice(0, a) + put + v.slice(b), caret: a + put.length };
+    }
+
+    function fitComposed(before, after, data, from, max) {
+        const b = String(before == null ? '' : before);
+        const v = String(after == null ? '' : after);
+        const d = String(data == null ? '' : data).replace(/[\r\n]+/g, '');
+        const limit = max == null ? MAX : max;
+        const keep = b.length - Math.max(0, Math.min(b.length, from == null ? b.length : from));
+        let s = 0;
+        while (s < keep && s < v.length && b.charCodeAt(b.length - 1 - s) === v.charCodeAt(v.length - 1 - s)) s++;
+        const e = v.length - s;
+        let k = Math.min(d.length, e);
+        while (k > 0 && v.slice(e - k, e) !== d.slice(0, k)) k--;
+        if (k === 0) return null;
+        const a = e - k;
+        const rest = v.slice(0, a) + v.slice(e);
+        return fitInsert(rest, a, a, d, limit);
+    }
+
+    const composing = new WeakMap();
+
+    function isNymField(el) {
+        return !!el && typeof el.hasAttribute === 'function' && el.hasAttribute('data-nym-input');
+    }
+
+    function refitComposed(el, data) {
+        const snap = composing.get(el);
+        if (!snap || data == null) return;
+        const max = parseInt(el.getAttribute('maxlength') || String(MAX), 10) || MAX;
+        const fit = fitComposed(snap.before, el.value, data, snap.from, max);
+        if (!fit || fit.value === el.value) return;
+        el.value = fit.value;
+        try { el.setSelectionRange(fit.caret, fit.caret); } catch (_) { }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function onNymCompositionStart(e) {
+        const el = e.target;
+        if (!isNymField(el)) return;
+        composing.set(el, { before: String(el.value || ''), from: el.selectionEnd == null ? String(el.value || '').length : el.selectionEnd });
+    }
+
+    function onNymCompositionEnd(e) {
+        if (isNymField(e.target)) refitComposed(e.target, e.data);
+    }
+
+    function onNymInput(e) {
+        if (e.isComposing || !isNymField(e.target) || !/^(insertCompositionText|insertFromComposition)$/.test(e.inputType || '')) return;
+        refitComposed(e.target, e.data);
+    }
+
+    function onNymBeforeInput(e) {
+        const el = e.target;
+        if (!el || typeof el.hasAttribute !== 'function' || !el.hasAttribute('data-nym-input') || e.isComposing) return;
+        const t = e.inputType || '';
+        if (!/^insert(Text|FromPaste|FromDrop|ReplacementText|FromYank)$/.test(t)) return;
+        const data = e.data != null ? e.data : (e.dataTransfer && typeof e.dataTransfer.getData === 'function' ? e.dataTransfer.getData('text/plain') : '');
+        const max = parseInt(el.getAttribute('maxlength') || String(MAX), 10) || MAX;
+        const fit = fitInsert(el.value, el.selectionStart, el.selectionEnd, data, max);
+        if (!fit) return;
+        e.preventDefault();
+        el.value = fit.value;
+        try { el.setSelectionRange(fit.caret, fit.caret); } catch (_) { }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    if (G.document && typeof G.document.addEventListener === 'function') {
+        G.document.addEventListener('beforeinput', onNymBeforeInput, true);
+        G.document.addEventListener('compositionstart', onNymCompositionStart, true);
+        G.document.addEventListener('compositionend', onNymCompositionEnd, true);
+        G.document.addEventListener('input', onNymInput, true);
+    }
+
+    function cap(name) {
+        const s = String(name == null ? '' : name);
+        const m = CAPPED.exec(s);
+        return m ? capBase(m[1]) + '#' + m[2] : capBase(s);
+    }
+
+    function labelText(label) {
+        if (!label) return 'nym';
+        const cleaned = String(label).replace(/<span class="nym-suffix">[\s\S]*$/, '').trim()
+            .replace(/<[^>]*>/g, '').trim()
+            .replace(/&lt;/g, '').replace(/&gt;/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
+        return cleaned.replace(/#[0-9a-f]{4}$/i, '') || cleaned || 'nym';
+    }
+
+    function capMentions(text) {
+        return String(text == null ? '' : text).replace(MENTION, (m) => '@' + capBase(m.slice(1, -5)) + m.slice(-5));
+    }
+
+    let segmenter = null;
+    function graphemes(s) {
+        if (G.Intl && typeof G.Intl.Segmenter === 'function') {
+            if (!segmenter) segmenter = new G.Intl.Segmenter(undefined, { granularity: 'grapheme' });
+            return Array.from(segmenter.segment(s), (g) => g.segment);
+        }
+        return Array.from(s);
+    }
+
+    function initial(v) {
+        const s = wellFormed(v);
+        return s ? graphemes(s)[0] : '';
+    }
+
+    const GUARD_MEMO_MAX = 2000;
+    const guardMemo = new Map();
+    let measureCtx = null;
+    let measureFamily = null;
+    let familyReadAt = -Infinity;
+
+    function measurer() {
+        const doc = G.document;
+        if (!doc || !doc.body || typeof doc.createElement !== 'function' || typeof G.getComputedStyle !== 'function') return null;
+        try {
+            if (!measureCtx) {
+                const canvas = doc.createElement('canvas');
+                measureCtx = canvas && typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+                if (!measureCtx) { measureCtx = false; return null; }
+            }
+            if (measureCtx === false) return null;
+            const now = Date.now();
+            if (now - familyReadAt >= 1000) {
+                familyReadAt = now;
+                const fam = G.getComputedStyle(doc.body).fontFamily || 'sans-serif';
+                if (fam !== measureFamily) {
+                    measureFamily = fam;
+                    measureCtx.font = '100px ' + fam;
+                    guardMemo.clear();
+                }
+            }
+            return measureCtx;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function guard(base) {
+        const b = String(base == null ? '' : base);
+        const g = graphemes(b);
+        if (g.length < 2) return '';
+        const m = measurer();
+        if (!m) return g.length > 2 ? g[0] : '';
+        const hit = guardMemo.get(b);
+        if (hit !== undefined) return hit;
+        let out;
+        try {
+            out = m.measureText(b).width > m.measureText(g[0] + '…').width ? g[0] : '';
+        } catch (e) {
+            out = g.length > 2 ? g[0] : '';
+        }
+        if (guardMemo.size >= GUARD_MEMO_MAX) guardMemo.clear();
+        guardMemo.set(b, out);
+        return out;
+    }
+
+    function sqRaw(baseHtml, suffixHtml, firstLetter, baseClass) {
+        const f = firstLetter ? ' data-f="' + esc(firstLetter) + '"' : '';
+        return '<span class="nym-sq"' + f + '><span class="nym-b' + (baseClass ? ' ' + esc(baseClass) : '') + '">' + baseHtml + '</span>' + (suffixHtml ? '<span class="' + CLASS + '">' + suffixHtml + '</span>' : '') + '</span>';
+    }
+
+    function sqHtml(base, suffix, baseClass) {
+        const b = capBase(base);
+        const m = /^#?([0-9a-f]{4})$/i.exec(String(suffix == null ? '' : suffix));
+        return sqRaw(esc(b), m ? '#' + m[1] : '', guard(b), baseClass);
+    }
+
+    function sqLabelHtml(label) {
+        const p = split(label);
+        return p ? sqHtml(p.base, p.suffix) : sqHtml(label, '');
+    }
+
+    function sqPubkeyHtml(name, pubkey) {
+        const t = remember(pubkey);
+        if (!t) return sqLabelHtml(name);
+        return sqHtml(strip(name), '#' + t);
+    }
+
+    function squeeze(el, base, suffix) {
+        if (el) el.innerHTML = sqHtml(base, suffix);
+        return el;
     }
 
     function html(base, suffix) {
@@ -147,5 +395,5 @@
         return el;
     }
 
-    G.NymSuffix = { CLASS, split, strip, suffixOf, remember, known, html, labelHtml, pubkeyHtml, listHtml, ranges, textHtml, dimHtml, render };
+    G.NymSuffix = { CLASS, MAX, cap, capBase, cutAt, fitInsert, fitComposed, wellFormed, initial, capMentions, labelText, guard, sqRaw, sqHtml, sqLabelHtml, sqPubkeyHtml, squeeze, split, strip, suffixOf, remember, known, html, labelHtml, pubkeyHtml, listHtml, ranges, textHtml, dimHtml, render };
 })();

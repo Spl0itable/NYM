@@ -1,12 +1,16 @@
 import 'dart:convert';
 import 'dart:math';
 
+import '../../core/utils/channel_name.dart';
+
 class ChatNavLimits {
   const ChatNavLimits._();
 
   static const int pinMax = 10;
   static const int pinHardMax = 50;
   static const int pinChannelMax = 500;
+  static const int rowBytes = 15360;
+  static const int rowBytesClassic = 27648;
   static const int pinRemovedMax = 300;
   static const int pinRemovedTtlMs = 180 * 24 * 60 * 60 * 1000;
   static const int mentionChatsMax = 200;
@@ -26,11 +30,14 @@ class ChatNavLimits {
   static const int scheduleRetrySec = 60;
   static const int scheduleKeepDoneSec = 7 * 24 * 60 * 60;
   static const int wrapJitterSec = 7200;
+  static const int scheduleOverdueSec = 120;
 
   static Map<String, num> toJson() => {
         'pinMax': pinMax,
         'pinHardMax': pinHardMax,
         'pinChannelMax': pinChannelMax,
+        'rowBytes': rowBytes,
+        'rowBytesClassic': rowBytesClassic,
         'pinRemovedMax': pinRemovedMax,
         'pinRemovedTtlMs': pinRemovedTtlMs,
         'mentionChatsMax': mentionChatsMax,
@@ -50,6 +57,7 @@ class ChatNavLimits {
         'scheduleRetrySec': scheduleRetrySec,
         'scheduleKeepDoneSec': scheduleKeepDoneSec,
         'wrapJitterSec': wrapJitterSec,
+        'scheduleOverdueSec': scheduleOverdueSec,
       };
 }
 
@@ -92,6 +100,8 @@ class ChatNavStrings {
       'You can have up to {n} favorite channels. Remove one first.';
   static const String favoriteChatCap =
       'You can have up to {n} favorite chats. Remove one first.';
+  static const String favoriteFull =
+      'Favorites are full. Remove some to make room.';
   static const String unfavoritedChat = 'Unfavorited {name}';
   static const String sendLater = 'Send later';
   static const String scheduled = 'Scheduled';
@@ -117,6 +127,11 @@ class ChatNavStrings {
   static const String sent = 'Sent';
   static const String failed = 'Failed';
   static const String cancelled = 'Cancelled';
+  static const String overdue = 'Not sent yet';
+  static const String overdueDetail =
+      "It didn't go out at its time. Send it now, or cancel it.";
+  static const String failedNotice =
+      "A scheduled message wasn't sent. Open its chat's scheduled list to see why.";
   static const String sendNow = 'Send now';
   static const String editTime = 'Edit time';
   static const String cancel = 'Cancel';
@@ -136,6 +151,7 @@ class ChatNavStrings {
         'unfavorited': unfavorited,
         'favoriteCap': favoriteCap,
         'favoriteChatCap': favoriteChatCap,
+        'favoriteFull': favoriteFull,
         'unfavoritedChat': unfavoritedChat,
         'sendLater': sendLater,
         'scheduled': scheduled,
@@ -155,6 +171,9 @@ class ChatNavStrings {
         'sent': sent,
         'failed': failed,
         'cancelled': cancelled,
+        'overdue': overdue,
+        'overdueDetail': overdueDetail,
+        'failedNotice': failedNotice,
         'sendNow': sendNow,
         'editTime': editTime,
         'cancel': cancel,
@@ -171,7 +190,6 @@ const List<String> chatNavStatuses = [
 
 final RegExp _rxHex64 = RegExp(r'^[0-9a-f]{64}$');
 final RegExp _rxGroup = RegExp(r'^[0-9a-f]{16,64}$');
-final RegExp _rxChannel = RegExp(r'^[\p{L}\p{N}]{1,64}$', unicode: true);
 
 typedef ChatNavTr = String Function(String s);
 
@@ -706,7 +724,7 @@ String pinKey(String kind, Object? id) {
   }
   if (kind == 'channel') {
     final c = raw.replaceFirst(RegExp(r'^#'), '').toLowerCase();
-    return _rxChannel.hasMatch(c) ? 'c:$c' : '';
+    return isChannelName(c) ? 'c:$c' : '';
   }
   return '';
 }
@@ -719,7 +737,7 @@ String pinKey(String kind, Object? id) {
   if (s.startsWith('g:') && _rxGroup.hasMatch(s.substring(2))) {
     return (kind: 'group', id: s.substring(2));
   }
-  if (s.startsWith('c:') && _rxChannel.hasMatch(s.substring(2))) {
+  if (s.startsWith('c:') && isChannelName(s.substring(2))) {
     return (kind: 'channel', id: s.substring(2));
   }
   return null;
@@ -860,9 +878,22 @@ int _maxInt(List<num> xs) => xs.reduce((a, b) => a > b ? a : b).floor();
 String pinSection(String k) =>
     pinParse(k)?.kind == 'channel' ? 'channel' : 'chat';
 
+int pinRowBytes(Object? state) {
+  final s = normalizePins(state);
+  final live = <String, dynamic>{
+    'v': s['v'],
+    'order': s['order'],
+    'ot': s['ot'],
+    'items': s['items'],
+    'removed': <String, int>{},
+  };
+  return utf8.encode(jsonEncode(jsonEncode({'pinnedChats': live}))).length +
+      256;
+}
+
 ({Map<String, dynamic> state, String? error}) pinAdd(
     Object? state, String k, num nowMs,
-    {int cap = 0}) {
+    {int cap = 0, bool pq2 = true}) {
   final s = normalizePins(state);
   if (pinParse(k) == null) return (state: s, error: 'invalid');
   final order = _order(s);
@@ -883,7 +914,12 @@ String pinSection(String k) =>
   removed.remove(k);
   s['order'] = <String>[k, ...order];
   s['ot'] = _maxInt([nowMs, (s['ot'] as int) + 1]);
-  return (state: _finishPins(s, nowMs), error: null);
+  final next = _finishPins(s, nowMs);
+  if (pinRowBytes(next) >
+      (pq2 ? ChatNavLimits.rowBytes : ChatNavLimits.rowBytesClassic)) {
+    return (state: normalizePins(state), error: 'size');
+  }
+  return (state: next, error: null);
 }
 
 Map<String, dynamic> pinRemove(Object? state, String k, num nowMs) {
@@ -1012,8 +1048,11 @@ bool trimPinnedPayload(Map<String, dynamic> p) {
   if (s is! Map) return false;
   final removed = s['removed'];
   final rk = removed is Map ? removed.keys.map((k) => '$k').toList() : <String>[];
-  if (rk.length > 20 && removed is Map) {
-    rk.sort((a, b) => _num(removed[a]).compareTo(_num(removed[b])));
+  if (rk.isNotEmpty && removed is Map) {
+    rk.sort((a, b) {
+      final d = _num(removed[a]).compareTo(_num(removed[b]));
+      return d != 0 ? d : a.compareTo(b);
+    });
     for (final k in rk.take((rk.length / 4).ceil())) {
       removed.remove(k);
     }
@@ -1304,8 +1343,40 @@ String scheduleStatusText(String status, [ChatNavTr? t]) {
     'sent': ChatNavStrings.sent,
     'failed': ChatNavStrings.failed,
     'cancelled': ChatNavStrings.cancelled,
+    'overdue': ChatNavStrings.overdue,
   };
   return _tr(t, map[status] ?? ChatNavStrings.pending);
+}
+
+String scheduleItemStatus(ScheduledItem it, int nowSec) {
+  final s = chatNavStatuses.contains(it.status) ? it.status : 'pending';
+  if (s == 'pending' && nowSec >= it.at + ChatNavLimits.scheduleOverdueSec) {
+    return 'overdue';
+  }
+  return s;
+}
+
+int scheduleRefreshWaitMs(List<Object?> items, int nowSec) {
+  final open = scheduleNormalize(items)
+      .where((x) => x.status == 'pending' || x.status == 'sending')
+      .toList();
+  if (open.isEmpty) return 0;
+  final raw = open
+      .map((x) => nowSec < x.at + 15
+          ? (x.at - nowSec) * 1000 + 15000
+          : (nowSec - x.at) * 500)
+      .reduce(min);
+  return raw.clamp(5000, 60000);
+}
+
+List<String> scheduleNewFailures(List<Object?> prev, List<Object?> next) {
+  final was = {for (final x in scheduleNormalize(prev)) x.id: x.status};
+  return [
+    for (final x in scheduleNormalize(next))
+      if (x.status == 'failed' &&
+          (was[x.id] == 'pending' || was[x.id] == 'sending'))
+        x.id,
+  ];
 }
 
 String? scheduleBlockReason({

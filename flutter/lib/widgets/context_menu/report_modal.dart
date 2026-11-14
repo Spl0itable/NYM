@@ -18,9 +18,18 @@ class ReportModal extends StatefulWidget {
     this.hasMessage = false,
     this.onSubmit,
     this.pack,
+    this.alreadyReported,
+    this.reportedChanges,
+    this.messageNote,
   });
 
   final String targetNym;
+
+  final String? Function(bool reportMessage)? alreadyReported;
+
+  final Listenable? reportedChanges;
+
+  final String? messageNote;
 
   final ({String name, String author})? pack;
 
@@ -45,6 +54,9 @@ class ReportModal extends StatefulWidget {
     bool hasMessage = false,
     void Function(String type, String details, bool reportMessage)? onSubmit,
     ({String name, String author})? pack,
+    String? Function(bool reportMessage)? alreadyReported,
+    Listenable? reportedChanges,
+    String? messageNote,
   }) {
     return showNymSheet<bool>(
       context,
@@ -53,6 +65,9 @@ class ReportModal extends StatefulWidget {
         hasMessage: hasMessage,
         onSubmit: onSubmit,
         pack: pack,
+        alreadyReported: alreadyReported,
+        reportedChanges: reportedChanges,
+        messageNote: messageNote,
       ),
       barrierColor: const Color(0xB3000000),
     );
@@ -65,7 +80,9 @@ class ReportModal extends StatefulWidget {
 class _ReportModalState extends State<ReportModal> {
   String _type = ReportModal.types.first.$1;
   final _details = TextEditingController();
-  late bool _reportMessage = widget.pack == null && widget.hasMessage;
+  late bool _reportMessage = widget.pack == null && _boxOn;
+
+  bool get _boxOn => widget.hasMessage && widget.messageNote == null;
 
   @override
   void dispose() {
@@ -73,9 +90,19 @@ class _ReportModalState extends State<ReportModal> {
     super.dispose();
   }
 
+  String? get _already => widget.alreadyReported?.call(_reportMessage);
+
   @override
   Widget build(BuildContext context) {
+    final changes = widget.reportedChanges;
+    if (changes == null) return _build(context);
+    return ListenableBuilder(
+        listenable: changes, builder: (context, _) => _build(context));
+  }
+
+  Widget _build(BuildContext context) {
     final c = context.nym;
+    final already = _already;
     final body = Material(
       type: MaterialType.transparency,
       child: Stack(
@@ -167,7 +194,7 @@ class _ReportModalState extends State<ReportModal> {
                     height: 15),
                 if (widget.pack == null)
                 InkWell(
-                  onTap: widget.hasMessage
+                  onTap: _boxOn
                       ? () =>
                           setState(() => _reportMessage = !_reportMessage)
                       : null,
@@ -178,7 +205,7 @@ class _ReportModalState extends State<ReportModal> {
                         height: 22,
                         child: Checkbox(
                           value: _reportMessage,
-                          onChanged: widget.hasMessage
+                          onChanged: _boxOn
                               ? (v) => setState(
                                   () => _reportMessage = v ?? false)
                               : null,
@@ -199,10 +226,25 @@ class _ReportModalState extends State<ReportModal> {
                   ),
                 ),
                 const SizedBox(height: 15),
+                if (already != null) ...[
+                  Text(
+                    already,
+                    key: const ValueKey('report-already'),
+                    style: TextStyle(color: c.warning, fontSize: 15),
+                  ),
+                  const SizedBox(height: 15),
+                ] else if (widget.messageNote case final note?) ...[
+                  Text(
+                    note,
+                    key: const ValueKey('report-message-already'),
+                    style: TextStyle(color: c.textDim, fontSize: 15),
+                  ),
+                  const SizedBox(height: 15),
+                ],
                 DialogActions(
                   children: [
                     _cancelBtn(c),
-                    _submitBtn(c),
+                    _submitBtn(c, already == null),
                   ],
                 ),
               ],
@@ -262,6 +304,7 @@ class _ReportModalState extends State<ReportModal> {
   }
 
   void _submit() {
+    if (_already != null) return;
     widget.onSubmit?.call(_type, _details.text, _reportMessage);
     Navigator.of(context).pop(true);
   }
@@ -292,7 +335,8 @@ class _ReportModalState extends State<ReportModal> {
         label: tr('CANCEL'), onTap: () => Navigator.of(context).pop());
   }
 
-  Widget _submitBtn(NymColors c) {
-    return DialogButton(label: tr('SUBMIT REPORT'), onTap: _submit);
+  Widget _submitBtn(NymColors c, bool enabled) {
+    return DialogButton(
+        label: tr('SUBMIT REPORT'), onTap: enabled ? _submit : null);
   }
 }

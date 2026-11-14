@@ -3,6 +3,7 @@ import { hasD1 } from "./_d1.js";
 import { verifySignedEvent, isPrivateRelayHost, spamEngineJob } from "./relay-pool.js";
 import { spamEngine } from "./_spam.js";
 import { filterSet, pubkeyHit } from "./_filters.js";
+import { isEncryptedBlobChannelEvent } from "./_encrypted-blob.js";
 
 export const SCHEDULE_LIMITS = Object.freeze({
   minLeadSec: 30,
@@ -24,7 +25,12 @@ export const SCHEDULE_LIMITS = Object.freeze({
   wrapSlackSec: 120,
   addPerMinute: 30,
   runBatch: 20,
-  relayTimeoutMs: 8000
+  relayTimeoutMs: 8000,
+  judgeMaxMs: 15000,
+  runParallel: 4,
+  runBudgetMs: 38000,
+  kickBudgetMs: 28000,
+  ownerKickMs: 20000
 });
 
 export const SCHEDULE_DDL = [
@@ -60,6 +66,11 @@ export async function ensureScheduleTables(db) {
 
 function nowSec() {
   return Math.floor(Date.now() / 1000);
+}
+
+function replaceRefused(row) {
+  if (!row) return json({ error: "The scheduled message to change is gone.", code: "gone" }, 404);
+  return json({ error: row.status === "sent" ? "It was already sent." : "It is being sent right now.", code: row.status }, 409);
 }
 
 function json(obj, status) {
@@ -137,6 +148,7 @@ export function validateScheduleItem(body, owner, now) {
       if (r !== "pub") return { error: "Invalid route.", status: 400 };
       if (ev.pubkey !== owner) return { error: "Channel messages must be signed by you.", status: 403 };
       if (ev.created_at !== at) return { error: "The message must be dated at the scheduled time.", status: 400 };
+      if (isEncryptedBlobChannelEvent(ev)) return { error: "This message cannot be sent.", code: "blob", status: 400 };
     } else if (ev.kind === 1059) {
       if (ev.created_at > at || ev.created_at < at - L.wrapJitterSec - L.wrapSlackSec) {
         return { error: "A wrap is not dated near the scheduled time.", status: 400 };
@@ -176,6 +188,24 @@ function rowView(r) {
   };
 }
 
+const ownerKicks = new Map();
+
+export function kickOwnerRun(context, owner, opts) {
+  if (!context || typeof context.waitUntil !== "function") return false;
+  const ms = Date.now();
+  const last = ownerKicks.get(owner) || 0;
+  if (ms - last < SCHEDULE_LIMITS.ownerKickMs) return false;
+  if (ownerKicks.size > 5000) ownerKicks.clear();
+  ownerKicks.set(owner, ms);
+  const o = Object.assign({ context, owner, budgetMs: SCHEDULE_LIMITS.kickBudgetMs }, opts || {});
+  context.waitUntil(runScheduled(context.env, o).catch(() => { }));
+  return true;
+}
+
+export function resetOwnerKicks() {
+  ownerKicks.clear();
+}
+
 export async function handleScheduleAction(context, body, authOk) {
   const env = context.env;
   const db = scheduleDb(env);
@@ -190,8 +220,10 @@ export async function handleScheduleAction(context, body, authOk) {
   if (body.action === "schedule-list") {
     let rows = [];
     try {
-      rows = (await db.prepare("SELECT id, publish_at, events, note, status, attempts, error, sent_at FROM scheduled WHERE pubkey = ? ORDER BY publish_at ASC, id ASC").bind(owner).all()).results || [];
+      rows = (await db.prepare("SELECT id, publish_at, events, note, status, attempts, error, sent_at, next_try, lease_until FROM scheduled WHERE pubkey = ? ORDER BY publish_at ASC, id ASC").bind(owner).all()).results || [];
     } catch { rows = []; }
+    const stalled = (r) => (r.status === "pending" && Number(r.next_try) <= now) || (r.status === "sending" && Number(r.lease_until) < now);
+    if (rows.some(stalled)) kickOwnerRun(context, owner);
     return json({ ok: true, now, items: rows.map(rowView) });
   }
 
@@ -217,10 +249,7 @@ export async function handleScheduleAction(context, body, authOk) {
     let replacing = null;
     if (v.replaces) {
       replacing = await db.prepare("SELECT status, bytes FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, v.replaces).first();
-      if (!replacing) return json({ error: "The scheduled message to change is gone.", code: "gone" }, 404);
-      if (replacing.status !== "pending" && replacing.status !== "failed") {
-        return json({ error: replacing.status === "sent" ? "It was already sent." : "It is being sent right now.", code: replacing.status }, 409);
-      }
+      if (!replacing || (replacing.status !== "pending" && replacing.status !== "failed")) return replaceRefused(replacing);
     }
     const dup = await db.prepare("SELECT status FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, v.id).first();
     if (dup && v.id !== v.replaces) return json({ ok: true, id: v.id, at: v.at, duplicate: true });
@@ -230,13 +259,22 @@ export async function handleScheduleAction(context, body, authOk) {
     if (replacing) { pending--; bytes -= Number(replacing.bytes) || 0; }
     if (pending >= SCHEDULE_LIMITS.maxPending) return json({ error: "You have too many scheduled messages. Cancel one first.", code: "full" }, 429);
     if (bytes + v.bytes > SCHEDULE_LIMITS.maxUserBytes) return json({ error: "Your scheduled messages are using all their space. Cancel one first.", code: "full" }, 413);
+    const cols = "(pubkey, id, publish_at, events, relays, note, bytes, status, attempts, next_try, lease_until, error, created_at, sent_at) ";
+    const vals = [owner, v.id, v.at, JSON.stringify(v.events), JSON.stringify(v.relays), v.note, v.bytes, v.at, now];
     const stmts = [];
-    if (replacing) stmts.push(db.prepare("DELETE FROM scheduled WHERE pubkey = ? AND id = ? AND status IN ('pending', 'failed')").bind(owner, v.replaces));
-    stmts.push(db.prepare(
-      "INSERT INTO scheduled (pubkey, id, publish_at, events, relays, note, bytes, status, attempts, next_try, lease_until, error, created_at, sent_at) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 0, '', ?, 0)"
-    ).bind(owner, v.id, v.at, JSON.stringify(v.events), JSON.stringify(v.relays), v.note, v.bytes, v.at, now));
-    await db.batch(stmts);
+    if (replacing) {
+      stmts.push(db.prepare(
+        (v.id === v.replaces ? "INSERT OR REPLACE" : "INSERT") + " INTO scheduled " + cols +
+        "SELECT ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 0, '', ?, 0 WHERE EXISTS (SELECT 1 FROM scheduled WHERE pubkey = ? AND id = ? AND status IN ('pending', 'failed'))"
+      ).bind(...vals, owner, v.replaces));
+      if (v.id !== v.replaces) stmts.push(db.prepare("DELETE FROM scheduled WHERE pubkey = ? AND id = ? AND status IN ('pending', 'failed')").bind(owner, v.replaces));
+    } else {
+      stmts.push(db.prepare("INSERT INTO scheduled " + cols + "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 0, '', ?, 0)").bind(...vals));
+    }
+    const res = await db.batch(stmts);
+    if (replacing && !((res && res[0] && res[0].meta && res[0].meta.changes) > 0)) {
+      return replaceRefused(await db.prepare("SELECT status FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, v.replaces).first());
+    }
     return json({ ok: true, id: v.id, at: v.at });
   }
 
@@ -407,36 +445,39 @@ export async function runScheduled(env, opts) {
   const now = Number.isSafeInteger(o.now) ? o.now : nowSec();
   const L = SCHEDULE_LIMITS;
   const publish = o.publish || relayPublisher(env, { proxyHost: o.proxyHost });
-  const judge = o.judge || ((events) => judgeChannelEvents(env, o.context, events, 15000));
+  const judge = o.judge || ((events) => judgeChannelEvents(env, o.context, events, L.judgeMaxMs));
+  const claimUntil = Date.now() + Math.max(0, (o.budgetMs || L.runBudgetMs) - L.judgeMaxMs - L.relayTimeoutMs);
   try {
     const p = await db.prepare("DELETE FROM scheduled WHERE status IN ('sent', 'failed') AND next_try < ? AND MAX(sent_at, next_try, publish_at) < ?").bind(now - L.keepDoneSec, now - L.keepDoneSec).run();
     summary.purged = (p && p.meta && p.meta.changes) || 0;
   } catch { }
-  await db.prepare("UPDATE scheduled SET status = 'pending', lease_until = 0 WHERE status = 'sending' AND lease_until < ?").bind(now).run();
-  const due = (await db.prepare("SELECT pubkey, id FROM scheduled WHERE status = 'pending' AND next_try <= ? ORDER BY next_try ASC LIMIT ?").bind(now, o.limit || L.runBatch).all()).results || [];
-  for (const d of due) {
+  await db.prepare("UPDATE scheduled SET status = 'pending', lease_until = 0 WHERE status = 'sending' AND lease_until < ?" + (o.owner ? " AND pubkey = ?" : "")).bind(...(o.owner ? [now, o.owner] : [now])).run();
+  const dueSql = "SELECT pubkey, id FROM scheduled WHERE status = 'pending' AND next_try <= ?" + (o.owner ? " AND pubkey = ?" : "") + " ORDER BY next_try ASC LIMIT ?";
+  const dueBinds = o.owner ? [now, o.owner, o.limit || L.runBatch] : [now, o.limit || L.runBatch];
+  const due = (await db.prepare(dueSql).bind(...dueBinds).all()).results || [];
+  const one = async (d) => {
     const claim = await db.prepare("UPDATE scheduled SET status = 'sending', lease_until = ?, attempts = attempts + 1 WHERE pubkey = ? AND id = ? AND status = 'pending' AND next_try <= ?")
       .bind(now + L.leaseSec, d.pubkey, d.id, now).run();
-    if (!((claim && claim.meta && claim.meta.changes) > 0)) continue;
+    if (!((claim && claim.meta && claim.meta.changes) > 0)) return;
     summary.due++;
     const row = await db.prepare("SELECT * FROM scheduled WHERE pubkey = ? AND id = ?").bind(d.pubkey, d.id).first();
-    if (!row) continue;
+    if (!row) return;
     if (now > row.publish_at + L.lateSec) {
       await settle(db, row, { status: "failed", error: "late", lease_until: 0, events: "[]", bytes: 0, next_try: now });
       summary.late++;
       summary.failed++;
-      continue;
+      return;
     }
     let items = [];
     let relays = [];
     try { items = JSON.parse(row.events); relays = JSON.parse(row.relays); } catch { items = []; }
     const all = items.map((x) => x.e);
-    const dropped = await judge(all);
+    const dropped = all.some(isEncryptedBlobChannelEvent) ? new Set([row.id]) : await judge(all);
     if (dropped && dropped.size) {
       await settle(db, row, { status: "failed", error: "spam", lease_until: 0, events: "[]", bytes: 0, next_try: now });
       summary.spam++;
       summary.failed++;
-      continue;
+      return;
     }
     const toRelay = items.filter((x) => x.r !== "arch").map((x) => x.e);
     let counts = new Map();
@@ -460,6 +501,18 @@ export async function runScheduled(env, opts) {
       await settle(db, row, { status: "pending", error: "retry", lease_until: 0, next_try: now + L.retrySec * Math.pow(2, attempts - 1) });
       summary.retry++;
     }
+  };
+  let pos = 0;
+  const worker = async () => {
+    while (pos < due.length && Date.now() <= claimUntil) await one(due[pos++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(L.runParallel, due.length) }, worker));
+  try {
+    const nx = await db.prepare("SELECT MIN(next_try) AS t FROM scheduled WHERE status = 'pending'").first();
+    const t = Number(nx && nx.t) || 0;
+    summary.next = t ? Math.max(t, now) : 0;
+  } catch {
+    summary.next = 0;
   }
   return summary;
 }

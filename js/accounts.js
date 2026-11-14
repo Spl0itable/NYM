@@ -11,21 +11,17 @@
     const AVATAR_MAX = 4096;
 
     const DEVICE_KEYS = new Set([
-        'nym_theme', 'nym_color_mode', 'nym_text_size', 'nym_transparency_enabled',
-        'nym_chat_layout', 'nym_chat_view_mode', 'nym_nick_style',
-        'nym_timestamps', 'nym_time_format', 'nym_date_format',
-        'nym_ui_language', 'nym_ui_language_chosen', 'nym_translate_language',
         'nym_connection_mode', 'nym_relay_url', 'nym_relay_direct_mode', 'nym_relay_direct_ack', 'nym_relay_fallback_notice_off',
-        'nym_low_data_mode', 'nym_mesh_ghost_mode', 'nym_tutorial_seen', 'nym_attest_authority',
-        'nym_voice_speed', 'nym_sidebar_section_order', 'nym_sidebar_section_collapsed',
-        'nym_settings_sections_collapsed', 'nym_global_emoji_blocks', 'nym_global_emoji_block_urls'
+        'nym_mesh_ghost_mode', 'nym_attest_authority', 'nym_sidebar_section_collapsed',
+        'nym_settings_sections_collapsed', 'nym_settings_sections_split', 'nym_global_emoji_blocks', 'nym_global_emoji_block_urls',
+        'nym_screen_security', 'nym_incognito_keyboard', 'nym_background_connectivity'
     ]);
     const DEVICE_PREFIXES = ['nym_ui_i18n_', 'nym_cmd_i18n_'];
     const VOLATILE_KEYS = new Set(['nym_unfurl_cache', 'nym_nostr_ref_cache', 'nym_msg_verify_status', 'nym_relay_stats']);
 
     const SETTINGS_SCOPE = {
-        device: ['theme', 'colorMode', 'textSize', 'transparency', 'chatLayout', 'chatViewMode', 'nickStyle', 'timestamps', 'timeFormat', 'dateFormat', 'sidebarLayout', 'uiLanguage', 'translateLanguage', 'connectionMode', 'relayTransport', 'lowDataMode', 'meshEnabled', 'meshGhostMode', 'notificationPermission', 'tutorialSeen', 'voiceSpeed'],
-        account: ['keys', 'loginMethod', 'vault', 'pqRoot', 'pqDeviceId', 'profile', 'lightningAddress', 'settingsSync', 'pmCache', 'groupCache', 'channelCache', 'unread', 'lastRead', 'chatLocks', 'savedMessages', 'keptMessages', 'drafts', 'mutes', 'blocks', 'friends', 'pinnedChannels', 'hiddenChannels', 'columnsLayout', 'notificationPrefs', 'notificationHistory', 'readReceipts', 'typingIndicators', 'wallpaper', 'emojiFavorites', 'd1Session', 'pushRegistration', 'attestation', 'nymbotCredits', 'nymbotSession', 'purchases', 'outbox', 'depositQueue', 'scheduledMessages', 'meshIdentity', 'meshOutbox', 'anonNymbotKeys', 'notifyInactive']
+        device: ['sidebarLayout', 'connectionMode', 'relayTransport', 'meshEnabled', 'meshGhostMode', 'notificationPermission'],
+        account: ['keys', 'loginMethod', 'vault', 'pqRoot', 'pqDeviceId', 'profile', 'lightningAddress', 'settingsSync', 'pmCache', 'groupCache', 'channelCache', 'unread', 'lastRead', 'chatLocks', 'savedMessages', 'keptMessages', 'drafts', 'mutes', 'blocks', 'friends', 'pinnedChannels', 'hiddenChannels', 'columnsLayout', 'notificationPrefs', 'notificationHistory', 'readReceipts', 'typingIndicators', 'wallpaper', 'emojiFavorites', 'd1Session', 'pushRegistration', 'attestation', 'nymbotCredits', 'nymbotSession', 'purchases', 'outbox', 'depositQueue', 'scheduledMessages', 'meshIdentity', 'meshOutbox', 'anonNymbotKeys', 'notifyInactive', 'theme', 'colorMode', 'textSize', 'transparency', 'chatLayout', 'chatViewMode', 'nickStyle', 'timestamps', 'timeFormat', 'dateFormat', 'sectionOrder', 'uiLanguage', 'translateLanguage', 'lowDataMode', 'tutorialSeen', 'voiceSpeed']
     };
 
     function nsKey(id, key) { return NS_PREFIX + id + ':' + key; }
@@ -114,6 +110,17 @@
     function freeNs(index, id) { return index.accounts.some((a) => a.ns === '') ? id : ''; }
 
     function isPlaceholder(a) { return !!a && !a.pubkey; }
+
+    function otherIdentity(index) {
+        return !!index && Array.isArray(index.accounts) && index.accounts.some((a) => !!a && !!a.pubkey && a.id !== index.active);
+    }
+
+    function tutorialSeen(get) {
+        try {
+            if (get('nym_tutorial_seen') === 'true') return true;
+            return otherIdentity(parseIndex(get(INDEX_KEY)));
+        } catch (_) { return false; }
+    }
 
     function removePlan(index, id) {
         const pos = index.accounts.findIndex((a) => a.id === id);
@@ -752,10 +759,10 @@
     }
 
     const api = {
-        MAX_ACCOUNTS, INDEX_KEY, NS_PREFIX, METHODS, CACHE_DB, STASH_DB, DROP_KEY, KEEP_KEY, AVATAR_MAX, SETTINGS_SCOPE,
+        MAX_ACCOUNTS, INDEX_KEY, NS_PREFIX, METHODS, CACHE_DB, STASH_DB, DROP_KEY, KEEP_KEY, AVATAR_MAX, SETTINGS_SCOPE, DEVICE_KEYS,
         nsKey, dbName, classify, methodFromStorage, nymFromStorage, ownNym, parseIndex, loadOrMigrate,
         emptyIndex, plan, runEffects, commit, recover, settle, release, sweep, boot, keepHeld, randomId, activeOf, isQuota,
-        snapshot, legacyStashes, migrateLegacy, memStash, idbStash, hidesPreviews, inactiveNotice
+        snapshot, legacyStashes, migrateLegacy, memStash, idbStash, hidesPreviews, inactiveNotice, otherIdentity, tutorialSeen
     };
     self.NymAccounts = api;
 

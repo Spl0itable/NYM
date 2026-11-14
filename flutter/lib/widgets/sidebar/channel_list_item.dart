@@ -56,9 +56,7 @@ class ChannelListItem extends ConsumerWidget {
     final Color activeFill =
         c.isLight ? Colors.black.withValues(alpha: 0.06) : c.primaryA(0.10);
     // Hover loses to active but beats pinned, following the CSS cascade order.
-    final Color hoverFill = c.isLight
-        ? Colors.black.withValues(alpha: 0.04)
-        : Colors.white.withValues(alpha: 0.06);
+    final Color hoverFill = sidebarRowHoverFill(c);
     final Color borderColor = active
         ? c.primaryA(0.20)
         : (showPinned
@@ -312,6 +310,14 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
         setState(() => _place = hit);
       }
       return;
+    }
+    final stored = cache.missLabel(gh);
+    if (stored != null && stored.isNotEmpty && _region != stored) {
+      if (initial) {
+        _region = stored;
+      } else {
+        setState(() => _region = stored);
+      }
     }
     cache.resolve(gh, force: force).then((place) {
       if (!mounted || widget.geohash != gh) return;

@@ -20,6 +20,16 @@ Object.assign(NYM.prototype, {
         if (this._localEchoIds && this._localEchoIds.size) this._localEchoIds.delete(id);
     },
 
+    _zapAnonLane(messageId) {
+        return !!(messageId && typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(messageId));
+    },
+
+    _zapAnonLaneBlocked(messageId) {
+        if (!this._zapAnonLane(messageId)) return false;
+        this.displaySystemMessage(this.uiText('Zaps are off on anonymous Nymbot messages: a zap is paid from your own wallet and would link the chat to you.'));
+        return true;
+    },
+
     _zapLookupSkip(m) {
         if (!m || this._anonNymbotMessage(m)) return true;
         if (m._optimistic) return true;
@@ -28,7 +38,7 @@ Object.assign(NYM.prototype, {
     },
 
     _backfillZapReceiptsForMessages(messages) {
-        if (!Array.isArray(messages)) return;
+        if (!Array.isArray(messages) || this._anonThreadClosing) return;
         const ids = [];
         for (const m of messages) {
             if (this._zapLookupSkip(m)) continue;
@@ -323,6 +333,36 @@ Object.assign(NYM.prototype, {
         return await this.waitForLightningAddress(pubkey, 4000);
     },
 
+    _lnProfileMayFill(createdAt) {
+        const ts = typeof this._prefStamps === 'function' ? (this._prefStamps().lightningAddress || 0) : 0;
+        return !(ts > 0) || (createdAt > 0 && createdAt * 1000 > ts);
+    },
+
+    _lnStore(addr, global) {
+        if (this._settingsSyncLocal()) { this._lnDropStored(); return; }
+        const v = typeof addr === 'string' ? addr.trim() : '';
+        try {
+            if (v) {
+                if (this.pubkey) localStorage.setItem(`nym_lightning_address_${this.pubkey}`, v);
+                if (global) localStorage.setItem('nym_lightning_address_global', v);
+            } else {
+                if (this.pubkey) localStorage.removeItem(`nym_lightning_address_${this.pubkey}`);
+                if (global) localStorage.removeItem('nym_lightning_address_global');
+            }
+        } catch (_) { }
+    },
+
+    _lnDropStored() {
+        try {
+            const drop = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && /^nym_lightning_address_(global|[0-9a-f]{64})$/.test(k)) drop.push(k);
+            }
+            drop.forEach((k) => localStorage.removeItem(k));
+        } catch (_) { }
+    },
+
     async loadLightningAddress() {
         if (!this.pubkey) return;
 
@@ -334,9 +374,9 @@ Object.assign(NYM.prototype, {
         }
 
         const profileAddress = await this.fetchLightningAddressForUser(this.pubkey);
-        if (profileAddress) {
+        if (profileAddress && this._lnProfileMayFill(0)) {
             this.lightningAddress = profileAddress;
-            localStorage.setItem(`nym_lightning_address_${this.pubkey}`, profileAddress);
+            this._lnStore(profileAddress);
             this.updateLightningAddressDisplay();
         }
     },
@@ -354,6 +394,7 @@ Object.assign(NYM.prototype, {
     },
 
     showZapModal(messageId, recipientPubkey, recipientNym) {
+        if (this._zapAnonLaneBlocked(messageId)) return;
         const lnAddress = this.userLightningAddresses.get(recipientPubkey);
 
         if (!lnAddress) {
@@ -703,8 +744,8 @@ Object.assign(NYM.prototype, {
                 ? `Nymbot ${isPro ? 'Pro ' : ''}credits gift for @${giftNym} — ${creditWord}`
                 : `Nymbot ${isPro ? 'Pro ' : ''}credits — ${creditWord}`;
             const giftPk = this.currentZapTarget.giftRecipientPubkey;
-            const anonBuy = !!(typeof this.botAnonReady === 'function' && this.botAnonReady() &&
-                !(giftPk && giftPk !== this.pubkey));
+            const anonBuy = !!(!(giftPk && giftPk !== this.pubkey) &&
+                typeof this.botAnonBuyReady === 'function' && this.botAnonBuyReady());
             let zapRequest = null;
             try {
                 zapRequest = anonBuy
@@ -1874,7 +1915,7 @@ Object.assign(NYM.prototype, {
             reactionsRow.insertBefore(zapBadge, reactionsRow.firstChild);
 
             const pubkey = messageEl.dataset.pubkey;
-            if (pubkey) {
+            if (pubkey && !this._zapAnonLane(messageId)) {
                 const addZapBtn = document.createElement('span');
                 addZapBtn.className = 'add-zap-btn';
                 addZapBtn.innerHTML = `
@@ -1900,6 +1941,7 @@ Object.assign(NYM.prototype, {
     },
 
     async handleQuickZap(messageId, pubkey, messageEl) {
+        if (this._zapAnonLaneBlocked(messageId)) return;
         const author = messageEl.dataset.author;
 
         this.displaySystemMessage(this.uiText(`Checking if @{author} can receive zaps...`, { author }));

@@ -30,7 +30,7 @@
             if (!E()) return;
             lsSet(STORE_KEY, JSON.stringify(E().patchSettings(this.eventToastSettings(), patch)));
             this._etSyncPrefs();
-            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+            this.notePrefChanged('eventToasts');
         },
 
         _etTr(s, params) {
@@ -53,6 +53,7 @@
             const body = String(entry.body || '');
             if (info.type === 'reaction') return body.trim().startsWith('⚡') || info.zapMessageId ? 'zap' : 'reaction';
             if (info.type === 'call') return evId.startsWith('call-link-') ? 'invite' : (info.isGroup ? 'group' : 'pm');
+            if (info.type === 'group-invite') return 'invite';
             if (info.type === 'group') {
                 if (evId.startsWith('join-req-') || evId.startsWith('join-declined-')) return 'invite';
                 if (/^Group invite: /.test(String(entry.title || ''))) return 'invite';
@@ -453,13 +454,9 @@
             node.dataset.shown = key;
             node.textContent = '';
             if (at < 0) { node.textContent = title; return; }
-            const cut = at + m[1].length;
-            node.appendChild(document.createTextNode(title.slice(0, cut)));
-            const dim = document.createElement('span');
-            dim.className = 'nym-suffix';
-            dim.textContent = m[2];
-            node.appendChild(dim);
-            if (cut + m[2].length < title.length) node.appendChild(document.createTextNode(title.slice(cut + m[2].length)));
+            if (at > 0) node.appendChild(document.createTextNode(title.slice(0, at)));
+            node.insertAdjacentHTML('beforeend', window.NymSuffix.sqHtml(m[1], m[2]));
+            if (at + sender.length < title.length) node.appendChild(document.createTextNode(title.slice(at + sender.length)));
         },
 
         _etBody(node, body, sender) {

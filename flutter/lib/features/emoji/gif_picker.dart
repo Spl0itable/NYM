@@ -17,6 +17,7 @@ import '../messages/pausable_animated_image.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../services/api/api_client.dart';
 import '../../state/settings_provider.dart';
+import '../sync/synced_stores.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
@@ -94,8 +95,9 @@ final giphyServiceProvider = Provider<GiphyService>((ref) => GiphyService());
 
 /// Favorites persisted as a JSON array of `{url,title}`.
 class FavoriteGifsStore {
-  FavoriteGifsStore(this._prefs);
+  FavoriteGifsStore(this._prefs, {this.onChanged});
   final SharedPreferences _prefs;
+  final void Function()? onChanged;
 
   List<GifItem> load() {
     final raw = _prefs.getString(kFavoriteGifsKey);
@@ -130,6 +132,7 @@ class FavoriteGifsStore {
       kFavoriteGifsKey,
       jsonEncode(capped.map((g) => g.toJson()).toList()),
     );
+    onChanged?.call();
     return capped;
   }
 }
@@ -277,6 +280,9 @@ class _GifPickerState extends ConsumerState<GifPicker>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(syncedStoresRevisionProvider, (_, _) {
+      if (mounted) setState(() => _favorites = widget.favoritesStore.load());
+    });
     final c = context.nym;
     final transparency =
         ref.watch(settingsProvider.select((s) => s.transparencyEnabled));

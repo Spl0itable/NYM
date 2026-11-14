@@ -9,9 +9,33 @@ import '../../features/layout/layout_model.dart' show mentionSuffixRanges;
 import '../../features/search/unified_search_panel.dart' show nymSuffixStyle;
 import '../../features/toasts/event_toast_center.dart';
 import '../../features/toasts/event_toasts.dart';
-import 'nym_label.dart' show knownNymSuffix, mergeNymRanges, nymSuffixRanges;
+import '../../core/utils/nym_utils.dart' show capNymBase;
+import 'nym_label.dart'
+    show
+        NymFitLine,
+        keepNymBase,
+        knownNymSuffix,
+        mergeNymRanges,
+        nymSuffixRanges;
 
 final RegExp _suffixRe = RegExp(r'^(.*\S)(#[0-9a-f]{4})$', caseSensitive: false);
+
+({String title, String sender}) _keepTitle(
+    String title, String sender, int? keep) {
+  final m = _suffixRe.firstMatch(sender);
+  final at = m == null ? -1 : title.lastIndexOf(sender);
+  if (m == null || at < 0) return (title: title, sender: sender);
+  final next = '${keepNymBase(capNymBase(m.group(1)!), keep)}${m.group(2)!}';
+  return (
+    title: title.replaceRange(at, at + sender.length, next),
+    sender: next
+  );
+}
+
+String _titleBase(String sender) {
+  final m = _suffixRe.firstMatch(sender);
+  return m == null ? '' : capNymBase(m.group(1)!);
+}
 
 TextSpan _titleSpan(String title, String sender, TextStyle style,
     {bool contrast = false}) {
@@ -135,19 +159,21 @@ class _EventToastCardState extends State<EventToastCard> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text.rich(
-          _titleSpan(text.title,
-              t.locked ? '' : (t.last?.sender ?? ''),
-              TextStyle(
-                  color: fg,
-                  fontSize: 13,
-                  height: 1.4,
-                  fontWeight: FontWeight.w700),
-              contrast: context.highContrast),
-          key: ValueKey('eventToastTitle-${t.id}'),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+        Builder(builder: (context) {
+          final sender = t.locked ? '' : (t.last?.sender ?? '');
+          final style = TextStyle(
+              color: fg, fontSize: 13, height: 1.4, fontWeight: FontWeight.w700);
+          return NymFitLine(
+            base: _titleBase(sender),
+            style: style,
+            textKey: ValueKey('eventToastTitle-${t.id}'),
+            span: (keep) {
+              final k = _keepTitle(text.title, sender, keep);
+              return _titleSpan(k.title, k.sender, style,
+                  contrast: context.highContrast);
+            },
+          );
+        }),
         if (text.meta.isNotEmpty)
           Text(
             text.meta,

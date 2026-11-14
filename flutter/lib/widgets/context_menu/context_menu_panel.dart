@@ -20,6 +20,7 @@ import '../../features/chat_tools/chat_tools_providers.dart';
 import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/duo/duo_rail.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/reports/report_record.dart';
 import '../../features/mesh/mesh_controller.dart';
 import '../../features/messages/inline_network_image.dart';
 import '../../features/identity/nick_edit_modal.dart';
@@ -78,6 +79,8 @@ CtxTarget enrichCtxTarget(AppState s, CtxTarget target) {
     targetIsAdmin: group != null && group.admins.contains(target.pubkey),
     targetIsMod: group != null && group.mods.contains(target.pubkey),
     backToGroupId: target.backToGroupId,
+    translatable: target.translatable,
+    anonLane: target.anonLane,
   );
 }
 
@@ -279,13 +282,26 @@ class ContextMenuPanel extends ConsumerWidget {
                             onTap: () => _invokeTool(context, ref, t, tools),
                           ),
                       if (i < actions.length)
-                        _ActionItem(
-                          svg: ctxActionSvg(actions[i], target),
-                          label: ctxActionLabel(actions[i], target),
-                          color: _colorFor(actions[i], c),
-                          onTap: () =>
-                              _invoke(context, ref, actions[i], target, fullNym),
-                        ),
+                        if (actions[i] == CtxAction.report &&
+                            controller
+                                .reportEntryBlocked(target.pubkey, target.messageId)
+                                .isNotEmpty)
+                          _ActionItem(
+                            key: const ValueKey('ctx-reported'),
+                            svg: ctxActionSvg(actions[i], target),
+                            label: tr('Reported'),
+                            color: c.textDim,
+                            disabled: true,
+                            onTap: () {},
+                          )
+                        else
+                          _ActionItem(
+                            svg: ctxActionSvg(actions[i], target),
+                            label: ctxActionLabel(actions[i], target),
+                            color: _colorFor(actions[i], c),
+                            onTap: () => _invoke(
+                                context, ref, actions[i], target, fullNym),
+                          ),
                     ],
                     if (sharePubkey != null)
                       _ActionItem(
@@ -660,7 +676,8 @@ class ContextMenuPanel extends ConsumerWidget {
           hooks.requestQuote(
               fullNym: fullNym,
               content: t.content!,
-              messageId: t.messageId ?? '');
+              messageId: t.messageId ?? '',
+              pubkey: t.pubkey);
         }
         break;
       case CtxAction.privateMessage:
@@ -689,12 +706,28 @@ class ContextMenuPanel extends ConsumerWidget {
         await _zap(context, ref);
         break;
       case CtxAction.report:
+        final entry = controller.reportEntryBlocked(t.pubkey, t.messageId);
+        if (entry.isNotEmpty) {
+          controller.showReportRefusal(entry);
+          break;
+        }
         await openOverMenu(
           onClose,
           () => ReportModal.show(
             context,
             targetNym: fullNym,
             hasMessage: t.messageId != null,
+            reportedChanges: controller.reportedRevision,
+            messageNote: controller.reportMessageLockedNote(t.pubkey, t.messageId),
+            alreadyReported: (reportMessage) {
+              final k = ReportRecord.keyFor(
+                  pubkey: t.pubkey,
+                  messageId: t.messageId,
+                  includeMessage: reportMessage);
+              return controller.isTargetReported(k)
+                  ? controller.reportRefusal(k)
+                  : null;
+            },
             // Publishes the NIP-56 kind-1984 report, with an `e` tag when a specific message is reported.
             onSubmit: (type, details, reportMessage) {
               controller.submitReport(
@@ -928,6 +961,9 @@ class ContextMenuPanel extends ConsumerWidget {
   }
 
   Future<void> _zap(BuildContext context, WidgetRef ref) async {
+    if (ref.read(nostrControllerProvider).anonLaneZapRefused(target.messageId)) {
+      return;
+    }
     // Fresh LN-address resolve so a target whose profile isn't ingested yet can still be zapped.
     final lnAddr =
         await ref.read(nostrControllerProvider).resolveLightningAddressForZap(
@@ -1126,11 +1162,13 @@ class _ActionItem extends StatefulWidget {
     required this.label,
     required this.color,
     required this.onTap,
+    this.disabled = false,
   });
   final String svg;
   final String label;
   final Color color;
   final VoidCallback onTap;
+  final bool disabled;
 
   @override
   State<_ActionItem> createState() => _ActionItemState();
@@ -1147,6 +1185,37 @@ class _ActionItemState extends State<_ActionItem> {
     final Color labelColor = isNeutral && _hover ? c.primary : widget.color;
     final Color iconColor =
         isNeutral ? (_hover ? c.primary : c.textDim) : widget.color;
+    if (widget.disabled) {
+      return Semantics(
+        enabled: false,
+        button: true,
+        child: Opacity(
+          opacity: 0.55,
+          child: Container(
+            constraints: context.largeTouchTargets
+                ? const BoxConstraints(minHeight: kMinTouchTarget)
+                : null,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                NymSvgIcon(widget.svg, size: 16, color: widget.color),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    widget.label,
+                    style: TextStyle(
+                      color: widget.color,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),

@@ -293,7 +293,8 @@ class AccountSession extends ChangeNotifier implements AccountsController {
     required String nym,
     String? avatar,
   }) async {
-    if (_busy || pubkey.isEmpty || method.isEmpty) return;
+    if (_busy || method.isEmpty) return;
+    if (pubkey.isEmpty && method != 'ephemeral') return;
     final cur = runtime.active;
     if (cur == null ||
         cur.pubkey != pubkey ||
@@ -525,29 +526,35 @@ class _AccountReporterState extends ConsumerState<_AccountReporter> {
 
   void _report() {
     if (!mounted) return;
-    final api = ref.read(accountsProvider);
-    if (api == null || api.busy) return;
-    try {
-      final kv = ref.read(keyValueStoreProvider);
-      final method = AccountLogic.methodFromStorage(kv.getString);
-      if (method.isEmpty) return;
-      final st = ref.read(appStateProvider);
-      final login = kv.getString('nym_nostr_login_pubkey') ?? '';
-      final durable = method == 'nsec' || method == 'extension' || method == 'nip46';
-      final pubkey = durable && login.length == 64 ? login : st.selfPubkey;
-      if (pubkey.length != 64) return;
-      final stored = AccountLogic.nymFromStorage(kv.getString, method);
-      final nym = stored.isNotEmpty ? stored : splitNymSuffix(st.selfNym).base;
-      final avatar = st.users[pubkey]?.profile?.picture;
-      unawaited(api.register(
-        pubkey: pubkey,
-        method: method,
-        nym: withOwnNymSuffix(nym, pubkey),
-        avatar: avatar,
-      ));
-    } catch (_) {}
+    reportActiveAccount(ref.read);
   }
 
   @override
   Widget build(BuildContext context) => widget.child;
+}
+
+void reportActiveAccount(T Function<T>(ProviderListenable<T> provider) read) {
+  final api = read(accountsProvider);
+  if (api == null || api.busy) return;
+  try {
+    final kv = read(keyValueStoreProvider);
+    final method = AccountLogic.methodFromStorage(kv.getString);
+    if (method.isEmpty) return;
+    final st = read(appStateProvider);
+    final login = kv.getString('nym_nostr_login_pubkey') ?? '';
+    final durable = method == 'nsec' || method == 'extension' || method == 'nip46';
+    final pubkey = durable && login.length == 64 ? login : st.selfPubkey;
+    if (pubkey.length != 64) return;
+    final mode = read(settingsProvider.notifier).keypairMode;
+    final throwaway = !durable && (mode == 'random' || mode == 'hardcore');
+    final stored = AccountLogic.nymFromStorage(kv.getString, method);
+    final nym = stored.isNotEmpty ? stored : splitNymSuffix(st.selfNym).base;
+    final avatar = st.users[pubkey]?.profile?.picture;
+    unawaited(api.register(
+      pubkey: throwaway ? '' : pubkey,
+      method: method,
+      nym: withOwnNymSuffix(nym, pubkey),
+      avatar: avatar,
+    ));
+  } catch (_) {}
 }

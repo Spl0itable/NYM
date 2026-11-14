@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'dart:math' as math;
+
+import '../../core/utils/channel_name.dart' as channel_name;
 
 class GeoPresenceVerdict {
   const GeoPresenceVerdict(this.ok, this.reason, this.atMs);
@@ -185,7 +188,6 @@ class GeoPresence {
 
   static final RegExp _geohashRe = RegExp(r'^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$');
   static final RegExp _hex64Re = RegExp(r'^[0-9a-f]{64}$');
-  static final RegExp _nameRe = RegExp(r'^[\p{L}\p{N}]+$', unicode: true);
   static final RegExp _upperOrTitleRe =
       RegExp(r'[\p{Lu}\p{Lt}]', unicode: true);
   static final RegExp _asciiUpperRe = RegExp('[A-Z]');
@@ -212,8 +214,10 @@ class GeoPresence {
 
   static bool isChannelName(String? name) {
     if (name == null || name.isEmpty) return false;
-    final lower = name.toLowerCase();
-    return _nameRe.hasMatch(lower) && !isGeohash(lower);
+    final lower = channel_name.sanitizeChannelName(name);
+    return lower.isNotEmpty &&
+        !isGeohash(lower) &&
+        utf8.encode(lower).length <= wideMaxNameBytes;
   }
 
   static List? _firstTag(Object? tags, String name) {
@@ -410,7 +414,7 @@ class GeoPresence {
       'created_at': createdAt,
       'content': '',
       'tags': [
-        ['d', name.toLowerCase()]
+        ['d', channel_name.sanitizeChannelName(name)]
       ],
     };
   }
@@ -420,7 +424,7 @@ class GeoPresence {
     return {
       'kinds': [kind],
       'since': nowSec - sinceWindowSec,
-      '#d': [name.toLowerCase()],
+      '#d': [channel_name.sanitizeChannelName(name)],
     };
   }
 
@@ -429,7 +433,7 @@ class GeoPresence {
   static const int wideFutureSkewSec = 120;
   static const int wideMaxAgeSec = 300;
   static const int wideDecayMs = 300000;
-  static const int wideMaxNameLength = 64;
+  static const int wideMaxNameBytes = 1024;
   static const int wideRatePerMin = 6;
   static const int wideMaxChannels = 1000;
   static const int wideMaxEntries = 20000;
@@ -444,7 +448,7 @@ class GeoPresence {
         'maxAgeSec': wideMaxAgeSec,
         'decayMs': wideDecayMs,
         'maxPrecision': maxSendPrecision,
-        'maxNameLength': wideMaxNameLength,
+        'maxNameBytes': wideMaxNameBytes,
         'ratePerMin': wideRatePerMin,
         'channelCap': channelCap,
         'maxChannels': wideMaxChannels,
@@ -491,7 +495,7 @@ class GeoPresence {
       if (value.length > maxSendPrecision) return _shapeRefuse('precision');
       type = 'geohash';
     } else {
-      if (cased || !isChannelName(value) || value.length > wideMaxNameLength) {
+      if (cased || !isChannelName(value)) {
         return _shapeRefuse('name');
       }
       type = 'named';

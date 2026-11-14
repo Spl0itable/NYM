@@ -41,7 +41,6 @@ import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/hit_slop.dart';
 import '../media_notes/profile_image.dart';
 
-/// Profile and nickname editor, with a reveal slideout for the private key and recovery code.
 class NickEditModal extends ConsumerStatefulWidget {
   const NickEditModal({super.key});
 
@@ -84,7 +83,6 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   String _uploadLabel = 'Uploading…';
   double _uploadProgress = 0;
 
-  bool _revealOpen = false;
   bool _nsecVisible = false;
   bool _pqRootVisible = false;
   final TextEditingController _pqRootLink = TextEditingController();
@@ -122,7 +120,9 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         ? ref.read(appStateProvider).users[id.pubkey]?.profile
         : null;
     _originalBio = profile?.about ?? '';
-    _originalLightning = profile?.lightningAddress ?? '';
+    _originalLightning = ref.read(nostrControllerProvider).ownLightningAddress ??
+        profile?.lightningAddress ??
+        '';
     _currentAvatarUrl = profile?.picture;
     _currentBannerUrl = profile?.banner;
     _origAvatarUrl = _currentAvatarUrl;
@@ -288,6 +288,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         TextField(
           controller: _nick,
           maxLength: 20,
+          inputFormatters: const [NymLengthFormatter()],
           buildCounter: (_,
                   {required currentLength, required isFocused, maxLength}) =>
               null,
@@ -613,75 +614,48 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     );
   }
 
-  Widget _revealPrivkeyGroup(NymColors c) {
+  Widget _privkeyGroup(NymColors c) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        InkWell(
-          onTap: () => setState(() => _revealOpen = !_revealOpen),
-          child: Row(
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: c.warning.withValues(alpha: 0.08),
+            borderRadius: NymRadius.rsm,
+            border: Border.all(color: c.warning.withValues(alpha: 0.3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Secondary, not dim: this row leads to key material.
-              NymSvgIcon(
-                _revealOpen
-                    ? NymIcons.revealArrowDown
-                    : NymIcons.revealArrowRight,
-                size: 18,
-                color: c.secondary,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  NymSvgIcon(NymIcons.warningTriangle,
+                      size: 16, color: c.warning),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      tr('Your private key (nsec) is like a password for your '
+                          'Nym identity. Anyone with access to it can post as you '
+                          'and read your encrypted messages. Never share it.'),
+                      style: TextStyle(color: c.text, fontSize: 11),
+                    ),
+                  ),
+                ],
               ),
-              Flexible(
-                child: Text(
-                  tr("Reveal this nym's private key and recovery code"),
-                  style: TextStyle(
-                      color: c.secondary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600),
-                ),
-              ),
+              const SizedBox(height: 12),
+              // The nsec reveals on a plain toggle with no hold gate.
+              _nsecRow(c),
+              const SizedBox(height: 16),
+              _pqRootRow(c),
+              if (canShowKeyBackup(ref)) ...[
+                const SizedBox(height: 16),
+                const KeyBackupActions(),
+              ],
             ],
           ),
         ),
-        if (_revealOpen) ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: c.warning.withValues(alpha: 0.08),
-              borderRadius: NymRadius.rsm,
-              border: Border.all(color: c.warning.withValues(alpha: 0.3)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    NymSvgIcon(NymIcons.warningTriangle,
-                        size: 16, color: c.warning),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        tr('Your private key (nsec) is like a password for your '
-                            'Nym identity. Anyone with access to it can post as you '
-                            'and read your encrypted messages. Never share it.'),
-                        style: TextStyle(color: c.text, fontSize: 11),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                // The nsec reveals on a plain toggle with no hold gate.
-                _nsecRow(c),
-                const SizedBox(height: 16),
-                _pqRootRow(c),
-                if (canShowKeyBackup(ref)) ...[
-                  const SizedBox(height: 16),
-                  const KeyBackupActions(),
-                ],
-              ],
-            ),
-          ),
-        ],
       ],
     );
   }
@@ -1051,7 +1025,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         const SizedBox(height: 18),
         _lightningGroup(c),
         const SizedBox(height: 18),
-        _revealPrivkeyGroup(c),
+        _privkeyGroup(c),
       ];
 
   Widget _actions(NymColors c) {

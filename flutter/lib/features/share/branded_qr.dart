@@ -24,11 +24,13 @@ class BrandedQrMatrix {
   bool isDark(int row, int col) => _image.isDark(row, col);
 }
 
+bool brandedQrFits(String data) =>
+    data.isNotEmpty &&
+    !data.codeUnits.any((c) => c > 0x7E || c < 0x20) &&
+    utf8.encode(data).length <= kShareCodeMaxBytes;
+
 BrandedQrMatrix? brandedQrMatrix(String data) {
-  if (data.isEmpty || data.codeUnits.any((c) => c > 0x7E || c < 0x20)) {
-    return null;
-  }
-  if (utf8.encode(data).length > kShareCodeMaxBytes) return null;
+  if (!brandedQrFits(data)) return null;
   final result = QrValidator.validate(
     data: data,
     version: QrVersions.auto,

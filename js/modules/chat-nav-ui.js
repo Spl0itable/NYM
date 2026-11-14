@@ -14,7 +14,6 @@
         anon: ico('<circle cx="8" cy="6" r="3"/><path d="M2.5 14c.8-2.6 2.9-4 5.5-4s4.7 1.4 5.5 4"/><line x1="2.5" y1="2.5" x2="13.5" y2="13.5"/>'),
     };
     const MENTION_SAVE_MS = 400;
-    const SCHEDULE_REFRESH_MS = 30000;
     const HTTP_ADD_BYTES = 200000;
 
     Object.assign(NYM.prototype, {
@@ -93,10 +92,10 @@
             return entry;
         },
 
-        _cnRelease(key) {
+        _cnRelease(key, quiet) {
             if (!key) return;
             const entry = this._cnEntries().get(key);
-            if (entry) this._cnSaveMark(key, entry.mark);
+            if (entry) this._cnSaveMark(key, entry.mark, quiet);
             this._cnEntries().delete(key);
             if (this._cnClosedBase) this._cnClosedBase.delete(key);
             if (typeof document === 'undefined') return;
@@ -129,18 +128,27 @@
             return N().markNorm(this._cnMarkStore()[key]);
         },
 
-        _cnSaveMark(key, mark) {
+        _cnSaveMark(key, mark, quiet) {
             if (!key || !(N().markNorm(mark).at > 0)) return;
             const store = this._cnMarkStore();
             const prev = N().markNorm(store[key]);
             const m = N().markMax(prev, mark);
             if (prev.at === m.at && prev.ids.length === m.ids.length) return;
             store[key] = { at: m.at, ids: m.ids, t: Date.now() };
+            const anonOnly = typeof this._anonLaneAdvance === 'function' && this._anonLaneAdvance(key, prev.at, (x) => this._cnAt(x) <= m.at && !N().markUnder(prev, this._cnAt(x), x.id) && !(x.nymMessageId && N().markUnder(prev, this._cnAt(x), x.nymMessageId)), (x) => this._cnAt(x));
+            if (typeof this._readAnonHold === 'function') this._readAnonHold(key, anonOnly);
+            if (this._anonThreadClosing) {
+                try { localStorage.setItem(this._cnMarkKey(), JSON.stringify(N().markStoreNorm(this._cnMarkStore()))); } catch (_) { }
+                return;
+            }
+            if (!quiet && !anonOnly && !(typeof this._readMarkQuiet === 'function' && this._readMarkQuiet(key))) this._cnMarkLoud = true;
             if (this._cnMarkTimer) return;
             this._cnMarkTimer = setTimeout(() => {
                 this._cnMarkTimer = null;
+                const loud = !!this._cnMarkLoud;
+                this._cnMarkLoud = false;
                 try { localStorage.setItem(this._cnMarkKey(), JSON.stringify(N().markStoreNorm(this._cnMarkStore()))); } catch (_) { }
-                if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
+                if (loud && typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
             }, MENTION_SAVE_MS);
         },
 
@@ -460,15 +468,18 @@
             if (!sc || !list || sc._cnKeep || typeof ResizeObserver === 'undefined' || typeof this._scrollAnchorFor !== 'function') return;
             sc.style.overflowAnchor = 'none';
             const keep = sc._cnKeep = { top: sc.scrollTop, el: null, at: 0, shift: null };
-            keep.shift = () => (keep.el && keep.el.isConnected && Math.abs(sc.scrollTop) >= 2
-                ? keep.el.getBoundingClientRect().top - keep.at + (sc.scrollTop - keep.top) : 0);
+            keep.shift = () => {
+                if (!keep.el || !keep.el.isConnected || Math.abs(sc.scrollTop) < 2) return 0;
+                const clamped = Math.abs(keep.top) > sc.scrollHeight - sc.clientHeight + 0.5;
+                return keep.el.getBoundingClientRect().bottom - keep.at + (clamped ? 0 : sc.scrollTop - keep.top);
+            };
             const settle = () => {
                 const d = keep.shift();
                 if (Math.abs(d) >= 1) sc.scrollTop += d;
                 keep.top = sc.scrollTop;
                 const a = this._scrollAnchorFor(list);
                 keep.el = a ? a.el : null;
-                keep.at = a ? a.top : 0;
+                keep.at = a ? a.edge : 0;
             };
             sc.addEventListener('scroll', settle, { passive: true });
             new ResizeObserver(settle).observe(list);
@@ -547,6 +558,11 @@
             }
             this._cnUpdateFabs(k);
             return !!el;
+        },
+
+        _cnUnpin(key) {
+            const entry = key ? this._cnEntries().get(key) : null;
+            if (entry) entry.pin = null;
         },
 
         _cnCenter(key) {
@@ -965,10 +981,14 @@
                 }
                 return true;
             } else {
-                const r = N_.pinAdd(state, pinKey, now);
+                const r = N_.pinAdd(state, pinKey, now, { pq2: this._pinWrapPq2() });
                 if (r.error === 'cap') {
                     const isChannel = N_.pinParse(pinKey).kind === 'channel';
                     this._cnNotice(this._cn(isChannel ? N_.STRINGS.favoriteCap : N_.STRINGS.favoriteChatCap, { n: isChannel ? N_.LIMITS.pinChannelMax : N_.LIMITS.pinMax }));
+                    return false;
+                }
+                if (r.error === 'size') {
+                    this._cnNotice(this._cn(N_.STRINGS.favoriteFull));
                     return false;
                 }
                 state = r.state;
@@ -977,11 +997,15 @@
             return true;
         },
 
+        _pinWrapPq2() {
+            return typeof this._selfWrapUsesPq2 === 'function' ? this._selfWrapUsesPq2() : true;
+        },
+
         restorePinChat(pinKey, index) {
             const N_ = N();
             const state = this._pinState();
             if (N_.isPinned(state, pinKey)) return;
-            const r = N_.pinAdd(state, pinKey, Date.now());
+            const r = N_.pinAdd(state, pinKey, Date.now(), { pq2: this._pinWrapPq2() });
             if (r.error) return;
             this._pinCommit(N_.pinMove(r.state, pinKey, index, Date.now()));
             if (typeof this._refreshFavoriteChannelBtn === 'function') this._refreshFavoriteChannelBtn();
@@ -1556,6 +1580,13 @@
             if (!content) return { ok: false };
             const block = this.sendLaterBlockReason(key);
             if (block) { this._cnNotice(block); return { ok: false, reason: block }; }
+            const botPeer = key.startsWith('pm-') ? (this._ctPeerFromKey ? this._ctPeerFromKey(key) : key.slice(3)) : '';
+            if (botPeer && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(botPeer)
+                && !(typeof this._botLaneFor === 'function' && this._botLaneFor(botPeer, o.threadRoot, o.quoteSource) === false)) {
+                const msg = this.uiText('Not sent: this would link your anonymous Nymbot chat to your nym.');
+                this._cnNotice(msg);
+                return { ok: false, reason: msg };
+            }
             if (content.startsWith('/')) {
                 const msg = this._cn("Commands can't be scheduled.");
                 this._cnNotice(msg);
@@ -1621,18 +1652,17 @@
                 if (!chat) continue;
                 out.push(Object.assign(it, { chat, text: text || '' }));
             }
+            const failedNow = N().scheduleNewFailures(this._slItemsCache(), out);
             this._slSetItems(out);
+            if (failedNow.length) this._cnNotice(this._cn(N().STRINGS.failedNotice));
             this._slScheduleRefresh();
             return out;
         },
 
         _slScheduleRefresh() {
             if (this._slRefreshTimer) clearTimeout(this._slRefreshTimer);
-            const now = nowSec();
-            const open = this._slItemsCache().filter((x) => x.status === 'pending' || x.status === 'sending');
-            if (!open.length) return;
-            const next = Math.min(...open.map((x) => x.at));
-            const wait = Math.max(5000, Math.min(SCHEDULE_REFRESH_MS * 2, (next - now) * 1000 + 15000));
+            const wait = N().scheduleRefreshWaitMs(this._slItemsCache(), nowSec());
+            if (!wait) return;
             this._slRefreshTimer = setTimeout(() => { this._slRefreshTimer = null; this.refreshScheduled(); }, wait);
         },
 
@@ -1681,6 +1711,7 @@
             const input = document.getElementById('messageInput');
             let draft = o.text;
             let quote = null;
+            let quoteSource = null;
             if (draft == null) {
                 if (typeof this.composerHasPendingUploads === 'function' && this.composerHasPendingUploads()) {
                     this._cnNotice(this._cn('Still uploading — send again once the attachments finish.'));
@@ -1689,17 +1720,20 @@
                 draft = input ? String(input.value || '').trim() : '';
                 const urls = typeof this.composerAttachmentUrls === 'function' ? this.composerAttachmentUrls() : [];
                 if (urls.length) draft = (draft ? draft + ' ' : '') + urls.join(' ');
+                if (this.pendingQuote && typeof this._refreshPendingQuote === 'function' && !this._refreshPendingQuote()) return;
                 if (this.pendingQuote) {
                     quote = { author: this.pendingQuote.author, text: this.pendingQuote.text, fullText: this.pendingQuote.fullText };
+                    quoteSource = this.pendingQuote.sourceId || null;
                     const lines = String(this.pendingQuote.text || '').split('\n');
-                    const quoteLine = `> @${this.pendingQuote.author}: ${lines[0]}` + (lines.length > 1 ? '\n' + lines.slice(1).map((l) => `> ${l}`).join('\n') : '');
+                    const anonQuote = !!(quoteSource && typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(quoteSource));
+                    const quoteLine = (anonQuote ? `> ${lines[0]}` : `> @${this.pendingQuote.author}: ${lines[0]}`) + (lines.length > 1 ? '\n' + lines.slice(1).map((l) => `> ${l}`).join('\n') : '');
                     draft = draft ? `${quoteLine}\n\n${draft}` : quoteLine;
                 }
             }
             const { body } = this._ctModal('sendLaterModal', this._cn(N().STRINGS.sendLater));
             const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
             const block = this.sendLaterBlockReason(key);
-            this._slPicker = { key, draft: String(draft || ''), replaces: o.replaces || null, quote };
+            this._slPicker = { key, draft: String(draft || ''), replaces: o.replaces || null, quote, quoteSource };
             const presets = N().schedulePresets(Date.now(), this._slOffsetMin());
             const defAt = o.at || presets[0].at;
             const preview = String(draft || '').trim();
@@ -1726,7 +1760,7 @@
                 return;
             }
             const threadRoot = !p.replaces && typeof this._threadRootForSend === 'function' ? this._threadRootForSend() : null;
-            const res = p.replaces ? await this.rescheduleItem(p.replaces, when) : await this.scheduleMessage(p.draft, when, { key: p.key, quote: p.quote, threadRoot });
+            const res = p.replaces ? await this.rescheduleItem(p.replaces, when) : await this.scheduleMessage(p.draft, when, { key: p.key, quote: p.quote, threadRoot, quoteSource: p.quoteSource });
             if (res && res.ok) {
                 this._ctCloseModal('sendLaterModal');
                 if (!p.replaces) {
@@ -1757,7 +1791,8 @@
 
         _slErrorText(it) {
             const map = { spam: "The spam filter held it back.", relays: "No relay accepted it.", late: 'It was too late to send.', partial: 'Some copies may not have arrived.', retry: 'Retrying.' };
-            return it.error && map[it.error] ? this._cn(map[it.error]) : '';
+            if (it.error && map[it.error]) return this._cn(map[it.error]);
+            return N().scheduleItemStatus(it, nowSec()) === 'overdue' ? this._cn(N().STRINGS.overdueDetail) : '';
         },
 
         _slRenderList() {
@@ -1769,7 +1804,7 @@
             const rows = items.map((it) => {
                 const open = it.status === 'pending' || it.status === 'failed';
                 return `<div class="sl-item sl-${esc(it.status)}" data-sl-id="${esc(it.id)}">
-                    <div class="sl-item-head"><span class="sl-clock">${ICONS.clock}</span><span class="sl-time">${esc(this._slFormatTime(it.at))}</span><span class="sl-status">${esc(N().scheduleStatusText(it.status, (s) => this._cn(s)))}</span></div>
+                    <div class="sl-item-head"><span class="sl-clock">${ICONS.clock}</span><span class="sl-time">${esc(this._slFormatTime(it.at))}</span><span class="sl-status">${esc(N().scheduleStatusText(N().scheduleItemStatus(it, nowSec()), (s) => this._cn(s)))}</span></div>
                     <div class="sl-text message-content">${typeof this.formatMessageWithQuotes === 'function' ? this.formatMessageWithQuotes(it.text, 0) : esc(it.text)}</div>
                     ${this._slErrorText(it) ? `<div class="sl-item-error">${esc(this._slErrorText(it))}</div>` : ''}
                     ${open ? `<div class="sl-item-actions">
@@ -1895,7 +1930,7 @@
         if (this._cvActive || !nextKey) return null;
         const prev = this._cnSingleKey();
         if (prev === nextKey) return null;
-        if (prev) this._cnRelease(prev);
+        if (prev) this._cnRelease(prev, typeof this._readMarkQuiet === 'function' && this._readMarkQuiet(nextKey));
         this._cnCapture(nextKey);
         return nextKey;
     };

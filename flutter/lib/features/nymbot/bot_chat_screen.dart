@@ -48,6 +48,10 @@ class BotChatScreen extends ConsumerStatefulWidget {
 
 class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   final _scroll = ScrollController();
+  final AnchoredUnits _anchors = AnchoredUnits();
+  final ReaderAway _reader = ReaderAway();
+  late final RowHold _hold = RowHold(units: _anchors, away: () => _reader.away);
+  late final BottomFollow _follow = BottomFollow()..hold = _hold.delta;
 
   /// Whether the scroll-to-bottom button shows (>150px up); in the reversed list `offset` is that distance.
   final ValueNotifier<bool> _showScrollButton = ValueNotifier(false);
@@ -64,15 +68,14 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       // Bind the paid surface to the identity, make the bot PM the active view, then show the intro and refresh credits.
       final nostr = ref.read(nostrControllerProvider);
       nostr.bindBotChat();
+      final engine = ref.read(botChatControllerProvider.notifier);
+      final quiet = engine.laneOnlyOpen();
       ref
           .read(appStateProvider.notifier)
           .switchView(const ChatView.pm(kNymbotPubkey));
-      final engine = ref.read(botChatControllerProvider.notifier);
       // Sign paid actions through the active signer (local or NIP-46).
       engine.attachSigner(nostr.signer);
-      engine.ensureIntro();
-      engine.refreshBalance();
-      engine.onChatOpen();
+      engine.onScreenOpen(quiet: quiet);
     });
     _runsTimer = Timer.periodic(kBotRunPollEvery, (_) {
       if (!mounted) return;
@@ -92,6 +95,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   void _openRun(String id) {
     final ctx = _runKeys[id.toLowerCase()]?.currentContext;
     if (ctx != null) {
+      _reader.reset();
       Scrollable.ensureVisible(ctx,
           duration: NymMotion.transition, alignment: 0.5);
     }
@@ -103,6 +107,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
 
   void _scrollToBottom() {
     if (!_scroll.hasClients) return;
+    _reader.reset();
     _scroll.animateTo(0,
         duration: NymMotion.transition, curve: NymMotion.curve);
   }
@@ -274,12 +279,22 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       child: Stack(
         children: [
           Positioned.fill(
+            child: NotificationListener<ScrollNotification>(
+            onNotification: (n) {
+              _reader.observe(n);
+              if (n.depth == 0 &&
+                  (n is ScrollEndNotification ||
+                      n is ScrollUpdateNotification)) {
+                _hold.pick();
+              }
+              return false;
+            },
             child: MessageSelection(
             builder: (keepAlives) => ListView.builder(
               addAutomaticKeepAlives: keepAlives,
               controller: _scroll,
               reverse: true,
-              physics: const KeepReadingPhysics(),
+              physics: KeepReadingPhysics(follow: _follow),
               // Dragging the list dismisses the keyboard.
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
@@ -334,10 +349,17 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
 
                 final item = unitAt();
                 final key = item.key;
-                return MessageSelection.item(context, item,
+                final forward = units.length - 1 - revIndex;
+                return MessageSelection.item(
+                    context,
+                    AnchoredUnit(
+                      id: 'botunit_${units[forward].first.message.id}',
+                      units: _anchors,
+                      child: item,
+                    ),
                     key: key == null ? null : ValueKey<Key>(key));
               },
-            )),
+            ))),
           ),
           // Shown >150px from the bottom.
           Positioned(

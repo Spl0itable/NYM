@@ -478,7 +478,7 @@
                 const mode = localStorage.getItem('nym_keypair_mode')
                     || (localStorage.getItem('nym_random_keypair_per_session') === 'true' ? 'random' : 'persistent');
                 return mode === 'random' || mode === 'hardcore';
-            } catch (_) { return false; }
+            } catch (_) { return true; }
         },
 
         pqRootRowUnreadable() { return !!this._pqRootRowUnreadable; },
@@ -907,10 +907,15 @@
             }
 
             // D1 first (see _pqAnnouncementFromD1); relays only when it has nothing.
-            const viaD1 = this._pqAnnouncementFromD1(pubkey).then((entry) => {
+            const botKey = typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(pubkey);
+            const viaD1 = (botKey ? this._pqAnnouncementFromBotWorker(pubkey) : this._pqAnnouncementFromD1(pubkey)).then((entry) => {
                 if (entry && entry.pk) {
                     this._pqFetches.set(pubkey, { at: Date.now() });
                     return entry;
+                }
+                if (botKey) {
+                    this._pqFetches.set(pubkey, { at: Date.now(), miss: true });
+                    return this._pqEntry(pubkey);
                 }
                 return this._pqAnnouncementFromRelays(pubkey);
             });
@@ -1008,6 +1013,12 @@
             } catch (_) { return null; }
             if (!found) return null;
             return this._pqAcceptArchived(pubkey, found);
+        },
+
+        async _pqAnnouncementFromBotWorker(pubkey) {
+            if (!this._getApiHost || !this._getApiHost()) return null;
+            const ev = await this._pqAnnouncementFromWorker(pubkey);
+            return ev ? this._pqAcceptArchived(pubkey, ev) : null;
         },
 
         async _pqAnnouncementFromWorker(pubkey) {
@@ -1369,7 +1380,7 @@
 
         /// Whether the tutorial is still ahead of this user.
         _pqTutorialPending() {
-            try { return localStorage.getItem('nym_tutorial_seen') !== 'true'; }
+            try { return !(window.NymAccounts && typeof window.NymAccounts.tutorialSeen === 'function' ? window.NymAccounts.tutorialSeen((k) => localStorage.getItem(k)) : localStorage.getItem('nym_tutorial_seen') === 'true'); }
             catch (_) { return false; }
         },
 

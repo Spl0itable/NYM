@@ -249,6 +249,7 @@
     }
 
     const NAV = ['prevChat', 'nextChat', 'nextUnread', 'back', 'forward'];
+    const STEP = ['back', 'forward'];
 
     function onKey(e) {
         if (e.defaultPrevented || e.isComposing) return;
@@ -261,7 +262,7 @@
         let action = match(x);
         if (!action && parked && t === parked) {
             const a = match(Object.assign({}, x, { inText: false }));
-            if (NAV.indexOf(a) >= 0) action = a;
+            if (NAV.indexOf(a) >= 0 && (STEP.indexOf(a) < 0 || x.composerEmpty)) action = a;
         }
         if (!/^(Alt|AltGraph|Shift|Control|Meta)$/.test(e.key) && NAV.indexOf(action) < 0) parked = null;
         if (!action || action === 'search') return;

@@ -336,14 +336,14 @@
             save(PENDING_JOINS_KEY + (this.pubkey || ''), this._gtPendingJoins());
         },
 
+        _gtDropPendingJoin(groupId) {
+            const pend = this._gtPendingJoins();
+            if (pend[groupId]) { delete pend[groupId]; this._gtSavePendingJoins(); }
+        },
+
         async _gtHandleGroupControl(msgType, rumor, groupId, senderPubkey, isOwn) {
             const TY = T().TYPES;
             const tagv = (k) => { const t = (rumor.tags || []).find((x) => Array.isArray(x) && x[0] === k && x[1]); return t ? t[1] : null; };
-            if (msgType === 'group-invite' || msgType === 'group-add-member') {
-                const pend = this._gtPendingJoins();
-                if (pend[groupId]) { delete pend[groupId]; this._gtSavePendingJoins(); }
-                return false;
-            }
             if (msgType === TY.rsvp) {
                 if (!isOwn) this._gtApplyRsvpRumor(rumor, groupId, senderPubkey);
                 return true;
@@ -430,7 +430,7 @@
             const masks = new Map(list.map((r) => [r.pubkey, this._gtMask(r.pubkey)]));
             if (typeof this.ensureListProfiles === 'function') this.ensureListProfiles(null, list.filter((r) => !masks.get(r.pubkey)).map((r) => r.pubkey));
             const who = (pk) => (masks.get(pk)
-                ? `${esc(masks.get(pk))}<span class="nym-suffix">#${esc(this.getPubkeySuffix(pk))}</span>`
+                ? `${window.NymSuffix.sqHtml(masks.get(pk), esc(this.getPubkeySuffix(pk)))}`
                 : this.formatNymWithPubkey(this.getNymFromPubkey(pk), pk));
             body.innerHTML = list.map((r) => `<div class="gt-join-row" data-pubkey="${esc(r.pubkey)}">
                 <img class="avatar-message" src="${esc(masks.get(r.pubkey) ? (typeof this._maskedAvatar === 'function' ? this._maskedAvatar(r.pubkey) : '') : this.getAvatarUrl(r.pubkey))}" alt="">

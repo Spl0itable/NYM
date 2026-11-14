@@ -12,6 +12,7 @@ import '../emoji/custom_emoji.dart';
 import '../emoji/emoji_block.dart';
 import '../emoji/emoji_block_ui.dart';
 import '../emoji/emoji_data.dart';
+import '../sync/synced_stores.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/inline_network_image.dart';
@@ -72,11 +73,11 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
 
   Future<void> _loadFavorites() async {
     try {
-      final prefs = await ref.read(emojiPrefsProvider.future);
+      final stores = await ref.read(syncedStoresProvider.future);
       if (!mounted) return;
       setState(() {
-        _catFavStore = EmojiFavoritesStore(prefs, kEmojiCategoryFavoritesKey);
-        _packFavStore = EmojiFavoritesStore(prefs, kEmojiPackFavoritesKey);
+        _catFavStore = stores.emojiCategories;
+        _packFavStore = stores.emojiPacks;
         _categoryFavorites = _catFavStore!.load();
         _packFavorites = _packFavStore!.load();
       });
@@ -142,6 +143,15 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(syncedStoresRevisionProvider, (_, _) {
+      final cat = _catFavStore;
+      final pack = _packFavStore;
+      if (!mounted || cat == null || pack == null) return;
+      setState(() {
+        _categoryFavorites = cat.load();
+        _packFavorites = pack.load();
+      });
+    });
     final c = context.nym;
     final custom = ref.watch(visibleCustomEmojiProvider);
     final screenWidth = MediaQuery.sizeOf(context).width;

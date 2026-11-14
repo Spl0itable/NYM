@@ -156,7 +156,7 @@
 
         savedMode() {
             if (this.connectionMode === 'ephemeral') {
-                let mode = 'persistent';
+                let mode = 'random';
                 try {
                     mode = localStorage.getItem('nym_keypair_mode') || (localStorage.getItem('nym_random_keypair_per_session') === 'true' ? 'random' : 'persistent');
                 } catch (_) { }
@@ -460,12 +460,20 @@
             clearTimeout(timer);
             const live = this._ctFindMessage(domId);
             const store = this._editStore();
-            const merged = C().mergeEditHistory(store[domId], C().editSources(target, bag), (live || found).msg.content);
+            const src = C().editSources(target, bag);
+            const merged = C().mergeEditHistory(store[domId], src, (live || found).msg.content);
             if (ok || merged.versions.length) {
                 if (!ok) delete merged.fetched;
                 store[domId] = merged;
                 this._ctEdits = C().pruneEditStore(store);
                 try { localStorage.setItem(C().EDITS_KEY, JSON.stringify(this._ctEdits)); } catch (_) { }
+            }
+            const newest = src.edits.length ? src.edits[src.edits.length - 1] : null;
+            if (newest && live && live.msg.pubkey === target.pubkey && typeof this.handleIncomingEdit === 'function') {
+                const hit = bag.find((ev) => ev && ev.pubkey === target.pubkey && ev.content === newest.text && Number(ev.created_at) === newest.at && typeof ev.id === 'string');
+                const editId = hit ? hit.id : '';
+                if (surface === 'channel') this.handleIncomingEdit(live.msg.id, newest.text, target.pubkey, editId, newest.at);
+                else this.handleIncomingPMEdit(domId, newest.text, target.pubkey, live.key, true, newest.at, editId);
             }
             return C().editHistoryPlan(this.editHistoryFor(domId), { done: true }).view;
         },
@@ -475,6 +483,7 @@
             const NT = window.NostrTools;
             for (const ev of (res && Array.isArray(res.events) ? res.events : [])) {
                 if (!ev || (ev.kind !== 20000 && ev.kind !== 23333)) continue;
+                if (typeof this._encryptedBlobDrop === 'function' && this._encryptedBlobDrop(ev)) continue;
                 let good = false;
                 try { good = !!(NT && typeof NT.verifyEvent === 'function' && NT.verifyEvent(ev) === true); } catch (_) { good = false; }
                 if (good) bag.push(ev);
@@ -770,7 +779,7 @@
             }
             const nym = this._ctDisplayNym(m.pubkey, m.author);
             if (typeof this.openUserPM === 'function') this.openUserPM(nym, m.pubkey);
-            if (typeof this.setQuoteReply === 'function') this.setQuoteReply(nym, typeof this._shownContent === 'function' ? this._shownContent(m) : (m.content || ''));
+            if (typeof this.setQuoteReply === 'function') this.setQuoteReply(nym, typeof this._shownContent === 'function' ? this._shownContent(m) : (m.content || ''), m.nymMessageId || m.id || '', m.pubkey || '');
             if (!this.connected && !this.meshPmPeerId(m.pubkey)) {
                 this._ctNotice(this._ct("You're offline. Your reply will need the internet or this person in Bluetooth range."));
             }

@@ -208,10 +208,10 @@
             const avatar = typeof this._sendAsAvatar === 'function' ? this._sendAsAvatar(r.account) : '';
             const img = avatar
                 ? `<img class="send-as-avatar" src="${e(avatar)}" alt="" width="24" height="24" decoding="async">`
-                : `<span class="send-as-avatar send-as-avatar-blank" aria-hidden="true">${e(r.nym.slice(0, 1).toUpperCase())}</span>`;
+                : `<span class="send-as-avatar send-as-avatar-blank" aria-hidden="true">${e(window.NymSuffix.initial(r.nym).toUpperCase())}</span>`;
             return `<button type="button" class="composer-menu-item send-as-item${r.enabled ? '' : ' is-disabled'}" role="menuitem" data-send-item="as" data-acct-id="${e(r.account)}" data-state="${e(r.state)}" aria-label="${e(label)}" aria-disabled="${r.enabled ? 'false' : 'true'}"${reason ? ` aria-describedby="${e(rid)}" data-detail="${e(reason)}"` : ''}>`
                 + img
-                + `<span class="composer-menu-text"><span class="composer-menu-label"><bdi class="send-as-name"><span class="send-as-nym">${e(r.nym)}</span><span class="nym-suffix">#${e(r.suffix)}</span></bdi></span>`
+                + `<span class="composer-menu-text"><span class="composer-menu-label"><bdi class="send-as-name">${window.NymSuffix.sqHtml(r.nym, r.suffix, 'send-as-nym')}</bdi></span>`
                 + `<span class="composer-menu-reason" id="${e(rid)}">${e(reason)}</span></span></button>`;
         },
 

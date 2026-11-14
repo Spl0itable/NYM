@@ -13,6 +13,9 @@ import '../services/storage/key_value_store.dart';
 import '../services/attest/attest_badge.dart';
 import '../services/filter/filter_packs.dart';
 import '../features/sync/pref_stamps.dart';
+import '../features/sync/set_stamps.dart' show ColStamps;
+import '../features/toasts/event_toast_settings_store.dart';
+import '../features/toasts/event_toasts.dart' show EventToastSettings;
 import '../features/reactions/hover_actions.dart' as hover;
 import '../core/crypto/pow.dart' show normalizePowDifficulty;
 import 'app_state.dart' show appThreadsEnabled, setAppSpamFilter;
@@ -132,6 +135,9 @@ class SettingsController extends StateNotifier<Settings> {
   /// Clears the saved column layout and bumps [Settings.columnsResetTick] so a mounted deck re-seeds live.
   void resetColumns() {
     _kv.remove(StorageKeys.columnsLayout);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    ColStamps.reset(_kv, now);
+    PrefStamps.touch(_kv, 'columnsLayout', now);
     state = state.copyWith(columnsResetTick: state.columnsResetTick + 1);
     // Synced in both branches, matching the PWA.
     _syncedChanged();
@@ -456,6 +462,31 @@ class SettingsController extends StateNotifier<Settings> {
 
   void notePrefChanged(String name) => _changed([name]);
 
+  void setNotificationsEnabled(bool v) {
+    _kv.setString(StorageKeys.notificationsEnabled, '$v');
+    state = state.copyWith(notificationsEnabled: v);
+    _changed(const ['notificationsEnabled']);
+  }
+
+  void setNotifyFriendsOnly(bool v) =>
+      _setNotifyFlag(StorageKeys.notifyFriendsOnly, 'notifyFriendsOnly', v);
+
+  void setGroupNotifyMentionsOnly(bool v) => _setNotifyFlag(
+      StorageKeys.groupNotifyMentionsOnly, 'groupNotifyMentionsOnly', v);
+
+  void setThreadNotifyMentionsOnly(bool v) => _setNotifyFlag(
+      StorageKeys.threadNotifyMentionsOnly, 'threadNotifyMentionsOnly', v);
+
+  void _setNotifyFlag(String key, String name, bool v) {
+    _kv.setString(key, '$v');
+    _changed([name]);
+  }
+
+  void setEventToastSettings(EventToastSettings s) {
+    writeEventToastSettings(_kv, s);
+    _changed(const ['eventToasts']);
+  }
+
   void _stampPref(String name, int? syncedTs) {
     if (syncedTs != null) {
       PrefStamps.set(_kv, name, syncedTs);
@@ -528,7 +559,6 @@ class SettingsController extends StateNotifier<Settings> {
   void setBackgroundConnectivity(bool v) {
     _kv.setBool(StorageKeys.backgroundConnectivity, v);
     state = state.copyWith(backgroundConnectivity: v);
-    _changed(const ['backgroundConnectivity']);
   }
 
   void update(Settings Function(Settings) fn) {

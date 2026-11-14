@@ -10,6 +10,9 @@
     const HTC_DOMAIN = 'Nymbot_Voucher_HashToCurve_v1';
     const DLEQ_DOMAIN = 'Nymbot_Voucher_DLEQ_v1';
     const ANON_PREV_MAX = 4;
+    const ANON_QUIET_MS = 10 * 60 * 1000;
+    const ANON_SYNC_MIN_MS = 15 * 60 * 1000;
+    const ANON_SYNC_SPAN_MS = 30 * 60 * 1000;
     const ANON_ANNOUNCE_TTL_SEC = 7 * 24 * 3600;
 
     const enc = new TextEncoder();
@@ -191,22 +194,96 @@
             };
         },
 
-        _botAnonEnsure() {
+        _botAnonEnsure(opts) {
             if (this.botAnonBlockedReason()) return null;
             if (!this._botAnon) this._botAnon = { current: null, prev: [], tokens: [], pending: null };
             this._botAnonOwner = this.pubkey;
-            if (!this._botAnon.current) {
-                this._botAnon.current = this._botAnonNewIdentity();
+            const st = this._botAnon;
+            const send = !!(opts && opts.send);
+            if (!st.current) {
+                st.current = this._botAnonNewIdentity();
+                st.unsent = true;
+                st.sent = send;
+                st.quietAt = Date.now();
                 this._saveBotAnonState();
                 this._botAnonRefreshSubs();
+                this._botAnonArmSync();
+            } else if (send && st.unsent && !st.sent) {
+                st.sent = true;
+                st.quietAt = Date.now();
+                this._saveBotAnonState();
+                this._botAnonArmSync();
             }
-            return this._botAnon.current;
+            return st.current;
+        },
+
+        botAnonBuyReady() {
+            if (!this.botAnonEnabled()) return false;
+            this._botAnonEnsure();
+            return this.botAnonReady();
+        },
+
+        _botAnonSyncDelayMs() {
+            const r = crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296;
+            return ANON_SYNC_MIN_MS + Math.floor(r * ANON_SYNC_SPAN_MS);
+        },
+
+        botAnonSyncHeld() {
+            const st = this._botAnon;
+            return !!(st && st.unsent && Date.now() - (st.quietAt || 0) < ANON_QUIET_MS);
+        },
+
+        botAnonSyncPayload() {
+            if (!this._botAnon || !this._botAnon.current || this.botAnonSyncHeld()) return null;
+            return this.botAnonSerialize();
+        },
+
+        botAnonMarkSynced(pk) {
+            const st = this._botAnon;
+            if (!st || !st.unsent || !st.current || st.current.pk !== pk) return;
+            st.unsent = false;
+            this._saveBotAnonState();
+            this._botAnonArmSync();
+        },
+
+        _botAnonArmSync() {
+            if (this._botAnonSyncTimer) clearTimeout(this._botAnonSyncTimer);
+            this._botAnonSyncTimer = null;
+            const st = this._botAnon;
+            if (!st || !st.current || !st.unsent) return;
+            const owner = this.pubkey;
+            this._botAnonSyncTimer = setTimeout(() => {
+                this._botAnonSyncTimer = null;
+                if (this.pubkey !== owner || this._botAnon !== st || !st.unsent) return;
+                if (this.botAnonSyncHeld()) { this._botAnonArmSync(); return; }
+                if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(0, { wanted: true });
+                this._botAnonArmSync();
+            }, this._botAnonSyncDelayMs());
+        },
+
+        _botAnonArmSweep() {
+            if (this._botAnonSweepTimer) clearTimeout(this._botAnonSweepTimer);
+            this._botAnonSweepTimer = null;
+            const st = this._botAnon;
+            if (!st || !st.sweepDue) return;
+            const owner = this.pubkey;
+            this._botAnonSweepTimer = setTimeout(async () => {
+                this._botAnonSweepTimer = null;
+                if (this.pubkey !== owner || this._botAnon !== st || !st.sweepDue) return;
+                let ok = true;
+                try { await this.botAnonSweepPrev({ quiet: true }); } catch (_) { ok = false; }
+                if (this._botAnon !== st) return;
+                if (ok && !st.pending) {
+                    st.sweepDue = false;
+                    this._saveBotAnonState();
+                } else {
+                    this._botAnonArmSweep();
+                }
+            }, this._botAnonSyncDelayMs());
         },
 
         _botAnonRefreshSubs() {
-            try {
-                if (typeof this._scheduleEphemeralSubRefresh === 'function') this._scheduleEphemeralSubRefresh();
-            } catch (_) { }
+            if (typeof this._invalidateEphPkCache === 'function') this._invalidateEphPkCache();
         },
 
         _botAnonKem(entry) {
@@ -393,18 +470,49 @@
             return !!(pubkey && this.botAnonEnabled() && this.isVerifiedBot && this.isVerifiedBot(pubkey));
         },
 
+        _botAnonReactionLane(messageEl, messageId) {
+            if (!messageEl || messageEl.dataset.isPM !== '1' || messageEl.dataset.groupId) return null;
+            if (typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(messageId)) return 'anon';
+            const peer = typeof this._pmPeerForElement === 'function' ? this._pmPeerForElement(messageEl) : this.currentPM;
+            if (!peer || !this.isVerifiedBot || !this.isVerifiedBot(peer)) return null;
+            if (typeof this._anonLaneMessageIds === 'function' && this._anonLaneMessageIds(peer, messageId)) return 'anon';
+            return this.botAnonSuppressSendTo(peer) ? 'quiet' : null;
+        },
+
+        async _botAnonSendReaction(messageId, targetPubkey, emoji, remove) {
+            const id = this.botAnonIdentity();
+            const bot = this.verifiedBot && this.verifiedBot.pubkey;
+            if (!id || !bot) return false;
+            const rumor = {
+                kind: 7,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [['e', messageId], ['p', targetPubkey === bot ? bot : id.pk], ['k', '1059'],
+                    ...(remove ? [['action', 'remove']] : []),
+                    ...this.customEmojiTagsForContent(emoji, null, { anon: true })],
+                content: emoji,
+                pubkey: id.pk
+            };
+            for (const to of [bot, id.pk]) {
+                const w = await this.nip59WrapEventAsync(rumor, id.sk, to, null);
+                if (typeof this._markAnonLane === 'function') this._markAnonLane([w.id]);
+                this.sendDMToRelays(['EVENT', w]);
+            }
+            return true;
+        },
+
         _botAnonSenderFor(recipientPubkey) {
             if (!this.isVerifiedBot || !this.isVerifiedBot(recipientPubkey)) return null;
             if (!this.botAnonEnabled()) return null;
             const blocked = this.botAnonBlockedReason();
             if (blocked) throw new Error('Anonymous Nymbot chat: ' + blocked);
-            const id = this._botAnonEnsure();
+            const id = this._botAnonEnsure({ send: true });
             if (!id) throw new Error('Anonymous Nymbot chat is unavailable right now.');
             return id;
         },
 
         async _sendAnonBotPM(content, recipientPubkey, options) {
-            const id = this._botAnonEnsure();
+            if (options && options.anonLane && !this.botAnonIdentity()) throw new Error('Anonymous Nymbot chat is not ready on this device yet.');
+            const id = this._botAnonEnsure({ send: true });
             if (!id) throw new Error('No anonymous Nymbot identity');
             const nowMs = Date.now();
             const now = Math.floor(nowMs / 1000);
@@ -500,7 +608,7 @@
                 this.pmMessages.set(conversationKey, pmList.slice(-this.pmStorageLimit));
             }
             this.persistPMMessages(conversationKey);
-            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
+            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now(), true);
             this.movePMToTop(recipientPubkey);
             if (this.inPMMode && this.currentPM === recipientPubkey) {
                 this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
@@ -513,7 +621,7 @@
             const key = this._botAnonKey();
             if (!key || !this._botAnon) return;
             let json;
-            try { json = JSON.stringify(this.botAnonSerialize()); } catch (_) { return; }
+            try { json = JSON.stringify(this.botAnonSerialize({ local: true })); } catch (_) { return; }
             try {
                 if (typeof this.vaultEnabled === 'function' && this.vaultEnabled()) {
                     if (!this._vaultKey) return;
@@ -523,20 +631,113 @@
                         try { localStorage.setItem(key, blob); } catch (_) { }
                     }).catch(() => { });
                 } else {
-                    localStorage.setItem(key, json);
+                    const seq = (this._botAnonSaveSeq = (this._botAnonSaveSeq || 0) + 1);
+                    this._botAnonLocalSeal(json).then(blob => {
+                        if (seq !== this._botAnonSaveSeq) return;
+                        try {
+                            if (blob) localStorage.setItem(key, blob);
+                            else localStorage.removeItem(key);
+                        } catch (_) { }
+                    }).catch(() => { });
                 }
             } catch (_) { }
         },
 
-        botAnonSerialize() {
+        async _botAnonLocalKey() {
+            const sk = this.privkey;
+            if (!(sk instanceof Uint8Array) || sk.length !== 32 || !(self.crypto && crypto.subtle)) return null;
+            if (this._botAnonLk && this._botAnonLk.sk === sk) return this._botAnonLk.key;
+            const label = enc.encode('nym-botanon-local-v1');
+            const buf = new Uint8Array(label.length + sk.length);
+            buf.set(label);
+            buf.set(sk, label.length);
+            const raw = await crypto.subtle.digest('SHA-256', buf);
+            buf.fill(0);
+            const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+            this._botAnonLk = { sk, key };
+            return key;
+        },
+
+        _botAnonDeviceKey() {
+            if (this._botAnonDk) return this._botAnonDk;
+            const p = new Promise((resolve) => {
+                if (!(self.indexedDB && self.crypto && crypto.subtle)) { resolve(null); return; }
+                let req;
+                try { req = indexedDB.open('nym-device-key', 1); } catch (_) { resolve(null); return; }
+                req.onupgradeneeded = () => { try { req.result.createObjectStore('k'); } catch (_) { } };
+                req.onerror = () => resolve(null);
+                req.onblocked = () => resolve(null);
+                req.onsuccess = () => {
+                    const db = req.result;
+                    const done = (k) => { try { db.close(); } catch (_) { } resolve(k || null); };
+                    const read = (then) => {
+                        try {
+                            const g = db.transaction('k', 'readonly').objectStore('k').get('botanon');
+                            g.onsuccess = () => then(g.result || null);
+                            g.onerror = () => then(null);
+                        } catch (_) { then(null); }
+                    };
+                    read(async (have) => {
+                        if (have) { done(have); return; }
+                        let key;
+                        try { key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']); } catch (_) { done(null); return; }
+                        try {
+                            const tx = db.transaction('k', 'readwrite');
+                            tx.objectStore('k').add(key, 'botanon');
+                            tx.oncomplete = () => done(key);
+                            tx.onabort = () => read(done);
+                        } catch (_) { done(null); }
+                    });
+                };
+            });
+            this._botAnonDk = p.then((k) => { if (!k) this._botAnonDk = null; return k; });
+            return this._botAnonDk;
+        },
+
+        async _botAnonLocalSeal(json) {
+            let key = await this._botAnonLocalKey();
+            let tag = 'idk:v1:';
+            if (!key) {
+                key = await this._botAnonDeviceKey();
+                tag = 'ddk:v1:';
+            }
+            if (!key) return null;
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(json)));
+            const out = new Uint8Array(iv.length + ct.length);
+            out.set(iv);
+            out.set(ct, iv.length);
+            let bin = '';
+            for (let i = 0; i < out.length; i++) bin += String.fromCharCode(out[i]);
+            return tag + btoa(bin);
+        },
+
+        async _botAnonLocalOpen(blob) {
+            const key = String(blob).startsWith('ddk:v1:') ? await this._botAnonDeviceKey() : await this._botAnonLocalKey();
+            if (!key) return null;
+            const bin = atob(String(blob).slice(7));
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes.slice(0, 12) }, key, bytes.slice(12));
+            return new TextDecoder().decode(pt);
+        },
+
+        botAnonSerialize(opts) {
             const st = this._botAnon || {};
             const one = (e) => ({ sk: hex(e.sk), pk: e.pk, root: hex(e.root), createdAt: e.createdAt || 0 });
-            return {
+            const out = {
                 current: st.current ? one(st.current) : null,
                 prev: (st.prev || []).slice(0, ANON_PREV_MAX).map(one),
                 tokens: (st.tokens || []).slice(0, ANON_TOKEN_MAX),
                 pending: st.pending || null
             };
+            if (opts && opts.local) {
+                out.unsent = !!st.unsent;
+                out.sent = !!st.sent;
+                out.quietAt = st.quietAt || 0;
+                out.sweepDue = !!st.sweepDue;
+            }
+            return out;
         },
 
         botAnonDeserialize(data) {
@@ -552,7 +753,11 @@
                 current,
                 prev: (Array.isArray(data.prev) ? data.prev : []).map(one).filter(Boolean).slice(0, ANON_PREV_MAX),
                 tokens: Array.isArray(data.tokens) ? data.tokens.slice(0, ANON_TOKEN_MAX) : [],
-                pending: data.pending || null
+                pending: data.pending || null,
+                unsent: data.unsent === true,
+                sent: data.sent === true,
+                quietAt: Number(data.quietAt) || 0,
+                sweepDue: data.sweepDue === true
             };
         },
 
@@ -570,13 +775,16 @@
             try {
                 let raw = localStorage.getItem(key);
                 if (raw) {
-                    if (String(raw).startsWith('enc:v1:')) {
+                    if (String(raw).startsWith('idk:v1:') || String(raw).startsWith('ddk:v1:')) {
+                        raw = await this._botAnonLocalOpen(raw).catch(() => null);
+                        if (raw && typeof this.vaultEnabled === 'function' && this.vaultEnabled() && this._vaultKey) migrate = true;
+                    } else if (String(raw).startsWith('enc:v1:')) {
                         if (typeof this.vaultEnabled === 'function' && this.vaultEnabled() && this._vaultKey) {
                             raw = await this._vaultDecrypt(raw);
                         } else {
                             raw = null;
                         }
-                    } else if (typeof this.vaultEnabled === 'function' && this.vaultEnabled() && this._vaultKey) {
+                    } else {
                         migrate = true;
                     }
                 }
@@ -600,25 +808,40 @@
                 this._botAnonRefreshSubs();
                 this._botAnonFlushVouchers();
             }
+            this._botAnonArmSync();
+            this._botAnonArmSweep();
         },
 
         botAnonApplySynced(data) {
             const parsed = this.botAnonDeserialize(data);
             if (!parsed) return;
             if (!this._botAnon) this._botAnon = { current: null, prev: [], tokens: [], pending: null };
-            const cur = this._botAnon && this._botAnon.current;
+            const st = this._botAnon;
+            const cur = st.current;
+            const pks = (s) => ({ current: s.current ? s.current.pk : null, prev: (s.prev || []).map((e) => e.pk), createdAt: s.current ? s.current.createdAt || 0 : 0 });
+            const out = window.NymAnonNymbot.settleKeys(pks(st), pks(parsed), ANON_PREV_MAX);
+            const byPk = new Map();
+            for (const e of [parsed.current, ...parsed.prev, cur, ...(st.prev || [])]) if (e) byPk.set(e.pk, e);
+            const prevBefore = (st.prev || []).map((e) => e.pk).join(',');
+            st.current = byPk.get(out.current) || cur;
+            st.prev = out.prev.map((pk) => byPk.get(pk)).filter(Boolean);
+            const same = !!cur && cur.pk === st.current.pk;
             if (cur && cur.pk === parsed.current.pk) {
-                if (!this._botAnon.tokens || !this._botAnon.tokens.length) this._botAnon.tokens = parsed.tokens;
-                return;
-            }
-            if (cur && (cur.createdAt || 0) > (parsed.current.createdAt || 0)) {
-                this._botAnonAdoptPrev(parsed.current);
+                if (!st.tokens || !st.tokens.length) st.tokens = parsed.tokens;
+            } else {
                 this._botAnonMergeTokens(parsed.tokens);
-                this._saveBotAnonState();
+            }
+            if ((out.rule === 'lower' || out.rule === 'newer') && !st.sweepDue) {
+                st.sweepDue = true;
+                this._botAnonArmSweep();
+            }
+            if (same) {
+                if (st.prev.map((e) => e.pk).join(',') !== prevBefore || out.loser) {
+                    this._saveBotAnonState();
+                    this._botAnonRefreshSubs();
+                }
                 return;
             }
-            if (cur) parsed.prev = [cur, ...parsed.prev].slice(0, ANON_PREV_MAX);
-            this._botAnon = parsed;
             this._botAnonKemCache = null;
             this._botAnonAnnCache = null;
             this._saveBotAnonState();
@@ -641,7 +864,7 @@
             }
         },
 
-        async botAnonSweepPrev() {
+        async botAnonSweepPrev(opts) {
             const st = this._botAnon;
             if (!st || !st.current || !(st.prev || []).length) return 0;
             if (st.pending) {
@@ -682,7 +905,12 @@
                     }
                 }
             }
-            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000, { wanted: true });
+            if (issued > 0 && opts && opts.quiet) {
+                this._botAnon.unsent = true;
+                this._botAnon.quietAt = Date.now();
+                this._saveBotAnonState();
+                this._botAnonArmSync();
+            } else if (issued > 0 && typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000, { wanted: true });
             return issued;
         },
 
@@ -699,12 +927,9 @@
             this._botAnonOn = !!on;
             try { localStorage.setItem('nym_botanon_enabled', on ? 'true' : 'false'); } catch (_) { }
             if (on && !this._botAnonLoaded) await this._loadBotAnonState();
-            if (on) {
-                this._botAnonEnsure();
-                this._botAnonFlushVouchers();
-            }
+            if (on && this._botAnon && this._botAnon.current) this._botAnonFlushVouchers();
             this._saveBotAnonState();
-            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500, { wanted: true });
+            this.notePrefChanged('botAnonEnabled');
             this._refreshBotControlBar();
             this._refreshBotCreditMeta();
         },
@@ -720,7 +945,7 @@
             this._botAnonRefreshSubs();
             let moved = 0;
             if (sweep) moved = await this.botAnonSweepPrev();
-            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500, { wanted: true });
+            if (sweep && typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500, { wanted: true });
             this._refreshBotCreditMeta();
             return moved;
         },

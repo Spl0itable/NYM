@@ -60,7 +60,7 @@ Object.assign(NYM.prototype, {
         body = this._notifPreviewText(rawBody);
         if (!this.notificationsEnabled) return;
 
-        const baseTitle = this.parseNymFromDisplay(title);
+        const baseTitle = this.displayTextFromLabel(title);
 
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
@@ -359,6 +359,11 @@ Object.assign(NYM.prototype, {
         _nymNotifTapPump();
     },
 
+    _notifRowAvatar(n, pubkey) {
+        const type = n && n.channelInfo && n.channelInfo.type;
+        return type === 'group-invite' ? this.generateAvatarSvg(pubkey) : this.getAvatarUrl(pubkey);
+    },
+
     _notifTapReady(r) {
         if (this._notifTapsOpen !== true || !r || typeof r !== 'object') return false;
         const g = r.type === 'reaction' ? (r.sourceType === 'group' ? r.sourceGroupId : '') : (r.type === 'group' || r.type === 'call' ? r.groupId : '');
@@ -391,6 +396,8 @@ Object.assign(NYM.prototype, {
             this.openUserPM(r.nym || nymOf(r.pubkey), r.pubkey);
         } else if (r.type === 'group') {
             this.openGroup(r.groupId);
+        } else if (r.type === 'group-invite') {
+            if (typeof this.openGroupInvites === 'function') this.openGroupInvites(r.groupId);
         } else if (r.type === 'geohash') {
             this.switchChannel(r.channel, r.geohash);
         } else if (r.type === 'call') {
@@ -459,7 +466,7 @@ Object.assign(NYM.prototype, {
         body = this._notifPreviewText(rawBody);
         if (!this.notificationsEnabled) return;
 
-        const baseTitle = this.parseNymFromDisplay(title);
+        const baseTitle = this.displayTextFromLabel(title);
 
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
@@ -647,6 +654,25 @@ Object.assign(NYM.prototype, {
         this._saveSeenNotificationKeys();
         this._saveNotificationHistorySoon();
         this._updateNotificationBadge();
+        this._refreshNotificationsModalIfOpen();
+        return true;
+    },
+
+    _notifRetext(ids, body) {
+        const want = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+        if (!want.length || typeof body !== 'string' || !body || !Array.isArray(this.notificationHistory)) return false;
+        let hit = false;
+        for (const n of this.notificationHistory) {
+            if (!n || n.locked === true) continue;
+            if (want.indexOf(n.eventId || (n.channelInfo && n.channelInfo.eventId) || '') < 0) continue;
+            const held = this._notifQuoted(n.channelInfo).length ? this._notifQuoted(n.channelInfo) : this._notifQuoted(n);
+            const next = this._notifPreviewText(this._notifCleanBody(body, held));
+            if (n.body === next) continue;
+            n.body = next;
+            hit = true;
+        }
+        if (!hit) return false;
+        this._saveNotificationHistorySoon();
         this._refreshNotificationsModalIfOpen();
         return true;
     },
@@ -1008,7 +1034,7 @@ Object.assign(NYM.prototype, {
             this.threadLastRead = new Map(newest);
         }
         try { localStorage.setItem('nym_thread_last_read', JSON.stringify(Object.fromEntries(this.threadLastRead))); } catch (_) { }
-        if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
+        if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1(false, convKey);
         return true;
     },
 
@@ -1319,10 +1345,8 @@ Object.assign(NYM.prototype, {
                 const target = n.channelInfo || this._notifSyncedTarget(n);
                 if (target) item.style.cursor = 'pointer';
                 const dt = new Date(n.timestamp);
-                const time = dt.toLocaleString([], {
-                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-                    hour12: this.settings.timeFormat === '12hr'
-                });
+                const time = this._formatRelativeTime(n.timestamp);
+                const fullTime = this._rowTimeFormat('full', dt).format(dt);
 
                 const hiddenChat = typeof this._clNotifHidden === 'function' && this._clNotifHidden(n);
                 const pubkey = hiddenChat ? '' : (n.senderPubkey || n.channelInfo?.pubkey || '');
@@ -1334,7 +1358,7 @@ Object.assign(NYM.prototype, {
                 if (hiddenChat) {
                     authorHtml = `<span class="notification-item-author">${this.escapeHtml(this._clRedactText().title)}</span>`;
                 } else if (pubkey) {
-                    const avatarSrc = this.getAvatarUrl(pubkey);
+                    const avatarSrc = this._notifRowAvatar(n, pubkey);
                     const safePk = this._safePubkey(pubkey);
                     avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
                     const baseNym = this.resolveDisplayNym(pubkey, shownTitle(n.senderNym || ''));
@@ -1345,7 +1369,7 @@ Object.assign(NYM.prototype, {
                         : this.isVerifiedBot(pubkey)
                             ? '<span class="verified-badge" data-tip="Nymchat Bot">✓</span>'
                             : '';
-                    authorHtml = `<span class="notification-item-author" data-notif-pubkey="${this.escapeHtml(pubkey)}"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span><span class="nym-bracket">&gt;</span>${flairHtml} ${verifiedBadge}</span>`;
+                    authorHtml = `<span class="notification-item-author" data-notif-pubkey="${this.escapeHtml(pubkey)}"><span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(baseNym, suffix)}<span class="nym-bracket">&gt;</span>${flairHtml} ${verifiedBadge}</span>`;
                 } else if (n.title) {
                     authorHtml = `<span class="notification-item-author"><span class="nym-bracket">&lt;</span>${this.escapeHtml(shownTitle(n.title))}<span class="nym-bracket">&gt;</span></span>`;
                 }
@@ -1403,10 +1427,12 @@ Object.assign(NYM.prototype, {
                         <div class="notification-item-meta">
                             <div class="notification-item-title">${authorHtml}</div>
                             ${bodyHtml}
-                            <div class="notification-item-footer">${contextHtml} <span class="notification-item-time" data-no-i18n>${time}</span></div>
+                            <div class="notification-item-footer">${contextHtml} <span class="notification-item-time" data-no-i18n data-ts="${Number(n.timestamp) || 0}" title="${this.escapeHtml(fullTime)}">${this.escapeHtml(time)}</span></div>
                         </div>
                     </div>
                 `;
+                const timeEl = item.querySelector('.notification-item-time');
+                if (timeEl) this._bindNotificationTimeLongPress(timeEl);
                 if (target) {
                     item.onclick = () => this._openNotificationTarget(n);
                 }
@@ -1415,9 +1441,59 @@ Object.assign(NYM.prototype, {
         }
 
         modal.classList.add('active');
+        if (typeof this._ensureBubbleRelativeTimer === 'function') this._ensureBubbleRelativeTimer();
         this._markListedNotificationsSeen(recent);
         const markAllBtn = document.getElementById('markAllNotificationsReadBtn');
         if (markAllBtn) markAllBtn.classList.toggle('nm-hidden', !recent.some(n => !n.viewed));
+    },
+
+    _bindNotificationTimeLongPress(timeEl) {
+        let timer = null;
+        let fired = false;
+        let startX = 0;
+        let startY = 0;
+        const cancel = () => {
+            if (timer) clearTimeout(timer);
+            timer = null;
+        };
+        timeEl.addEventListener('pointerdown', (e) => {
+            fired = false;
+            cancel();
+            if (e.pointerType === 'mouse') return;
+            startX = e.clientX;
+            startY = e.clientY;
+            timer = setTimeout(() => {
+                timer = null;
+                fired = true;
+                const full = timeEl.getAttribute('title') || '';
+                if (full && typeof this.showTimestampPopup === 'function') this.showTimestampPopup(timeEl, full);
+            }, 500);
+        });
+        timeEl.addEventListener('pointermove', (e) => {
+            if (timer && Math.hypot(e.clientX - startX, e.clientY - startY) > 10) cancel();
+        });
+        timeEl.addEventListener('pointerup', cancel);
+        timeEl.addEventListener('pointercancel', cancel);
+        timeEl.addEventListener('contextmenu', (e) => {
+            if (timer || fired) e.preventDefault();
+        });
+        timeEl.addEventListener('click', (e) => {
+            if (!fired) return;
+            fired = false;
+            e.stopPropagation();
+            e.preventDefault();
+        });
+    },
+
+    _refreshNotificationRelativeTimes() {
+        const modal = document.getElementById('notificationsModal');
+        if (!modal || !modal.classList.contains('active')) return;
+        modal.querySelectorAll('.notification-item-time[data-ts]').forEach(el => {
+            const ts = parseInt(el.dataset.ts);
+            if (!ts) return;
+            const next = this._formatRelativeTime(ts);
+            if (el.textContent !== next) el.textContent = next;
+        });
     },
 
     _notifNewKey(n) {
@@ -1442,7 +1518,7 @@ Object.assign(NYM.prototype, {
     updateNotificationModalProfile(pubkey, profileName) {
         const modal = document.getElementById('notificationsModal');
         if (!modal || !modal.classList.contains('active')) return;
-        const baseNym = this.resolveDisplayNym(pubkey, profileName || '').substring(0, 20);
+        const baseNym = window.NymSuffix.capBase(this.resolveDisplayNym(pubkey, profileName || ''));
         const suffix = this.getPubkeySuffix(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
@@ -1451,12 +1527,13 @@ Object.assign(NYM.prototype, {
                 ? '<span class="verified-badge" data-tip="Nymchat Bot">✓</span>'
                 : '';
         modal.querySelectorAll(`.notification-item-author[data-notif-pubkey="${this.escapeHtml(pubkey)}"]`).forEach(el => {
-            el.innerHTML = `<span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span><span class="nym-bracket">&gt;</span>${flairHtml} ${verifiedBadge}`;
+            el.innerHTML = `<span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(baseNym, suffix)}<span class="nym-bracket">&gt;</span>${flairHtml} ${verifiedBadge}`;
         });
     },
 
     closeNotificationsModal() {
         this._notifNewKeys = null;
+        if (typeof this.closeTimestampPopup === 'function') this.closeTimestampPopup();
         const modal = document.getElementById('notificationsModal');
         if (modal) {
             modal.classList.remove('active');

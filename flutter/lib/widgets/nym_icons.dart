@@ -550,10 +550,6 @@ class NymIcons {
       '<svg viewBox="0 0 16 16" fill="currentColor">'
       '<path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
 
-  static const String revealArrowDown =
-      '<svg viewBox="0 0 16 16" fill="currentColor">'
-      '<path d="M 3 6 L 8 11 L 13 6 Z"/></svg>';
-
   /// Used for both visibility states; the PWA never swaps to an eye-off glyph.
   static const String nsecEye =
       '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'

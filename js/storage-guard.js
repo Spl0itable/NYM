@@ -191,10 +191,19 @@
             if (held.size) arm();
         };
         const arm = () => { if (!timer) timer = setTimeout(flush, RETRY_MS); };
+        const mem = new Map();
         const guarded = function (key, value) {
             if (this !== store) return nativeSet.call(this, key, value);
             const k = String(key);
             const v = String(value);
+            if (k.indexOf('nymacct:') !== 0 && api.namesSession(k, v)) {
+                mem.set(k, v);
+                held.delete(k);
+                const prior = nativeGet.call(store, k);
+                if (prior !== null && api.namesSession(k, prior)) nativeRemove.call(store, k);
+                return;
+            }
+            if (mem.size) mem.delete(k);
             const r = write(store, nativeSet, nativeRemove, k, v, lang());
             if (r.ok) { held.delete(k); return; }
             if (strict && r.user) throw r.error;
@@ -205,6 +214,13 @@
         guarded.__nymGuard = true;
         proto.setItem = guarded;
         proto.getItem = function (key) {
+            if (this === store && mem.size) {
+                const k = String(key);
+                if (mem.has(k)) {
+                    if (api.namesSession(k, mem.get(k))) return mem.get(k);
+                    mem.delete(k);
+                }
+            }
             if (this === store && held.size) {
                 const k = String(key);
                 if (held.has(k)) return held.get(k);
@@ -213,12 +229,14 @@
         };
         proto.removeItem = function (key) {
             if (this === store && held.size) held.delete(String(key));
+            if (this === store && mem.size) mem.delete(String(key));
             return nativeRemove.call(this, key);
         };
         if (typeof nativeClear === 'function') {
             proto.clear = function () {
                 if (this === store) {
                     held.clear();
+                    mem.clear();
                     if (timer) { clearTimeout(timer); timer = null; }
                 }
                 return nativeClear.call(this);
@@ -226,6 +244,16 @@
         }
         api.set = function (key, value) {
             try { store.setItem(key, value); return true; } catch (_) { return false; }
+        };
+        api.releaseSession = (retired) => {
+            if (!mem.size) return;
+            const list = (retired || []).filter(Boolean);
+            const entries = [...mem];
+            mem.clear();
+            for (const [k, v] of entries) {
+                if (list.some((n) => k.includes(n) || v.includes(n))) continue;
+                try { guarded.call(store, k, v); } catch (_) { }
+            }
         };
         api.held = () => [...held.keys()];
         api.heldEntries = () => [...held];
@@ -239,8 +267,21 @@
     }
 
     api.install = install;
+    api.sessionNeedles = null;
+    api.namesSession = function (key, value) {
+        const fn = api.sessionNeedles;
+        if (typeof fn !== 'function') return false;
+        let list = null;
+        try { list = fn(); } catch (_) { list = null; }
+        if (!list || !list.length) return false;
+        const k = String(key == null ? '' : key);
+        const v = String(value == null ? '' : value);
+        for (const n of list) if (n && (k.includes(n) || v.includes(n))) return true;
+        return false;
+    };
     api.openKeys = () => (self.nym && typeof self.nym._unreadOpenKeys === 'function' ? self.nym._unreadOpenKeys() : null);
     api.set = function () { return false; };
+    api.releaseSession = () => { };
     api.held = () => [];
     api.heldEntries = () => [];
     api.drop = () => { };

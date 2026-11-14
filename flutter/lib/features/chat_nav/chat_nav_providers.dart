@@ -51,6 +51,7 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
     KeyValueChatToolsPrefs(kv),
     ChatNavHooks(
       selfPubkey: () => ref.read(appStateProvider).selfPubkey,
+      selfWrapPq2: () => ref.read(nostrControllerProvider).selfWrapPq2,
       online: () => ref.read(appStateProvider).connectedRelays > 0,
       hydrated: () => ref.read(nostrControllerProvider).savesHydrated,
       syncAllowed: () => ref.read(nostrControllerProvider).savedSyncAllowed,
@@ -101,6 +102,8 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
           ref.read(nostrControllerProvider).scheduleBlockContext(key),
       sendText: (key, text) =>
           ref.read(nostrControllerProvider).sendScheduledText(key, text),
+      laneRefusal: (key, threadRoot) =>
+          ref.read(nostrControllerProvider).scheduleLaneRefusal(key, threadRoot),
       groupSendBlocked: (key, text) => ref
           .read(groupToolsProvider)
           .sendBlockedReason(chatNavAlias(key), text),

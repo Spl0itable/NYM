@@ -474,6 +474,12 @@
         return cps.length > PEEK_CONTENT_MAX ? cps.slice(0, PEEK_CONTENT_MAX).join('') + '…' : flat;
     }
 
+    function labelVerifyLinks(s, label) {
+        const BV = G.NymBitchatVerify;
+        if (!BV || typeof BV.labelBitchatVerifyLinks !== 'function') return s;
+        return BV.labelBitchatVerifyLinks(s, typeof label === 'string' && label ? label : BV.LABEL);
+    }
+
     function summarizePeek(events, opts) {
         const o = opts || {};
         const gh = String(o.geohash || '').toLowerCase();
@@ -501,7 +507,7 @@
         for (const e of valid) if (e.created_at >= nowSec - ONLINE_WINDOW_SEC) online.add(e.pubkey);
         const newest = valid.slice().sort((a, b) => (b.created_at - a.created_at) || cmp(a.id, b.id)).slice(0, limit);
         const messages = newest.map((e) => ({
-            id: e.id, pubkey: e.pubkey, nym: tagValue(e.tags, 'n') || '', content: clip(e.content), createdAt: e.created_at,
+            id: e.id, pubkey: e.pubkey, nym: tagValue(e.tags, 'n') || '', content: clip(labelVerifyLinks(e.content, o.verifyLabel)), createdAt: e.created_at,
         }));
         return { messages, online: online.size, total: valid.length, capped: o.capped === true };
     }

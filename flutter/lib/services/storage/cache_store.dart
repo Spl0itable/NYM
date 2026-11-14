@@ -11,6 +11,7 @@ import 'package:sqflite_sqlcipher/sqflite.dart';
 import '../../core/constants/history_window.dart';
 import '../../core/crypto/keys.dart' as keys;
 import '../../features/accounts/account_logic.dart';
+import '../../features/messages/encrypted_blob.dart';
 import '../../models/message.dart';
 import '../../models/user.dart';
 import 'account_scope.dart';
@@ -287,6 +288,18 @@ class CacheStore {
 
   // Channel messages
 
+  static List<Message> _withoutBlobs(
+      List<Message> messages, Set<String> blobIds) {
+    bool drop(Message m) =>
+        isDroppedChannelContent(m.content) ||
+        (m.threadRoot != null && blobIds.contains(m.threadRoot));
+    if (!messages.any(drop)) return messages;
+    return [
+      for (final m in messages)
+        if (!drop(m)) m,
+    ];
+  }
+
   /// Drops aged-out channel messages, then pins back thread roots the survivors reply to.
   static List<Message> _withinChannelWindow(List<Message> messages) {
     if (messages.isEmpty) return messages;
@@ -373,18 +386,32 @@ class CacheStore {
   }
 
   /// Loads every cached channel history by storage key; empty or corrupt records are skipped.
-  Future<Map<String, List<Message>>> loadAllChannelMessages() async {
+  Future<Map<String, List<Message>>> loadAllChannelMessages(
+      {void Function(String id)? onBlob}) async {
     final all = await _loadAllMessages('channels');
+    final blobIds = <String>{
+      for (final msgs in all.values)
+        for (final m in msgs)
+          if (m.id.isNotEmpty && isDroppedChannelContent(m.content)) m.id,
+    };
+    if (onBlob != null) blobIds.forEach(onBlob);
     // Drop aged-out history on load; rows that empty out are deleted.
     final drop = <String>[];
+    final purged = <String>[];
     all.updateAll((key, msgs) {
-      final kept = _withinChannelWindow(msgs);
+      final clean = _withoutBlobs(msgs, blobIds);
+      if (!identical(clean, msgs)) purged.add(key);
+      final kept = _withinChannelWindow(clean);
       if (kept.isEmpty) drop.add(key);
       return kept;
     });
     for (final key in drop) {
       all.remove(key);
       await _database.delete('channels', where: 'key = ?', whereArgs: [key]);
+    }
+    for (final key in purged) {
+      final kept = all[key];
+      if (kept != null) await saveChannelMessages(key, kept);
     }
     return all;
   }

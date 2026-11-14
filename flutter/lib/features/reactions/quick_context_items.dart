@@ -15,6 +15,7 @@ import '../../widgets/context_menu/report_modal.dart';
 import '../chat_tools/chat_tools_providers.dart';
 import '../chat_tools/chat_tools_ui.dart';
 import '../i18n/i18n.dart';
+import '../reports/report_record.dart';
 import '../zaps/zap_modal.dart';
 import '../toasts/toast_center.dart';
 import 'message_actions.dart';
@@ -64,6 +65,7 @@ final RegExp _hex64 = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
     edited: message.isEdited,
     hexId: _hex64.hasMatch(message.id),
     bot: message.isBot,
+    anonLane: message.anonLane || (stored?.anonLane ?? false),
   );
   return (facts: facts, stored: stored, modDelete: modDelete);
 }
@@ -91,7 +93,8 @@ List<QuickContextItem> buildQuickContextItems(
             .requestQuote(
                 fullNym: fullNym,
                 content: message.content,
-                messageId: message.id);
+                messageId: message.id,
+                pubkey: message.pubkey);
       case MsgAction.replyPrivately:
         return () => ChatToolsActions.replyPrivately(read, stored);
       case MsgAction.thread:
@@ -133,9 +136,21 @@ List<QuickContextItem> buildQuickContextItems(
     }
   }
 
+  final controller = ref.read(nostrControllerProvider);
+  final reportKey = controller.reportEntryBlocked(message.pubkey, message.id);
+  final reported = reportKey.isNotEmpty;
+
   return [
     for (final a in buildMessageActions(info.facts))
-      if (run(a) case final onTap?)
+      if (a == MsgAction.report && reported)
+        QuickContextItem(
+          id: a.id,
+          label: tr('Reported'),
+          svg: msgActionSvg(a),
+          color: QuickContextItemColor.normal,
+          onTap: () => controller.showReportRefusal(reportKey),
+        )
+      else if (run(a) case final onTap?)
         QuickContextItem(
           id: a.id,
           label: msgActionLabel(a),
@@ -153,10 +168,24 @@ Future<void> _report(
   String fullNym,
 ) async {
   final controller = ref.read(nostrControllerProvider);
+  final entry = controller.reportEntryBlocked(message.pubkey, message.id);
+  if (entry.isNotEmpty) {
+    controller.showReportRefusal(entry);
+    return;
+  }
   await ReportModal.show(
     context,
     targetNym: fullNym,
     hasMessage: message.id.isNotEmpty,
+    reportedChanges: controller.reportedRevision,
+    messageNote: controller.reportMessageLockedNote(message.pubkey, message.id),
+    alreadyReported: (reportMessage) {
+      final k = ReportRecord.keyFor(
+          pubkey: message.pubkey,
+          messageId: message.id,
+          includeMessage: reportMessage);
+      return controller.isTargetReported(k) ? controller.reportRefusal(k) : null;
+    },
     onSubmit: (type, details, reportMessage) {
       controller.submitReport(
         pubkey: message.pubkey,
@@ -174,6 +203,7 @@ Future<void> _zap(
   Message message,
   String baseNym,
 ) async {
+  if (ref.read(nostrControllerProvider).anonLaneZapRefused(message.id)) return;
   showToast(tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
   final String? lnAddr;
   try {

@@ -1,3 +1,5 @@
+import '../core/utils/nym_utils.dart';
+
 enum DeliveryStatus { sending, sent, delivered, read, failed }
 
 /// Row type: ordinary message, system pill, action pill, or `/me` emote.
@@ -54,6 +56,7 @@ class Message {
   Message({
     required this.id,
     required this.author,
+    this.nameAt,
     required this.pubkey,
     required this.content,
     required this.createdAt,
@@ -83,6 +86,8 @@ class Message {
     this.anchorMs,
     this.deliveryStatus = DeliveryStatus.sending,
     this.isEdited = false,
+    this.editAt = 0,
+    this.editId = '',
     this.channel,
     this.geohash,
     this.isFileOffer = false,
@@ -119,6 +124,7 @@ class Message {
 
   String id;
   String author;
+  int? nameAt;
   String pubkey;
   String content;
 
@@ -175,6 +181,10 @@ class Message {
   int? anchorMs;
   DeliveryStatus deliveryStatus;
   bool isEdited;
+
+  int editAt;
+
+  String editId;
 
   String? channel;
   String? geohash;
@@ -240,6 +250,7 @@ class Message {
   Map<String, dynamic> toJson() => {
         'id': id,
         'author': author,
+        if (nameAt != null) 'nameAt': nameAt,
         'pubkey': pubkey,
         'content': content,
         'created_at': createdAt,
@@ -270,6 +281,8 @@ class Message {
         if (anchorMs != null) '_anchorMs': anchorMs,
         'deliveryStatus': deliveryStatus.name,
         'isEdited': isEdited,
+        if (editAt != 0) 'editAt': editAt,
+        if (editId.isNotEmpty) 'editId': editId,
         'channel': channel,
         'geohash': geohash,
         'isFileOffer': isFileOffer,
@@ -331,7 +344,8 @@ class Message {
   factory Message.fromJson(Map<String, dynamic> j) {
     return Message(
       id: j['id'] as String,
-      author: (j['author'] ?? '') as String,
+      author: capNym((j['author'] ?? '') as String),
+      nameAt: (j['nameAt'] as num?)?.toInt(),
       pubkey: (j['pubkey'] ?? '') as String,
       content: (j['content'] ?? '') as String,
       createdAt: (j['created_at'] as num?)?.toInt() ?? 0,
@@ -365,6 +379,8 @@ class Message {
       anchorMs: (j['_anchorMs'] as num?)?.toInt(),
       deliveryStatus: deliveryStatusFromString(j['deliveryStatus'] as String?),
       isEdited: j['isEdited'] == true,
+      editAt: (j['editAt'] as num?)?.toInt() ?? 0,
+      editId: j['editId'] is String ? j['editId'] as String : '',
       channel: j['channel'] as String?,
       geohash: j['geohash'] as String?,
       isFileOffer: j['isFileOffer'] == true,

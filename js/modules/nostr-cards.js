@@ -359,8 +359,7 @@
             const attrs = pubkey
                 ? ` data-action="openNostrProfileCard" data-nostr-pubkey="${esc(pubkey)}" role="button" tabindex="0"`
                 : '';
-            return `<span class="nostr-card-author"${attrs}>${esc(base)}` +
-                `${suffix ? `<span class="nym-suffix">#${esc(suffix)}</span>` : ''}</span>`;
+            return `<span class="nostr-card-author"${attrs}>${window.NymSuffix.sqHtml(base, suffix)}</span>`;
         },
 
         _hydrateCardAuthor(cardEl, data, anon) {

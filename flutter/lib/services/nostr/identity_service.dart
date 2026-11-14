@@ -140,8 +140,15 @@ class IdentityService {
     generatedFreshKey = false;
     final randomPerSession =
         _kv.getBool(StorageKeys.randomKeypairPerSession, defaultValue: false);
-    final savedNick = _kv.getString(StorageKeys.autoEphemeralNick);
+    final storedNick = _kv.getString(StorageKeys.autoEphemeralNick);
+    final savedNick = storedNick == null ? null : capNym(storedNick);
     final nickStyle = _kv.getString(StorageKeys.nickStyle) ?? 'fancy';
+    if (!randomPerSession &&
+        savedNick != null &&
+        savedNick.isNotEmpty &&
+        savedNick != storedNick) {
+      await _kv.setString(StorageKeys.autoEphemeralNick, savedNick);
+    }
 
     if (!randomPerSession) {
       final savedNsec =

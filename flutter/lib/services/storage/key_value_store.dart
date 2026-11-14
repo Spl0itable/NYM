@@ -26,6 +26,37 @@ class KeyValueStore {
 
   static List<String> get held => _held.keys.toList();
 
+  static final Map<Object, Iterable<String> Function()> _sessionNeedles = {};
+  static final Map<SharedPreferences, Map<String, String>> _sessionOnly = {};
+
+  static void holdSessionKeysFor(
+      Object owner, Iterable<String> Function()? needles) {
+    if (needles == null) {
+      _sessionNeedles.remove(owner);
+    } else {
+      _sessionNeedles[owner] = needles;
+    }
+    if (_sessionNeedles.isEmpty) _sessionOnly.clear();
+  }
+
+  static bool _namesSession(String key, String value) {
+    for (final fn in _sessionNeedles.values.toList()) {
+      Iterable<String> list;
+      try {
+        list = fn();
+      } catch (_) {
+        continue;
+      }
+      for (final n in list) {
+        if (n.isNotEmpty && (key.contains(n) || value.contains(n))) return true;
+      }
+    }
+    return false;
+  }
+
+  static Map<String, String>? sessionOnlyFor(SharedPreferences prefs) =>
+      _sessionOnly[prefs];
+
   static String? heldValue(String key) => _held[key]?.value;
 
   static SharedPreferences _root(SharedPreferences p) =>
@@ -110,8 +141,20 @@ class KeyValueStore {
     });
   }
 
-  String? getString(String key) =>
-      (_dead(_prefs) ? null : heldValue(key)) ?? _prefs.getString(key);
+  void releaseSession(Iterable<String> retired) {
+    final mem = _sessionOnly.remove(_prefs);
+    if (mem == null || mem.isEmpty) return;
+    final list = [for (final n in retired) if (n.isNotEmpty) n];
+    for (final e in mem.entries) {
+      if (list.any((n) => e.key.contains(n) || e.value.contains(n))) continue;
+      unawaited(guardedSetString(_prefs, e.key, e.value));
+    }
+  }
+
+  String? getString(String key) {
+    if (_dead(_prefs)) return _prefs.getString(key);
+    return _sessionOnly[_prefs]?[key] ?? heldValue(key) ?? _prefs.getString(key);
+  }
 
   Future<void> setString(String key, String value) =>
       guardedSetString(_prefs, key, value);
@@ -119,6 +162,14 @@ class KeyValueStore {
   static Future<void> guardedSetString(
       SharedPreferences prefs, String key, String value) async {
     if (_dead(prefs)) return;
+    if (_sessionNeedles.isNotEmpty && _namesSession(key, value)) {
+      (_sessionOnly[prefs] ??= {})[key] = value;
+      dropHeld(key);
+      final prior = prefs.get(key);
+      if (prior != null && _namesSession(key, '$prior')) await prefs.remove(key);
+      return;
+    }
+    _sessionOnly[prefs]?.remove(key);
     final root = _root(prefs);
     final since = _seq;
     final done = Completer<void>();
@@ -173,19 +224,28 @@ class KeyValueStore {
 
   Future<void> remove(String key) {
     if (!_dead(_prefs)) dropHeld(key);
+    _sessionOnly[_prefs]?.remove(key);
     return _prefs.remove(key);
   }
 
   /// Drops every stored key for the panic wipe; never used on sign-out, which keeps device prefs.
   Future<void> clear() {
     if (!_dead(_prefs)) dropHeld();
+    _sessionOnly.remove(_prefs);
     return _prefs.clear();
   }
 
   bool contains(String key) =>
-      (!_dead(_prefs) && _held.containsKey(key)) || _prefs.containsKey(key);
+      (!_dead(_prefs) &&
+          (_held.containsKey(key) ||
+              (_sessionOnly[_prefs]?.containsKey(key) ?? false))) ||
+      _prefs.containsKey(key);
 
-  Set<String> get keys => _prefs.getKeys();
+  Set<String> get keys {
+    final mem = _dead(_prefs) ? null : _sessionOnly[_prefs];
+    if (mem == null || mem.isEmpty) return _prefs.getKeys();
+    return {..._prefs.getKeys(), ...mem.keys};
+  }
 
   /// PWA semantics: `localStorage.getItem(k) === 'true'`.
   bool getBool(String key, {bool defaultValue = false}) {

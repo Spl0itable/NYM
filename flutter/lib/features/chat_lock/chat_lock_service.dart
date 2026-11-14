@@ -242,6 +242,10 @@ class ChatLockService {
           ?.call(t(ChatLockStrings.lockCap, {'n': ChatLockLimits.lockMax}));
       return false;
     }
+    if (r.error == 'size') {
+      hooks.notice?.call(t(ChatLockStrings.lockFull));
+      return false;
+    }
     if (r.error != null) return false;
     sessionEvent('unlock');
     _commit(r.state);
