@@ -239,7 +239,7 @@ Object.assign(NYM.prototype, {
                 const bio = this.userBios.get(this.pubkey) || '';
                 profileToSave = holdName ? {} : { name: this.nym, display_name: this.nym };
                 profileToSave.lud16 = this.lightningAddress;
-                profileToSave.about = bio || `Nymchat user`;
+                profileToSave.about = bio || ``;
 
                 const avatarUrl = this.userAvatars.get(this.pubkey);
                 if (avatarUrl) {
