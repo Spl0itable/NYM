@@ -312,7 +312,7 @@ function aiRun(ai, model, input, options) {
 var NYMCHAT_VERSION = "3.75.545";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel bot uses one model; the premium private bot routes per task.
-var BOT_MODEL_DEFAULT = "@cf/qwen/qwen3.8-27b";
+var BOT_MODEL_DEFAULT = "@cf/zai-org/glm-4.7-flash";
 // Small, fast, non-reasoning model for short structured one-shots.
 var BOT_MODEL_UTILITY = "@cf/meta/llama-3.1-8b-instruct-fast";
 // Qwen3's soft switch for its hybrid reasoning mode.
