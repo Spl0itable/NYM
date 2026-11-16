@@ -72,7 +72,7 @@ export const SPAM_RESTORED_KEY = "restored";
 const RESTORED_MAX = 500;
 const RESTORED_WINDOW_MS = 7 * 86400000;
 export const SPAM_ACTOR = "ai-spam";
-export const DEFAULT_SPAM_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
+export const DEFAULT_SPAM_MODEL = "@cf/qwen/qwen3.8-27b";
 const NO_THINK_SUFFIX = "\n\n/no_think";
 
 export const BUILTIN_EXEMPT_PUBKEYS = [
