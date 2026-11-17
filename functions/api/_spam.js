@@ -72,7 +72,7 @@ export const SPAM_RESTORED_KEY = "restored";
 const RESTORED_MAX = 500;
 const RESTORED_WINDOW_MS = 7 * 86400000;
 export const SPAM_ACTOR = "ai-spam";
-export const DEFAULT_SPAM_MODEL = "@cf/zai-org/glm-5.3-flash";
+export const DEFAULT_SPAM_MODEL = "@cf/zai-org/glm-4.7-flash";
 const NO_THINK_SUFFIX = "\n\n/no_think";
 
 export const BUILTIN_EXEMPT_PUBKEYS = [
