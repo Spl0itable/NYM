@@ -2,7 +2,7 @@
 
 import { validateZapReceipt, nwcInvoicePaid, ipv6Blocked, ipv6NetKey, cacheRateTakeAll } from './_shared.js';
 import { clientOriginAllowed } from './_client.js';
-import { translateText, translateUiText, MAX_CHARS } from './_translate.js';
+import { translateText, translateUiText, MAX_CHARS, PUBLIC_CACHE_TTL } from './_translate.js';
 
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 
@@ -589,7 +589,7 @@ async function handleTranslate(request, context) {
   try {
     result = await translateText(context.env && context.env.AI, {
       text: q, source: sl, target,
-    });
+    }, { gateway: context.env && context.env.AI_GATEWAY_NAME });
   } catch (err) {
     // Details go to the log only; user-facing text never names the infrastructure vendor.
     console.error(`[translate] failed (tl=${target}, len=${q.length}): ${err.message}`);
@@ -629,6 +629,10 @@ async function handleTranslateBatch(texts, source, target, context, request, ui 
   if (translateWait) return translateRateLimited(translateWait);
 
   const ai = context.env && context.env.AI;
+  const gatewayOpts = {
+    gateway: context.env && context.env.AI_GATEWAY_NAME,
+    cacheTtl: translateBuildTokenOk(request, context.env) ? PUBLIC_CACHE_TTL : 0,
+  };
   const out = new Array(items.length).fill(null);
   const failures = [];
   let next = 0;
@@ -639,8 +643,8 @@ async function handleTranslateBatch(texts, source, target, context, request, ui 
       if (!q.trim()) continue;
       try {
         const r = Array.isArray(ui.contexts)
-          ? await translateUiText(ai, { text: q, target, context: ui.contexts[i], glossary: ui.glossary })
-          : await translateText(ai, { text: q, source, target });
+          ? await translateUiText(ai, { text: q, target, context: ui.contexts[i], glossary: ui.glossary }, gatewayOpts)
+          : await translateText(ai, { text: q, source, target }, gatewayOpts);
         out[i] = r.translatedText;
       } catch (err) {
         failures.push(`[${i}] ${err.message}`);
