@@ -2798,7 +2798,9 @@ var NYMBOT_PM_PROMPT_TAIL = [
   "",
   "=== ABOUT NYMCHAT (only when asked) ===",
   "Nymchat (NYM — Nostr Ynstant Messenger) is a decentralized, pseudonymous chat app on the Nostr protocol. Web/PWA at https://nymchat.app, plus iOS and Android wrappers. Open source (AGPL-3.0) at https://github.com/Spl0itable/NYM. Operated by 21 Million LLC. Current version: v" + NYMCHAT_VERSION + ".",
-  "Public channels (geohash-based, ephemeral) are free. The free public bot is invoked with ?ask or @Nymbot in any channel. This private 1:1 Nymbot chat is the paid premium tier."
+  "Public channels (geohash-based, ephemeral) are free. The free public bot is invoked with ?ask or @Nymbot in any channel. This private 1:1 Nymbot chat is the paid premium tier.",
+  "Private messages and group chats are end-to-end encrypted with NIP-17 gift wraps, and between Nymchat users they are also quantum-resistant: the NIP-44 ciphertext is sealed a second time in an ML-KEM-768 (FIPS 203) layer, automatically with no setting, so traffic recorded today stays unreadable to a future quantum computer. It protects contents, not signatures, and does not cover the Bluetooth mesh. Each account has a post-quantum recovery code (nympq1...) right below the nsec in the Nym's details, to back up with the nsec.",
+  "Nymchat's official knowledge base is https://nymchat.app/docs/ (quantum-resistant encryption: https://nymchat.app/docs/post-quantum/). When excerpts from it appear in your context under 'NYMCHAT KNOWLEDGE BASE', they are the authoritative answer for how Nymchat works; cite the page URL you used. Never invent a docs URL."
 ];
 
 var NYMBOT_APP_PROMPT_HEAD = [
@@ -3602,6 +3604,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var pmSearchAttempted = false;
   var pmSearchedQuery = question;
   var pmChangelogCtx = "";
+  var pmKbCtx = "";
   try {
     if (needsChangelogContext(question)) {
       var pmReleases = await fetchNymchatReleases(15);
@@ -3611,6 +3614,11 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         return { author: h && h.isBot ? "nymbot" : "", text: h && h.text };
       });
       var pmResolved = searchQueryFor(question, pmTurns);
+      try {
+        pmKbCtx = nymchatKbBlock(await nymchatKbExcerpts(question, pmResolved !== question ? pmResolved : ""));
+      } catch (e) {
+        pmKbCtx = "";
+      }
       if (runOpts.web === true && needsWebSearch(question, pmResolved)) {
         pmSearchedQuery = pmResolved;
         if (runOpts.progress) runOpts.progress({ kind: "search", query: truncateText(pmSearchedQuery, 120) });
@@ -3620,8 +3628,8 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       }
     }
   } catch (e) { }
-  if (pmSearchResults.length > 0 || pmChangelogCtx || pmSearchAttempted) {
-    var pmCtx = botSearchContext(question, pmSearchResults, pmSearchAttempted, pmSearchedQuery);
+  if (pmSearchResults.length > 0 || pmChangelogCtx || pmSearchAttempted || pmKbCtx) {
+    var pmCtx = pmKbCtx + botSearchContext(question, pmSearchResults, pmSearchAttempted, pmSearchedQuery);
     // The numbered results, sent to the device so the reply's [n] citations have cards.
     if (pmSearchResults.length > 0) pmCitations = searchCitations(pmSearchResults);
     if (pmChangelogCtx) {
@@ -5931,8 +5939,10 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Q: How do channels work?",
   "A: Nymchat uses ephemeral geohash and non-geohash channels — location-based chat rooms using geohash codes (e.g. #w1, #dr5r). These are bridged with Bitchat and can be sorted by proximity to your location. All channel messages are temporary and exist only during active sessions.",
   "",
+  "Q: Is Nymchat quantum-resistant (post-quantum encrypted)?",
+  "A: Yes, for private messages and group chats between Nymchat users, automatically and with no setting. Each message gets two key exchanges: the standard secp256k1 ECDH of NIP-44 and ML-KEM-768 (NIST FIPS 203). The finished NIP-44 ciphertext is sealed a second time inside the post-quantum layer, so an attacker has to break both, which defeats harvest-now-decrypt-later recording. It protects message contents, not signatures, and does not cover the Bluetooth mesh. Each account also has a post-quantum recovery code (nympq1...) kept right below the nsec in your Nym's details; back it up with the nsec. Full details: https://nymchat.app/docs/post-quantum/",
   "Q: How do private messages and group chats work?",
-  "A: PMs and group chats use Nostr's NIP-17 encryption standard (gift wraps over NIP-44 sealed rumors) for end-to-end encrypted communication that can't be linked to your session. Only you and your recipient(s) can read the messages. You can enable forward secrecy for disappearing messages in Settings. To send a PM, use /pm nym#xxxx or click a user's nym and select 'Private Message'. Each user is identified by their nym + a 4-character suffix from their public key (e.g. cyber_wolf#a3f2). Group chats use NIP-17 gift wraps with enhanced security: each message is individually encrypted using rotating ephemeral recipient keys so an observer can never correlate group membership or link messages to real identities. Groups have an owner (the creator) and optional moderators — see the group chat roles section for who can kick, ban, promote, or transfer ownership.",
+  "A: PMs and group chats use Nostr's NIP-17 encryption standard (gift wraps over NIP-44 sealed rumors) for end-to-end encrypted communication that can't be linked to your session. Only you and your recipient(s) can read the messages, and between Nymchat users they are also quantum-resistant: the NIP-44 ciphertext is sealed a second time inside an ML-KEM-768 post-quantum layer, automatically and with no setting. The 'Disappearing PM (forward secrecy)' setting makes your PMs expire. To send a PM, use /pm nym#xxxx or click a user's nym and select 'Private Message'. Each user is identified by their nym + a 4-character suffix from their public key (e.g. cyber_wolf#a3f2). Group chats use NIP-17 gift wraps with enhanced security: each message is individually encrypted using rotating ephemeral recipient keys so an observer can never correlate group membership or link messages to real identities. Groups have an owner (the creator) and optional moderators — see the group chat roles section for who can kick, ban, promote, or transfer ownership.",
   "",
   "Q: What is the Bluetooth mesh / how do I chat with no internet?",
   "A: Nymchat has an offline Bluetooth LE mesh. Nearby devices link directly and relay store-and-forward, so a message reaches peers beyond radio range by hopping through the devices in between — no internet, cell service, or infrastructure needed. It is wire-compatible with Bitchat, so both apps share one mesh, and each link is encrypted with a Noise XX handshake. Announcements carry a signed nostrLink so a mesh peer can be matched to its real Nostr profile. When you are online, sends take the internet route and fall back to Bluetooth automatically when it is unavailable. Available on Android, iOS, and in the web app on Chromium browsers (Chrome, Edge, Brave, Opera). A browser can only take the Bluetooth central role — it cannot advertise itself — so it joins as a leaf: you pick each nearby device once through the browser device chooser, and the phones you are linked to relay for you. The mesh controls are hidden entirely on browsers that cannot run it (Safari, Firefox).",
@@ -5997,6 +6007,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Lightning Address: your Bitcoin Lightning address for receiving zaps",
   "- Private key section, shown as soon as the modal opens:",
   "  - Shows your nsec (Nostr secret key) — view-only, with eye toggle and copy button",
+  "  - Below it, 'Post-quantum recovery code' (nympq1...) — view-only, with eye toggle and copy button, plus 'Replace with a different code' to paste back a previous code; on a device that has no code yet, this spot is a field to paste the code from a device that has it",
   "  - IMPORTANT: This is for VIEWING/COPYING your nsec to back it up. To LOGIN with an nsec, use the Nostr Login Modal (click ASCII logo)",
   "- Buttons: Randomize (new random nym), Cancel, Change (saves profile to Nostr)",
   "",
@@ -6048,9 +6059,9 @@ var NYMBOT_SYSTEM_PROMPT = [
   "Messages use Nostr ephemeral events (kind 20000) so relays do not store them long-term.",
   "",
   "=== PM SECURITY (in Settings > Privacy & Security) ===",
-  "PMs use NIP-44 end-to-end encryption wrapped in NIP-17 gift wraps for privacy.",
-  "Forward secrecy: optional, disabled by default — toggle in Settings > Privacy & Security.",
-  "TTL (time-to-live): messages auto-expire, default 1 day (86400s), configurable from 1 hour to 30 days.",
+  "PMs use NIP-44 end-to-end encryption wrapped in NIP-17 gift wraps for privacy, and between Nymchat users the NIP-44 ciphertext is also sealed in the quantum-resistant ML-KEM-768 layer (automatic, no setting; see QUANTUM-RESISTANT ENCRYPTION).",
+  "Disappearing PM (forward secrecy): off by default — toggle in Settings > Privacy & Security. It adds a NIP-40 expiration tag to each outgoing gift wrap, asking relays and clients to delete the message after the Disappear After period. Despite the name it is not cryptographic forward secrecy, which Nymchat does not have; a relay that ignores the tag keeps the event, and it cannot un-send a message someone already received.",
+  "Disappear After: 1 hour, 6 hours, 1 day (default), 3 days or 7 days; only applies while Disappearing PM is on. 'Keep in chat' in a message's menu stops that one message from disappearing for everyone in the conversation.",
   "Read receipts: enabled by default — others see when you read their PMs. Toggle in Settings > Privacy & Security.",
   "Typing indicators: enabled by default — others see when you're typing. Toggle in Settings > Privacy & Security.",
   "",
@@ -6076,6 +6087,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "GREEN lock with a checkmark = VERIFIED: the NIP-17 seal (kind 13) was signed by the sender's long-term identity key and that signer matches the author the message claims, so the identity is cryptographically authenticated and cannot be forged by a relay or third party.",
   "RED lock with an X = UNVERIFIED: the message uses a Bitchat-format seal signed with a throwaway, per-message key that has no binding to a long-term identity. The displayed sender is an unverified, self-asserted claim that could be spoofed — treat the identity with caution.",
   "The icon appears only on incoming messages, never your own. Tapping or clicking it opens a popup explaining the verification status.",
+  "Next to the lock, every private and group message also carries a SHIELD for quantum resistance: shield = quantum-resistant (both sides held a post-quantum code and the hybrid exchange was used for every copy); dashed shield = partly (a group message only some members received a protected copy of, so treat it as conventionally encrypted overall); struck-through shield = standard NIP-44 only, still end-to-end encrypted and unreadable to anyone but the participants today; no shield = not an encrypted message (public channel posts). Older messages keep the struck-through shield permanently: they were sealed before both sides were upgraded and cannot be re-sealed. The lock answers who sent it, the shield answers how it was encrypted.",
   "",
   "=== ENHANCED GROUP CHAT SECURITY ===",
   "Group chats use NIP-17 gift wraps (kind 1059) over NIP-44-encrypted seals (kind 13) wrapping the actual chat rumor (kind 14). Every recipient gets their own gift wrap signed by a throwaway pubkey, so nothing on the wire links a message to its real author or recipients.",
@@ -6083,6 +6095,18 @@ var NYMBOT_SYSTEM_PROMPT = [
   "How it works: Each member generates a fresh ephemeral keypair when they send a message. The new public key is advertised inside the encrypted rumor as an ephemeral_pk tag. Future messages to that member use their ephemeral pubkey instead of their real pubkey. To an outside observer, every message goes to/from never-before-seen one-time pubkeys with no link to real identities. The sender's own gift-wrap copy is also addressed to their own ephemeral key, so even self-addressed wraps don't reveal their real pubkey.",
   "Post-compromise recovery: If a device is compromised, the next message the user sends advertises a fresh ephemeral key to all group members via the in-band ephemeral_pk tag. Members without an ephemeral key for a sender fall back to the real pubkey, and a small window of previous ephemeral secret keys is kept locally so out-of-order messages still decrypt.",
   "Backward compatible: Old clients ignore the unknown tag. New clients fall back to real pubkeys for members who haven't upgraded yet. Existing groups upgrade organically.",
+  "Quantum resistance in groups: each member's copy is encrypted separately, so members whose clients support it get the post-quantum layer and the rest get standard NIP-44, and the group works normally either way. A group message is only marked quantum-resistant when every member received it that way; otherwise the app says e.g. 'quantum-resistant to 8 of 10 members'. The rotating one-time keys are unaffected.",
+  "",
+  "=== QUANTUM-RESISTANT (POST-QUANTUM) ENCRYPTION ===",
+  "What it is: private messages and group chats between Nymchat users are encrypted so that traffic recorded today stays unreadable to a future quantum computer (the harvest-now-decrypt-later attack). Ordinary Nostr encryption (NIP-44) agrees its key with secp256k1 ECDH, which Shor's algorithm breaks; the ChaCha20/HMAC half is fine.",
+  "How it works: two key exchanges per message, the standard secp256k1 ECDH of NIP-44 (unchanged) and ML-KEM-768, the lattice-based algorithm NIST standardized as FIPS 203. They are layered, not mixed: the finished NIP-44 v2 ciphertext is sealed a second time with ChaCha20-Poly1305 keyed from the ML-KEM shared secret through HKDF-SHA256, with both identity keys and the encapsulation ciphertext bound in, and the payload carries a pq2. prefix. The result is at least as strong as the stronger half: reading a message means breaking both. Every message gets a fresh encapsulation, so one message's key opens no other.",
+  "Layering instead of a combiner (like X-Wing or Signal's PQXDH) is deliberate: a browser extension (NIP-07) or remote signer (NIP-46) never hands back the raw ECDH output, so layering keeps those logins as full participants.",
+  "The post-quantum recovery code: the post-quantum key is deliberately NOT derived from the nsec (a quantum computer that recovers the nsec would recover anything derived from it). Each account gets a separate random code that reads nympq1..., generated by the app. To see it: click your nym or avatar in the sidebar to open the Profile Edit Modal (the app also calls it View or Edit Nym's Details); its private key section shows it straight away as 'Post-quantum recovery code', right below the nsec, with the same show and copy buttons. 'Replace with a different code' there pastes back a previous nympq1... code if a device created a new one by mistake. It is not a password or a second login. Back it up wherever the nsec is saved (the Google, Apple and passkey key backups made from that modal include it): the nsec alone cannot rebuild it, and if no device holds it and there is no copy, what was sealed to it cannot be opened again. There is no reset.",
+  "Nothing to turn on: it applies automatically to every private message and group chat with another Nymchat user, whichever way you log in (nsec, NIP-07 extension or NIP-46 remote signer). Settings > Privacy & Security shows whether it is active and how many contacts it reaches, as information only; there is no switch.",
+  "New devices: a second device needs a current app version and the nympq1... code, once per device. The app asks for it on a device that lacks it ('Add your post-quantum recovery code', with Link this device or Later), and the Profile Edit Modal shows a field to paste it until the device is linked. Until then it still reads everything sent under the older encryption and sends normally, and once linked it opens the quantum-resistant messages it could not read before. An older app build keeps working but cannot read the current format.",
+  "Who gets it: both sides need it. Every Nymchat client publishes a signed, expiring announcement (Nostr kind 30078 tagged nym-pq, carrying its ML-KEM-768 public key) that lasts a week and refreshes daily while the app is used. A relay can withhold an announcement, so the sender falls back to standard encryption, but it cannot forge a key. Someone away for more than a week receives standard encryption until they open the app again. Bitchat users and other Nostr clients keep receiving standard NIP-17, so nothing breaks. A post-quantum message replaces the standard copy rather than being sent alongside it, and your own copies, archive and synced settings get it too.",
+  "What it does not do: it protects message contents (confidentiality), not authentication, because Nostr signatures are still secp256k1 Schnorr. There is no forward secrecy (both keys are long-lived). Metadata is unchanged (a relay still sees that an event was addressed to a key and roughly when; gift wraps and one-time keys handle that). The Bluetooth mesh is not covered: mesh links use a Noise XX session with a classical key exchange, so mesh-delivered messages are not marked quantum-resistant. It cannot stop a recipient from screenshotting or copying a message.",
+  "Checking the work: the ML-KEM implementation is tested against NIST's official FIPS 203 test vectors, the web and mobile apps share test vectors so each reads the other's messages, and everything is open source (AGPL-3.0) with reproducible web builds. Technical whitepaper: https://nymchat.app/whitepaper/. User docs: https://nymchat.app/docs/post-quantum/",
   "",
   "=== GROUP CHAT ROLES & MODERATION ===",
   "Every group chat has exactly one owner (the creator) plus optional moderators and regular members. Roles are enforced both locally and by verifying the sender pubkey on every moderation rumor — clients silently ignore moderation events from non-authorized members.",
@@ -6231,9 +6255,9 @@ var NYMBOT_SYSTEM_PROMPT = [
   "",
   "=== PMs & GROUP CHATS ===",
   "Start a PM: /pm @nym, or click a user > Send PM.",
-  "PMs are end-to-end encrypted with NIP-44 + NIP-17 gift wraps (kind 1059 wrapping a kind 13 seal around a kind 14 rumor).",
+  "PMs are end-to-end encrypted with NIP-44 + NIP-17 gift wraps (kind 1059 wrapping a kind 13 seal around a kind 14 rumor). Between Nymchat users the NIP-44 payload is also sealed in the quantum-resistant ML-KEM-768 layer.",
   "Group chats: /group @user1 @user2 [GroupName] — creates an encrypted group. There's also a + button in the private messages sidebar section, which lets you easily create a group chat. You can also click a user's nickname and there is a button there to start a group chat with that user.",
-  "Group chats use NIP-17 gift wraps with rotating ephemeral recipient keys for enhanced privacy: timing-attack resistance (every message uses one-time pubkeys so observers can't infer group membership) and post-compromise recovery (next message advertises a fresh ephemeral key via the ephemeral_pk tag).",
+  "Group chats use NIP-17 gift wraps with rotating ephemeral recipient keys for enhanced privacy: timing-attack resistance (every message uses one-time pubkeys so observers can't infer group membership) and post-compromise recovery (next message advertises a fresh ephemeral key via the ephemeral_pk tag). Group messages also get the quantum-resistant layer for every member whose client supports it.",
   "Group commands: /addmember @nym (any member) adds someone, /groupinfo lists current members, /leave drops you from the group.",
   "Owner-only moderation: /addmod @nym (promote moderator), /removemod @nym (revoke moderator), /transferowner @nym (hand the group over), /unban @nym (clear from banlist).",
   "Owner or moderator: /kick @nym (remove from group, can be re-invited), /ban @nym (remove and banlist — only the owner can re-admit), and message deletion via the context menu (mods cannot delete the owner's messages or kick/ban the owner or other mods).",
@@ -6277,7 +6301,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "",
   "=== NOSTR PROTOCOL ===",
   "Nymchat uses the Nostr protocol. Messages are cryptographically signed events published to relays.",
-  "Event kinds used: kind 0 = profile metadata (nick, avatar, bio, lightning address); kind 1059 = NIP-17 gift wraps for PMs and group chats (with rotating ephemeral recipient keys for group chats); kind 13 = NIP-44 sealed payloads inside the gift wraps; kind 14 = the actual chat rumor (PM or group message); kind 20000 = ephemeral public channel messages; kind 7 = NIP-25 reactions; kind 9735 = NIP-57 zap receipts.",
+  "Event kinds used: kind 0 = profile metadata (nick, avatar, bio, lightning address); kind 1059 = NIP-17 gift wraps for PMs and group chats (with rotating ephemeral recipient keys for group chats); kind 13 = NIP-44 sealed payloads inside the gift wraps; kind 14 = the actual chat rumor (PM or group message); kind 20000 = ephemeral public channel messages; kind 7 = NIP-25 reactions; kind 9735 = NIP-57 zap receipts; kind 30078 = NIP-78 application data (polls, encrypted settings sync, and post-quantum key announcements tagged nym-pq, carrying an ML-KEM-768 public key with a NIP-40 expiration).",
   "Events include g-tags for geohash routing and n-tags for nym identity. Group rumors carry 'g' (group id), 'subject' (group name), 'p' tags for each recipient, 'type' tags for moderation events, and 'ephemeral_pk' tags advertising the sender's next-message recipient key.",
   "Multiple relays for redundancy. Nostr is censorship-resistant — no central server.",
   "",
@@ -6288,13 +6312,19 @@ var NYMBOT_SYSTEM_PROMPT = [
   "- Lightning address is in Settings (NOT in Profile Edit Modal)",
   "- Default theme is bitchat (Bitcoin orange), default layout is bubbles",
   "- Read receipts and typing indicators are ON by default",
-  "- Forward secrecy is OFF by default",
+  "- Disappearing PM (forward secrecy) is OFF by default",
+  "- Quantum-resistant encryption has no setting: it is automatic between Nymchat users. The nympq1... recovery code sits right below the nsec in your Nym's details.",
   "- Notification sounds: Classic Beep (default), Low Tone, High Ping, ICQ Uh-Oh, MSN Alert, MSN Nudge, Nokia SMS, Nokia Tune, Dial-Up Modem, Mario Coin, Mario 1-Up, Mario Power-Up, Zelda Secret, Game Boy Boot, Tetris, Pokemon Heal, Communicator Chirp, F1 Radio, Silent",
   "- When giving navigation help, always specify the exact click path (e.g. 'click your nym in the sidebar > expand Reveal private key > copy your nsec')",
   "",
+  "=== NYMCHAT KNOWLEDGE BASE ===",
+  "Nymchat's official documentation is the knowledge base at https://nymchat.app/docs/, written against the app's source code. When a question is about Nymchat, the relevant pages are looked up for you and their excerpts appear in your context under 'NYMCHAT KNOWLEDGE BASE'. They are the most authoritative source you have on how a feature works: prefer them over anything else in this prompt when the two differ, and give the page's URL when you rely on it. The one exception is where a control sits on screen: the UI NAVIGATION section above describes the current app's screens, so its click paths win over a page's.",
+  "When no excerpt covers a question, answer from this prompt and point the user to the matching page: Getting started https://nymchat.app/docs/getting-started/ · Apps and platforms https://nymchat.app/docs/apps/ · Identity and login https://nymchat.app/docs/identity/ · Device security https://nymchat.app/docs/security/ · Channels https://nymchat.app/docs/channels/ · Messages https://nymchat.app/docs/messaging/ · Private messages https://nymchat.app/docs/private-messages/ · Group chats https://nymchat.app/docs/groups/ · Quantum-resistant encryption https://nymchat.app/docs/post-quantum/ · Voice and video calls https://nymchat.app/docs/calls/ · Bluetooth mesh https://nymchat.app/docs/mesh/ · Lightning and zaps https://nymchat.app/docs/lightning/ · Nymbot https://nymchat.app/docs/nymbot/ · Themes and layout https://nymchat.app/docs/appearance/ · Settings reference https://nymchat.app/docs/settings/ · Blocking and filters https://nymchat.app/docs/moderation/ · Command reference https://nymchat.app/docs/commands/ · Relays https://nymchat.app/docs/relays/ · Protocol and events https://nymchat.app/docs/protocol/ · Verifying the build https://nymchat.app/docs/verify/ · Troubleshooting https://nymchat.app/docs/troubleshooting/ · How Nymchat compares https://nymchat.app/docs/comparison/",
+  "Never invent a docs URL beyond these. The whole knowledge base as one markdown file is https://nymchat.app/llms-full.txt.",
+  "",
   "=== ANTI-HALLUCINATION RULES ===",
-  "- ONLY describe features, settings, commands, and UI elements explicitly listed in this system prompt.",
-  "- If a user asks about a feature not documented above, just say it doesn't exist and suggest the closest real feature if relevant. Keep it brief.",
+  "- ONLY describe features, settings, commands, and UI elements explicitly listed in this system prompt or in the NYMCHAT KNOWLEDGE BASE excerpts in your context.",
+  "- If a user asks about a feature not documented above or in those excerpts, just say it doesn't exist and suggest the closest real feature if relevant. Keep it brief.",
   "- NEVER invent menu items, settings, buttons, URLs, API endpoints, or features that are not described above.",
   "- NEVER fabricate version numbers, release dates, roadmaps, or future plans for Nymchat.",
   "- If you are unsure whether something exists, say you don't know rather than guessing.",
@@ -8352,6 +8382,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     var changelogCtx = "";
     var isAsciiArtRequest = /\b(ascii\s*art|draw me|sketch)\b/i.test(question) || /\b(draw|make|create|generate)\b.{0,30}\b(ascii|art)\b/i.test(question);
     var resolvedQuery = searchQueryFor(question, conversation);
+    var kbCtx = "";
     if (isAsciiArtRequest) {
       return "I can't generate ASCII art — try these sites instead: ascii.co.uk or asciiart.eu";
     } else if (needsChangelogContext(question)) {
@@ -8359,6 +8390,11 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       changelogCtx = buildChangelogContext(releases);
     } else {
       canSearch = needsWebSearch(question, resolvedQuery);
+      try {
+        kbCtx = nymchatKbBlock(await nymchatKbExcerpts(question, resolvedQuery !== question ? resolvedQuery : ""));
+      } catch (e) {
+        kbCtx = "";
+      }
     }
 
     var channelCtx = buildChannelContext(channelMessages, activeUsers);
@@ -8370,6 +8406,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       var contextBlock = "";
       if (senderNym) contextBlock += "User asking: " + senderNym + "\n";
       if (locationCtx) contextBlock += locationCtx;
+      contextBlock += kbCtx;
       contextBlock += searchBlock;
       if (changelogCtx) {
         contextBlock += changelogCtx + "\n";
@@ -8389,7 +8426,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
       messages.push({ role: "user", content: "CONTEXT: The current date is " + new Date().toUTCString() + ". Treat that as 'now' and 'today'. Anything dated on or before it has already happened — never call a recent event 'future', 'fictional', or 'speculative' because of your training cutoff." });
       messages.push({ role: "assistant", content: "Understood." });
       if (offerSearch) {
-        messages.push({ role: "user", content: "WEB SEARCH RULE: Nothing has been looked up for the question below, and most questions need no lookup. If you can answer it accurately from what you already know or from the context above, answer it. If you cannot — it depends on current or recent information (news, prices, scores, weather, schedules, releases, anything 'latest', 'today' or 'now'), or it is about something you do not recognize or are unsure of — reply with exactly " + BOT_FREE_SEARCH_REQUEST + " and nothing else, whatever language the question is in, and a live search will be run for you. Never guess at current facts, and never say you lack real-time access. Questions about Nymchat itself are answered from your instructions, not a search." });
+        messages.push({ role: "user", content: "WEB SEARCH RULE: Nothing has been looked up for the question below, and most questions need no lookup. If you can answer it accurately from what you already know or from the context above, answer it. If you cannot — it depends on current or recent information (news, prices, scores, weather, schedules, releases, anything 'latest', 'today' or 'now'), or it is about something you do not recognize or are unsure of — reply with exactly " + BOT_FREE_SEARCH_REQUEST + " and nothing else, whatever language the question is in, and a live search will be run for you. Never guess at current facts, and never say you lack real-time access. Questions about Nymchat itself are answered from your instructions and the Nymchat knowledge base excerpts, not a search." });
         messages.push({ role: "assistant", content: "Understood. I'll answer directly when I know the answer, and reply with only " + BOT_FREE_SEARCH_REQUEST + " when I need a live search." });
       }
       // Always inject a language reminder right before the user's question.
@@ -8611,6 +8648,200 @@ async function fetchNymchatReleases(maxReleases) {
   } catch (e) {
     return [];
   }
+}
+
+var NYMCHAT_KB_URL = "https://nymchat.app/llms-full.txt";
+var NYMCHAT_KB_HOME = "https://nymchat.app/docs/";
+var NYMCHAT_KB_CACHE_SECONDS = 21600;
+var NYMCHAT_KB_MAX_BYTES = 4 * 1024 * 1024;
+var NYMCHAT_KB_MAX_PAGES = 3;
+var NYMCHAT_KB_PAGE_CHARS = 3000;
+var NYMCHAT_KB_TOTAL_CHARS = 7000;
+var NYMCHAT_KB_RETRY_MS = 300000;
+var nymchatKbMemo = { at: 0, pages: null, failedAt: 0 };
+
+var NYMCHAT_KB_APP_RX = /\b(?:nym ?chat|nymbot|this app|the app|your app|this client)\b/i;
+var NYMCHAT_KB_SPECIFIC_RX = /\b(?:nympq\w*|quantum[- ]?(?:resistant|safe|proof|secure)|post[- ]?quantum|ml[- ]?kem|geohash(?:es)?|bitchat|ghost mode|nymbot|flair|panic (?:mode|wipe)|gift ?wraps?|nip-?(?:07|17|44|46|59)|nsec|npub)\b/i;
+var NYMCHAT_KB_HOWTO_RX = /\b(?:how (?:do|can|to|does|is|are)|where (?:is|are|do|can)|can i|can you|is there|are there|what (?:is|are|does|do|happens)|why (?:is|are|does|do|can'?t)|does (?:it|this)|do i|should i|is it)\b/i;
+var NYMCHAT_KB_TOPICS = [
+  { slug: "post-quantum", strong: true, rx: /\b(?:post[- ]?quantum|quantum[- ]?(?:resistant|safe|proof|secure|encryption|encrypted)|pq|ml[- ]?kem|kyber|nympq\w*|harvest[- ]now|shield(?:s)? (?:icon|badge|mark))\b/i },
+  { slug: "private-messages", strong: true, rx: /\b(?:private messages?|pms?|dms?|direct messages?|disappearing|disappear after|forward secrecy|gift ?wraps?|nip-?17)\b/i },
+  { slug: "groups", strong: true, rx: /\b(?:group chats?|groups?|invite links?|group members?|moderators?|kick(?:ed)?|history sharing)\b/i },
+  { slug: "mesh", strong: true, rx: /\b(?:mesh|bluetooth|ble|offline|without internet|no internet|bitchat|ghost mode|couriers?)\b/i },
+  { slug: "lightning", strong: true, rx: /\b(?:zaps?|zapping|lightning|sats|flair|shop|lightning address)\b/i },
+  { slug: "nymbot", strong: true, rx: /\b(?:nymbot|the bot|credits?|pro models?|\?ask|\?anon|anon(?:ymous)? asks?)\b/i },
+  { slug: "identity", strong: true, rx: /\b(?:nsec|npub|log ?in|sign ?in|nip-?07|nip-?46|nostr account|remote signer|browser extension|profile|nickname|nym name|identity|recovery code|private key)\b/i },
+  { slug: "security", strong: true, rx: /\b(?:panic(?: mode| wipe)?|wipe|identity encryption|passkey|biometric|face ?id|touch ?id|unlock|device security|delete (?:my )?account)\b/i },
+  { slug: "channels", strong: true, rx: /\b(?:channels?|geohash(?:es)?|globe|explorer)\b/i },
+  { slug: "calls", strong: true, rx: /\b(?:voice calls?|video calls?|audio calls?|group calls?|calling|webrtc)\b/i },
+  { slug: "appearance", strong: true, rx: /\b(?:themes?|dark mode|light mode|layouts?|wallpapers?|text size|font size|notification sounds?)\b/i },
+  { slug: "moderation", strong: true, rx: /\b(?:block(?:ing|ed)?|unblock|mute|keyword filters?|filters?|spam|flood(?:ing)?|blur(?:red)?)\b/i },
+  { slug: "relays", strong: true, rx: /\b(?:relays?|privacy proxy)\b/i },
+  { slug: "apps", strong: true, rx: /\b(?:android|ios|iphone|ipad|app store|play store|testflight|install|download|pwa|web app)\b/i },
+  { slug: "verify", strong: true, rx: /\b(?:reproducible|attestations?|warrant canary|canary|bundle hash|verify (?:the )?build)\b/i },
+  { slug: "messaging", strong: false, rx: /\b(?:reactions?|repl(?:y|ies)|threads?|polls?|voice messages?|edit(?:ing)?|send later|schedul\w*|read receipts?|typing|formatting|markdown|translat\w*|saved messages?|media|images?)\b/i },
+  { slug: "settings", strong: false, rx: /\b(?:settings?|preferences?|defaults?|options?)\b/i },
+  { slug: "commands", strong: false, rx: /\b(?:commands?|slash)\b|(?:^|\s)[\/?][a-z]{2,}\b/i },
+  { slug: "protocol", strong: false, rx: /\b(?:protocol|event kinds?|nips?|nip-?\d+|nostr|encrypt\w*|cryptograph\w*)\b/i },
+  { slug: "comparison", strong: false, rx: /\b(?:compare[sd]?|comparison|vs\.?|versus|better than|signal|briar|simplex|telegram|whatsapp|element|white noise|xchat|armada)\b/i },
+  { slug: "troubleshooting", strong: false, rx: /\b(?:not working|broken|doesn'?t work|isn'?t working|can'?t|cannot|won'?t|error|fix|trouble\w*|missing|stuck|locked out|lockout|not (?:connecting|loading|showing))\b/i },
+  { slug: "getting-started", strong: false, rx: /\b(?:get(?:ting)? started|first time|new here|beginner|how do i start|how to use)\b/i }
+];
+
+function nymchatKbParts(body) {
+  var parts = [];
+  var para = [];
+  var flush = function () {
+    var t = para.join(" ").replace(/\s+/g, " ").trim();
+    if (t) parts.push({ text: t, heading: 0 });
+    para = [];
+  };
+  String(body || "").split("\n").forEach(function (line) {
+    var h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) {
+      flush();
+      parts.push({ text: h[2].trim(), heading: Math.min(4, h[1].length) });
+      return;
+    }
+    if (!line.trim()) { flush(); return; }
+    if (/^\s*\|[\s|:-]+\|\s*$/.test(line)) return;
+    if (/^\s*(?:\||[-*]\s|\d+\.\s|>)/.test(line)) {
+      flush();
+      para.push(line.trim());
+      flush();
+      return;
+    }
+    para.push(line.trim());
+  });
+  flush();
+  return parts;
+}
+
+function nymchatKbParse(text) {
+  var pages = [];
+  String(text || "").replace(/\r/g, "").split(/\n-{3,}\n/).forEach(function (chunk) {
+    var m = /^\s*Source:\s*(https:\/\/nymchat\.app\/\S*)\s*\n+#\s+([^\n]+)\n?([\s\S]*)$/.exec(chunk);
+    if (m) pages.push({ url: m[1], title: m[2].trim(), body: m[3] });
+    else if (pages.length) pages[pages.length - 1].body += "\n\n" + chunk;
+  });
+  pages.forEach(function (p) {
+    var slug = /\/docs\/([^/]+)\/?$/.exec(p.url);
+    p.slug = slug ? slug[1] : "";
+    p.parts = nymchatKbParts(p.body);
+    p.titleTokens = pageTokens(p.title + " " + p.slug.replace(/-/g, " "));
+    p.headTokens = pageTokens(p.parts.filter(function (x) { return x.heading; }).map(function (x) { return x.text; }).join(" "));
+    p.bodyTokens = pageTokens(p.body);
+  });
+  return pages.filter(function (p) { return /^https:\/\/nymchat\.app\/docs\//.test(p.url); });
+}
+
+async function nymchatKbPages() {
+  var now = Date.now();
+  if (nymchatKbMemo.pages && now - nymchatKbMemo.at < NYMCHAT_KB_CACHE_SECONDS * 1000) return nymchatKbMemo.pages;
+  if (nymchatKbMemo.failedAt && now - nymchatKbMemo.failedAt < NYMCHAT_KB_RETRY_MS) return [];
+  var cacheKey = new Request("https://nymbot-cache.invalid/nymchat-kb-full");
+  var text = "";
+  try {
+    if (typeof caches !== "undefined" && caches.default) {
+      var hit = await caches.default.match(cacheKey);
+      if (hit) text = await hit.text();
+    }
+  } catch (_) {}
+  if (!text) {
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
+    try {
+      var resp = await fetch(NYMCHAT_KB_URL, {
+        headers: { "User-Agent": "Nymbot/1.0 (+" + NYMCHAT_KB_HOME + ")", "Accept": "text/plain, text/markdown;q=0.9" },
+        signal: controller.signal
+      });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      text = await readPageText(resp, NYMCHAT_KB_MAX_BYTES);
+      try {
+        if (text && typeof caches !== "undefined" && caches.default) {
+          await caches.default.put(cacheKey, new Response(text, {
+            headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "max-age=" + NYMCHAT_KB_CACHE_SECONDS }
+          }));
+        }
+      } catch (_) {}
+    } catch (e) {
+      console.warn("nymbot docs: knowledge base fetch failed — " + botLogCause(e));
+      text = "";
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  var pages = nymchatKbParse(text);
+  if (pages.length) nymchatKbMemo = { at: now, pages: pages, failedAt: 0 };
+  else nymchatKbMemo.failedAt = now;
+  return pages;
+}
+
+function nymchatKbWanted(text) {
+  var s = String(text || "");
+  if (!s.trim()) return { wanted: false, topics: {} };
+  var topics = {};
+  var strong = false;
+  var any = false;
+  NYMCHAT_KB_TOPICS.forEach(function (t) {
+    if (t.rx.test(s)) {
+      topics[t.slug] = t.strong ? 2 : 1;
+      any = true;
+      if (t.strong) strong = true;
+    }
+  });
+  var aboutApp = NYMCHAT_KB_APP_RX.test(s) || NYMCHAT_KB_SPECIFIC_RX.test(s);
+  return { wanted: aboutApp || (strong && NYMCHAT_KB_HOWTO_RX.test(s)), topics: topics, aboutApp: aboutApp, any: any };
+}
+
+async function nymchatKbExcerpts(question, context) {
+  var probe = String(question || "") + "\n" + String(context || "");
+  var want = nymchatKbWanted(probe);
+  if (!want.wanted) return [];
+  var pages = await nymchatKbPages();
+  if (!pages.length) return [];
+  var terms = pageQueryTerms(probe, "");
+  var df = terms.map(function (t) {
+    return pages.filter(function (p) { return pageTermHit(p.bodyTokens, t.stem); }).length;
+  });
+  var scored = pages.map(function (p) {
+    var score = want.topics[p.slug] === 2 ? 6 : (want.topics[p.slug] === 1 ? (want.aboutApp ? 4 : 0) : 0);
+    for (var i = 0; i < terms.length; i++) {
+      if (!df[i]) continue;
+      var idf = Math.log(1 + pages.length / df[i]);
+      var w = terms[i].weight / 3;
+      if (pageTermHit(p.titleTokens, terms[i].stem)) score += 2 * w * idf;
+      if (pageTermHit(p.headTokens, terms[i].stem)) score += w * idf;
+      if (pageTermHit(p.bodyTokens, terms[i].stem)) score += 0.5 * w * idf;
+    }
+    return { page: p, score: score };
+  }).filter(function (x) { return x.score > 0; }).sort(function (a, b) { return b.score - a.score; });
+  var picked = [];
+  if (scored.length) {
+    var floor = scored[0].score * 0.35;
+    for (var k = 0; k < scored.length && picked.length < NYMCHAT_KB_MAX_PAGES; k++) {
+      if (scored[k].score >= floor) picked.push(scored[k].page);
+    }
+  }
+  if (!picked.length && want.aboutApp) {
+    var home = pages.filter(function (p) { return p.slug === ""; })[0];
+    if (home) picked.push(home);
+  }
+  var budget = Math.min(NYMCHAT_KB_PAGE_CHARS, Math.floor(NYMCHAT_KB_TOTAL_CHARS / Math.max(1, picked.length)));
+  return picked.map(function (p) {
+    return { url: p.url, title: p.title, text: selectPageText(p.parts, probe, p.title, budget) };
+  }).filter(function (x) { return x.text && x.text.trim(); });
+}
+
+function nymchatKbBlock(excerpts) {
+  if (!excerpts || !excerpts.length) return "";
+  var out = "--- NYMCHAT KNOWLEDGE BASE (official documentation from " + NYMCHAT_KB_HOME + ", fetched just now) ---\n";
+  for (var i = 0; i < excerpts.length; i++) {
+    out += "[" + excerpts[i].url + "] " + excerpts[i].title + "\n" + excerpts[i].text + "\n\n";
+  }
+  out += "--- END KNOWLEDGE BASE ---\n";
+  out += "These are excerpts of Nymchat's official knowledge base, written against the app's source code. For any question about how Nymchat works — features, settings, encryption, the mesh, Nymbot, commands — they are the authoritative answer: when they disagree with anything else you were told, the knowledge base wins, except for where a button or field sits on screen, where your instructions describe the current app. Use only what is relevant to the question, and when you rely on a page, give its URL so the user can read more. " + PAGE_GAP + " marks text that was left out. If the excerpts do not cover what was asked, say so plainly and point to " + NYMCHAT_KB_HOME + " rather than guessing.\n";
+  return out;
 }
 
 function findRelease(releases, query) {
