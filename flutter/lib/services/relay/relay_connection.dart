@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:io' show ConnectionTask, HttpClient, SecureSocket, Socket;
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -56,68 +55,6 @@ WebSocketChannel defaultRelayChannelFactory(Uri url) =>
       headers: ApiConfig.socketHeadersFor(url),
       customClient: ApiConfig.socketClient(),
     );
-
-final Expando<HttpClient> _poolDialClients = Expando<HttpClient>();
-
-final Expando<Future<void>> _poolDialTransports = Expando<Future<void>>();
-
-@visibleForTesting
-void notePoolDialTransport(WebSocketChannel ch, Future<void> connected) {
-  _poolDialTransports[ch] = connected;
-}
-
-Future<void>? poolDialTransport(WebSocketChannel ch) => _poolDialTransports[ch];
-
-void boundPoolDial(WebSocketChannel ch, Duration budget) {
-  _poolDialClients[ch]?.connectionTimeout = budget;
-}
-
-void abortPoolDial(WebSocketChannel ch) {
-  final client = _poolDialClients[ch];
-  if (client == null) return;
-  _poolDialClients[ch] = null;
-  client.close(force: true);
-}
-
-Future<ConnectionTask<Socket>> _poolConnect(
-  Uri uri,
-  String? proxyHost,
-  int? proxyPort,
-  Completer<void> transport,
-) {
-  if (proxyHost != null && proxyPort != null) {
-    return Socket.startConnect(proxyHost, proxyPort);
-  }
-  final Future<ConnectionTask<Socket>> task = uri.isScheme('https')
-      ? SecureSocket.startConnect(uri.host, uri.port)
-      : Socket.startConnect(uri.host, uri.port);
-  return task.then((t) {
-    unawaited(t.socket.then((_) {
-      if (!transport.isCompleted) transport.complete();
-    }, onError: (Object _) {}));
-    return t;
-  });
-}
-
-WebSocketChannel poolRelayChannelFactory(Uri url) {
-  final override = relayChannelFactoryOverride?.call(url);
-  if (override != null) return override;
-  final client = ApiConfig.socketClient();
-  final transport = Completer<void>();
-  client.connectionFactory =
-      (uri, proxyHost, proxyPort) =>
-          _poolConnect(uri, proxyHost, proxyPort, transport);
-  final ch = IOWebSocketChannel.connect(
-    url,
-    headers: ApiConfig.socketHeadersFor(url),
-    customClient: client,
-  );
-  _poolDialClients[ch] = client;
-  _poolDialTransports[ch] = transport.future;
-  void settled() => _poolDialClients[ch] = null;
-  unawaited(ch.ready.then((_) => settled(), onError: (Object _) => settled()));
-  return ch;
-}
 
 class DialGate {
   DialGate({

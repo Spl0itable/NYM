@@ -104,12 +104,6 @@ bool proxyCloseNamesRateLimit(Object? error, {String? reason}) {
   return _rateLimitText.hasMatch(e.toString());
 }
 
-bool proxyCloseIsLocal(Object? error) {
-  Object? e = error;
-  if (e is WebSocketChannelException) e = e.inner;
-  return e is SocketException && !socketOutOfFiles(e);
-}
-
 bool socketOutOfFiles(Object? error) {
   Object? e = error;
   if (e is WebSocketChannelException) e = e.inner ?? e.message;

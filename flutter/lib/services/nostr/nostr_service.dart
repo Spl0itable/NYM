@@ -380,8 +380,6 @@ class NostrService {
     }
     // Set here so a pool swapped in by fallback carries the geo gate too.
     _pool.geoOriginAllows = poolAdmitsEvent;
-    final boot = _pool;
-    if (boot is RelayPoolProxy) boot.downRule = ProxyDownRule(link: _link);
   }
 
   /// Persistent /api counters kept on the service so they survive a pool swap.
@@ -1171,7 +1169,7 @@ class NostrService {
   void probePool({bool wake = true}) {
     _foreground = true;
     RelayConnection.backgrounded = false;
-    if (wake || !_link.foreground) _link.resumed(relayClock());
+    _link.resumed(relayClock());
     if (wake) _wakePools(network: false);
   }
 

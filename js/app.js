@@ -4861,7 +4861,7 @@ function initWallpaperUI() {
 }
 
 const NYMCHAT_VERSION = 'v3.76.545';
-const NYMCHAT_BUILD = 1062;
+const NYMCHAT_BUILD = 1063;
 
 function nymUiArgs(template, args) {
     if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);
