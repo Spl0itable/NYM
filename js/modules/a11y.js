@@ -127,6 +127,10 @@
         open.slice().forEach(function (e) { if (!shown(e.modal)) closed(e); });
     }
 
+    function sweepGone() {
+        open.slice().forEach(function (e) { if (!e.modal.isConnected) closed(e); });
+    }
+
     function closerOf(modal) {
         var panel = panelOf(modal);
         var list = panel.querySelectorAll(CLOSERS);
@@ -209,7 +213,7 @@
                 if (m.removedNodes.length) removed = true;
             });
             seen.forEach(sync);
-            if (removed && open.length) sweep();
+            if (removed && open.length) sweepGone();
         });
         obs.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style'] });
         obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });

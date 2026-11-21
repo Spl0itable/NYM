@@ -206,6 +206,7 @@ class StorageSync {
     'backgroundConnectivityChosen',
     'backgroundConnectivityTs',
     'backgroundConnectivityFp',
+    'rememberSearches',
   };
 
   static const Map<String, List<String>> syncedSectionKeys = {
@@ -4800,9 +4801,12 @@ class ShopStatusActive {
     this.cosmetics = const [],
     this.supporter = false,
     this.editions = const {},
+    this.ring,
   });
 
   final String? style;
+
+  final String? ring;
 
   /// Active nickname-flair ids; the last is rendered.
   final List<String> flair;
@@ -4816,8 +4820,10 @@ class ShopStatusActive {
 
   factory ShopStatusActive.fromJson(Map<String, dynamic>? j) {
     if (j == null) return const ShopStatusActive();
+    final ring = j['ring'];
     return ShopStatusActive(
       style: j['style'] is String ? j['style'] as String : null,
+      ring: ring is String && ring.isNotEmpty ? ring : null,
       flair: (j['flair'] as List?)?.whereType<String>().toList() ?? const [],
       cosmetics:
           (j['cosmetics'] as List?)?.whereType<String>().toList() ?? const [],

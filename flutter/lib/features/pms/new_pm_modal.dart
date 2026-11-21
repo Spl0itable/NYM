@@ -323,32 +323,36 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     final incog = ref.watch(incognitoFieldFlagsProvider);
     final title = _groupMode ? tr('New Group') : tr('New Message');
 
-    final body = Stack(
-      children: [
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              margin: NymSheetScope.of(context)
-                  ? const EdgeInsets.fromLTRB(32, 12, 56, 20)
-                  : const EdgeInsets.fromLTRB(32, 32, 32, 24),
-              padding: const EdgeInsets.only(bottom: 14),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: c.glassBorder)),
-              ),
-              child: Text(
-                title.toUpperCase(),
-                style: TextStyle(
-                  color: c.primary,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.5,
+    final body = SingleChildScrollView(
+      key: const ValueKey('newPmScroll'),
+      child: Stack(
+        children: [
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              NymSheetDragRegion(
+                inScroll: true,
+                child: Container(
+                  margin: NymSheetScope.of(context)
+                      ? const EdgeInsets.fromLTRB(32, 12, 56, 20)
+                      : const EdgeInsets.fromLTRB(32, 32, 32, 24),
+                  padding: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(
+                    border: Border(bottom: BorderSide(color: c.glassBorder)),
+                  ),
+                  child: Text(
+                    title.toUpperCase(),
+                    style: TextStyle(
+                      color: c.primary,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
                 ),
               ),
-            ),
-            Flexible(
-              child: SingleChildScrollView(
+              Padding(
                 padding: const EdgeInsets.fromLTRB(32, 0, 32, 0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -440,20 +444,20 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                   ],
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
-              child: DialogActions(
-                children: [
-                  _cancelBtn(c),
-                  _startBtn(c),
-                ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+                child: DialogActions(
+                  children: [
+                    _cancelBtn(c),
+                    _startBtn(c),
+                  ],
+                ),
               ),
-            ),
-          ],
-        ),
-        Positioned(top: 14, right: 14, child: _closeButton(c)),
-      ],
+            ],
+          ),
+          Positioned(top: 14, right: 14, child: _closeButton(c)),
+        ],
+      ),
     );
     return NymDiscardGuard(
       isDirty: () => _dirty,
@@ -481,6 +485,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                       color: Colors.white.withValues(alpha: 0.05), spreadRadius: 1),
                 ],
               ),
+              clipBehavior: Clip.antiAlias,
               child: body,
             ),
           ),

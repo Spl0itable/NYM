@@ -36,6 +36,7 @@
     const META_PM_INBOX_CURSORS = 'pmInboxCursors';
     const PM_CURSOR_META_KEYS = [META_PM_D1_CURSOR, META_PM_INBOX_CURSORS, 'settingsHave'];
     const META_CHANNEL_COVERED = 'channelCovered';
+    const META_BRIDGE_CACHE_PURGED = 'bridgeCachePurged';
 
     Object.assign(NYM.prototype, {
 
@@ -98,6 +99,25 @@
                 });
             } catch (_) {
                 return [];
+            }
+        },
+
+        async _cacheCount(storeName) {
+            if (this._cacheDisabled) return 0;
+            if (!STORES.includes(storeName)) return 0;
+            try {
+                const db = await this._cacheOpen();
+                return await new Promise((resolve) => {
+                    try {
+                        const req = db.transaction(storeName, 'readonly').objectStore(storeName).count();
+                        req.onsuccess = () => resolve(Number.isFinite(req.result) ? req.result : null);
+                        req.onerror = () => resolve(null);
+                    } catch (_) {
+                        resolve(null);
+                    }
+                });
+            } catch (_) {
+                return null;
             }
         },
 
@@ -343,14 +363,19 @@
             return !!(m && ((B && B.isEncryptedBlobContent(m.content)) || (BV && BV.isBitchatVerifyContent(m.content))));
         },
 
-        _cachedBlobFilter(channels) {
+        _cachedBridgeMessage(m) {
+            const R = typeof window !== 'undefined' ? window.NymBridgeBlock : null;
+            return !!(m && R && R.isBridgeNick(m.author));
+        },
+
+        _cachedBlobFilter(channels, bridgeDone) {
             for (const c of channels || []) {
                 if (!c || !Array.isArray(c.messages)) continue;
                 for (const m of c.messages) {
                     if (m && m.id && this._cachedBlobMessage(m) && typeof this._noteDroppedBlobId === 'function') this._noteDroppedBlobId(m.id);
                 }
             }
-            return (m) => this._cachedBlobMessage(m)
+            return (m) => this._cachedBlobMessage(m) || (!bridgeDone && this._cachedBridgeMessage(m))
                 || !!(m && m.threadRoot && this._blobDroppedIds instanceof Set && this._blobDroppedIds.has(m.threadRoot));
         },
 
@@ -395,6 +420,8 @@
             for (const s of STORES) {
                 await this._cacheClearStore(s);
             }
+            this._bridgeCacheDone = true;
+            await this._cachePut('meta', { key: META_BRIDGE_CACHE_PURGED, done: 1 });
         },
 
         _pmCursorInvalidate() {
@@ -472,6 +499,8 @@
         async _trimStore(storeName) {
             const limit = STORE_LIMITS[storeName];
             if (!limit) return;
+            const count = typeof this._cacheCount === 'function' ? await this._cacheCount(storeName) : null;
+            if (Number.isFinite(count) && count <= limit) return;
             let all = await this._cacheGetAll(storeName);
             if (storeName === 'pms') all = all.filter((r) => !(r && typeof r.key === 'string' && r.key.startsWith('group-')));
             if (all.length <= limit) return;
@@ -653,6 +682,10 @@
                 const meta = await this._cacheGetAll('meta');
                 try { await this._hydratePqKeys(meta); } catch (_) { }
                 for (const m of meta) {
+                    if (m && m.key === META_BRIDGE_CACHE_PURGED) {
+                        this._bridgeCacheDone = true;
+                        continue;
+                    }
                     if (m && m.key === META_CHANNEL_COVERED && m.map && typeof m.map === 'object' && typeof m.pk === 'string') {
                         this._channelCoveredSaved = { pk: m.pk, map: m.map };
                         continue;
@@ -860,7 +893,9 @@
                 }
 
                 const loadedChannelKeys = [];
-                const dropCached = this._cachedBlobFilter(channels);
+                await this._hydrateDedupSets();
+                const bridgeDone = !!this._bridgeCacheDone;
+                const dropCached = this._cachedBlobFilter(channels, bridgeDone);
                 for (const c of channels) {
                     if (!c || !c.key || !Array.isArray(c.messages)) continue;
                     let msgs = [];
@@ -879,6 +914,10 @@
                     loadedChannelKeys.push(c.key);
                     if (this._healHydratedEdits(this.messages.get(c.key), msgs) || blobs) this.persistChannelMessages(c.key);
                     if (this.pendingQuote && typeof this._refreshPendingQuote === 'function') this._refreshPendingQuote();
+                }
+                if (!bridgeDone) {
+                    this._bridgeCacheDone = true;
+                    this._scheduleMsgPersist('meta', META_BRIDGE_CACHE_PURGED, () => this._cachePut('meta', { key: META_BRIDGE_CACHE_PURGED, done: 1 }));
                 }
 
                 // Columns only append after first paint, so ask them to reconcile now rather than at the end.

@@ -295,7 +295,7 @@ Object.assign(NYM.prototype, {
         });
 
         const safePk = this._safePubkey(pubkey);
-        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(baseNym, suffix)}${flairHtml}`;
+        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message${this._ringClass(pubkey, userShopItems)}" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(baseNym, suffix)}${flairHtml}`;
 
         const reactLabel = this.escapeHtml(this.uiText('React'));
         const hoverButtons = this._canHover() ? `

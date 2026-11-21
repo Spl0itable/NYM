@@ -179,10 +179,16 @@ class _ComposerState extends ConsumerState<Composer>
       _pendingQuoteValue;
   set _pendingQuote(({String author, String text, String fullText})? v) {
     _pendingQuoteValue = v;
-    ref
-        .read(nostrControllerProvider)
-        .noteComposerQuote(_chatView(), v == null ? null : _pendingQuoteId);
+    final controller = ref.read(nostrControllerProvider);
+    final view = _chatView();
+    final noted = _quoteNote;
+    if (noted != null && noted.view != view) {
+      noted.by.noteComposerQuote(noted.view, null);
+    }
+    controller.noteComposerQuote(view, v == null ? null : _pendingQuoteId);
+    _quoteNote = v == null ? null : (by: controller, view: view);
   }
+  ({NostrController by, ChatView view})? _quoteNote;
   String _pendingQuoteId = '';
   String _pendingQuoteRaw = '';
   String _pendingQuotePubkey = '';
@@ -190,6 +196,7 @@ class _ComposerState extends ConsumerState<Composer>
 
   // Each conversation switch stashes the outgoing draft, clears quote/edit, and restores the incoming draft.
   String? _activeDraftKey;
+  bool _draftRestored = false;
 
   late final String _draftOwner =
       ref.read(accountsProvider)?.changes.value.active ?? '';
@@ -197,12 +204,13 @@ class _ComposerState extends ConsumerState<Composer>
   /// Stored expanded (`:code:` text) so drafts never carry sentinel chars whose allocations can be dropped.
   void _saveCurrentDraft() {
     final key = _activeDraftKey;
-    if (key == null) return;
+    if (key == null || !_draftRestored) return;
     ComposerDrafts.save(key, _controller.expand(_controller.text));
   }
 
   /// No-ops when the input already holds that exact text.
   void _restoreDraftForContext(ChatView view) {
+    _draftRestored = true;
     final key = ComposerDrafts.keyFor(view, owner: _draftOwner);
     _activeDraftKey = key;
     final draft = ComposerDrafts.restore(key);
@@ -566,6 +574,9 @@ class _ComposerState extends ConsumerState<Composer>
     }
     // Stash the unsent input before unmounting; the PWA's single input never unmounts.
     _saveCurrentDraft();
+    final noted = _quoteNote;
+    _quoteNote = null;
+    noted?.by.noteComposerQuote(noted.view, null);
     final voice = _voice;
     _voice = null;
     if (voice != null) {
@@ -1571,7 +1582,10 @@ class _ComposerState extends ConsumerState<Composer>
     for (var i = list.length - 1; i >= 0; i--) {
       final m = list[i];
       if (!m.isOwn || m.isSystemRow || m.isMeAction) continue;
-      if (m.id.isEmpty || m.content.isEmpty || m.id.startsWith('_optim_')) {
+      if (m.id.isEmpty ||
+          m.content.isEmpty ||
+          m.id.startsWith('_optim_') ||
+          m.anonLane) {
         return false;
       }
       ref
@@ -1665,24 +1679,33 @@ class _ComposerState extends ConsumerState<Composer>
     }
     if (!_refreshQuote()) return;
     final quote = _pendingQuote;
+    final quoteId = quote != null && _pendingQuoteId.isNotEmpty ? _pendingQuoteId : null;
     final content = _composeOutgoing(composed);
     _pendingQuote = quote;
     final view = _chatView();
     final thread = ref.read(activeThreadProvider);
     final threadRoot =
         thread != null && thread.view == view ? thread.rootId : null;
+    final heldText = _controller.text;
+    final heldUrls = urls.join(' ');
     unawaited(SendLaterSheet.open(
       context,
       storageKey: view.storageKey,
       draft: content,
       threadRoot: threadRoot,
+      quoteSource: quoteId,
       onScheduled: () {
         if (!mounted) return;
         _pushSentHistory(content);
+        if (_controller.text != heldText ||
+            attachmentUrls.join(' ') != heldUrls ||
+            _chatView() != view) {
+          return;
+        }
         _controller.clear();
         _endAllUploadActivities();
         _attachments.clear();
-        _pendingQuote = null;
+        if (identical(_pendingQuote, quote)) _pendingQuote = null;
         _popout = false;
         _syncPopoutPortal();
         _hideOverlay();
@@ -1981,7 +2004,8 @@ class _ComposerState extends ConsumerState<Composer>
     });
     ref.listen(pendingEditProvider, (_, edit) {
       if (edit == null) return;
-      if (!DmPollsService.blocksEdit(_chatView(), edit.content)) {
+      if (!ref.read(nostrControllerProvider).anonLaneEditRefused(edit.messageId) &&
+          !DmPollsService.blocksEdit(_chatView(), edit.content)) {
         _applyEdit(edit);
       }
       ref.read(pendingEditProvider.notifier).consume();
@@ -2814,6 +2838,23 @@ class _ComposerState extends ConsumerState<Composer>
     );
   }
 
+  Widget _toolbarSendLaterButton() {
+    return FormatToolbarIconButton(
+      key: const ValueKey('formatSendLaterBtn'),
+      svg: ComposerIcons.send['later']!,
+      tooltip: 'Send later',
+      enabled: sendLaterReady(
+        connected: _rowSendEnabled,
+        text: _controller.text,
+        attachments: _attachments.length,
+        editing: _pendingEdit != null,
+        quoting: _pendingQuote != null,
+        recording: _voice != null,
+      ),
+      onTap: _openSendLater,
+    );
+  }
+
   Widget _toolbarEmojiButton() {
     return CompositedTransformTarget(
       key: _toolbarEmojiKey,
@@ -2838,11 +2879,13 @@ class _ComposerState extends ConsumerState<Composer>
       initialDate: now,
       firstDate: DateTime(1970),
       lastDate: DateTime(now.year + 100),
+      helpText: tr('Insert a timestamp'),
     );
     if (date == null || !mounted) return;
     final time = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.fromDateTime(now),
+      helpText: tr('Insert a timestamp'),
     );
     if (time == null || !mounted) return;
     final picked =
@@ -2962,6 +3005,7 @@ class _ComposerState extends ConsumerState<Composer>
           leading: [
             _toolbarEmojiButton(),
             _translateButton(context),
+            _toolbarSendLaterButton(),
           ],
         ),
       ));
@@ -3307,14 +3351,16 @@ class _ComposerState extends ConsumerState<Composer>
   Future<void> _openSendMenu() async {
     final asRows = await _sendAsRows();
     if (!mounted) return;
+    final items =
+        sendMenuItems(canAnon: _anonEligible, editing: _pendingEdit != null);
+    if (items.isEmpty && asRows.isEmpty) return;
     final index = ref.read(accountsProvider)?.changes.value;
     final id = await showComposerMenu(
       context,
       kind: 'send',
       label: tr('Send options'),
       entries: [
-        for (final it in sendMenuItems(canAnon: _anonEligible))
-          ComposerMenuEntry.send(it),
+        for (final it in items) ComposerMenuEntry.send(it),
         if (asRows.isNotEmpty) ComposerMenuEntry.sendAsHeader(),
         for (final r in asRows)
           ComposerMenuEntry.sendAs(
@@ -3568,6 +3614,11 @@ class _ComposerState extends ConsumerState<Composer>
     return _SendButton(
       key: _sendSplitKey,
       enabled: sendEnabled,
+      menuShown: sendMenuShown(
+        canAnon: _anonEligible,
+        editing: _pendingEdit != null,
+        sendAs: _sendAsAllowed,
+      ),
       onTap: _send,
       onMenu: () => unawaited(_openSendMenu()),
       menuFocus: _sendMenuFocus,
@@ -3830,11 +3881,13 @@ class _SendButton extends StatefulWidget {
     required this.enabled,
     required this.onTap,
     required this.onMenu,
+    this.menuShown = true,
     this.menuFocus,
     this.phone = false,
     this.inset = 0,
   });
   final bool enabled;
+  final bool menuShown;
   final VoidCallback onTap;
   final VoidCallback onMenu;
   final FocusNode? menuFocus;
@@ -3922,7 +3975,9 @@ class _SendButtonState extends State<_SendButton> {
     final List<BoxShadow>? glow = hovering
         ? [BoxShadow(color: c.primaryA(0.10), blurRadius: 15)]
         : null;
-    const left = BorderRadius.horizontal(left: Radius.circular(NymRadius.sm));
+    final left = widget.menuShown
+        ? const BorderRadius.horizontal(left: Radius.circular(NymRadius.sm))
+        : const BorderRadius.all(Radius.circular(NymRadius.sm));
     const right = BorderRadius.horizontal(right: Radius.circular(NymRadius.sm));
     final send = MouseRegion(
       cursor: widget.enabled
@@ -4038,7 +4093,7 @@ class _SendButtonState extends State<_SendButton> {
         opacity: widget.enabled ? 1 : 0.35,
         child: Row(
           mainAxisSize: MainAxisSize.min,
-          children: [send, chevron],
+          children: [send, if (widget.menuShown) chevron],
         ),
       ),
     );
@@ -4202,6 +4257,7 @@ class _QuotePreviewChip extends ConsumerWidget {
                     size: 12,
                     imageUrl: users[t.pubkey]?.profile?.picture,
                     ring: context.nym.avatarRing,
+                    ringId: ref.watch(userCosmeticsProvider(t.pubkey)).ringId,
                   ),
                 ),
               Flexible(
@@ -4899,6 +4955,7 @@ class _InputMentionChip extends ConsumerWidget {
     final size = baseStyle.fontSize ?? 14;
     final picture =
         ref.watch(usersProvider.select((m) => m[pubkey]?.profile?.picture));
+    final cosmetics = ref.watch(userCosmeticsProvider(pubkey));
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -4906,7 +4963,8 @@ class _InputMentionChip extends ConsumerWidget {
             seed: pubkey,
             size: size,
             imageUrl: picture,
-            ring: context.nym.avatarRing),
+            ring: context.nym.avatarRing,
+            ringId: cosmetics.ringId),
         const SizedBox(width: 3),
         Text.rich(
           TextSpan(
@@ -4923,7 +4981,7 @@ class _InputMentionChip extends ConsumerWidget {
           ),
         ),
         CosmeticNymBadges(
-          cosmetics: ref.watch(userCosmeticsProvider(pubkey)),
+          cosmetics: cosmetics,
           flairSize: size,
           supporterHeight: size,
         ),

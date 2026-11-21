@@ -10,6 +10,13 @@
     var layerWasOpen = false;
     var LAYERS = '.modal.active, .shop-modal.active, .geohash-explorer-modal.active, [data-sheet].active';
     var STYLE_LAYERS = '#geohashExplorerModal, #shopModal, .modal[data-sheet]';
+    var LAYER_TARGETS = '.modal, .shop-modal, .geohash-explorer-modal, [data-sheet], #geohashExplorerModal, #shopModal';
+
+    function layerTarget(t) {
+        if (!t || t.nodeType !== 1) return false;
+        if (t === document.body) return true;
+        try { return t.matches(LAYER_TARGETS); } catch (_) { return false; }
+    }
     var NAV = ['switchChannel', 'openPM', 'openUserPM', 'openGroup', 'navigateToLatestPMOrGroup'];
     var HOME = 'nymchat';
     var lastPlace = null;
@@ -852,8 +859,11 @@
             armSwipeBack(s);
         }
         var layerQueued = false;
-        var layerObs = new MutationObserver(function () {
+        var layerObs = new MutationObserver(function (records) {
             if (layerQueued) return;
+            var hit = false;
+            for (var i = 0; i < records.length && !hit; i++) hit = layerTarget(records[i].target);
+            if (!hit) return;
             layerQueued = true;
             requestAnimationFrame(function () {
                 layerQueued = false;

@@ -530,7 +530,7 @@ body.a11y-targets .sidebar-newfolder-btn {
     text-transform: uppercase;
     letter-spacing: 1px;
     transition: all var(--transition);
-    display: block !important;
+    display: block;
     font-weight: 500;
 }
 
@@ -544,12 +544,9 @@ body.a11y-targets .sidebar-newfolder-btn {
     display: none !important;
 }
 
-.list-expanded .view-more-btn {
-    display: none;
-}
-
-.list-expanded .list-item:not(.search-hidden) {
-    display: flex !important;
+.sb-more-row[hidden],
+.sb-more-row .view-more-btn[hidden] {
+    display: none !important;
 }
 
 .channel-list,
@@ -580,7 +577,7 @@ body.a11y-targets .sidebar-newfolder-btn {
 }
 
 #pmList .pm-item.cf-hidden-row {
-    display: none;
+    display: none !important;
 }
 
 .channel-tile {
@@ -606,7 +603,6 @@ body.a11y-targets .sidebar-newfolder-btn {
 }
 
 .channel-item.pinned {
-    order: -2;
     background: rgba(150, 150, 160, 0.1);
     border-color: rgba(150, 150, 160, 0.2);
     box-shadow: 0 0 12px rgba(150, 150, 160, 0.05);
@@ -644,6 +640,10 @@ body.a11y-targets .sidebar-newfolder-btn {
 }
 
 .channel-item.active {
+    order: -2;
+}
+
+.channel-item.pinned {
     order: -3;
 }
 
@@ -2481,6 +2481,7 @@ body.a11y-targets .ps-row {
 }
 
 .nav-section.ps-on #channelList,
+.nav-section.ps-on .sb-more-row[data-more-for="channelList"],
 .nav-section.ps-on #channelSearchWrapper,
 .nav-section.ps-on #channelSearchResults,
 .nav-section.ps-on .search-icon[data-search-target="channelSearch"] {
@@ -2496,7 +2497,8 @@ body.a11y-targets .ps-row {
     display: none !important;
 }
 
-.nav-section[data-section="channels"] > .nav-title {
+.nav-section > .nav-title,
+.user-list > .nav-title {
     scroll-margin-top: var(--ps-head, 0px);
 }
 
@@ -2638,6 +2640,10 @@ body.a11y-targets .ps-row {
     margin: 0;
     background: transparent;
     font-family: inherit;
+}
+
+.ps-more-row .view-more-btn:hover {
+    background: rgb(from var(--primary) r g b / 0.08);
 }
 
 body.a11y-targets .ps-more-row .view-more-btn {

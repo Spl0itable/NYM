@@ -545,7 +545,7 @@ Object.assign(NYM.prototype, {
     _cvColIcon(col) {
         if (col.type === 'pm' && col.pubkey) {
             const src = this.getAvatarUrl(col.pubkey);
-            return `<img class="avatar-pm" src="${this.escapeHtml(src)}" data-avatar-pubkey="${this._safePubkey(col.pubkey)}" alt="" width="20" height="20" decoding="async" loading="lazy">`;
+            return `<img class="avatar-pm${this._ringPeek(col.pubkey)}" src="${this.escapeHtml(src)}" data-avatar-pubkey="${this._safePubkey(col.pubkey)}" alt="" width="20" height="20" decoding="async" loading="lazy">`;
         }
         if (col.type === 'group') {
             const g = this.groupConversations && this.groupConversations.get(col.groupId);
@@ -783,12 +783,18 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
+    _cvTypingViewRoot(col) {
+        const at = this.activeThread;
+        if (!col || !at || !at.ctx || !this.threadsEnabled()) return null;
+        return at.ctx.storageKey === col.key ? (at.rootId || null) : null;
+    },
+
     _cvRenderTyping() {
         const g = document.getElementById('typingIndicator');
         if (g) g.classList.remove('active');
         for (const col of this._cvColumns) {
             if (col.typingEl && typeof this._renderTypingInto === 'function') {
-                this._renderTypingInto(col.typingEl, col.typingAvatarsEl, col.typingTextEl, this._cvTypingKey(col));
+                this._renderTypingInto(col.typingEl, col.typingAvatarsEl, col.typingTextEl, this._cvTypingKey(col), this._cvTypingViewRoot(col));
             }
         }
     },

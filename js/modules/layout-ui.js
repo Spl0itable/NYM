@@ -121,17 +121,21 @@
 
     function rowConversation(n, item) {
         if (!item || !item.dataset) return null;
+        var key;
         if (item.classList.contains('channel-item')) {
             var gh = item.dataset.geohash || '';
             var ch = item.dataset.channel || '';
             if (!gh && !ch) return null;
-            return { kind: 'channel', list: n.messages && n.messages.get(gh ? '#' + gh : ch) };
+            key = gh ? '#' + gh : ch;
+            return { kind: 'channel', key: key, list: n.messages && n.messages.get(key) };
         }
         if (item.dataset.groupId && typeof n.getGroupConversationKey === 'function') {
-            return { kind: 'group', list: n.pmMessages && n.pmMessages.get(n.getGroupConversationKey(item.dataset.groupId)) };
+            key = n.getGroupConversationKey(item.dataset.groupId);
+            return { kind: 'group', key: key, list: n.pmMessages && n.pmMessages.get(key) };
         }
         if (item.dataset.pubkey && typeof n.getPMConversationKey === 'function') {
-            return { kind: 'pm', list: n.pmMessages && n.pmMessages.get(n.getPMConversationKey(item.dataset.pubkey)) };
+            key = n.getPMConversationKey(item.dataset.pubkey);
+            return { kind: 'pm', key: key, list: n.pmMessages && n.pmMessages.get(key) };
         }
         return null;
     }
@@ -231,43 +235,57 @@
         pv.appendChild(frag);
     }
 
-    function paintRow(n, item, now, hide, ui) {
+    function paintRow(n, item, now, hide, ui, env) {
         var conv = rowConversation(n, item);
         if (!conv) return;
+        if (rowByKey && conv.key) rowByKey.set(conv.key, item);
         var m = lastShown(n, conv.list);
         var els = ensurePreviewEls(item);
         if (!els) return;
         var locked = rowLocked(n, item);
-        var text = '';
-        var dim = [];
-        var sender = null;
-        var bodyAt = 0;
-        var who = '';
+        var author = m ? (m.author || '') : '';
+        var bot = false;
         if (m) {
-            var body = m.content;
-            try { body = typeof n._previewBody === 'function' ? n._previewBody(body, Array.isArray(m.quoted) ? m.quoted : []) : n._notifPreviewText(body); } catch (_) { }
-            var author = m.author || '';
             try {
                 if (typeof n.resolveDisplayNym === 'function') author = n.resolveDisplayNym(m.pubkey, m.author);
                 else if (typeof n.parseNymFromDisplay === 'function') author = n.parseNymFromDisplay(author);
             } catch (_) { }
-            var redacted = '';
-            if (locked) { try { redacted = n._clRedactText().body; } catch (_) { redacted = ui('New message'); } }
-            var parts = LM().rowPreviewParts({ kind: conv.kind, author: author, pubkey: m.pubkey, self: !!m.isOwn, text: typeof body === 'string' && window.NymSuffix ? window.NymSuffix.capMentions(body) : body, hide: hide, locked: locked, redacted: redacted }, ui);
-            text = parts.text;
-            dim = parts.dim;
-            sender = parts.sender || null;
-            bodyAt = parts.bodyAt || 0;
-            if (conv.kind === 'group' && bodyAt > 0 && !m.isOwn && typeof n.getUserColorClass === 'function') who = n.getUserColorClass(m.pubkey) || '';
-            var from = bodyAt || (sender ? -1 : 0);
-            if (text && !hide && !locked && from >= 0 && window.NymSuffix && typeof n.isVerifiedBot === 'function' && n.isVerifiedBot(m.pubkey)) {
-                var bot = window.NymSuffix.ranges(text.slice(from), '*').map(function (r) { return [r[0] + from, r[1] + from]; })
-                    .filter(function (r) { return !dim.some(function (d) { return d[0] < r[1] && r[0] < d[1]; }); });
-                if (bot.length) dim = dim.concat(bot).sort(function (a, b) { return a[0] - b[0]; });
-            }
+            bot = typeof n.isVerifiedBot === 'function' && !!n.isVerifiedBot(m.pubkey);
         }
-        paintPreview(els.pv, text, dim, sender, bodyAt, who);
-        item.classList.toggle('has-preview', !!text);
+        var tint = '';
+        if (m && conv.kind === 'group' && !m.isOwn && typeof n.getUserColorClass === 'function') {
+            try { tint = n.getUserColorClass(m.pubkey) || ''; } catch (_) { }
+        }
+        var quotes = !!m && typeof m.content === 'string' && m.content.indexOf('>') !== -1;
+        var sig = [env, quotes ? (n._cfVersion || 0) : 0, conv.kind, hide ? 1 : 0, locked ? 1 : 0, bot ? 1 : 0, tint, m ? m.id : '', m ? m.content : '', m ? (m.editAt || 0) : 0, m ? (m.pubkey || '') : '', author, m && m.isOwn ? 1 : 0, m && Array.isArray(m.quoted) ? m.quoted.join(',') : ''].join('\u0001');
+        if (els.pv._lyRowSig !== sig) {
+            var text = '';
+            var dim = [];
+            var sender = null;
+            var bodyAt = 0;
+            var who = '';
+            if (m) {
+                var body = m.content;
+                try { body = typeof n._previewBody === 'function' ? n._previewBody(body, Array.isArray(m.quoted) ? m.quoted : []) : n._notifPreviewText(body); } catch (_) { }
+                var redacted = '';
+                if (locked) { try { redacted = n._clRedactText().body; } catch (_) { redacted = ui('New message'); } }
+                var parts = LM().rowPreviewParts({ kind: conv.kind, author: author, pubkey: m.pubkey, self: !!m.isOwn, text: typeof body === 'string' && window.NymSuffix ? window.NymSuffix.capMentions(body) : body, hide: hide, locked: locked, redacted: redacted }, ui);
+                text = parts.text;
+                dim = parts.dim;
+                sender = parts.sender || null;
+                bodyAt = parts.bodyAt || 0;
+                if (bodyAt > 0) who = tint;
+                var from = bodyAt || (sender ? -1 : 0);
+                if (text && !hide && !locked && from >= 0 && window.NymSuffix && bot) {
+                    var botRanges = window.NymSuffix.ranges(text.slice(from), '*').map(function (r) { return [r[0] + from, r[1] + from]; })
+                        .filter(function (r) { return !dim.some(function (d) { return d[0] < r[1] && r[0] < d[1]; }); });
+                    if (botRanges.length) dim = dim.concat(botRanges).sort(function (a, b) { return a[0] - b[0]; });
+                }
+            }
+            paintPreview(els.pv, text, dim, sender, bodyAt, who);
+            item.classList.toggle('has-preview', !!text);
+            els.pv._lyRowSig = sig;
+        }
         var ts = m ? (m._ms || (m.created_at ? m.created_at * 1000 : (m.timestamp instanceof Date ? m.timestamp.getTime() : 0))) : 0;
         var when = ts ? LM().relativeTime(now, ts, ui) : '';
         if (els.tm) {
@@ -276,31 +294,78 @@
     }
 
     var sweepTimer = null;
+    var sweepAll = false;
+    var dirtyRows = typeof Set === 'function' ? new Set() : null;
+    var rowByKey = typeof Map === 'function' ? new Map() : null;
+
+    function sweepEnv(n) {
+        var lang = '';
+        try { lang = typeof n.getUiLanguage === 'function' ? n.getUiLanguage() : ''; } catch (_) { }
+        return [lang, (n.settings && n.settings.theme) || '', n._emojiBlockRev || 0, n._i18nRev || 0].join('\u0002');
+    }
+
     function sweepPreviews() {
         sweepTimer = null;
         var n = window.nym;
         if (!n || !LM() || typeof document === 'undefined') return;
+        var all = sweepAll || !dirtyRows;
+        sweepAll = false;
+        var rows;
+        if (all) {
+            if (dirtyRows) dirtyRows.clear();
+            if (rowByKey) rowByKey.clear();
+            rows = document.querySelectorAll('#channelList .channel-item, #pmList .pm-item');
+        } else {
+            rows = [];
+            dirtyRows.forEach(function (r) { if (r.isConnected) rows.push(r); });
+            dirtyRows.clear();
+        }
         var ui = function (s) { return typeof n.uiText === 'function' ? n.uiText(s) : s; };
         var hide = previewsHidden();
         var now = Date.now();
-        var rows = document.querySelectorAll('#channelList .channel-item, #pmList .pm-item');
+        var env = sweepEnv(n);
         for (var i = 0; i < rows.length; i++) {
-            try { paintRow(n, rows[i], now, hide, ui); } catch (_) { }
+            try { paintRow(n, rows[i], now, hide, ui, env); } catch (_) { }
         }
-        if (typeof n._psSweepTimes === 'function') n._psSweepTimes();
+        if (all && typeof n._psSweepTimes === 'function') n._psSweepTimes();
     }
 
-    function schedulePreviews() {
+    function sweepAllPreviews() {
+        sweepAll = true;
+        sweepPreviews();
+    }
+
+    function schedulePreviews(rowsOnly) {
+        if (!rowsOnly) sweepAll = true;
         if (sweepTimer) return;
         sweepTimer = setTimeout(sweepPreviews, 120);
+    }
+
+    var wideTimer = null;
+
+    function scheduleKey(key) {
+        var row = rowByKey && key ? rowByKey.get(key) : null;
+        if (!row || !row.isConnected || !dirtyRows) { schedulePreviews(); return; }
+        dirtyRows.add(row);
+        schedulePreviews(true);
+        if (!wideTimer) wideTimer = setTimeout(function () { wideTimer = null; schedulePreviews(); }, 5000);
+    }
+
+    function markRow(node) {
+        if (!dirtyRows || !node) return false;
+        var el = node.nodeType === 1 ? node : node.parentElement;
+        var row = el && el.closest ? el.closest('.channel-item, .pm-item') : null;
+        if (!row) return false;
+        dirtyRows.add(row);
+        return true;
     }
 
     function wrapPersist(name) {
         if (typeof NYM === 'undefined' || !NYM.prototype || typeof NYM.prototype[name] !== 'function' || NYM.prototype[name]._lyWrapped) return;
         var orig = NYM.prototype[name];
-        var wrapped = function () {
+        var wrapped = function (key) {
             var r = orig.apply(this, arguments);
-            schedulePreviews();
+            scheduleKey(key);
             return r;
         };
         wrapped._lyWrapped = true;
@@ -315,17 +380,25 @@
             if (!el || el._lyObserved || typeof MutationObserver === 'undefined') return;
             el._lyObserved = true;
             new MutationObserver(function (records) {
+                var any = false;
                 for (var i = 0; i < records.length; i++) {
-                    var t = records[i].target;
+                    var r = records[i];
+                    var t = r.target;
                     if (t && t.classList && (t.classList.contains('row-preview') || t.classList.contains('row-time'))) continue;
+                    if (t === el) {
+                        for (var j = 0; j < r.addedNodes.length; j++) if (markRow(r.addedNodes[j])) any = true;
+                        continue;
+                    }
+                    if (markRow(t)) { any = true; continue; }
                     schedulePreviews();
                     return;
                 }
+                if (any) schedulePreviews(true);
             }).observe(el, { childList: true, subtree: true });
         };
         watch('channelList');
         watch('pmList');
-        setInterval(schedulePreviews, 30000);
+        setInterval(function () { schedulePreviews(); }, 30000);
         schedulePreviews();
     }
 
@@ -1065,7 +1138,12 @@
         };
         run();
         window.addEventListener('resize', run);
-        document.addEventListener('input', function (e) { if (e.target && e.target.id === 'messageInput') run(); }, true);
+        document.addEventListener('input', function (e) {
+            var t = e.target;
+            if (!t || t.id !== 'messageInput') return;
+            if ((t.textContent || '').trim() || (typeof t.querySelector === 'function' && t.querySelector('img'))) return;
+            run();
+        }, true);
         if (typeof ResizeObserver !== 'undefined') {
             var ro = new ResizeObserver(run);
             ['.chat-header', '.input-container', '#sidebarFooter'].forEach(function (sel) {
@@ -1208,7 +1286,7 @@
         lsSet(HIDE_KEY, on ? '1' : null);
         var sel = document.getElementById('hidePreviewsToggle');
         if (sel) sel.checked = !!on;
-        sweepPreviews();
+        sweepAllPreviews();
         var n = window.nym;
         if (n && typeof n._refreshNotificationsModalIfOpen === 'function') n._refreshNotificationsModalIfOpen();
     }
@@ -1671,7 +1749,7 @@
 
     window.NymLayout = Object.assign(window.NymLayout || {}, {
         closeHeaderMore: closeHeaderMore,
-        refreshPreviews: sweepPreviews,
+        refreshPreviews: sweepAllPreviews,
         setHidePreviews: setHidePreviews,
         setColorful: setColorful,
         setLargeTargets: setLargeTargets,

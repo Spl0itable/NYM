@@ -6,6 +6,7 @@ import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
 import { reviewSpamReport, spamEngine, frameBadgeRefused } from './_spam.js';
 import { verifySignedEvent } from './relay-pool.js';
 import { isEncryptedBlobChannelEvent } from './_encrypted-blob.js';
+import { isBridgeBlockedEvent, isBridgeBlockedFrame } from './_bridge-block.js';
 
 const RX_BLOB_KIND_FRAME = /"kind"\s*:\s*(?:20000|23333)\b/;
 
@@ -106,6 +107,12 @@ export async function onRequest(context) {
     let ev = null;
     try { const arr = JSON.parse(data); ev = Array.isArray(arr) && arr[0] === 'EVENT' ? arr[1] : null; } catch { return false; }
     if (!ev) return false;
+    if (isBridgeBlockedEvent(ev)) {
+      if (typeof ev.id === 'string') {
+        try { server.send(JSON.stringify(['OK', ev.id, false, 'blocked: not accepted'])); } catch {}
+      }
+      return true;
+    }
     if (isEncryptedBlobChannelEvent(ev)) {
       if (typeof ev.id === 'string') {
         try { server.send(JSON.stringify(['OK', ev.id, false, 'blocked: encrypted blob'])); } catch {}
@@ -162,6 +169,7 @@ export async function onRequest(context) {
     try {
       if (typeof event.data === 'string' && event.data.startsWith('["EVENT"') && frameHit(gate, event.data)) return;
       if (isBlobFrame(event.data)) return;
+      if (isBridgeBlockedFrame(event.data)) return;
       if (frameBadgeRefused(env, spam, event.data, verifySignedEvent)) return;
       if (server.readyState === 1) {
         server.send(event.data);

@@ -438,7 +438,7 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final connected =
-        ref.watch(appStateProvider.select((s) => s.connectedRelays));
+        ref.watch(relayStatusProvider.select((s) => s.connected));
     final lowData = ref.watch(settingsProvider.select((s) => s.lowDataMode));
     final backgroundConnectivity =
         ref.watch(settingsProvider.select((s) => s.backgroundConnectivity));
@@ -454,148 +454,150 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     final fallbackActive = nostr.isProxyFallbackActive;
     final userDirect = nostr.isUserDirectMode;
 
-    final body = Stack(
-      children: [
-        Padding(
-          padding: MediaQuery.sizeOf(context).width <= _kMobileMaxWidth
-              ? const EdgeInsets.symmetric(vertical: 18, horizontal: 14)
-              : const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                margin: const EdgeInsets.only(bottom: 24),
-                padding: const EdgeInsets.only(bottom: 14),
-                decoration: BoxDecoration(
-                  border:
-                      Border(bottom: BorderSide(color: c.glassBorder)),
-                ),
-                child: Text(
-                  tr('NETWORK STATS'),
-                  style: TextStyle(
-                    color: c.primary,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.5,
+    final body = SingleChildScrollView(
+      key: const ValueKey('relayStatsScroll'),
+      child: Stack(
+        children: [
+          Padding(
+            padding: MediaQuery.sizeOf(context).width <= _kMobileMaxWidth
+                ? const EdgeInsets.symmetric(vertical: 18, horizontal: 14)
+                : const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                NymSheetDragRegion(
+                  inScroll: true,
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 24),
+                    padding: const EdgeInsets.only(bottom: 14),
+                    decoration: BoxDecoration(
+                      border:
+                          Border(bottom: BorderSide(color: c.glassBorder)),
+                    ),
+                    child: Text(
+                      tr('NETWORK STATS'),
+                      style: TextStyle(
+                        color: c.primary,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              Flexible(
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _ConnectionModeLine(
-                        connected: connected,
-                        proxyMode: proxyMode,
-                        fallbackActive: fallbackActive,
-                        userDirect: userDirect,
-                        canSwitch: nostr.canSwitchRelayTransport,
-                        switching: _switching,
-                        probing:
-                            fallbackActive && nostr.isProxyRetryInFlight,
-                        note: _noteFor ==
-                                '$proxyMode/$fallbackActive/$userDirect'
-                            ? _note
-                            : '',
-                        onUseDirect: _useDirect,
-                        onUseProxy: _useProxy,
-                      ),
-                      const SizedBox(height: 12),
-                      _Cards(connected: connected, stats: stats),
-                      const SizedBox(height: 14),
-                      _ThroughputSection(
-                        history: stats?.throughputHistory ?? const [],
-                      ),
-                      const SizedBox(height: 14),
-                      _RelayListSection(
-                        relayStatus: relayStatus,
-                        stats: stats,
-                        expandedRow: _expandedRow,
-                        onToggleRow: _toggleRow,
-                        query: _query,
-                        search: Semantics(
-                          label: tr('Search relays'),
-                          textField: true,
-                          child: FormInput(
-                            key: const ValueKey('relay-search'),
-                            controller: _search,
-                            focusNode: _searchFocus,
-                            hint: tr('Search relays'),
-                            prefix: Icon(Icons.search,
-                                size: 16, color: c.textDim),
-                            onChanged: (_) => setState(() {}),
-                          ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _ConnectionModeLine(
+                      connected: connected,
+                      proxyMode: proxyMode,
+                      fallbackActive: fallbackActive,
+                      userDirect: userDirect,
+                      canSwitch: nostr.canSwitchRelayTransport,
+                      switching: _switching,
+                      probing:
+                          fallbackActive && nostr.isProxyRetryInFlight,
+                      note: _noteFor ==
+                              '$proxyMode/$fallbackActive/$userDirect'
+                          ? _note
+                          : '',
+                      onUseDirect: _useDirect,
+                      onUseProxy: _useProxy,
+                    ),
+                    const SizedBox(height: 12),
+                    _Cards(connected: connected, stats: stats),
+                    const SizedBox(height: 14),
+                    _ThroughputSection(
+                      history: stats?.throughputHistory ?? const [],
+                    ),
+                    const SizedBox(height: 14),
+                    _RelayListSection(
+                      relayStatus: relayStatus,
+                      stats: stats,
+                      expandedRow: _expandedRow,
+                      onToggleRow: _toggleRow,
+                      query: _query,
+                      search: Semantics(
+                        label: tr('Search relays'),
+                        textField: true,
+                        child: FormInput(
+                          key: const ValueKey('relay-search'),
+                          controller: _search,
+                          focusNode: _searchFocus,
+                          hint: tr('Search relays'),
+                          prefix: Icon(Icons.search,
+                              size: 16, color: c.textDim),
+                          onChanged: (_) => setState(() {}),
                         ),
-                        onClearSearch: _clearSearch,
-                        guardFor: nostr.relayBlockGuard,
-                        onBlock: _confirmBlock,
-                        blocked: blocked.toSet(),
-                        added: {
-                          if (ref.watch(addedRelaysProvider).isNotEmpty)
-                            for (final u in ref
-                                .read(addedRelaysProvider.notifier)
-                                .active)
-                              RelayBlock.canon(u)
-                        },
                       ),
-                      const SizedBox(height: 12),
-                      _addedSection(context, proxyMode),
-                      const SizedBox(height: 12),
-                      _BlockedSection(
-                        blocked: blocked,
-                        query: _query,
-                        geoNoteFor: nostr.relayBlockGeoNote,
-                        onUnblock: _unblock,
-                      ),
-                      if (BackgroundConnectivityService.isSupported) ...[
-                        const SizedBox(height: 14),
-                        _TogglePanel(
-                          title: tr('Stay connected in background'),
-                          hint: tr('Keep relay connections and the '
-                              'Bluetooth mesh running while Nymchat is in '
-                              'the background, so messages and '
-                              'notifications arrive without opening it. '
-                              'Uses more battery and data. On iOS the system '
-                              'decides when a suspended app may catch up, '
-                              'so notifications can lag; with identity '
-                              'encryption on, catch-up works only once '
-                              'the device has been unlocked at least once '
-                              'since it was powered on.'),
-                          enabled: backgroundConnectivity,
-                          onToggle: (v) => ref
-                              .read(settingsProvider.notifier)
-                              .setBackgroundConnectivity(v),
-                        ),
-                      ],
+                      onClearSearch: _clearSearch,
+                      guardFor: nostr.relayBlockGuard,
+                      onBlock: _confirmBlock,
+                      blocked: blocked.toSet(),
+                      added: {
+                        if (ref.watch(addedRelaysProvider).isNotEmpty)
+                          for (final u in ref
+                              .read(addedRelaysProvider.notifier)
+                              .active)
+                            RelayBlock.canon(u)
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    _addedSection(context, proxyMode),
+                    const SizedBox(height: 12),
+                    _BlockedSection(
+                      blocked: blocked,
+                      query: _query,
+                      geoNoteFor: nostr.relayBlockGeoNote,
+                      onUnblock: _unblock,
+                    ),
+                    if (BackgroundConnectivityService.isSupported) ...[
                       const SizedBox(height: 14),
                       _TogglePanel(
-                        title: tr('Using too much data?'),
-                        semanticLabel: tr('Low Data Mode'),
-                        hint: tr('Enable Low Data Mode to connect only to '
-                            'the 18 default relays and load geo relays only '
-                            'for the channels you open.'),
-                        enabled: lowData,
+                        title: tr('Stay connected in background'),
+                        hint: tr('Keep relay connections and the '
+                            'Bluetooth mesh running while Nymchat is in '
+                            'the background, so messages and '
+                            'notifications arrive without opening it. '
+                            'Uses more battery and data. On iOS the system '
+                            'decides when a suspended app may catch up, '
+                            'so notifications can lag; with identity '
+                            'encryption on, catch-up works only once '
+                            'the device has been unlocked at least once '
+                            'since it was powered on.'),
+                        enabled: backgroundConnectivity,
                         onToggle: (v) => ref
                             .read(settingsProvider.notifier)
-                            .setLowDataMode(v),
+                            .setBackgroundConnectivity(v),
                       ),
                     ],
-                  ),
+                    const SizedBox(height: 14),
+                    _TogglePanel(
+                      title: tr('Using too much data?'),
+                      semanticLabel: tr('Low Data Mode'),
+                      hint: tr('Enable Low Data Mode to connect only to '
+                          'the 18 default relays and load geo relays only '
+                          'for the channels you open.'),
+                      enabled: lowData,
+                      onToggle: (v) => ref
+                          .read(settingsProvider.notifier)
+                          .setLowDataMode(v),
+                    ),
+                  ],
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        Positioned(
-          top: 14,
-          right: 14,
-          child: _CloseChip(
-            onTap: () => Navigator.of(context).maybePop(),
+          Positioned(
+            top: 14,
+            right: 14,
+            child: _CloseChip(
+              onTap: () => Navigator.of(context).maybePop(),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
     final keyed = FocusScope(
       autofocus: true,
@@ -640,6 +642,7 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                       ),
                     ],
             ),
+            clipBehavior: Clip.antiAlias,
             child: body,
           ),
         ),

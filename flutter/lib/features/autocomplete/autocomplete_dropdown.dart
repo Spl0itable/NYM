@@ -241,7 +241,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
   }
 
   /// 18x18 avatar with a status dot, omitted for `hidden` users.
-  Widget _mentionAvatar(NymColors c, MentionResult m) {
+  Widget _mentionAvatar(NymColors c, MentionResult m, {String? ringId}) {
     final hidden = m.status == UserStatus.hidden;
     return SizedBox(
       width: 18,
@@ -253,7 +253,8 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
               seed: m.pubkey,
               size: 18,
               imageUrl: m.avatarUrl,
-              label: nymInitial(m.baseNym)),
+              label: nymInitial(m.baseNym),
+              ringId: ringId),
           if (!hidden)
             Positioned(
               right: -1,
@@ -305,7 +306,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
       onTap: () => widget.onSelectMention(m),
       child: Row(
         children: [
-          _mentionAvatar(c, m),
+          _mentionAvatar(c, m, ringId: cosmetics?.ringId),
           const SizedBox(width: 4),
           Flexible(
             child: NymLabel(

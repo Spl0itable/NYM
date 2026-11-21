@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/utils/nym_utils.dart';
@@ -5,6 +6,8 @@ import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../../widgets/context_menu/interaction_hooks.dart'
+    show pendingComposerActionProvider;
 import '../chat_tools/chat_tools_providers.dart';
 import '../group_tools/group_tools_providers.dart';
 import '../i18n/i18n.dart';
@@ -100,10 +103,31 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
           ref.read(nostrControllerProvider).decryptScheduleNote(blob),
       blockContext: (key) =>
           ref.read(nostrControllerProvider).scheduleBlockContext(key),
-      sendText: (key, text) =>
-          ref.read(nostrControllerProvider).sendScheduledText(key, text),
-      laneRefusal: (key, threadRoot) =>
-          ref.read(nostrControllerProvider).scheduleLaneRefusal(key, threadRoot),
+      sendText: (key, text, {threadRoot, quoteSource}) => ref
+          .read(nostrControllerProvider)
+          .sendScheduledText(key, text,
+              threadRoot: threadRoot, quoteSource: quoteSource),
+      sendNowRefusal: (key, text, {threadRoot, quoteSource, quiet = false}) =>
+          ref.read(nostrControllerProvider).scheduledSendRefusal(key, text,
+              threadRoot: threadRoot, quoteSource: quoteSource, quiet: quiet),
+      restoreText: (key, text) async {
+        final view = ref.read(nostrControllerProvider).chatViewForKey(key);
+        if (view != null && ref.read(appStateProvider).view == view) {
+          ref.read(pendingComposerActionProvider.notifier).requestInsertText(text);
+          return 'composer';
+        }
+        try {
+          await Clipboard.setData(ClipboardData(text: text));
+          return 'copied';
+        } catch (_) {
+          return '';
+        }
+      },
+      localNoteKey: () => ref.read(nostrControllerProvider).scheduleNoteKeyLocal,
+      laneRefusal: (key, threadRoot, quoteSource, {composer = false}) => ref
+          .read(nostrControllerProvider)
+          .scheduleLaneRefusal(key, threadRoot, quoteSource,
+              composer: composer),
       groupSendBlocked: (key, text) => ref
           .read(groupToolsProvider)
           .sendBlockedReason(chatNavAlias(key), text),

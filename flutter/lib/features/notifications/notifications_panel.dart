@@ -16,6 +16,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../shop/avatar_ring.dart' show AvatarRingClass;
 import '../../widgets/chat/message_row.dart'
     show formatFullTimestamp, formatRelativeTime;
 import '../../widgets/chat/relative_time_ticker.dart';
@@ -23,6 +24,7 @@ import '../calls/call_nym.dart';
 import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import '../groups/group_invites.dart' show GroupInvites;
+import '../shop/cosmetics.dart' show userCosmeticsProvider;
 import 'notification_route_target.dart';
 import 'notification_routing.dart';
 import '../messages/format/message_content.dart';
@@ -759,6 +761,12 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
         ? GroupInvites.bellPicture(
             entry.eventId, ref.watch(usersProvider)[pubkey]?.profile?.picture)
         : null;
+    final ringId = !hasPubkey ||
+            (entry.eventId ?? '').startsWith(GroupInvites.notifyPrefix) ||
+            ref.watch(appStateProvider
+                .select((s) => s.personMaskLabel(pubkey).isNotEmpty))
+        ? null
+        : ref.watch(userCosmeticsProvider(pubkey).select((x) => x.ringId));
     final hide = ref.watch(settingsProvider.select((s) => s.hidePreviews));
     final prefs = EventToastPrefs(hidePreviews: hide);
     String etr(String s, [Map<String, Object?>? p]) =>
@@ -835,7 +843,12 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
                 if (hasPubkey) ...[
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
-                    child: NymAvatar(seed: pubkey, size: 28, imageUrl: picture),
+                    child: NymAvatar(
+                        seed: pubkey,
+                        size: 28,
+                        imageUrl: picture,
+                        ringId: ringId,
+                        ringClass: AvatarRingClass.tiny),
                   ),
                   const SizedBox(width: 6),
                 ],

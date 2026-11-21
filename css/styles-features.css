@@ -255,19 +255,60 @@
     font-weight: 700;
 }
 
-.shop-credits {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+.shop-ring-preview {
     gap: 14px;
-    max-width: 560px;
+    background: var(--bg);
 }
 
-.shop-credits-text {
-    margin: 0;
-    color: var(--text-dim);
-    font-size: 14px;
-    line-height: 1.5;
+.shop-ring-sample-profile,
+.shop-ring-sample-row,
+.shop-ring-sample-tiny {
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.shop-ring-sample-profile {
+    --sr-s: 64px;
+    width: 64px;
+    height: 64px;
+}
+
+.shop-ring-sample-row {
+    --sr-s: 32px;
+    width: 32px;
+    height: 32px;
+}
+
+.shop-ring-sample-tiny {
+    width: 20px;
+    height: 20px;
+}
+
+.context-menu:not(.active) .shop-ring-host:has(> img.shop-ring)::before {
+    animation: none;
+}
+
+.context-menu.ctx-under-modal .shop-ring-host:has(> img.shop-ring)::before,
+body:has(> .modal.active, > .shop-modal.active, > .image-modal.active, > .call-overlay.active, > .geohash-explorer-modal.active) .uh-avatar:has(> img.shop-ring)::before,
+html.info-docked body:has(> .modal.active, > .shop-modal.active, > .image-modal.active, > .call-overlay.active, > .geohash-explorer-modal.active) .context-menu.docked .shop-ring-host:has(> img.shop-ring)::before {
+    animation-play-state: paused;
+}
+
+@media (max-width: 1024px) {
+    .container:has(> #sidebar.open) .uh-avatar:has(> img.shop-ring)::before {
+        animation-play-state: paused;
+    }
+}
+
+.shop-ring-icon.shop-ring-sample-tiny {
+    --sr-w: 0.16em;
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    vertical-align: middle;
+    -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 0.16em - 0.5px), #000 calc(100% - 0.16em));
+    mask: radial-gradient(closest-side, transparent calc(100% - 0.16em - 0.5px), #000 calc(100% - 0.16em));
 }
 
 .shop-active-items {
@@ -2851,7 +2892,7 @@ body:not(.chat-bubbles) .message.supporter-style {
 
 .nm-mention .avatar-message,
 .quote-author .avatar-message,
-#quotePreviewAuthor .avatar-message,
+.quote-preview-author .avatar-message,
 .input-mention .avatar-message {
     display: inline-block;
     width: 20px;
@@ -2866,13 +2907,24 @@ body:not(.chat-bubbles) .message.supporter-style {
 .input-mention {
     display: inline-flex;
     align-items: baseline;
+    height: 1.4em;
     color: var(--secondary);
     white-space: nowrap;
-    vertical-align: middle;
+    vertical-align: top;
 }
 
 .input-mention > img {
     align-self: center;
+}
+
+.input-mention > img.avatar-message {
+    width: min(20px, 1.4em);
+    height: min(20px, 1.4em);
+}
+
+.input-mention > .flair-badge {
+    align-self: center;
+    font-size: min(20px, 1.4em);
 }
 
 .context-menu-copy-pubkey:hover {
@@ -5194,6 +5246,7 @@ body.a11y-contrast.light-mode {
 }
 
 .typing-indicator {
+    --typing-avatar-size: 18px;
     display: none;
     align-items: center;
     gap: 8px;
@@ -5222,8 +5275,8 @@ body.a11y-contrast.light-mode {
 }
 
 .typing-indicator-avatars img {
-    width: 18px;
-    height: 18px;
+    width: var(--typing-avatar-size);
+    height: var(--typing-avatar-size);
     border-radius: 50%;
     border: 1.5px solid var(--avatar-ring);
     object-fit: cover;
@@ -5274,6 +5327,11 @@ body.a11y-contrast.light-mode {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.typing-indicator-text .flair-badge {
+    font-size: var(--typing-avatar-size);
+    align-self: center;
 }
 
 .message-translation {
@@ -7328,7 +7386,8 @@ body.chat-bubbles .message-content {
     text-align: center;
 }
 
-.us-row.us-more {
+.us-row.us-more,
+.us-row.us-clearHistory {
     justify-content: center;
 }
 
@@ -7408,6 +7467,48 @@ mark.us-hit {
 
 .us-state-hint {
     font-size: 12px;
+}
+
+.us-group + .us-state {
+    height: auto;
+    min-height: 120px;
+}
+
+.us-row.us-recent {
+    padding-right: 0;
+}
+
+.us-row.us-recent .us-conv.us-glyph {
+    color: var(--text-dim);
+}
+
+.us-remove {
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    margin: -6px 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-xs);
+    color: var(--text-dim);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.us-remove:hover,
+.us-remove:focus-visible {
+    color: var(--text);
+    background: rgb(from var(--primary) r g b / 0.18);
+}
+
+.us-recent-foot {
+    margin: 12px 8px 4px;
+    text-align: center;
+    color: var(--text-dim);
 }
 
 @media (max-width: 768px) {

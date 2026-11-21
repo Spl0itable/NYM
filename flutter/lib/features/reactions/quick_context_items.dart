@@ -77,9 +77,11 @@ List<QuickContextItem> buildQuickContextItems(
   VoidCallback? onTranslate,
   VoidCallback? onEdit,
   VoidCallback? onThread,
+  BuildContext? host,
 }) {
   final info = messageActionFactsFor(ref, message, threadable: onThread != null);
   final read = ProviderScope.containerOf(context, listen: false).read;
+  BuildContext at() => context.mounted ? context : (host ?? context);
   final app = ref.read(appStateProvider);
   final baseNym = pickDisplayNym(app.users[message.pubkey]?.nym, message.author);
   final fullNym = '${stripPubkeySuffix(baseNym)}#${getPubkeySuffix(message.pubkey)}';
@@ -88,8 +90,7 @@ List<QuickContextItem> buildQuickContextItems(
   VoidCallback? run(MsgAction a) {
     switch (a) {
       case MsgAction.reply:
-        return () => ref
-            .read(pendingComposerActionProvider.notifier)
+        return () => read(pendingComposerActionProvider.notifier)
             .requestQuote(
                 fullNym: fullNym,
                 content: message.content,
@@ -114,16 +115,16 @@ List<QuickContextItem> buildQuickContextItems(
       case MsgAction.unkeep:
         return () => ChatToolsActions.toggleKeep(read, stored);
       case MsgAction.zap:
-        return () => _zap(context, ref, message, stripPubkeySuffix(baseNym));
+        return () => _zap(at, read, message, stripPubkeySuffix(baseNym));
       case MsgAction.edit:
         return onEdit;
       case MsgAction.delete:
-        return () => _confirmDelete(context, ref, message, mod: info.modDelete);
+        return () => _confirmDelete(at(), read, message, mod: info.modDelete);
       case MsgAction.editHistory:
-        return () => EditHistorySheet.open(context, message);
+        return () => EditHistorySheet.open(at(), message);
       case MsgAction.eventDetails:
         return () => showEventDetails(
-              context,
+              at(),
               eventId: message.id,
               pubkey: message.pubkey,
               nym: message.author,
@@ -132,7 +133,7 @@ List<QuickContextItem> buildQuickContextItems(
               powTarget: message.powTarget,
             );
       case MsgAction.report:
-        return () => _report(context, ref, message, fullNym);
+        return () => _report(at(), read, message, fullNym);
     }
   }
 
@@ -163,11 +164,11 @@ List<QuickContextItem> buildQuickContextItems(
 
 Future<void> _report(
   BuildContext context,
-  WidgetRef ref,
+  ChatToolsReader read,
   Message message,
   String fullNym,
 ) async {
-  final controller = ref.read(nostrControllerProvider);
+  final controller = read(nostrControllerProvider);
   final entry = controller.reportEntryBlocked(message.pubkey, message.id);
   if (entry.isNotEmpty) {
     controller.showReportRefusal(entry);
@@ -198,17 +199,16 @@ Future<void> _report(
 }
 
 Future<void> _zap(
-  BuildContext context,
-  WidgetRef ref,
+  BuildContext Function() at,
+  ChatToolsReader read,
   Message message,
   String baseNym,
 ) async {
-  if (ref.read(nostrControllerProvider).anonLaneZapRefused(message.id)) return;
+  if (read(nostrControllerProvider).anonLaneZapRefused(message.id)) return;
   showToast(tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
   final String? lnAddr;
   try {
-    lnAddr = await ref
-        .read(nostrControllerProvider)
+    lnAddr = await read(nostrControllerProvider)
         .resolveLightningAddressForZap(message.pubkey);
   } catch (_) {
     showToast(
@@ -221,6 +221,7 @@ Future<void> _zap(
         {'user': baseNym}));
     return;
   }
+  final context = at();
   if (!context.mounted) return;
   await ZapModal.show(
     context,
@@ -229,18 +230,18 @@ Future<void> _zap(
     lightningAddress: lnAddr,
     messageId: message.id,
     originalKind:
-        inferOriginalKind(message, view: ref.read(currentViewProvider)),
+        inferOriginalKind(message, view: read(currentViewProvider)),
   );
 }
 
 Future<void> _confirmDelete(
   BuildContext context,
-  WidgetRef ref,
+  ChatToolsReader read,
   Message message, {
   required bool mod,
 }) async {
-  final controller = ref.read(nostrControllerProvider);
-  final view = ref.read(currentViewProvider);
+  final controller = read(nostrControllerProvider);
+  final view = read(currentViewProvider);
   final ok = await showAppConfirm(
     context,
     mod

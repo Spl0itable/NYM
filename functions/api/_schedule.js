@@ -4,6 +4,7 @@ import { verifySignedEvent, isPrivateRelayHost, spamEngineJob } from "./relay-po
 import { spamEngine } from "./_spam.js";
 import { filterSet, pubkeyHit } from "./_filters.js";
 import { isEncryptedBlobChannelEvent } from "./_encrypted-blob.js";
+import { isBridgeBlockedEvent } from "./_bridge-block.js";
 
 export const SCHEDULE_LIMITS = Object.freeze({
   minLeadSec: 30,
@@ -19,6 +20,7 @@ export const SCHEDULE_LIMITS = Object.freeze({
   attempts: 4,
   retrySec: 60,
   keepDoneSec: 7 * 24 * 60 * 60,
+  keepCancelledSec: 24 * 60 * 60,
   leaseSec: 300,
   lateSec: 6 * 60 * 60,
   wrapJitterSec: 7200,
@@ -68,9 +70,35 @@ function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
 
-function replaceRefused(row) {
-  if (!row) return json({ error: "The scheduled message to change is gone.", code: "gone" }, 404);
-  return json({ error: row.status === "sent" ? "It was already sent." : "It is being sent right now.", code: row.status }, 409);
+async function ownerItems(db, owner) {
+  try {
+    const rows = (await db.prepare("SELECT id, publish_at, events, note, status, attempts, error, sent_at FROM scheduled WHERE pubkey = ? AND status != 'cancelled' ORDER BY publish_at ASC, id ASC").bind(owner).all()).results || [];
+    return rows.map(rowView);
+  } catch {
+    return [];
+  }
+}
+
+function heldStatus(row) {
+  return row && row.status === "pending" && row.error === "deposited" ? "sent" : row && row.status;
+}
+
+async function replaceRefused(db, owner, row) {
+  if (!row || row.status === "cancelled") return json({ error: "The scheduled message to change is gone.", code: "gone", items: await ownerItems(db, owner) }, 404);
+  const st = heldStatus(row);
+  return json({ error: st === "sent" ? "It was already sent." : "It is being sent right now.", code: st }, 409);
+}
+
+function cancelAnswer(row, token) {
+  if (!row) return json({ ok: true, removed: false, status: "gone" });
+  if (row.status === "cancelled") {
+    if (token && row.error === token) return json({ ok: true, removed: true, status: "cancelled" });
+    return json({ ok: true, removed: false, status: "gone", taken: true });
+  }
+  const st = row.status === "pending" || row.status === "failed" ? (token ? heldStatus(row) : null) : row.status;
+  if (st === "sent") return json({ ok: false, removed: false, status: "sent", code: "sent", error: "It was already sent." }, 409);
+  if (st && st !== "pending" && st !== "failed") return json({ ok: false, removed: false, status: "sending", code: "sending", error: "It is being sent right now." }, 409);
+  return null;
 }
 
 function json(obj, status) {
@@ -144,6 +172,7 @@ export function validateScheduleItem(body, owner, now) {
     if (!verifySignedEvent(ev)) return { error: "An event is not validly signed.", status: 400 };
     if (seen.has(ev.id)) return { error: "Duplicate event.", status: 400 };
     seen.add(ev.id);
+    if (isBridgeBlockedEvent(ev)) return { error: "This message cannot be sent.", code: "blocked", status: 400 };
     if (CHANNEL_KINDS.has(ev.kind)) {
       if (r !== "pub") return { error: "Invalid route.", status: 400 };
       if (ev.pubkey !== owner) return { error: "Channel messages must be signed by you.", status: 403 };
@@ -220,7 +249,7 @@ export async function handleScheduleAction(context, body, authOk) {
   if (body.action === "schedule-list") {
     let rows = [];
     try {
-      rows = (await db.prepare("SELECT id, publish_at, events, note, status, attempts, error, sent_at, next_try, lease_until FROM scheduled WHERE pubkey = ? ORDER BY publish_at ASC, id ASC").bind(owner).all()).results || [];
+      rows = (await db.prepare("SELECT id, publish_at, events, note, status, attempts, error, sent_at, next_try, lease_until FROM scheduled WHERE pubkey = ? AND status != 'cancelled' ORDER BY publish_at ASC, id ASC").bind(owner).all()).results || [];
     } catch { rows = []; }
     const stalled = (r) => (r.status === "pending" && Number(r.next_try) <= now) || (r.status === "sending" && Number(r.lease_until) < now);
     if (rows.some(stalled)) kickOwnerRun(context, owner);
@@ -230,13 +259,16 @@ export async function handleScheduleAction(context, body, authOk) {
   if (body.action === "schedule-cancel") {
     const id = typeof body.id === "string" ? body.id.toLowerCase() : "";
     if (!RX_ID.test(id)) return json({ error: "Invalid id." }, 400);
-    const row = await db.prepare("SELECT status FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, id).first();
-    if (!row) return json({ ok: true, removed: false, status: "gone" });
-    if (row.status === "sending") return json({ ok: false, removed: false, status: "sending", error: "It is being sent right now." }, 409);
-    if (row.status === "sent") return json({ ok: false, removed: false, status: "sent", error: "It was already sent." }, 409);
-    const res = await db.prepare("DELETE FROM scheduled WHERE pubkey = ? AND id = ? AND status IN ('pending', 'failed')").bind(owner, id).run();
-    const removed = ((res && res.meta && res.meta.changes) || 0) > 0;
-    return json({ ok: removed, removed, status: removed ? "cancelled" : "sending" }, removed ? 200 : 409);
+    const token = body.token == null ? "" : (typeof body.token === "string" ? body.token.toLowerCase() : null);
+    if (token === null || (token && !RX_ID.test(token))) return json({ error: "Invalid token." }, 400);
+    const readRow = () => db.prepare("SELECT status, error FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, id).first();
+    const early = cancelAnswer(await readRow(), token);
+    if (early) return early;
+    const res = token
+      ? await db.prepare("UPDATE scheduled SET status = 'cancelled', error = ?, events = '[]', note = '', bytes = 0, lease_until = 0, next_try = ? WHERE pubkey = ? AND id = ? AND status IN ('pending', 'failed') AND error != 'deposited'").bind(token, now, owner, id).run()
+      : await db.prepare("DELETE FROM scheduled WHERE pubkey = ? AND id = ? AND status IN ('pending', 'failed')").bind(owner, id).run();
+    if (((res && res.meta && res.meta.changes) || 0) > 0) return json({ ok: true, removed: true, status: "cancelled" });
+    return cancelAnswer(await readRow(), token) || json({ ok: false, removed: false, status: "sending", code: "sending", error: "It is being sent right now." }, 409);
   }
 
   if (body.action === "schedule-add") {
@@ -244,15 +276,18 @@ export async function handleScheduleAction(context, body, authOk) {
     if (!(await cacheRateTake("schedule-add", owner, 1, SCHEDULE_LIMITS.addPerMinute, 60000))) {
       return json({ error: "Too many scheduled messages at once. Try again in a minute." }, 429);
     }
+    const addId = typeof body.id === "string" ? body.id.toLowerCase() : "";
+    if (!RX_ID.test(addId)) return json({ error: "Invalid id.", code: "" }, 400);
+    const addReplaces = typeof body.replaces === "string" && RX_ID.test(body.replaces.toLowerCase()) ? body.replaces.toLowerCase() : null;
+    const dup = await db.prepare("SELECT status, publish_at FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, addId).first();
+    if (dup && addId !== addReplaces) return json({ ok: true, id: addId, at: Number(dup.publish_at) || Number(body.at) || 0, duplicate: true });
     const v = validateScheduleItem(body, owner, now);
     if (v.error) return json({ error: v.error, code: v.code || "" }, v.status);
     let replacing = null;
     if (v.replaces) {
-      replacing = await db.prepare("SELECT status, bytes FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, v.replaces).first();
-      if (!replacing || (replacing.status !== "pending" && replacing.status !== "failed")) return replaceRefused(replacing);
+      replacing = await db.prepare("SELECT status, error, bytes FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, v.replaces).first();
+      if (!replacing || (replacing.status !== "pending" && replacing.status !== "failed") || replacing.error === "deposited") return replaceRefused(db, owner, replacing);
     }
-    const dup = await db.prepare("SELECT status FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, v.id).first();
-    if (dup && v.id !== v.replaces) return json({ ok: true, id: v.id, at: v.at, duplicate: true });
     const agg = await db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM scheduled WHERE pubkey = ? AND status IN ('pending', 'sending', 'failed')").bind(owner).first();
     let pending = Number(agg && agg.n) || 0;
     let bytes = Number(agg && agg.b) || 0;
@@ -265,15 +300,15 @@ export async function handleScheduleAction(context, body, authOk) {
     if (replacing) {
       stmts.push(db.prepare(
         (v.id === v.replaces ? "INSERT OR REPLACE" : "INSERT") + " INTO scheduled " + cols +
-        "SELECT ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 0, '', ?, 0 WHERE EXISTS (SELECT 1 FROM scheduled WHERE pubkey = ? AND id = ? AND status IN ('pending', 'failed'))"
+        "SELECT ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 0, '', ?, 0 WHERE EXISTS (SELECT 1 FROM scheduled WHERE pubkey = ? AND id = ? AND status IN ('pending', 'failed') AND error != 'deposited')"
       ).bind(...vals, owner, v.replaces));
-      if (v.id !== v.replaces) stmts.push(db.prepare("DELETE FROM scheduled WHERE pubkey = ? AND id = ? AND status IN ('pending', 'failed')").bind(owner, v.replaces));
+      if (v.id !== v.replaces) stmts.push(db.prepare("DELETE FROM scheduled WHERE pubkey = ? AND id = ? AND status IN ('pending', 'failed') AND error != 'deposited'").bind(owner, v.replaces));
     } else {
       stmts.push(db.prepare("INSERT INTO scheduled " + cols + "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 0, '', ?, 0)").bind(...vals));
     }
     const res = await db.batch(stmts);
     if (replacing && !((res && res[0] && res[0].meta && res[0].meta.changes) > 0)) {
-      return replaceRefused(await db.prepare("SELECT status FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, v.replaces).first());
+      return replaceRefused(db, owner, await db.prepare("SELECT status, error FROM scheduled WHERE pubkey = ? AND id = ?").bind(owner, v.replaces).first());
     }
     return json({ ok: true, id: v.id, at: v.at });
   }
@@ -409,24 +444,25 @@ export async function judgeChannelEvents(env, context, events, deadlineMs) {
 
 async function storeWraps(env, owner, events, now) {
   const db = env && hasD1(env.DB_PM) ? env.DB_PM : null;
-  if (!db) return 0;
+  if (!db) return { stored: 0, deposited: false };
   const stmt = db.prepare("INSERT OR IGNORE INTO pm (pubkey, id, created_at, event, stored_at) VALUES (?, ?, ?, ?, ?)");
   const batch = [];
+  let dep = 0;
   const nowMs = Math.max(now * 1000, Date.now());
   for (const { e, r } of events) {
     if (e.kind !== 1059) continue;
     if (r === "self" || r === "arch") batch.push(stmt.bind(owner, e.id, Math.min(e.created_at, now), JSON.stringify(e), nowMs));
     else if (r === "dep") {
       const p = wrapRecipient(e);
-      if (p && p !== owner) batch.push(stmt.bind(p, e.id, Math.min(e.created_at, now), JSON.stringify(e), nowMs));
+      if (p && p !== owner) { batch.push(stmt.bind(p, e.id, Math.min(e.created_at, now), JSON.stringify(e), nowMs)); dep++; }
     }
   }
-  if (!batch.length) return 0;
+  if (!batch.length) return { stored: 0, deposited: false };
   try {
     const res = await db.batch(batch);
-    return res.reduce((n, x) => n + ((x && x.meta && x.meta.changes) || 0), 0);
+    return { stored: res.reduce((n, x) => n + ((x && x.meta && x.meta.changes) || 0), 0), deposited: dep > 0 };
   } catch {
-    return 0;
+    return { stored: 0, deposited: false };
   }
 }
 
@@ -451,6 +487,10 @@ export async function runScheduled(env, opts) {
     const p = await db.prepare("DELETE FROM scheduled WHERE status IN ('sent', 'failed') AND next_try < ? AND MAX(sent_at, next_try, publish_at) < ?").bind(now - L.keepDoneSec, now - L.keepDoneSec).run();
     summary.purged = (p && p.meta && p.meta.changes) || 0;
   } catch { }
+  try {
+    const c = await db.prepare("DELETE FROM scheduled WHERE status = 'cancelled' AND next_try < ?").bind(now - L.keepCancelledSec).run();
+    summary.purged += (c && c.meta && c.meta.changes) || 0;
+  } catch { }
   await db.prepare("UPDATE scheduled SET status = 'pending', lease_until = 0 WHERE status = 'sending' AND lease_until < ?" + (o.owner ? " AND pubkey = ?" : "")).bind(...(o.owner ? [now, o.owner] : [now])).run();
   const dueSql = "SELECT pubkey, id FROM scheduled WHERE status = 'pending' AND next_try <= ?" + (o.owner ? " AND pubkey = ?" : "") + " ORDER BY next_try ASC LIMIT ?";
   const dueBinds = o.owner ? [now, o.owner, o.limit || L.runBatch] : [now, o.limit || L.runBatch];
@@ -463,6 +503,11 @@ export async function runScheduled(env, opts) {
     const row = await db.prepare("SELECT * FROM scheduled WHERE pubkey = ? AND id = ?").bind(d.pubkey, d.id).first();
     if (!row) return;
     if (now > row.publish_at + L.lateSec) {
+      if (row.error === "deposited") {
+        await settle(db, row, { status: "sent", error: "partial", lease_until: 0, events: "[]", bytes: 0, sent_at: now });
+        summary.partial++;
+        return;
+      }
       await settle(db, row, { status: "failed", error: "late", lease_until: 0, events: "[]", bytes: 0, next_try: now });
       summary.late++;
       summary.failed++;
@@ -472,7 +517,7 @@ export async function runScheduled(env, opts) {
     let relays = [];
     try { items = JSON.parse(row.events); relays = JSON.parse(row.relays); } catch { items = []; }
     const all = items.map((x) => x.e);
-    const dropped = all.some(isEncryptedBlobChannelEvent) ? new Set([row.id]) : await judge(all);
+    const dropped = all.some((e) => isEncryptedBlobChannelEvent(e) || isBridgeBlockedEvent(e)) ? new Set([row.id]) : await judge(all);
     if (dropped && dropped.size) {
       await settle(db, row, { status: "failed", error: "spam", lease_until: 0, events: "[]", bytes: 0, next_try: now });
       summary.spam++;
@@ -482,7 +527,8 @@ export async function runScheduled(env, opts) {
     const toRelay = items.filter((x) => x.r !== "arch").map((x) => x.e);
     let counts = new Map();
     try { counts = await publish(relays, toRelay); } catch { counts = new Map(); }
-    await storeWraps(env, row.pubkey, items, now);
+    const deposit = await storeWraps(env, row.pubkey, items, now);
+    const deposited = deposit.deposited || row.error === "deposited";
     const okAll = toRelay.every((e) => (counts.get(e.id) || 0) > 0);
     const okAny = toRelay.some((e) => (counts.get(e.id) || 0) > 0);
     const attempts = Number(row.attempts) || 1;
@@ -490,7 +536,7 @@ export async function runScheduled(env, opts) {
       await settle(db, row, { status: "sent", error: "", lease_until: 0, events: "[]", bytes: 0, sent_at: now });
       summary.sent++;
     } else if (attempts >= L.attempts) {
-      if (okAny) {
+      if (okAny || deposited) {
         await settle(db, row, { status: "sent", error: "partial", lease_until: 0, events: "[]", bytes: 0, sent_at: now });
         summary.partial++;
       } else {
@@ -498,7 +544,7 @@ export async function runScheduled(env, opts) {
         summary.failed++;
       }
     } else {
-      await settle(db, row, { status: "pending", error: "retry", lease_until: 0, next_try: now + L.retrySec * Math.pow(2, attempts - 1) });
+      await settle(db, row, { status: "pending", error: deposited ? "deposited" : "retry", lease_until: 0, next_try: now + L.retrySec * Math.pow(2, attempts - 1) });
       summary.retry++;
     }
   };

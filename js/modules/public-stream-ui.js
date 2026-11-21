@@ -168,9 +168,8 @@ Object.assign(NYM.prototype, {
         const sc = this._psScroller();
         if (!sc) return !!this._psPointer;
         const hb = this._psHeaderBottom(sc);
-        const sec = this._psSection();
         const want = Math.round(hb.height) + 'px';
-        if (sec && sec.style.getPropertyValue('--ps-head') !== want) sec.style.setProperty('--ps-head', want);
+        if (sc.style.getPropertyValue('--ps-head') !== want) sc.style.setProperty('--ps-head', want);
         if (!head) return !!this._psPointer;
         return P.isHeld({ headTop: head.getBoundingClientRect().top, viewTop: hb.top, pointerDown: !!this._psPointer });
     },
@@ -446,9 +445,11 @@ Object.assign(NYM.prototype, {
         const b = bs.find((x) => (x.kind === 'less') === (which === 'less'));
         if (!P || !b) return;
         this._psShown = b.next;
-        const box = b.kind === 'less' ? document.getElementById('publicStream') : null;
+        const box = document.getElementById('publicStream');
         const back = box && box.querySelector('.ps-less');
-        const refocus = !!back && document.activeElement === back;
+        const fwd = box && box.querySelector('.ps-more');
+        const refocus = b.kind === 'less' && !!back && document.activeElement === back;
+        const handoff = b.kind !== 'less' && !!fwd && document.activeElement === fwd;
         if (b.kind === 'less') {
             this._psHold = null;
             this._psRelease = true;
@@ -460,6 +461,7 @@ Object.assign(NYM.prototype, {
         this._psRender();
         const go = refocus && box.querySelector('.ps-more');
         if (go && !go.hidden && typeof go.focus === 'function') go.focus({ preventScroll: true });
+        if (handoff && fwd.hidden && back && !back.hidden && typeof back.focus === 'function') back.focus({ preventScroll: true });
     },
 
     _psModeKey(e) {

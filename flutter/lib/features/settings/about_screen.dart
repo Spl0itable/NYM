@@ -29,7 +29,7 @@ import '../../widgets/common/dialog_button.dart';
 import '../../widgets/nym_icons.dart';
 
 /// Bundled fallback version, shown until the live version resolves; keep in sync with `NYMCHAT_VERSION` at release.
-const String kAboutVersion = 'v3.75.545';
+const String kAboutVersion = 'v3.76.545';
 
 const String kAboutCopyright = '© 21 Million LLC';
 
@@ -408,14 +408,15 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     final viewInsets = MediaQuery.of(context).viewInsets;
     final visibleHeight =
         MediaQuery.of(context).size.height - viewInsets.bottom;
-    final body = Stack(
-      children: [
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _header(c),
-            Flexible(
-              child: SingleChildScrollView(
+    final body = SingleChildScrollView(
+      key: const ValueKey('aboutScroll'),
+      child: Stack(
+        children: [
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              NymSheetDragRegion(inScroll: true, child: _header(c)),
+              Padding(
                 padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -500,13 +501,13 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                   ],
                 ),
               ),
-            ),
-            _actions(c),
-          ],
-        ),
-        ModalChrome.closeChip(
-            c, () => Navigator.of(context).pop()),
-      ],
+              _actions(c),
+            ],
+          ),
+          ModalChrome.closeChip(
+              c, () => Navigator.of(context).pop()),
+        ],
+      ),
     );
     return NymDiscardGuard(
       isDirty: () => _messageController.text.trim().isNotEmpty,

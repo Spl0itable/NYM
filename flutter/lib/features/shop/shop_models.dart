@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../i18n/i18n.dart';
+
 /// A purchasable shop item; [icon] is inline SVG rendered via `flutter_svg`.
 class ShopItem {
   const ShopItem({
@@ -41,23 +43,23 @@ class ShopItem {
   bool get isLegendary => tier == 'legendary';
 }
 
-enum ShopTab { styles, flair, special, limited, credits, inventory }
+enum ShopTab { styles, flair, rings, special, limited, inventory }
 
 extension ShopTabLabel on ShopTab {
   String get label {
     switch (this) {
       case ShopTab.styles:
-        return 'Message Styles';
+        return tr('Message Styles');
       case ShopTab.flair:
-        return 'Nickname Flair';
+        return tr('Nickname Flair');
+      case ShopTab.rings:
+        return tr('Avatar Rings');
       case ShopTab.special:
-        return 'Special Items';
+        return tr('Special Items');
       case ShopTab.limited:
-        return 'Limited & Bundles';
-      case ShopTab.credits:
-        return 'Nymbot Credits';
+        return tr('Limited & Bundles');
       case ShopTab.inventory:
-        return 'My Items';
+        return tr('My Items');
     }
   }
 }
@@ -110,6 +112,7 @@ class ActiveItems {
     this.cosmetics = const [],
     this.supporter = false,
     this.editions = const {},
+    this.ring,
   });
 
   final String? style;
@@ -117,6 +120,7 @@ class ActiveItems {
   final List<String> cosmetics;
   final bool supporter;
   final Map<String, int> editions;
+  final String? ring;
 
   ActiveItems copyWith({
     String? style,
@@ -125,6 +129,8 @@ class ActiveItems {
     List<String>? cosmetics,
     bool? supporter,
     Map<String, int>? editions,
+    String? ring,
+    bool clearRing = false,
   }) =>
       ActiveItems(
         style: clearStyle ? null : (style ?? this.style),
@@ -132,6 +138,7 @@ class ActiveItems {
         cosmetics: cosmetics ?? this.cosmetics,
         supporter: supporter ?? this.supporter,
         editions: editions ?? this.editions,
+        ring: clearRing ? null : (ring ?? this.ring),
       );
 
   Map<String, dynamic> toJson() => {
@@ -140,12 +147,15 @@ class ActiveItems {
         'cosmetics': cosmetics,
         'supporter': supporter,
         'editions': editions,
+        'ring': ring,
       };
 
   factory ActiveItems.fromJson(Map<String, dynamic>? j) {
     if (j == null) return const ActiveItems();
+    final ring = j['ring'];
     return ActiveItems(
       style: j['style'] as String?,
+      ring: ring is String && ring.isNotEmpty ? ring : null,
       flair: (j['flair'] as List?)?.cast<String>() ?? const [],
       cosmetics: (j['cosmetics'] as List?)?.cast<String>() ?? const [],
       supporter: j['supporter'] == true,

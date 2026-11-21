@@ -26,6 +26,8 @@ class ChatNavLimits {
   static const int scheduleMaxRelays = 16;
   static const int scheduleNoteMax = 16000;
   static const int scheduleTextMax = 8000;
+  static const int scheduleQuoteMax = 1000;
+  static const int scheduleQuoteAuthorMax = 100;
   static const int scheduleAttempts = 4;
   static const int scheduleRetrySec = 60;
   static const int scheduleKeepDoneSec = 7 * 24 * 60 * 60;
@@ -53,6 +55,8 @@ class ChatNavLimits {
         'scheduleMaxRelays': scheduleMaxRelays,
         'scheduleNoteMax': scheduleNoteMax,
         'scheduleTextMax': scheduleTextMax,
+        'scheduleQuoteMax': scheduleQuoteMax,
+        'scheduleQuoteAuthorMax': scheduleQuoteAuthorMax,
         'scheduleAttempts': scheduleAttempts,
         'scheduleRetrySec': scheduleRetrySec,
         'scheduleKeepDoneSec': scheduleKeepDoneSec,
@@ -116,12 +120,20 @@ class ChatNavStrings {
       'Send later in PMs and groups needs your key on this device.';
   static const String serverBlocked =
       "Send later isn't available without the Nymchat server.";
+  static const String hardcoreBlocked =
+      "Send later isn't available in hardcore mode. Every message uses a new key, so a held message could not be changed or cancelled.";
   static const String past = 'Pick a time in the future.';
   static const String soon = 'Pick a time at least a minute from now.';
   static const String far = 'You can schedule up to 30 days ahead.';
   static const String full =
       'You have too many scheduled messages. Cancel one first.';
   static const String tooBig = 'This message is too large to schedule.';
+  static const String gone =
+      'This scheduled message had already changed. The list was refreshed.';
+  static const String alreadySent =
+      'It was already sent. The list was refreshed.';
+  static const String sendingNow =
+      'It is being sent right now. The list was refreshed.';
   static const String pending = 'Scheduled';
   static const String sending = 'Sending';
   static const String sent = 'Sent';
@@ -135,6 +147,21 @@ class ChatNavStrings {
   static const String sendNow = 'Send now';
   static const String editTime = 'Edit time';
   static const String cancel = 'Cancel';
+  static const String stopRetrying = 'Stop retrying';
+  static const String depositedDetail =
+      'It reached Nymchat already. Retrying the relays.';
+  static const String sendNowRetry =
+      "Couldn't reach Nymchat to send it now. Tap Send now again.";
+  static const String sendNowHeld =
+      "Couldn't send it now. It is held again and goes out at {time}.";
+  static const String sendNowLost =
+      "Couldn't send it or hold it again. The text was copied so you can paste it.";
+  static const String sendNowComposer =
+      "Couldn't send it or hold it again. It is back in the composer.";
+  static const String sendNowFailed = "Couldn't send it or hold it again.";
+  static const String noText =
+      "This message can't be opened on this device yet, so it can't be sent now.";
+  static const String groupGone = 'This group is no longer available.';
 
   static Map<String, String> toJson() => {
         'newMessages': newMessages,
@@ -161,11 +188,15 @@ class ChatNavStrings {
         'offlineBlocked': offlineBlocked,
         'signerBlocked': signerBlocked,
         'serverBlocked': serverBlocked,
+        'hardcoreBlocked': hardcoreBlocked,
         'past': past,
         'soon': soon,
         'far': far,
         'full': full,
         'tooBig': tooBig,
+        'gone': gone,
+        'alreadySent': alreadySent,
+        'sendingNow': sendingNow,
         'pending': pending,
         'sending': sending,
         'sent': sent,
@@ -177,6 +208,15 @@ class ChatNavStrings {
         'sendNow': sendNow,
         'editTime': editTime,
         'cancel': cancel,
+        'stopRetrying': stopRetrying,
+        'depositedDetail': depositedDetail,
+        'sendNowRetry': sendNowRetry,
+        'sendNowHeld': sendNowHeld,
+        'sendNowLost': sendNowLost,
+        'sendNowComposer': sendNowComposer,
+        'sendNowFailed': sendNowFailed,
+        'noText': noText,
+        'groupGone': groupGone,
       };
 }
 
@@ -1105,6 +1145,9 @@ String scheduleErrorText(String? code, [ChatNavTr? t]) {
     'far': ChatNavStrings.far,
     'full': ChatNavStrings.full,
     'big': ChatNavStrings.tooBig,
+    'gone': ChatNavStrings.gone,
+    'sent': ChatNavStrings.alreadySent,
+    'sending': ChatNavStrings.sendingNow,
   };
   final s = map[code];
   return s == null ? '' : _tr(t, s);
@@ -1208,29 +1251,201 @@ String? scheduleSizeError(List<Object?> events, num noteLen) {
   return null;
 }
 
-String scheduleNoteJson(String text, Map<String, String> chat) {
-  final t = text.length > ChatNavLimits.scheduleTextMax
-      ? text.substring(0, ChatNavLimits.scheduleTextMax)
-      : text;
+final RegExp _rxEventId = RegExp(r'^[0-9a-fA-F]{64}$');
+
+typedef ScheduleNoteExtras = ({
+  String threadRoot,
+  Map<String, String>? quote,
+  String quoteSource,
+});
+
+typedef ScheduleNote = ({
+  String text,
+  Map<String, String> chat,
+  String threadRoot,
+  Map<String, String>? quote,
+  String quoteSource,
+});
+
+String _cut(String s, int max) => s.length > max ? s.substring(0, max) : s;
+
+ScheduleNoteExtras scheduleNoteExtras(Object? o) {
+  final x = o is Map ? o : const {};
+  final tr = x['threadRoot'];
+  final qs = x['quoteSource'];
+  final threadRoot = tr is String && _rxEventId.hasMatch(tr) ? tr : '';
+  final quoteSource = qs is String && _rxEventId.hasMatch(qs) ? qs : '';
+  final q = x['quote'] is Map ? x['quote'] as Map : null;
+  final qText = q == null
+      ? null
+      : q['text'] is String
+          ? q['text'] as String
+          : q['fullText'] is String
+              ? q['fullText'] as String
+              : null;
+  final author = q == null ? null : q['author'];
+  final quote = author is String && author.isNotEmpty && qText != null
+      ? <String, String>{
+          'author': _cut(author, ChatNavLimits.scheduleQuoteAuthorMax),
+          'text': _cut(qText, ChatNavLimits.scheduleQuoteMax),
+        }
+      : null;
+  return (threadRoot: threadRoot, quote: quote, quoteSource: quoteSource);
+}
+
+Map<String, dynamic> scheduleNoteExtrasJson(ScheduleNoteExtras x) =>
+    <String, dynamic>{
+      'threadRoot': x.threadRoot,
+      'quote': x.quote,
+      'quoteSource': x.quoteSource,
+    };
+
+String scheduleNoteJson(String text, Map<String, String> chat,
+    [Object? extras]) {
+  final x = scheduleNoteExtras(extras);
   return jsonEncode(<String, dynamic>{
     'v': 1,
-    'text': t,
+    'text': _cut(text, ChatNavLimits.scheduleTextMax),
     'chat': {'t': chat['t'] ?? '', 'k': chat['k'] ?? ''},
+    if (x.threadRoot.isNotEmpty) 'threadRoot': x.threadRoot,
+    'quote': ?x.quote,
+    if (x.quoteSource.isNotEmpty) 'quoteSource': x.quoteSource,
   });
 }
 
-({String text, Map<String, String> chat})? scheduleNoteParse(String json) {
+ScheduleNote? scheduleNoteParse(String json) {
   try {
     final o = jsonDecode(json);
     if (o is! Map || o['v'] != 1 || o['text'] is! String) return null;
     final c = o['chat'] is Map ? o['chat'] as Map : const {};
+    final x = scheduleNoteExtras(o);
     return (
       text: o['text'] as String,
       chat: {'t': '${c['t'] ?? ''}', 'k': '${c['k'] ?? ''}'},
+      threadRoot: x.threadRoot,
+      quote: x.quote,
+      quoteSource: x.quoteSource,
     );
   } catch (_) {
     return null;
   }
+}
+
+Map<String, dynamic> scheduleNoteJsonMap(ScheduleNote? p) => p == null
+    ? const {}
+    : <String, dynamic>{
+        'text': p.text,
+        'chat': p.chat,
+        'threadRoot': p.threadRoot,
+        'quote': p.quote,
+        'quoteSource': p.quoteSource,
+      };
+
+List<Map<String, dynamic>> scheduleReplay(
+    List<Object?> items, List<Object?>? journal) {
+  final out = <Map<String, dynamic>>[
+    for (final x in items)
+      if (x is Map && x['id'] is String && (x['id'] as String).isNotEmpty)
+        Map<String, dynamic>.from(x),
+  ];
+  for (final e in journal ?? const <Object?>[]) {
+    if (e is! Map) continue;
+    if (e['t'] == 'drop') {
+      out.removeWhere((x) => x['id'] == e['id']);
+    } else if (e['t'] == 'add') {
+      final it = e['item'];
+      if (it is Map && it['id'] is String && (it['id'] as String).isNotEmpty) {
+        if (!out.any((x) => x['id'] == it['id'])) {
+          out.add(Map<String, dynamic>.from(it));
+        }
+      }
+    }
+  }
+  final indexed = [for (var i = 0; i < out.length; i++) (i, out[i])];
+  indexed.sort((a, b) {
+    final d = _num(a.$2['at']) - _num(b.$2['at']);
+    if (d != 0) return d < 0 ? -1 : 1;
+    final c = _cmp('${a.$2['id']}', '${b.$2['id']}');
+    return c != 0 ? c : a.$1 - b.$1;
+  });
+  return [for (final x in indexed) x.$2];
+}
+
+final RegExp _rxSendToken = RegExp(r'^[0-9a-f]{32}$');
+
+bool scheduleSendTokenValid(Object? token) =>
+    token is String && _rxSendToken.hasMatch(token);
+
+bool _scheduleOpenStatus(Object? status) =>
+    status == 'pending' || status == 'failed';
+
+List<Map<String, dynamic>> scheduleHoldTaking(
+    List<Object?>? prev, List<Object?>? next) {
+  final out = <Map<String, dynamic>>[
+    for (final x in next ?? const <Object?>[])
+      if (x is Map && x['id'] is String && (x['id'] as String).isNotEmpty)
+        Map<String, dynamic>.from(x)..remove('sendToken'),
+  ];
+  for (final p in prev ?? const <Object?>[]) {
+    if (p is! Map || p['id'] is! String || (p['id'] as String).isEmpty) {
+      continue;
+    }
+    if (!scheduleSendTokenValid(p['sendToken']) ||
+        !_scheduleOpenStatus(p['status'])) {
+      continue;
+    }
+    final hit = out.where((x) => x['id'] == p['id']).firstOrNull;
+    if (hit == null) {
+      out.add(Map<String, dynamic>.from(p));
+    } else if (_scheduleOpenStatus(hit['status']) &&
+        hit['error'] != 'deposited') {
+      hit['sendToken'] = p['sendToken'];
+    }
+  }
+  final indexed = [for (var i = 0; i < out.length; i++) (i, out[i])];
+  indexed.sort((a, b) {
+    final d = _num(a.$2['at']) - _num(b.$2['at']);
+    if (d != 0) return d < 0 ? -1 : 1;
+    final c = _cmp('${a.$2['id']}', '${b.$2['id']}');
+    return c != 0 ? c : a.$1 - b.$1;
+  });
+  return [for (final x in indexed) x.$2];
+}
+
+List<String> scheduleItemActions(Map<String, dynamic>? item) {
+  final it = item ?? const <String, dynamic>{};
+  if (!_scheduleOpenStatus(it['status'])) return const [];
+  if (it['status'] == 'pending' && it['error'] == 'deposited') {
+    return const ['stop'];
+  }
+  if (scheduleSendTokenValid(it['sendToken'])) return const ['now', 'cancel'];
+  return const ['edit', 'now', 'cancel'];
+}
+
+bool scheduleTakenElsewhere(Map<String, dynamic>? item, List<Object?> items) {
+  final it = item ?? const <String, dynamic>{};
+  final c = it['chat'];
+  final key = c is Map
+      ? scheduleChatKey({'t': '${c['t'] ?? ''}', 'k': '${c['k'] ?? ''}'})
+      : '';
+  final text = it['text'] is String ? it['text'] as String : '';
+  for (final x in items) {
+    if (x is! Map || x['id'] is! String) continue;
+    final status = x['status'];
+    if (x['id'] == it['id']) {
+      if (status == 'sent' || status == 'sending') return true;
+      continue;
+    }
+    if (status != 'pending' && status != 'sending') continue;
+    if (text.isEmpty || x['text'] != text || key.isEmpty) continue;
+    final xc = x['chat'];
+    if (xc is Map &&
+        scheduleChatKey({'t': '${xc['t'] ?? ''}', 'k': '${xc['k'] ?? ''}'}) ==
+            key) {
+      return true;
+    }
+  }
+  return false;
 }
 
 String scheduleChatKey(Map<String, String> chat) {
@@ -1266,6 +1481,10 @@ class ScheduledItem {
     this.sentAt = 0,
     this.note = '',
     this.text = '',
+    this.threadRoot = '',
+    this.quote,
+    this.quoteSource = '',
+    this.sendToken = '',
   });
 
   final String id;
@@ -1277,6 +1496,10 @@ class ScheduledItem {
   final int sentAt;
   final String note;
   String text;
+  String threadRoot;
+  Map<String, String>? quote;
+  String quoteSource;
+  String sendToken;
 
   bool get open =>
       status == 'pending' || status == 'sending' || status == 'failed';
@@ -1291,6 +1514,10 @@ class ScheduledItem {
         'sentAt': sentAt,
         'note': note,
         if (withText) 'text': text,
+        if (withText) 'threadRoot': threadRoot,
+        if (withText) 'quote': quote,
+        if (withText) 'quoteSource': quoteSource,
+        if (withText && scheduleSendTokenValid(sendToken)) 'sendToken': sendToken,
       };
 }
 
@@ -1313,6 +1540,18 @@ List<ScheduledItem> scheduleNormalize(List<Object?> items) {
       sentAt: _floor(it['sentAt']),
       note: it['note'] is String ? it['note'] as String : '',
       text: it['text'] is String ? it['text'] as String : '',
+      threadRoot: it['threadRoot'] is String ? it['threadRoot'] as String : '',
+      quote: it['quote'] is Map
+          ? {
+              for (final e in (it['quote'] as Map).entries)
+                '${e.key}': '${e.value}'
+            }
+          : null,
+      quoteSource:
+          it['quoteSource'] is String ? it['quoteSource'] as String : '',
+      sendToken: scheduleSendTokenValid(it['sendToken'])
+          ? it['sendToken'] as String
+          : '',
     ));
   }
   out.sort((a, b) {
@@ -1385,8 +1624,10 @@ String? scheduleBlockReason({
   required bool online,
   required String kind,
   required bool localKey,
+  bool hardcore = false,
 }) {
   if (meshOnly) return ChatNavStrings.meshBlocked;
+  if (hardcore) return ChatNavStrings.hardcoreBlocked;
   if (!server) return ChatNavStrings.serverBlocked;
   if (!online) return ChatNavStrings.offlineBlocked;
   if ((kind == 'dm' || kind == 'group') && !localKey) {

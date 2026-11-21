@@ -15,6 +15,8 @@
     };
     const MENTION_SAVE_MS = 400;
     const HTTP_ADD_BYTES = 200000;
+    const SL_SIGNER_RETRY_MS = 10 * 60 * 1000;
+    const RX_SL_TOKEN = /^[0-9a-f]{32}$/;
 
     Object.assign(NYM.prototype, {
 
@@ -1102,7 +1104,7 @@
                 if (row === ref) ref = ref.nextElementSibling;
                 else list.insertBefore(row, ref);
             }
-            if (typeof this._markListOverflow === 'function') this._markListOverflow('pmList');
+            if (typeof this.updateViewMoreButton === 'function') this.updateViewMoreButton('pmList');
         },
 
         _pinMarkRow(row, on) {
@@ -1395,6 +1397,36 @@
             this._slRenderList();
         },
 
+        _slItemsFor(pk) {
+            if (pk === this.pubkey) return this._slItemsCache();
+            let items = [];
+            try {
+                const raw = localStorage.getItem(N().KEYS.scheduled + ':' + (pk || 'anon'));
+                if (raw) items = JSON.parse(raw);
+            } catch (_) { items = []; }
+            return Array.isArray(items) ? items : [];
+        },
+
+        _slSetItemsFor(pk, items) {
+            if (pk === this.pubkey) { this._slSetItems(items); return; }
+            try { localStorage.setItem(N().KEYS.scheduled + ':' + (pk || 'anon'), JSON.stringify(items)); } catch (_) { }
+        },
+
+        _slPatchItem(pk, id, token) {
+            this._slSetItemsFor(pk, this._slItemsFor(pk).map((x) => {
+                if (!x || x.id !== id) return x;
+                const y = Object.assign({}, x);
+                if (token) y.sendToken = token;
+                else delete y.sendToken;
+                return y;
+            }));
+        },
+
+        _slDropItem(pk, id) {
+            this._slMutate({ t: 'drop', id }, pk);
+            this._slSetItemsFor(pk, this._slItemsFor(pk).filter((x) => x && x.id !== id));
+        },
+
         _slChatKeyForView() {
             return this._cnActiveKey();
         },
@@ -1429,6 +1461,7 @@
             const online = !!this.connected && !(typeof navigator !== 'undefined' && navigator.onLine === false);
             const reason = N().scheduleBlockReason({
                 meshOnly: this._slMeshOnly(k),
+                hardcore: typeof this._hardcoreRotating === 'function' && !!this._hardcoreRotating(),
                 server: !!(typeof this._getApiHost === 'function' && this._getApiHost()) && !!this.pubkey,
                 online,
                 kind,
@@ -1456,25 +1489,50 @@
             if (this.privkey && NT && NT.nip44) {
                 return NT.nip44.encrypt(json, NT.nip44.getConversationKey(this.privkey, this.pubkey));
             }
-            if (window.nostr && window.nostr.nip44 && window.nostr.nip44.encrypt) return window.nostr.nip44.encrypt(this.pubkey, json);
-            if (this.nostrLoginMethod === 'nip46' && typeof _nip46Encrypt === 'function') return _nip46Encrypt(this.pubkey, json);
+            const signer = this._signerOps();
+            if (signer) return signer.encrypt(this.pubkey, json);
             throw new Error('no-encrypt');
         },
 
         async _slDecryptNote(blob) {
             if (!blob) return null;
             if (!this._slNoteCache) this._slNoteCache = new Map();
-            if (this._slNoteCache.has(blob)) return this._slNoteCache.get(blob);
+            const hit = this._slNoteCache.get(blob);
+            if (hit && (hit.parsed || Date.now() < hit.retryAt)) return hit.parsed;
+            const NT = window.NostrTools;
+            const local = !!(this.privkey && NT && NT.nip44);
             let json = null;
             try {
-                const NT = window.NostrTools;
-                if (this.privkey && NT && NT.nip44) json = NT.nip44.decrypt(blob, NT.nip44.getConversationKey(this.privkey, this.pubkey));
-                else if (window.nostr && window.nostr.nip44 && window.nostr.nip44.decrypt) json = await window.nostr.nip44.decrypt(this.pubkey, blob);
-                else if (this.nostrLoginMethod === 'nip46' && typeof _nip46Decrypt === 'function') json = await _nip46Decrypt(this.pubkey, blob);
+                const signer = local ? null : this._signerOps();
+                if (local) json = NT.nip44.decrypt(blob, NT.nip44.getConversationKey(this.privkey, this.pubkey));
+                else if (signer) json = await signer.decrypt(this.pubkey, blob);
             } catch (_) { json = null; }
             const parsed = json ? N().scheduleNoteParse(json) : null;
-            this._slNoteCache.set(blob, parsed);
+            if (parsed) this._slNoteCache.set(blob, { parsed, retryAt: 0 });
+            else if (local) this._slNoteCache.delete(blob);
+            else this._slNoteCache.set(blob, { parsed: null, retryAt: Date.now() + SL_SIGNER_RETRY_MS });
+            if (this._slNoteCache.size > 500) this._slNoteCache.delete(this._slNoteCache.keys().next().value);
             return parsed;
+        },
+
+        _slKeep(item, src) {
+            const from = src || {};
+            Object.assign(item, {
+                text: from.text || '',
+                threadRoot: from.threadRoot || '',
+                quote: from.quote || null,
+                quoteSource: from.quoteSource || '',
+            });
+            if (RX_SL_TOKEN.test(String(from.sendToken || ''))) item.sendToken = from.sendToken;
+            else delete item.sendToken;
+            return item;
+        },
+
+        _slMutate(entry, pk) {
+            this._slSeq = (this._slSeq || 0) + 1;
+            if (!this._slJournal) this._slJournal = [];
+            this._slJournal.push(Object.assign({ seq: this._slSeq, pk: pk || this.pubkey }, entry));
+            if (this._slJournal.length > 200) this._slJournal.splice(0, this._slJournal.length - 200);
         },
 
         _slRelays(kind, geohash) {
@@ -1568,6 +1626,8 @@
             if (!resp.ok || (data && data.error)) {
                 const err = new Error((data && data.error) || `Request failed (${resp.status})`);
                 err.code = data && data.code;
+                err.status = resp.status;
+                err.data = data || {};
                 throw err;
             }
             return data;
@@ -1581,8 +1641,12 @@
             const block = this.sendLaterBlockReason(key);
             if (block) { this._cnNotice(block); return { ok: false, reason: block }; }
             const botPeer = key.startsWith('pm-') ? (this._ctPeerFromKey ? this._ctPeerFromKey(key) : key.slice(3)) : '';
+            const quotes = [o.quoteSource || null];
+            const composerQuote = !o.stored && this.pendingQuote && this.pendingQuote.sourceId
+                && this._slCanon(key) === this._slCanon(this._slChatKeyForView()) ? this.pendingQuote.sourceId : null;
+            if (composerQuote && composerQuote !== o.quoteSource) quotes.push(composerQuote);
             if (botPeer && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(botPeer)
-                && !(typeof this._botLaneFor === 'function' && this._botLaneFor(botPeer, o.threadRoot, o.quoteSource) === false)) {
+                && !quotes.every((q) => typeof this._botLaneFor === 'function' && this._botLaneFor(botPeer, o.threadRoot, q) === false)) {
                 const msg = this.uiText('Not sent: this would link your anonymous Nymbot chat to your nym.');
                 this._cnNotice(msg);
                 return { ok: false, reason: msg };
@@ -1608,7 +1672,8 @@
             }
             const chat = N().scheduleChatOf(this._slCanon(key));
             let note;
-            try { note = await this._slEncryptNote(N().scheduleNoteJson(content, chat)); } catch (_) {
+            const extras = N().scheduleNoteParse(N().scheduleNoteJson('', chat, { threadRoot: o.threadRoot, quote: o.quote, quoteSource: o.quoteSource }));
+            try { note = await this._slEncryptNote(N().scheduleNoteJson(content, chat, extras)); } catch (_) {
                 const msg = this._cn(N().STRINGS.signerBlocked);
                 this._cnNotice(msg);
                 return { ok: false, reason: msg };
@@ -1618,45 +1683,84 @@
             const id = N().scheduleId(crypto.getRandomValues(new Uint8Array(16)));
             const body = { id, at, events: built.events, relays: built.relays, note };
             if (o.replaces) body.replaces = o.replaces;
+            const since = this._slSeq || 0;
+            const pk = this.pubkey;
             try {
                 await this._slApi('schedule-add', body);
             } catch (err) {
                 const code = err && err.code;
-                const msg = code ? N().scheduleErrorText(code, (s) => this._cn(s)) : '';
-                const text2 = msg || this._cn("Couldn't schedule it: {error}", { error: (err && err.message) || 'error' });
-                this._cnNotice(text2);
-                return { ok: false, reason: text2 };
+                const status = Number(err && err.status) || 0;
+                const refused = !!o.replaces && (code === 'gone' || code === 'sent' || code === 'sending');
+                let held = false;
+                if (refused) {
+                    const now = err.data && Array.isArray(err.data.items)
+                        ? await this._slApplyList(err.data.items, since, this._slNextReq(), pk)
+                        : await this.refreshScheduled();
+                    held = Array.isArray(now) && now.some((x) => x && x.id === id);
+                } else if (!status || status >= 500) {
+                    try {
+                        const data = await this._slApi('schedule-list', {});
+                        held = !!(data && Array.isArray(data.items) && data.items.some((x) => x && x.id === id));
+                    } catch (_) { held = false; }
+                }
+                if (!held) {
+                    const msg = code ? N().scheduleErrorText(code, (s) => this._cn(s)) : '';
+                    const text2 = msg || this._cn("Couldn't schedule it: {error}", { error: (err && err.message) || 'error' });
+                    this._cnNotice(text2);
+                    return refused ? { ok: false, reason: text2, code } : { ok: false, reason: text2 };
+                }
             }
-            const items = this._slItemsCache().filter((x) => x.id !== o.replaces);
-            items.push({ id, at, chat, status: 'pending', attempts: 0, error: '', sentAt: 0, note, text: content });
-            this._slSetItems(N().scheduleNormalize(items).map((x) => Object.assign(x, { text: (items.find((y) => y.id === x.id) || {}).text })));
-            this._cnNotice(this._cn('Scheduled for {time}. Held by Nymchat until it sends.', { time: this._slFormatTime(at) }));
+            if (this.pubkey !== pk) return { ok: true, id };
+            const item = this._slKeep({ id, at, chat, status: 'pending', attempts: 0, error: '', sentAt: 0, note }, Object.assign({}, extras, { text: content }));
+            if (o.replaces) this._slMutate({ t: 'drop', id: o.replaces });
+            this._slMutate({ t: 'add', item });
+            const items = this._slItemsCache().filter((x) => x.id !== o.replaces && x.id !== id);
+            items.push(item);
+            this._slSetItems(N().scheduleNormalize(items).map((x) => this._slKeep(x, items.find((y) => y.id === x.id))));
+            if (!o.quiet) this._cnNotice(this._cn('Scheduled for {time}. Held by Nymchat until it sends.', { time: this._slFormatTime(at) }));
             this._slScheduleRefresh();
             return { ok: true, id };
         },
 
+        _slNextReq() {
+            this._slReq = (this._slReq || 0) + 1;
+            return this._slReq;
+        },
+
         async refreshScheduled() {
             if (!this.pubkey || typeof this._getApiHost !== 'function' || !this._getApiHost()) return this._slItemsCache();
+            const since = this._slSeq || 0;
+            const req = this._slNextReq();
+            const pk = this.pubkey;
             let data;
             try { data = await this._slApi('schedule-list', {}); } catch (_) { return this._slItemsCache(); }
+            if (this.pubkey !== pk) return this._slItemsCache();
+            return this._slApplyList((data && data.items) || [], since, req, pk);
+        },
+
+        async _slApplyList(list, since, req, owner) {
+            const pk = owner || this.pubkey;
+            if (this.pubkey !== pk) return this._slItemsCache();
             const prev = new Map(this._slItemsCache().map((x) => [x.id, x]));
             const out = [];
-            for (const it of N().scheduleNormalize((data && data.items) || [])) {
+            for (const it of N().scheduleNormalize(list)) {
                 const old = prev.get(it.id);
-                let text = old && old.text;
-                let chat = old && old.chat && old.chat.t ? old.chat : null;
-                if (!text || !chat) {
+                let src = old && old.text && old.chat && old.chat.t ? old : null;
+                if (!src) {
                     const parsed = await this._slDecryptNote(it.note);
-                    if (parsed) { text = parsed.text; chat = parsed.chat; }
+                    if (parsed) src = parsed;
                 }
-                if (!chat) continue;
-                out.push(Object.assign(it, { chat, text: text || '' }));
+                out.push(this._slKeep(Object.assign(it, { chat: src ? src.chat : it.chat }), src));
             }
-            const failedNow = N().scheduleNewFailures(this._slItemsCache(), out);
-            this._slSetItems(out);
+            if (this.pubkey !== pk || req < (this._slApplied || 0)) return this._slItemsCache();
+            this._slApplied = req;
+            const later = (this._slJournal || []).filter((e) => e.seq > since && e.pk === pk);
+            const merged = N().scheduleHoldTaking(this._slItemsCache(), N().scheduleReplay(out, later)).map((x) => this._slKeep(x, x));
+            const failedNow = N().scheduleNewFailures(this._slItemsCache(), merged);
+            this._slSetItems(merged);
             if (failedNow.length) this._cnNotice(this._cn(N().STRINGS.failedNotice));
             this._slScheduleRefresh();
-            return out;
+            return merged;
         },
 
         _slScheduleRefresh() {
@@ -1666,47 +1770,200 @@
             this._slRefreshTimer = setTimeout(() => { this._slRefreshTimer = null; this.refreshScheduled(); }, wait);
         },
 
-        async cancelScheduled(id) {
+        async _slTake(id, token) {
             try {
-                const r = await this._slApi('schedule-cancel', { id });
-                if (r && (r.removed || r.status === 'gone')) {
-                    this._slSetItems(this._slItemsCache().filter((x) => x.id !== id));
-                    return true;
-                }
+                const r = await this._slApi('schedule-cancel', token ? { id, token } : { id });
+                if (r && r.removed) return { code: 'removed' };
+                if (r && r.status === 'gone') return { code: r.taken ? 'taken' : 'gone' };
+                return { code: 'retry', error: 'error' };
             } catch (err) {
-                this._cnNotice(this._cn("Couldn't cancel it: {error}", { error: (err && err.message) || 'error' }));
+                const st = err && err.data && err.data.status;
+                if (Number(err && err.status) === 409 && (st === 'sent' || st === 'sending')) return { code: st, error: (err && err.message) || st };
+                return { code: 'retry', error: (err && err.message) || 'error' };
+            }
+        },
+
+        async cancelScheduled(id) {
+            const pk = this.pubkey;
+            const it = this._slItemsCache().find((x) => x.id === id);
+            const token = it && RX_SL_TOKEN.test(String(it.sendToken || '')) ? it.sendToken : null;
+            const took = await this._slTake(id, token);
+            if (took.code === 'removed' || took.code === 'gone' || took.code === 'taken') {
+                this._slDropItem(pk, id);
+                return true;
+            }
+            if (this.pubkey === pk) {
+                this._cnNotice(this._cn("Couldn't cancel it: {error}", { error: took.error || 'error' }));
                 this.refreshScheduled();
-                return false;
             }
             return false;
         },
 
+        async _slSendNowGate(it, key, quiet) {
+            const text = String((it && it.text) || '').trim();
+            if (!text || !key) return this._cn(N().STRINGS.noText);
+            if (key.startsWith('pm-')) {
+                const peer = this._ctPeerFromKey ? this._ctPeerFromKey(key) : key.slice(3);
+                if (!(typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(peer))) return null;
+                if (!(typeof this._botLaneFor === 'function' && this._botLaneFor(peer, it.threadRoot || null, it.quoteSource || null) === false)) {
+                    return this.uiText('Not sent: this would link your anonymous Nymbot chat to your nym.');
+                }
+                if (typeof this.aiConsentNeededForPM === 'function' && this.aiConsentNeededForPM(text, peer)) {
+                    if (quiet || typeof this.aiConsentEnsure !== 'function' || !(await this.aiConsentEnsure('nymbot'))) {
+                        if (!quiet && typeof this.aiConsentBlocked === 'function') this.aiConsentBlocked('nymbot');
+                        return '';
+                    }
+                }
+                return null;
+            }
+            if (key.startsWith('group-')) {
+                const gid = key.slice(6);
+                if (!this.groupConversations || !this.groupConversations.get(gid)) return this._cn(N().STRINGS.groupGone);
+                if (typeof this._gtGroupSendBlocked === 'function') {
+                    const blocked = this._gtGroupSendBlocked(text, gid);
+                    if (blocked) return blocked;
+                }
+            }
+            return null;
+        },
+
+        async _slLiveSend(it, key) {
+            const text = it.text || '';
+            const thread = {};
+            if (it.threadRoot) thread.threadRoot = it.threadRoot;
+            try {
+                if (key.startsWith('pm-')) {
+                    if (it.quoteSource) thread.quoteSource = it.quoteSource;
+                    return !!(await this.sendPM(text, this._ctPeerFromKey(key), thread));
+                }
+                if (key.startsWith('group-')) return !!(await this.sendGroupMessage(text, key.slice(6), thread));
+                const name = key.replace(/^#/, '');
+                const reg = this.channels && this.channels.get(name);
+                return !!(await this.publishMessage(text, reg ? reg.channel : name, reg && reg.geohash ? reg.geohash : name, it.quote || null, it.threadRoot || null));
+            } catch (_) {
+                return false;
+            }
+        },
+
+        async _slRehold(it, key) {
+            const at = Math.max(Number(it.at) || 0, nowSec() + 90);
+            const r = await this.scheduleMessage(it.text, at, { key, threadRoot: it.threadRoot || null, quote: it.quote || null, quoteSource: it.quoteSource || null, quiet: true, stored: true });
+            if (r && r.ok) {
+                this._cnNotice(this._cn(N().STRINGS.sendNowHeld, { time: this._slFormatTime(at) }));
+                return true;
+            }
+            const input = typeof document !== 'undefined' && document.getElementById ? document.getElementById('messageInput') : null;
+            if (input && this._slCanon(this._slChatKeyForView()) === this._slCanon(key)) {
+                const cur = 'value' in input ? String(input.value || '') : String(input.textContent || '');
+                const next = cur.trim() ? cur + '\n' + it.text : it.text;
+                if ('value' in input) input.value = next;
+                else input.textContent = next;
+                if (typeof this.autoResizeTextarea === 'function') this.autoResizeTextarea(input);
+                if (typeof this.refreshComposerPrimary === 'function') this.refreshComposerPrimary();
+                this._cnNotice(this._cn(N().STRINGS.sendNowComposer));
+                return false;
+            }
+            let copied = false;
+            try {
+                if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(String(it.text || ''));
+                    copied = true;
+                }
+            } catch (_) { copied = false; }
+            this._cnNotice(this._cn(copied ? N().STRINGS.sendNowLost : N().STRINGS.sendNowFailed));
+            return false;
+        },
+
         async sendScheduledNow(id) {
+            const pk = this.pubkey;
             const it = this._slItemsCache().find((x) => x.id === id);
-            if (!it) return false;
+            if (!it || N().scheduleItemActions(it).indexOf('now') < 0) return false;
             const key = N().scheduleChatKey(it.chat);
             if (!this.connected) {
                 this._cnNotice(this._cn("You're offline. Try again when you're back online."));
                 return false;
             }
-            if (!(await this.cancelScheduled(id))) return false;
-            const text = it.text || '';
-            if (!text) return false;
-            if (key.startsWith('pm-')) return !!(await this.sendPM(text, this._ctPeerFromKey(key)));
-            if (key.startsWith('group-')) return !!(await this.sendGroupMessage(text, key.slice(6)));
-            const name = key.replace(/^#/, '');
-            const reg = this.channels && this.channels.get(name);
-            return !!(await this.publishMessage(text, reg ? reg.channel : name, reg && reg.geohash ? reg.geohash : name));
+            if (!this._slSendingNow) this._slSendingNow = new Set();
+            if (this._slSendingNow.has(id)) return false;
+            this._slSendingNow.add(id);
+            try {
+                const gate = await this._slSendNowGate(it, key, false);
+                if (gate !== null) {
+                    if (gate) this._cnNotice(gate);
+                    return false;
+                }
+                if (this.pubkey !== pk) return false;
+                const token = RX_SL_TOKEN.test(String(it.sendToken || '')) ? it.sendToken : N().scheduleId(crypto.getRandomValues(new Uint8Array(16)));
+                if (it.sendToken !== token) this._slPatchItem(pk, id, token);
+                const took = await this._slTake(id, token);
+                const here = this.pubkey === pk;
+                if (took.code === 'retry') {
+                    if (here) {
+                        this._cnNotice(this._cn(N().STRINGS.sendNowRetry));
+                        this.refreshScheduled();
+                    }
+                    return false;
+                }
+                if (took.code === 'sent' || took.code === 'sending') {
+                    this._slPatchItem(pk, id, '');
+                    if (here) {
+                        this._cnNotice(N().scheduleErrorText(took.code, (t) => this._cn(t)));
+                        this.refreshScheduled();
+                    }
+                    return false;
+                }
+                if (took.code === 'taken') {
+                    this._slDropItem(pk, id);
+                    if (here) {
+                        this._cnNotice(this._cn(N().STRINGS.gone));
+                        this.refreshScheduled();
+                    }
+                    return false;
+                }
+                if (!here) return false;
+                if (took.code === 'gone') {
+                    const now = await this.refreshScheduled();
+                    if (N().scheduleTakenElsewhere(it, now)) {
+                        this._slDropItem(pk, id);
+                        this._cnNotice(this._cn(N().STRINGS.gone));
+                        return false;
+                    }
+                    if (this.pubkey !== pk) return false;
+                }
+                const again = await this._slSendNowGate(it, key, true);
+                if (this.pubkey !== pk) return false;
+                const sent = again === null && await this._slLiveSend(it, key);
+                this._slDropItem(pk, id);
+                if (sent) return true;
+                if (again) this._cnNotice(again);
+                if (this.pubkey === pk) await this._slRehold(it, key);
+                return false;
+            } finally {
+                this._slSendingNow.delete(id);
+            }
         },
 
         async rescheduleItem(id, at) {
             const it = this._slItemsCache().find((x) => x.id === id);
-            if (!it || !it.text) return { ok: false };
-            return this.scheduleMessage(it.text, at, { key: N().scheduleChatKey(it.chat), replaces: id });
+            if (!it) {
+                const msg = this._cn(N().STRINGS.gone);
+                this._cnNotice(msg);
+                return { ok: false, reason: msg, code: 'gone' };
+            }
+            if (!it.text) return { ok: false };
+            return this.scheduleMessage(it.text, at, {
+                key: N().scheduleChatKey(it.chat),
+                replaces: id,
+                threadRoot: it.threadRoot || null,
+                quote: it.quote || null,
+                quoteSource: it.quoteSource || null,
+                stored: true,
+            });
         },
 
         openSendLater(opts) {
             const o = opts || {};
+            if (this.pendingEdit && !o.replaces) return;
             const key = o.key || this._slChatKeyForView();
             const input = document.getElementById('messageInput');
             let draft = o.text;
@@ -1730,10 +1987,11 @@
                     draft = draft ? `${quoteLine}\n\n${draft}` : quoteLine;
                 }
             }
+            const composed = o.text == null ? this._slComposerState() : null;
             const { body } = this._ctModal('sendLaterModal', this._cn(N().STRINGS.sendLater));
             const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
             const block = this.sendLaterBlockReason(key);
-            this._slPicker = { key, draft: String(draft || ''), replaces: o.replaces || null, quote, quoteSource };
+            this._slPicker = { key, draft: String(draft || ''), replaces: o.replaces || null, quote, quoteSource, composed };
             const presets = N().schedulePresets(Date.now(), this._slOffsetMin());
             const defAt = o.at || presets[0].at;
             const preview = String(draft || '').trim();
@@ -1749,28 +2007,67 @@
             </div>`;
         },
 
+        _slSheetBusy(on) {
+            if (typeof document === 'undefined' || !document.getElementById) return;
+            const modal = document.getElementById('sendLaterModal');
+            if (!modal || !modal.querySelectorAll) return;
+            for (const el of modal.querySelectorAll('.sl-preset, [data-action="slConfirm"], #slWhen')) {
+                if (on) { el.dataset.slBusy = el.disabled ? '' : '1'; el.disabled = true; }
+                else if (el.dataset.slBusy === '1') { el.disabled = false; delete el.dataset.slBusy; }
+            }
+            modal.setAttribute('aria-busy', on ? 'true' : 'false');
+        },
+
         async _slConfirm(at) {
             const p = this._slPicker;
-            if (!p) return;
-            const err = document.getElementById('slError');
-            const when = at || N().scheduleParseInput((document.getElementById('slWhen') || {}).value, this._slOffsetMin());
+            if (!p || this._slBusy) return;
+            const err = typeof document !== 'undefined' && document.getElementById ? document.getElementById('slError') : null;
+            const when = at || N().scheduleParseInput(((typeof document !== 'undefined' && document.getElementById && document.getElementById('slWhen')) || {}).value, this._slOffsetMin());
             const check = N().scheduleCheck(when, nowSec());
             if (check) {
                 if (err) { err.textContent = N().scheduleErrorText(check, (s) => this._cn(s)); err.classList.remove('nm-hidden'); }
                 return;
             }
-            const threadRoot = !p.replaces && typeof this._threadRootForSend === 'function' ? this._threadRootForSend() : null;
-            const res = p.replaces ? await this.rescheduleItem(p.replaces, when) : await this.scheduleMessage(p.draft, when, { key: p.key, quote: p.quote, threadRoot, quoteSource: p.quoteSource });
+            this._slBusy = true;
+            this._slSheetBusy(true);
+            let res;
+            try {
+                const threadRoot = !p.replaces && typeof this._threadRootForSend === 'function' ? this._threadRootForSend() : null;
+                res = p.replaces ? await this.rescheduleItem(p.replaces, when) : await this.scheduleMessage(p.draft, when, { key: p.key, quote: p.quote, threadRoot, quoteSource: p.quoteSource });
+            } finally {
+                this._slBusy = false;
+                if (this._slPicker === p) this._slSheetBusy(false);
+            }
+            const current = this._slPicker === p;
             if (res && res.ok) {
-                this._ctCloseModal('sendLaterModal');
-                if (!p.replaces) {
+                if (!p.replaces && p.composed && this._slComposerHolds(p.composed)) {
                     this._slClearComposer();
-                    if (p.quote && typeof this.clearQuoteReply === 'function') this.clearQuoteReply();
+                    if (p.composed.quote && this.pendingQuote === p.composed.quote && typeof this.clearQuoteReply === 'function') this.clearQuoteReply();
                 }
-            } else if (err && res && res.reason) {
+                if (current) {
+                    this._slPicker = null;
+                    this._ctCloseModal('sendLaterModal');
+                }
+            } else if (current && p.replaces && res && (res.code === 'gone' || res.code === 'sent' || res.code === 'sending')) {
+                this._slPicker = null;
+                this._ctCloseModal('sendLaterModal');
+                this.openScheduledList(p.key);
+            } else if (current && err && res && res.reason) {
                 err.textContent = res.reason;
                 err.classList.remove('nm-hidden');
             }
+        },
+
+        _slComposerState() {
+            const input = typeof document !== 'undefined' && document.getElementById ? document.getElementById('messageInput') : null;
+            const raw = input ? String(('value' in input ? input.value : input.textContent) || '') : '';
+            const urls = typeof this.composerAttachmentUrls === 'function' ? this.composerAttachmentUrls().join(' ') : '';
+            return { raw, urls, quote: this.pendingQuote || null };
+        },
+
+        _slComposerHolds(was) {
+            const now = this._slComposerState();
+            return now.raw === was.raw && now.urls === was.urls;
         },
 
         _slClearComposer() {
@@ -1790,7 +2087,7 @@
         },
 
         _slErrorText(it) {
-            const map = { spam: "The spam filter held it back.", relays: "No relay accepted it.", late: 'It was too late to send.', partial: 'Some copies may not have arrived.', retry: 'Retrying.' };
+            const map = { spam: "The spam filter held it back.", relays: "No relay accepted it.", late: 'It was too late to send.', partial: 'Some copies may not have arrived.', retry: 'Retrying.', deposited: N().STRINGS.depositedDetail };
             if (it.error && map[it.error]) return this._cn(map[it.error]);
             return N().scheduleItemStatus(it, nowSec()) === 'overdue' ? this._cn(N().STRINGS.overdueDetail) : '';
         },
@@ -1802,16 +2099,13 @@
             const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
             const items = N().scheduleForChat(this._slItemsCache(), this._slCanon(this._slListKey)).map((x) => Object.assign(x, { text: (this._slItemsCache().find((y) => y.id === x.id) || {}).text || '' }));
             const rows = items.map((it) => {
-                const open = it.status === 'pending' || it.status === 'failed';
+                const acts = N().scheduleItemActions(Object.assign({}, it, { sendToken: (this._slItemsCache().find((y) => y.id === it.id) || {}).sendToken || '' }));
+                const btn = (id, action, label, cls) => acts.indexOf(id) >= 0 ? `<button type="button" class="ct-btn${cls ? ' ' + cls : ''}" data-action="${action}" data-sl-id="${esc(it.id)}">${esc(this._cn(label))}</button>` : '';
                 return `<div class="sl-item sl-${esc(it.status)}" data-sl-id="${esc(it.id)}">
                     <div class="sl-item-head"><span class="sl-clock">${ICONS.clock}</span><span class="sl-time">${esc(this._slFormatTime(it.at))}</span><span class="sl-status">${esc(N().scheduleStatusText(N().scheduleItemStatus(it, nowSec()), (s) => this._cn(s)))}</span></div>
                     <div class="sl-text message-content">${typeof this.formatMessageWithQuotes === 'function' ? this.formatMessageWithQuotes(it.text, 0) : esc(it.text)}</div>
                     ${this._slErrorText(it) ? `<div class="sl-item-error">${esc(this._slErrorText(it))}</div>` : ''}
-                    ${open ? `<div class="sl-item-actions">
-                        <button type="button" class="ct-btn" data-action="slEdit" data-sl-id="${esc(it.id)}">${esc(this._cn(N().STRINGS.editTime))}</button>
-                        <button type="button" class="ct-btn" data-action="slSendNow" data-sl-id="${esc(it.id)}">${esc(this._cn(N().STRINGS.sendNow))}</button>
-                        <button type="button" class="ct-btn danger" data-action="slCancel" data-sl-id="${esc(it.id)}">${esc(this._cn(N().STRINGS.cancel))}</button>
-                    </div>` : ''}
+                    ${acts.length ? `<div class="sl-item-actions">${btn('edit', 'slEdit', N().STRINGS.editTime)}${btn('now', 'slSendNow', N().STRINGS.sendNow)}${btn('cancel', 'slCancel', N().STRINGS.cancel, 'danger')}${btn('stop', 'slCancel', N().STRINGS.stopRetrying, 'danger')}</div>` : ''}
                 </div>`;
             }).join('');
             body.innerHTML = `${rows || `<div class="ct-empty">${esc(this._cn('Nothing scheduled in this chat.'))}</div>`}
@@ -1839,11 +2133,11 @@
 
         _slSendMenu(x, y) {
             if (typeof this.openComposerSendMenu === 'function') { this.openComposerSendMenu(); return; }
-            const items = [{ label: this._cn(N().STRINGS.sendLater), svg: ICONS.clock, action: () => this.openSendLater() }];
+            const items = this.pendingEdit ? [] : [{ label: this._cn(N().STRINGS.sendLater), svg: ICONS.clock, action: () => this.openSendLater() }];
             if (typeof this._composerCanSendAnon === 'function' && this._composerCanSendAnon()) {
                 items.push({ label: this._cn('Send anonymously'), svg: ICONS.anon, action: () => this.sendMessagePseudonymous() });
             }
-            if (typeof this._showSidebarActionMenu === 'function') this._showSidebarActionMenu(items, x, y);
+            if (items.length && typeof this._showSidebarActionMenu === 'function') this._showSidebarActionMenu(items, x, y);
         },
 
         _slBindSend() {

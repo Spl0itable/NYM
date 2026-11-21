@@ -11,6 +11,7 @@ Future<void> forgetAtRestData(
   final sealedKeys = kv.keys
       .where((k) =>
           k.startsWith(StorageKeys.groupStorePrefix) ||
+          k.startsWith(StorageKeys.searchHistoryPrefix) ||
           StorageKeys.sealedPrefs.contains(k))
       .toList();
   for (final key in sealedKeys) {

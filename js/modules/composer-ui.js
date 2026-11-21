@@ -41,7 +41,7 @@
         },
 
         _composerSendModel() {
-            return C().sendMenuItems({ canAnon: this._composerCanSendAnon() });
+            return C().sendMenuItems({ canAnon: this._composerCanSendAnon(), editing: !!this.pendingEdit });
         },
 
         _composerText() {
@@ -64,11 +64,17 @@
                 recording: !!this._voiceRec,
             });
             const showSend = action === 'send';
+            const showMore = showSend && C().sendMenuShown({
+                canAnon: this._composerCanSendAnon(),
+                editing: !!this.pendingEdit,
+                sendAs: !!this.pendingEdit && typeof this.sendAsSection === 'function' && !!this.sendAsSection().show,
+            });
             const active = document.activeElement;
-            const lostFocus = !!active && ((!showSend && (active === send || active === more)) || (showSend && active === mic));
+            const lostFocus = !!active && ((!showSend && (active === send || active === more)) || (showSend && active === mic) || (!showMore && active === more));
             const appearing = showSend && send.hidden;
             if (send.hidden === showSend) send.hidden = !showSend;
-            if (more && more.hidden === showSend) more.hidden = !showSend;
+            if (more && more.hidden === showMore) more.hidden = !showMore;
+            if (!showMore && this._composerMenuOpen === 'send') this.closeComposerMenu();
             if (mic.hidden !== showSend) mic.hidden = showSend;
             if (!showSend && this._composerMenuOpen === 'send') this.closeComposerMenu();
             if (appearing && typeof this._sendAsProbe === 'function') Promise.resolve(this._sendAsProbe()).catch(() => { });
@@ -76,6 +82,16 @@
                 const input = document.getElementById('messageInput');
                 if (input) input.focus();
             }
+            const later = document.getElementById('formatSendLaterBtn');
+            const laterOff = !C().sendLaterReady({
+                connected: !!this.connected,
+                text: this._composerText(),
+                attachments: (this._composerAttachments || []).length,
+                editing: !!this.pendingEdit,
+                quoting: !!this.pendingQuote,
+                recording: !!this._voiceRec,
+            });
+            if (later && later.disabled !== laterOff) later.disabled = laterOff;
             this._syncComposerPill(showSend);
         },
 
@@ -258,6 +274,8 @@
             if (kind === 'attach') this._composerRenderAttach();
             else {
                 this._composerRenderSend();
+                const sendAs = typeof this.sendAsSection === 'function' ? this.sendAsSection() : null;
+                if (!this._composerSendModel().length && !(sendAs && sendAs.show)) return;
                 if (typeof this._sendAsProbe === 'function') {
                     Promise.resolve(this._sendAsProbe()).then(() => {
                         if (this._composerMenuOpen === 'send') {
@@ -418,7 +436,7 @@
         },
 
         _composerRunSend(id, acctId) {
-            if (id === 'later' && typeof this.openSendLater === 'function') this.openSendLater();
+            if (id === 'later' && !this.pendingEdit && typeof this.openSendLater === 'function') this.openSendLater();
             else if (id === 'anon' && typeof this.sendMessagePseudonymous === 'function') this.sendMessagePseudonymous();
             else if (id === 'as' && acctId && typeof this.sendAs === 'function') this.sendAs(acctId);
         },
@@ -617,5 +635,6 @@
     Object.assign(A, {
         composerPoll: function () { if (window.nym) window.nym.cmdPoll(); },
         composerEvent: function () { if (window.nym) window.nym.openCreateEvent(); },
+        formatSendLater: function () { if (window.nym) window.nym._composerRunSend('later'); },
     });
 })();

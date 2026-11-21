@@ -61,6 +61,8 @@ import { hiddenAmong, hiddenSenders, spamEngine, badgeGateRefuses, badgeTierFor,
 import { handleScheduleAction } from "./_schedule.js";
 import { archiveChannelKey, legacyArchiveChannelKey } from "./_channel-key.js";
 import { isEncryptedBlobContent } from "./_encrypted-blob.js";
+import { isBridgeBlockedFrame } from "./_bridge-block.js";
+import { shopOwnedView, shopPackSource } from "./_shoprings.js";
 
 function shopKnown(id) {
   return typeof id === "string" && Object.prototype.hasOwnProperty.call(SHOP_CATALOG, id);
@@ -103,6 +105,24 @@ var SHOP_CATALOG = {
   "flair-eye": { price: 1800, type: "nickname-flair" },
   "flair-anchor": { price: 1000, type: "nickname-flair" },
   "flair-gem": { price: 3300, type: "nickname-flair" },
+  "ring-satoshi": { price: 21420, type: "avatar-ring", tier: "legendary" },
+  "ring-glitch": { price: 10101, type: "avatar-ring" },
+  "ring-aurora": { price: 2424, type: "avatar-ring" },
+  "ring-neon": { price: 1984, type: "avatar-ring" },
+  "ring-ghost": { price: 666, type: "avatar-ring" },
+  "ring-matrix": { price: 1337, type: "avatar-ring", tier: "legendary" },
+  "ring-fire": { price: 911, type: "avatar-ring" },
+  "ring-ice": { price: 777, type: "avatar-ring" },
+  "ring-ocean": { price: 1500, type: "avatar-ring" },
+  "ring-sakura": { price: 3000, type: "avatar-ring" },
+  "ring-galaxy": { price: 4444, type: "avatar-ring" },
+  "ring-toxic": { price: 1300, type: "avatar-ring" },
+  "ring-midas": { price: 8888, type: "avatar-ring" },
+  "ring-vaporwave": { price: 1995, type: "avatar-ring" },
+  "ring-blood": { price: 1313, type: "avatar-ring" },
+  "ring-royal": { price: 6000, type: "avatar-ring" },
+  "ring-circuit": { price: 2048, type: "avatar-ring" },
+  "ring-prism": { price: 11111, type: "avatar-ring", tier: "legendary" },
   "supporter-badge": { price: 42069, type: "supporter" },
   "cosmetic-aura-gold": { price: 3500, type: "cosmetic" },
   "cosmetic-redacted": { price: 2800, type: "cosmetic" },
@@ -348,7 +368,14 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var rec;
     try { rec = await shopGet(env.DB_SHOP, userPubkey, true); }
     catch (e) { return json({ error: "Shop is temporarily unavailable." }, 503); }
-    return json({ owned: rec.owned, active: rec.active, updatedAt: rec.updatedAt });
+    if (shopPackSource(rec.owned)) {
+      var packed = null;
+      try { packed = await ledgerCall(env, { op: "shop-pack-rings", pubkey: userPubkey }); } catch (e) { packed = null; }
+      if (packed && !packed.error && packed.owned && typeof packed.owned === "object") {
+        rec = { owned: packed.owned, active: packed.active || rec.active, updatedAt: packed.updatedAt || rec.updatedAt };
+      }
+    }
+    return json({ owned: shopOwnedView(rec.owned), active: rec.active, updatedAt: rec.updatedAt });
   }
 
   if (body.action === "shop-set-active") {
@@ -356,16 +383,21 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     try { rec = await shopGet(env.DB_SHOP, userPubkey, true); }
     catch (e) { return json({ error: "Shop is temporarily unavailable." }, 503); }
     var want = (body.active && typeof body.active === "object") ? body.active : {};
+    var owns = shopOwnedView(rec.owned);
+    var ownsAs = function (id, type) {
+      return typeof id === "string" && !!owns[id] && !!SHOP_CATALOG[id] && SHOP_CATALOG[id].type === type;
+    };
     var nextStyle = null;
-    if (typeof want.style === "string" && rec.owned[want.style] &&
-      SHOP_CATALOG[want.style] && SHOP_CATALOG[want.style].type === "message-style") {
+    if (ownsAs(want.style, "message-style")) {
       nextStyle = want.style;
     }
+    var nextRing = Object.prototype.hasOwnProperty.call(want, "ring") ? want.ring : rec.active.ring;
+    if (!ownsAs(nextRing, "avatar-ring")) nextRing = null;
     var nextFlair = Array.isArray(want.flair) ? want.flair.filter(function (id) {
-      return rec.owned[id] && SHOP_CATALOG[id] && SHOP_CATALOG[id].type === "nickname-flair";
+      return ownsAs(id, "nickname-flair");
     }) : [];
     var nextCos = Array.isArray(want.cosmetics) ? want.cosmetics.filter(function (id) {
-      return rec.owned[id] && SHOP_CATALOG[id] && SHOP_CATALOG[id].type === "cosmetic";
+      return ownsAs(id, "cosmetic");
     }) : [];
     // Authoritative edition numbers from owned entries so other clients can render them.
     var nextEditions = {};
@@ -374,9 +406,10 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     });
     rec.active = {
       style: nextStyle,
+      ring: nextRing,
       flair: nextFlair,
       cosmetics: nextCos,
-      supporter: !!want.supporter && !!rec.owned["supporter-badge"],
+      supporter: !!want.supporter && !!owns["supporter-badge"],
       editions: nextEditions
     };
     await shopPutActive(env.DB_SHOP, userPubkey, rec);
@@ -486,7 +519,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       }, 409);
     }
     if (!claimRes || claimRes.error) return json({ error: (claimRes && claimRes.error) || "Claim failed." }, 400);
-    var crec = { owned: claimRes.owned, active: claimRes.active };
+    var crec = { owned: shopOwnedView(claimRes.owned), active: claimRes.active };
     var giftEvent = null;
     if (isGift) {
       var gifterName = giftSenderLabel(body.gifterNym, userPubkey);
@@ -511,7 +544,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var xfer = await ledgerCall(env, { op: "shop-transfer", from: userPubkey, to: toPubkey, itemId: itemId });
     if (xfer && xfer._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
     if (!xfer || xfer.error) return json({ error: (xfer && xfer.error) || "Transfer failed." }, 403);
-    var fromRec = { owned: xfer.owned, active: xfer.active };
+    var fromRec = { owned: shopOwnedView(xfer.owned), active: xfer.active };
     readCacheDelete(context, "/shop-status/" + userPubkey);
     var transferEvent = null;
     try {
@@ -543,9 +576,9 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       readCacheDelete(context, "/shop-status/" + prevOwner);
     }
     if (redeemRes.alreadyOwner) {
-      return json({ itemId: redeemItem, owned: redeemRes.owned, active: redeemRes.active, alreadyOwner: true });
+      return json({ itemId: redeemItem, owned: shopOwnedView(redeemRes.owned), active: redeemRes.active, alreadyOwner: true });
     }
-    return json({ itemId: redeemItem, owned: redeemRes.owned, active: redeemRes.active });
+    return json({ itemId: redeemItem, owned: shopOwnedView(redeemRes.owned), active: redeemRes.active });
   }
 
   return json({ error: "Unknown action" }, 400);
@@ -1176,6 +1209,10 @@ function archivedBlobRow(row) {
   return isEncryptedBlobContent(content);
 }
 
+function archivedBridgeRow(row) {
+  return !!row && isBridgeBlockedFrame(row.json);
+}
+
 async function spamAwareActivityRows(db, innerWhere, binds, limit, flagged) {
   var lim = limit ? (" LIMIT " + limit) : "";
   var cut = activityFlaggedClause(flagged);
@@ -1609,7 +1646,7 @@ async function handleChannelAction(context, body) {
     var engineE = badgeE !== "off" ? spamEngine(env, null) : null;
     for (var ri = 0; ri < idList.length; ri++) {
       var row = idList[ri];
-      if (archivedBlobRow(row)) continue;
+      if (archivedBlobRow(row) || archivedBridgeRow(row)) continue;
       if (rowHit(gateE, row)) continue;
       if (hiddenE.hidden.has(row.id)) continue;
       if (engineE && archivedBadgeRefused(env, row, badgeE, engineE)) continue;
@@ -1635,7 +1672,7 @@ async function handleChannelAction(context, body) {
     var origRow = await editDb.prepare(
       "SELECT id, channel, kind, pubkey, created_at, json, stored_at FROM events WHERE id = ? AND kind IN (20000, 23333) AND created_at >= ? AND created_at <= ?"
     ).bind(editId, editFloor, editCeil).first().catch(function () { return null; });
-    if (!origRow || archivedBlobRow(origRow)) return json({ events: [] });
+    if (!origRow || archivedBlobRow(origRow) || archivedBridgeRow(origRow)) return json({ events: [] });
     var editRows = [];
     try {
       editRows = (await editDb.prepare(
@@ -1644,7 +1681,7 @@ async function handleChannelAction(context, body) {
       ).bind(origRow.channel, origRow.pubkey, origRow.kind, origRow.created_at, editCeil,
         '["edit","' + editId + '"', CHANNEL_EDITS_MAX).all()).results || [];
     } catch (e) { editRows = []; }
-    var editAll = [origRow].concat(editRows.filter(function (r) { return r.id !== origRow.id && !archivedBlobRow(r); }));
+    var editAll = [origRow].concat(editRows.filter(function (r) { return r.id !== origRow.id && !archivedBlobRow(r) && !archivedBridgeRow(r); }));
     var gateX = await filterSet(env);
     if (gateX.n) editAll = editAll.filter(function (r) { return !rowHit(gateX, r); });
     var hiddenX = await hiddenAmong(env, [origRow.channel], editFloor * 1000 - HIDDEN_LOOKBACK_MS, editAll.map(function (r) { return r.id; }));
@@ -1738,7 +1775,7 @@ async function handleChannelAction(context, body) {
         rows = archiveRowsMerged(rows, legacyOwn, isSingle ? 500 : 1500);
       } catch (e) { }
     }
-    rows = rows.filter(function (r) { return !archivedBlobRow(r); });
+    rows = rows.filter(function (r) { return !archivedBlobRow(r) && !archivedBridgeRow(r); });
     var gateC = await filterSet(env);
     if (gateC.n) rows = rows.filter(function (r) { return !rowHit(gateC, r); });
     var hiddenFrom = floorSec * 1000 - HIDDEN_LOOKBACK_MS;
@@ -2759,5 +2796,6 @@ async function onRequest(context) {
 
 export {
   onRequest,
-  routeStorageAction
+  routeStorageAction,
+  SHOP_CATALOG
 };

@@ -203,6 +203,8 @@ Object.assign(NYM.prototype, {
     _apiRequestError(status, data, headers) {
         const err = new Error((data && data.error) || `Request failed (${status})`);
         err.status = status;
+        if (data && typeof data.code === 'string' && data.code) err.code = data.code;
+        err.data = data && typeof data === 'object' ? data : {};
         let after = data && Number(data.retryAfter);
         const header = headers && typeof headers.get === 'function' ? headers.get('Retry-After') : null;
         if (header != null && header !== '') {
@@ -335,7 +337,7 @@ Object.assign(NYM.prototype, {
         const rows = [];
         if (cache && typeof cache === 'object') {
             for (const [pubkey, entry] of Object.entries(cache)) {
-                if (entry && entry.items && typeof entry.ts === 'number' && now - entry.ts < this._SHOP_ACTIVE_MAX_AGE && now - entry.ts >= -60000) rows.push([pubkey, entry]);
+                if (entry && entry.items && Object.prototype.hasOwnProperty.call(entry.items, 'ring') && typeof entry.ts === 'number' && now - entry.ts < this._SHOP_ACTIVE_MAX_AGE && now - entry.ts >= -60000) rows.push([pubkey, entry]);
             }
         }
         rows.sort((a, b) => a[1].ts - b[1].ts);
@@ -405,7 +407,7 @@ Object.assign(NYM.prototype, {
     },
 
     invalidateShopCache(pubkey) {
-        if (!pubkey || pubkey === this.pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) return;
+        if (!pubkey || pubkey === this.pubkey || !/^[0-9a-f]{64}$/.test(pubkey) || this._shopLookupBarred(pubkey)) return;
         if (this.shopItemsCache) this.shopItemsCache.delete(pubkey);
         if (this._shopStatusInFlight) this._shopStatusInFlight.delete(pubkey);
         if (this._shopStatusMissAt) this._shopStatusMissAt.delete(pubkey);
@@ -433,6 +435,7 @@ Object.assign(NYM.prototype, {
                 owned,
                 active: {
                     style: this.activeMessageStyle || null,
+                    ring: this.activeAvatarRing || null,
                     flair: Array.from(this.activeFlairs || []),
                     cosmetics: Array.from(this.activeCosmetics || []),
                     supporter: this.supporterBadgeActive !== false
@@ -509,6 +512,7 @@ Object.assign(NYM.prototype, {
         this._shopRecordGen = (this._shopRecordGen || 0) + 1;
         this.activeMessageStyle = null;
         this.localActiveStyle = null;
+        this.activeAvatarRing = null;
         this.activeFlairs = new Set();
         this.activeCosmetics = new Set();
         this.supporterBadgeActive = true;
@@ -538,6 +542,7 @@ Object.assign(NYM.prototype, {
         if (data.active && typeof data.active === 'object') {
             this.activeMessageStyle = data.active.style || null;
             this.localActiveStyle = this.activeMessageStyle;
+            this.activeAvatarRing = this._ringIdOf(data.active.ring);
             const flairArr = Array.isArray(data.active.flair) ? data.active.flair : [];
             this.activeFlairs = new Set(flairArr.length ? [flairArr[flairArr.length - 1]] : []);
             this.activeCosmetics = new Set(Array.isArray(data.active.cosmetics) ? data.active.cosmetics : []);
@@ -551,6 +556,7 @@ Object.assign(NYM.prototype, {
     _buildActiveItemsPayload() {
         return {
             style: this.activeMessageStyle || null,
+            ring: this.activeAvatarRing || null,
             flair: Array.from(this.activeFlairs || []),
             cosmetics: Array.from(this.activeCosmetics || []),
             supporter: this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false
@@ -577,14 +583,22 @@ Object.assign(NYM.prototype, {
         if (missAt && now - missAt < SHOP_STATUS_FRESH_MS) return;
         if (this._shopStatusInFlight && this._shopStatusInFlight.has(pubkey)) return;
         if (!this._shopStatusQueue) this._shopStatusQueue = new Set();
-        this._shopStatusQueue.add(pubkey);
+        if (!this._shopStatusQueue.has(pubkey)) {
+            if (this._shopLookupBarred(pubkey)) return;
+            this._shopStatusQueue.add(pubkey);
+        }
         if (this._shopStatusTimer) return;
         this._shopStatusTimer = setTimeout(() => this._flushShopStatusQueue(), SHOP_STATUS_BATCH_MS);
     },
 
+    _shopLookupBarred(pubkey) {
+        if (typeof this._ownOtherKey === 'function' && this._ownOtherKey(pubkey)) return true;
+        return typeof this.isBotAnonPubkey === 'function' && this.isBotAnonPubkey(pubkey);
+    },
+
     async _flushShopStatusQueue() {
         this._shopStatusTimer = null;
-        const pubkeys = Array.from(this._shopStatusQueue || []);
+        const pubkeys = Array.from(this._shopStatusQueue || []).filter((pk) => !this._shopLookupBarred(pk));
         this._shopStatusQueue = new Set();
         if (!pubkeys.length) return;
         if (!this._shopStatusInFlight) this._shopStatusInFlight = new Set();
@@ -607,6 +621,7 @@ Object.assign(NYM.prototype, {
                 const active = (st && st.active) || {};
                 const items = {
                     style: active.style || null,
+                    ring: this._ringIdOf(active.ring),
                     flair: Array.isArray(active.flair) ? active.flair : [],
                     cosmetics: Array.isArray(active.cosmetics) ? active.cosmetics : [],
                     supporter: !!active.supporter,
@@ -614,7 +629,7 @@ Object.assign(NYM.prototype, {
                 };
                 const prev = this.shopItemsCache.get(pk);
                 const updatedAt = (st && st.updatedAt) || 0;
-                if (prev && prev.updatedAt === updatedAt) {
+                if (prev && prev.updatedAt === updatedAt && prev.items && Object.prototype.hasOwnProperty.call(prev.items, 'ring')) {
                     this.shopItemsCache.set(pk, { items: prev.items, timestamp: Date.now(), updatedAt });
                     return;
                 }
@@ -704,6 +719,7 @@ Object.assign(NYM.prototype, {
         if (this.inPMMode && !this.currentGroup && this.currentPM === pubkey && typeof this._renderPMHeaderForPubkey === 'function') {
             this._renderPMHeaderForPubkey(pubkey);
         }
+        this._queueRingPatch(pubkey);
     },
 
     applyShopStylesToOwnMessages() {
@@ -716,6 +732,7 @@ Object.assign(NYM.prototype, {
             this._applyShopClassesToMessage(msg, this.activeMessageStyle, cosmetics, supporterActive);
             this._applyFlairBadgesToMessage(msg, flairs, supporterActive, editions);
         });
+        this._queueRingPatch(this.pubkey);
     },
 
     activateCosmetic(itemId) {
@@ -772,6 +789,22 @@ Object.assign(NYM.prototype, {
         this.applyShopStylesToOwnMessages();
     },
 
+    activateAvatarRing(ringId) {
+        if (!this.userPurchases.has(ringId)) return;
+        const item = this.getShopItemById(ringId);
+        if (!item || item.type !== 'avatar-ring') return;
+        if (this.activeAvatarRing === ringId) {
+            this.activeAvatarRing = null;
+            this.displaySystemMessage(this.uiText(`Deactivated {name}`, { name: item.name }));
+        } else {
+            this.activeAvatarRing = ringId;
+            this.displaySystemMessage(this.uiText(`Activated {name}`, { name: item.name }));
+        }
+        this.publishActiveShopItems();
+        this._rerenderOpenShop();
+        this.applyShopStylesToOwnMessages();
+    },
+
     activateSupporter() {
         if (!this.userPurchases.has('supporter-badge')) return;
         if (this.supporterBadgeActive !== false) {
@@ -788,6 +821,11 @@ Object.assign(NYM.prototype, {
 
     getActiveMessageStyle() {
         return this.activeMessageStyle ? this.getShopItemById(this.activeMessageStyle) : null;
+    },
+
+    getActiveAvatarRing() {
+        const item = this.activeAvatarRing ? this.getShopItemById(this.activeAvatarRing) : null;
+        return item && item.type === 'avatar-ring' ? item : null;
     },
 
     getActiveFlairs() {
@@ -820,13 +858,8 @@ Object.assign(NYM.prototype, {
         this.activeShopTab = tab;
 
         document.querySelectorAll('.shop-tab').forEach(btn => btn.classList.remove('active'));
-        if (event && event.target) {
-            event.target.classList.add('active');
-        } else {
-            const idx = ['styles', 'flair', 'special', 'limited', 'credits', 'inventory'].indexOf(tab) + 1;
-            const btn = document.querySelector(`.shop-tab:nth-child(${idx})`);
-            if (btn) btn.classList.add('active');
-        }
+        const btn = document.querySelector(`.shop-tab[data-shop-tab="${tab}"]`);
+        if (btn) btn.classList.add('active');
         const activeTab = document.querySelector('.shop-tab.active');
         if (activeTab && typeof activeTab.scrollIntoView === 'function') activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
@@ -838,20 +871,11 @@ Object.assign(NYM.prototype, {
         switch (tab) {
             case 'styles': this.renderStylesTab(shopBody); break;
             case 'flair': this.renderFlairTab(shopBody); break;
+            case 'rings': this.renderRingsTab(shopBody); break;
             case 'special': this.renderSpecialTab(shopBody); break;
             case 'limited': this.renderLimitedTab(shopBody); break;
-            case 'credits': this.renderCreditsTab(shopBody); break;
             case 'inventory': this.renderInventoryTab(shopBody); break;
         }
-    },
-
-    renderCreditsTab(container) {
-        container.innerHTML = `
-<div class="shop-category-title">Nymbot Credits</div>
-<div class="shop-credits">
-    <p class="shop-credits-text">Credits pay for private messages with Nymbot. Standard and Pro credits are charged on the tokens each reply uses.</p>
-    <button class="shop-buy-btn" type="button" data-action="openBotCreditsModal">BUY</button>
-</div>`;
     },
 
     _shopItemActionsHtml(item, isPurchased) {
@@ -911,6 +935,47 @@ Object.assign(NYM.prototype, {
         <div class="shop-item-preview">
             <span>Your_Nick <span class="flair-badge ${item.id}">${item.icon}</span></span>
         </div>
+        ${isPurchased ? this._shopItemOwnedHtml(item, true) : this._shopItemActionsHtml(item, false)}
+    </div>
+`;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+    },
+
+    _RING_SURFACES: '.message-author .avatar-message, .me-message > .avatar-message, .message-group-avatar img.avatar-bubble, .user-item .avatar-user-list, .pm-item > .avatar-pm, .sb-frow > .avatar-pm, .nm-mention .avatar-message, .quote-author .avatar-message, .quote-preview-author .avatar-message, .input-mention .avatar-message, .typing-indicator-avatars img, .group-reader-avatar, .group-info-member .avatar-message, .autocomplete-item .avatar-message, .notification-item-header > .avatar-message, .cv-col-icon .avatar-pm, .cv-tab-icon .avatar-pm, .pm-header-avatar .avatar-message, .uh-avatar img, .call-title-avatar, .call-mention-item .avatar-message, .call-tile-avatar',
+
+    _shopRingSlug(item) {
+        return item && item.type === 'avatar-ring' && typeof item.id === 'string' && item.id.startsWith('ring-') ? item.id.slice(5) : '';
+    },
+
+    _shopItemIconHtml(item) {
+        if (!item) return '';
+        const slug = this._shopRingSlug(item);
+        if (slug) return `<span class="shop-ring-icon shop-ring-sample-tiny shop-ring shop-ring-${slug}" aria-hidden="true"></span>`;
+        return item.icon || '';
+    },
+
+    _shopRingPreview(item) {
+        const slug = this._shopRingSlug(item);
+        if (!slug) return '';
+        const src = this.escapeHtml(this.getAvatarUrl(this.pubkey));
+        const ring = `shop-ring shop-ring-${slug}`;
+        return `<div class="shop-item-preview shop-ring-preview"><img class="shop-ring-sample-profile ${ring}" src="${src}" alt="" decoding="async"><img class="shop-ring-sample-row ${ring}" src="${src}" alt="" decoding="async"><img class="shop-ring-sample-tiny ${ring}" src="${src}" alt="" decoding="async"></div>`;
+    },
+
+    renderRingsTab(container) {
+        let html = '<div class="shop-category-title">Avatar Rings</div>';
+        html += '<div class="shop-items">';
+        (this.shopItems.rings || []).forEach(item => {
+            const isPurchased = this.userPurchases.has(item.id);
+            html += `
+    <div class="shop-item ${isPurchased ? 'purchased' : ''} ${item.tier === 'legendary' ? 'shop-item-legendary' : ''}">
+        ${this._legendaryRibbon(item)}
+        <div class="shop-item-icon">${this._shopItemIconHtml(item)}</div>
+        <div class="shop-item-name">${item.name}</div>
+        <div class="shop-item-description">${item.description}</div>
+        ${this._shopRingPreview(item)}
         ${isPurchased ? this._shopItemOwnedHtml(item, true) : this._shopItemActionsHtml(item, false)}
     </div>
 `;
@@ -1036,7 +1101,7 @@ Object.assign(NYM.prototype, {
         const shown = all.slice(0, CHIP_CAP);
         let contents = shown.map(id => {
             const ci = this.getShopItemById(id);
-            return ci ? `<span class="shop-bundle-chip">${ci.icon}<span>${ci.name}</span></span>` : '';
+            return ci ? `<span class="shop-bundle-chip">${this._shopItemIconHtml(ci)}<span>${ci.name}</span></span>` : '';
         }).join('');
         if (all.length > CHIP_CAP) {
             contents += `<span class="shop-bundle-chip shop-bundle-more">+${all.length - CHIP_CAP} more</span>`;
@@ -1086,7 +1151,8 @@ Object.assign(NYM.prototype, {
         const supporterActive = this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false;
         const cosmetics = this.activeCosmetics ? Array.from(this.activeCosmetics) : [];
         const flairs = this.getActiveFlairs();
-        const hasActive = !!this.activeMessageStyle || supporterActive || cosmetics.length || flairs.length;
+        const ring = this.getActiveAvatarRing();
+        const hasActive = !!this.activeMessageStyle || supporterActive || cosmetics.length || flairs.length || !!ring;
         if (!hasActive) return '';
 
         const classes = ['message', 'self', 'shop-preview-message'];
@@ -1103,12 +1169,15 @@ Object.assign(NYM.prototype, {
         const supporterBadge = supporterActive
             ? `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>`
             : '';
+        const ringAvatar = ring
+            ? `<img src="${this.escapeHtml(this.getAvatarUrl(this.pubkey))}" class="avatar-message shop-ring shop-ring-${this._shopRingSlug(ring)}" alt="" decoding="async">`
+            : '';
 
         return `
 <div class="shop-active-items shop-preview-block">
     <div class="shop-active-items-title">Preview</div>
     <div class="${classes.join(' ')}">
-        <span class="message-author self ${colorClass}${authorExtra}"><span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(this.stripPubkeySuffix(this.nym) || 'You', suffix)}${flairHtml}${supporterBadge}<span class="nym-bracket">&gt;</span></span>
+        <span class="message-author self ${colorClass}${authorExtra}">${ringAvatar}<span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(this.stripPubkeySuffix(this.nym) || 'You', suffix)}${flairHtml}${supporterBadge}<span class="nym-bracket">&gt;</span></span>
         <span class="message-content ${colorClass}">${this.escapeHtml(this.uiText('This is how your messages look.'))}</span>
     </div>
 </div>`;
@@ -1143,6 +1212,14 @@ Object.assign(NYM.prototype, {
             html += '</div>';
         }
 
+        const activeRing = this.getActiveAvatarRing();
+        if (activeRing) {
+            html += '<div class="shop-active-items">';
+            html += '<div class="shop-active-items-title">Active Avatar Ring</div>';
+            html += `<div class="shop-active-item">${this._shopItemIconHtml(activeRing)} ${activeRing.name}</div>`;
+            html += '</div>';
+        }
+
         if (this.activeCosmetics.size > 0) {
             html += '<div class="shop-active-items">';
             html += '<div class="shop-active-items-title">Active Special Items</div>';
@@ -1165,7 +1242,7 @@ Object.assign(NYM.prototype, {
             html += `
     <div class="shop-item purchased ${item.tier === 'legendary' ? 'shop-item-legendary' : ''}">
         ${this._legendaryRibbon(item)}
-        <div class="shop-item-icon">${item.icon}</div>
+        <div class="shop-item-icon">${this._shopItemIconHtml(item)}</div>
         <div class="shop-item-name">${item.name}${editionNo}</div>
         <div class="shop-item-description">${item.description}</div>
         <div class="nm-shop-4">
@@ -1183,6 +1260,13 @@ ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
                 const isActive = this.activeFlairs && this.activeFlairs.has(itemId);
                 html += `
 <button class="shop-buy-btn nm-shop-5" data-action="activateFlair" data-item-id="${itemId}">
+${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
+</button>`;
+            } else if (item.type === 'avatar-ring') {
+                const isActive = this.activeAvatarRing === itemId;
+                html += this._shopRingPreview(item);
+                html += `
+<button class="shop-buy-btn nm-shop-5" data-action="activateAvatarRing" data-item-id="${itemId}">
 ${isActive ? 'DEACTIVATE' : 'ACTIVATE'}
 </button>`;
             } else if (item.type === 'cosmetic') {
@@ -1219,14 +1303,17 @@ TRANSFER TO PUBKEY
     },
 
     getShopItemById(itemId) {
-        const allItems = [
-            ...this.shopItems.styles,
-            ...this.shopItems.flair,
-            ...this.shopItems.special,
-            ...(this.shopItems.limited || []),
-            ...(this.shopItems.bundles || [])
-        ];
-        return allItems.find(item => item.id === itemId);
+        const shop = this.shopItems;
+        if (!shop) return undefined;
+        if (this._shopIndexOf !== shop || !this._shopIndex) {
+            const index = new Map();
+            for (const list of [shop.styles, shop.flair, shop.rings, shop.special, shop.limited, shop.bundles]) {
+                for (const item of (list || [])) if (item && !index.has(item.id)) index.set(item.id, item);
+            }
+            this._shopIndex = index;
+            this._shopIndexOf = shop;
+        }
+        return this._shopIndex.get(itemId);
     },
 
     getSupporterTrophyIcon() {
@@ -1266,6 +1353,7 @@ TRANSFER TO PUBKEY
         if (pubkey === this.pubkey) {
             return {
                 style: this.activeMessageStyle,
+                ring: this.activeAvatarRing || null,
                 flair: Array.from(this.activeFlairs || []),
                 supporter: this.userPurchases.has('supporter-badge') && this.supporterBadgeActive !== false,
                 cosmetics: Array.from(this.activeCosmetics || []),
@@ -1277,6 +1365,7 @@ TRANSFER TO PUBKEY
         if (!items) return null;
         return {
             style: items.style || null,
+            ring: this._ringIdOf(items.ring),
             flair: Array.isArray(items.flair) ? items.flair : [],
             supporter: !!items.supporter,
             cosmetics: Array.isArray(items.cosmetics) ? items.cosmetics : [],
@@ -1304,6 +1393,45 @@ TRANSFER TO PUBKEY
             const flairItem = this.getShopItemById(id);
             return flairItem ? `<span class="flair-badge ${id}">${this._flairIconHtml(id, editions[id])}</span>` : '';
         }).join('');
+    },
+
+    _ringIdOf(value) {
+        return typeof value === 'string' && /^ring-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) && value.length <= 64 ? value : null;
+    },
+
+    _ringClass(pubkey, items) {
+        if (!pubkey || !items || !items.ring) return '';
+        if (typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(pubkey)) return '';
+        const slug = this._shopRingSlug(this.getShopItemById(items.ring));
+        if (!slug) return '';
+        if (pubkey !== this.pubkey && typeof this._personMask === 'function' && this._personMask(pubkey)) return '';
+        return ` shop-ring shop-ring-${slug}`;
+    },
+
+    _ringPeek(pubkey) {
+        if (!pubkey) return '';
+        const items = pubkey === this.pubkey ? { ring: this.activeAvatarRing || null } : (this.otherUsersShopItems && this.otherUsersShopItems.get(pubkey));
+        return this._ringClass(pubkey, items ? { ring: this._ringIdOf(items.ring) } : null);
+    },
+
+    _setRingClass(img, ring) {
+        if (!img) return;
+        const cur = typeof img.className === 'string' ? img.className : '';
+        const kept = cur.split(/\s+/).filter((c) => c && c !== 'shop-ring' && !c.startsWith('shop-ring-'));
+        const next = [...kept, ...String(ring || '').split(/\s+/).filter(Boolean)].join(' ');
+        if (next !== cur) img.className = next;
+    },
+
+    _queueRingPatch(pubkey) {
+        const safePk = typeof this._safePubkey === 'function' ? this._safePubkey(pubkey) : pubkey;
+        if (!safePk) return;
+        if (!this._ringPatchQueue) this._ringPatchQueue = new Set();
+        this._ringPatchQueue.add(safePk);
+        if (this._avatarUpdateRaf) return;
+        this._avatarUpdateRaf = true;
+        const run = () => this._flushAvatarUpdates();
+        if (typeof this._frameOrTimer === 'function') this._frameOrTimer(run);
+        else setTimeout(run, 16);
     },
 
     async purchaseItem(itemId, recipientPubkey = null) {
@@ -1597,6 +1725,7 @@ TRANSFER TO PUBKEY
         const item = ctx.item;
         const kind = item.type === 'message-style' ? 'Message style'
             : item.type === 'nickname-flair' ? 'Nickname flair'
+            : item.type === 'avatar-ring' ? 'Avatar ring'
             : item.type === 'supporter' ? 'Supporter badge'
             : item.type === 'cosmetic' ? 'Cosmetic'
             : 'Shop item';
@@ -1758,7 +1887,7 @@ ${bundleCodes || (code ? `
     <h3 class="nm-shop-17">Gift Item</h3>
     <div class="nm-shop-18">
         <div class="nm-shop-19">
-            <span>${item.icon}</span>
+            <span>${this._shopItemIconHtml(item)}</span>
             <strong>${item.name}</strong>
             <span class="nm-shop-20">${item.price} sats</span>
         </div>
@@ -1839,7 +1968,7 @@ ${bundleCodes || (code ? `
     <h3 class="nm-shop-17">Transfer Item</h3>
     <div class="nm-shop-18">
         <div class="nm-shop-19">
-            <span>${item.icon}</span>
+            <span>${this._shopItemIconHtml(item)}</span>
             <strong>${item.name}</strong>
         </div>
         <p class="nm-shop-21">

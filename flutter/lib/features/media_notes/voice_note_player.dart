@@ -10,7 +10,9 @@ import '../../widgets/common/app_dialog.dart';
 import '../calls/call_providers.dart';
 import '../calls/call_signaling.dart';
 import '../i18n/i18n.dart';
+import '../messages/format/audio_playback.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
+import '../messages/format/playback_keeper.dart';
 import '../messages/media_fallbacks.dart';
 import '../toasts/toast_center.dart';
 import '../toasts/toast_model.dart';
@@ -87,29 +89,25 @@ class VoiceNotePlayer extends ConsumerStatefulWidget {
     required this.note,
     this.localPath,
     this.maxWidth = 340,
+    this.playbackScope,
   });
 
   final MediaNote note;
   final String? localPath;
   final double maxWidth;
+  final String? playbackScope;
 
   @override
   ConsumerState<VoiceNotePlayer> createState() => _VoiceNotePlayerState();
 }
 
 class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
-  final Object _token = Object();
-  AudioPlayer? _player;
-  final List<StreamSubscription<Object?>> _subs = [];
-  Duration _position = Duration.zero;
-  Duration _duration = Duration.zero;
-  bool _playing = false;
+  AudioPlayback? _session;
   bool _loading = false;
   String? _failure;
   bool _unplayable = false;
-  String? _tempPath;
-  VoiceFile? _localFile;
-  bool _sourceSet = false;
+  String? _pendingFile;
+  VoiceFile? _pendingVoice;
   String? _transcript;
   String? _transcriptNote;
   bool _transcribing = false;
@@ -127,52 +125,111 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
       ? _duration.inMilliseconds / 1000
       : (widget.note.duration ?? 0);
 
+  Duration get _position => _session?.position ?? Duration.zero;
+
+  Duration get _duration => _session?.duration ?? Duration.zero;
+
+  bool get _playing => _session?.playing ?? false;
+
+  bool get _sourceSet => _session?.sourceSet ?? false;
+
+  String? _playKeyOf(VoiceNotePlayer w) {
+    final scope = w.playbackScope;
+    if (scope == null) return null;
+    return PlaybackKeeper.keyFor(scope, w.localPath ?? w.note.url);
+  }
+
   @override
   void initState() {
     super.initState();
     final cached = ref.read(transcriptStoreProvider).get(_key);
     if (cached != null) _transcript = cached;
+    _bind(_playKeyOf(widget));
+  }
+
+  @override
+  void didUpdateWidget(VoiceNotePlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final old = _playKeyOf(oldWidget);
+    final key = _playKeyOf(widget);
+    if (old == key &&
+        oldWidget.note.url == widget.note.url &&
+        oldWidget.localPath == widget.localPath) {
+      return;
+    }
+    _unbind(old);
+    _bind(key);
   }
 
   @override
   void dispose() {
     _modelTicker?.cancel();
     _modelCanceled = true;
-    for (final s in _subs) {
-      s.cancel();
-    }
-    _player?.dispose();
-    MediaNoteFiles.deleteQuietly(_tempPath);
+    _unbind(_playKeyOf(widget));
+    MediaNoteFiles.deleteQuietly(_pendingFile);
     super.dispose();
   }
 
-  Future<AudioPlayer> _ensurePlayer() async {
-    final existing = _player;
+  void _bind(String? key) {
+    AudioPlayback.keeper.watch(key, _onStarted);
+    final s = AudioPlayback.keeper.join(key, this);
+    if (s != null) _attach(s);
+  }
+
+  void _unbind(String? key) {
+    AudioPlayback.keeper.unwatch(key, _onStarted);
+    final s = _session;
+    _session = null;
+    if (s == null) return;
+    s.removeListener(_onSession);
+    AudioPlayback.keeper.leave(s, this);
+  }
+
+  void _attach(AudioPlayback s) {
+    if (identical(_session, s)) return;
+    s.addListener(_onSession);
+    _session = s;
+  }
+
+  void _onStarted() {
+    if (!mounted || _session != null) return;
+    final s = AudioPlayback.keeper.join(_playKeyOf(widget), this);
+    if (s != null) setState(() => _attach(s));
+  }
+
+  void _onSession() {
+    if (mounted) setState(() {});
+  }
+
+  AudioPlayback _ensureSession() {
+    final existing = _session;
     if (existing != null) return existing;
-    final p = AudioPlayer();
-    _player = p;
-    _subs.add(p.onDurationChanged.listen((d) {
-      if (mounted) setState(() => _duration = d);
-    }));
-    _subs.add(p.onPositionChanged.listen((d) {
-      if (mounted) setState(() => _position = d);
-    }));
-    _subs.add(p.onPlayerStateChanged.listen((s) {
-      if (mounted) setState(() => _playing = s == PlayerState.playing);
-    }));
-    _subs.add(p.onPlayerComplete.listen((_) {
-      if (mounted) {
-        setState(() {
-          _playing = false;
-          _position = Duration.zero;
-        });
-      }
-    }));
-    return p;
+    final key = _playKeyOf(widget);
+    final s = AudioPlayback.keeper
+        .start(key, this, () => AudioPlayback(key, AudioPlayer()));
+    _attach(s);
+    return s;
+  }
+
+  void _adoptPrepared(AudioPlayback s) {
+    final voice = _pendingVoice;
+    final path = _pendingFile;
+    if (voice == null || path == null) return;
+    _pendingVoice = null;
+    _pendingFile = null;
+    if (s.prepared) {
+      MediaNoteFiles.deleteQuietly(path);
+      return;
+    }
+    MediaNoteFiles.deleteQuietly(s.file);
+    s
+      ..prepared = true
+      ..file = path
+      ..fileMime = voice.mime;
   }
 
   Future<bool> _prepareLocalFile() async {
-    if (_localFile != null) return true;
+    if ((_session?.prepared ?? false) || _pendingVoice != null) return true;
     setState(() => _loading = true);
     try {
       final bytes =
@@ -192,8 +249,8 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
         await MediaNoteFiles.deleteQuietly(path);
         return false;
       }
-      _tempPath = path;
-      _localFile = f;
+      _pendingFile = path;
+      _pendingVoice = f;
       return true;
     } catch (_) {
       if (mounted) setState(() => _failure = tr("Couldn't load"));
@@ -203,20 +260,27 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
     }
   }
 
-  Future<bool> _setSource(AudioPlayer p) async {
-    if (_sourceSet) return true;
-    final file = _localFile;
-    if (file != null) {
-      await p.setSource(DeviceFileSource(_tempPath!, mimeType: file.mime));
-      _sourceSet = true;
+  Future<bool> _setSource(AudioPlayback s) async {
+    if (s.sourceSet) return true;
+    final p = s.player;
+    final file = s.file;
+    if (s.prepared && file != null) {
+      await p.setSource(DeviceFileSource(file, mimeType: s.fileMime));
+      s.sourceSet = true;
       return true;
     }
     final local = widget.localPath;
     if (local != null) {
       final bytes = await MediaNoteFiles.readLocal(local);
-      _tempPath = await MediaNoteFiles.writeTemp(bytes, widget.note.mime);
-      await p.setSource(DeviceFileSource(_tempPath!, mimeType: widget.note.mime));
-      _sourceSet = true;
+      final temp = await MediaNoteFiles.writeTemp(bytes, widget.note.mime);
+      if (s.released) {
+        await MediaNoteFiles.deleteQuietly(temp);
+        return false;
+      }
+      MediaNoteFiles.deleteQuietly(s.file);
+      s.file = temp;
+      await p.setSource(DeviceFileSource(temp, mimeType: widget.note.mime));
+      s.sourceSet = true;
       return true;
     }
     final urls = <String>[
@@ -226,11 +290,11 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
     for (final u in urls) {
       try {
         await p.setSource(UrlSource(proxiedMedia(u), mimeType: widget.note.mime));
-        _sourceSet = true;
+        s.sourceSet = true;
         return true;
       } catch (_) {}
     }
-    setState(() => _failure = tr("Couldn't load"));
+    if (mounted) setState(() => _failure = tr("Couldn't load"));
     return false;
   }
 
@@ -242,17 +306,21 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
       return;
     }
     if (!mounted) return;
-    final p = await _ensurePlayer();
-    if (_playing) {
+    final s = _ensureSession();
+    _adoptPrepared(s);
+    final p = s.player;
+    if (s.playing) {
       await p.pause();
       return;
     }
-    ref.read(activeMediaNoteProvider.notifier).state = _token;
+    ref.read(activeMediaNoteProvider.notifier).state = s;
+    final prep = ref.read(voiceSessionPrepProvider);
+    final speed = ref.read(voiceSpeedProvider);
     setState(() => _loading = true);
     try {
-      if (!await _setSource(p)) return;
-      await ref.read(voiceSessionPrepProvider)();
-      await p.setPlaybackRate(ref.read(voiceSpeedProvider));
+      if (!await _setSource(s)) return;
+      await prep();
+      await p.setPlaybackRate(speed);
       await p.resume();
     } catch (_) {
       if (mounted) setState(() => _failure = tr("Couldn't load"));
@@ -263,23 +331,25 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
 
   Future<void> _seek(double fraction) async {
     final f = fraction.clamp(0.0, 1.0);
-    final p = await _ensurePlayer();
     if (!_sourceSet) {
       await _toggle();
     }
-    final totalMs = _duration > Duration.zero
-        ? _duration.inMilliseconds
+    final s = _session;
+    if (s == null || !mounted) return;
+    final totalMs = s.duration > Duration.zero
+        ? s.duration.inMilliseconds
         : ((widget.note.duration ?? 0) * 1000).round();
     if (totalMs <= 0) return;
     final target = Duration(milliseconds: (totalMs * f).round());
-    await p.seek(target);
-    if (mounted) setState(() => _position = target);
+    await s.player.seek(target);
+    s.position = target;
+    if (mounted) setState(() {});
   }
 
   Future<void> _cycleSpeed() async {
     final next = ref.read(voiceSpeedProvider.notifier).cycle();
-    final p = _player;
-    if (p != null && _playing) await p.setPlaybackRate(next);
+    final s = _session;
+    if (s != null && s.playing) await s.player.setPlaybackRate(next);
   }
 
   Future<void> _transcribe({bool consented = false}) async {
@@ -479,7 +549,8 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
   Widget build(BuildContext context) {
     final c = context.nym;
     ref.listen<Object?>(activeMediaNoteProvider, (_, next) {
-      if (next != _token && _playing) _player?.pause();
+      final s = _session;
+      if (s != null && !identical(next, s) && s.playing) s.player.pause();
     });
     final speed = ref.watch(voiceSpeedProvider);
     final levels = voiceBarLevels(widget.note);

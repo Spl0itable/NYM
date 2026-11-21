@@ -109,6 +109,7 @@
     --shadow-glow: 0 0 20px rgb(from var(--primary) r g b / 0.1);
     --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     --user-text-size: 15px;
+    --composer-row: 44px;
 }
 
 html {

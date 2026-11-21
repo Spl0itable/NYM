@@ -38,8 +38,8 @@ const NYM_FORMAT_TOOLS = [
         html: '<span class="ft-glyph ft-subtext">-#</span>'
     },
     {
-        id: 'timestamp', picker: true, title: 'Timestamp',
-        html: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>'
+        id: 'timestamp', picker: true, title: 'Insert a timestamp',
+        html: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"></rect><line x1="8" y1="2" x2="8" y2="6"></line><line x1="16" y1="2" x2="16" y2="6"></line><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="13" x2="15" y2="13"></line><line x1="12" y1="13" x2="12" y2="18"></line></svg>'
     },
     {
         id: 'h1', prefix: '# ', exclusive: ['### ', '## ', '# '], title: 'Heading 1',
@@ -394,7 +394,7 @@ Object.assign(NYM.prototype, {
             picker.querySelector('.ts-picker-cancel').addEventListener('click', () => this.closeTimestampPicker());
         }
         picker.setAttribute('aria-label', ui('Insert a timestamp'));
-        picker.querySelector('.ts-picker-title').textContent = ui('Date and time');
+        picker.querySelector('.ts-picker-title').textContent = ui('Insert a timestamp');
         picker.querySelector('.ts-picker-insert').textContent = ui('Insert');
         picker.querySelector('.ts-picker-cancel').textContent = ui('Cancel');
         const field = picker.querySelector('.ts-picker-input');

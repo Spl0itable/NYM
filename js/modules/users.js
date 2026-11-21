@@ -1201,17 +1201,27 @@ Object.assign(NYM.prototype, {
 
     _flushAvatarUpdates() {
         this._avatarUpdateRaf = null;
-        const queue = this._avatarUpdateQueue;
-        if (!queue || queue.size === 0) return;
+        const queue = this._avatarUpdateQueue || new Map();
+        const rings = this._ringPatchQueue || new Set();
+        if (queue.size === 0 && rings.size === 0) return;
         this._avatarUpdateQueue = new Map();
+        this._ringPatchQueue = new Set();
         const fallbackCache = new Map();
         const fallbackFor = (pk) => {
             let f = fallbackCache.get(pk);
             if (f === undefined) { f = this.generateAvatarSvg(pk); fallbackCache.set(pk, f); }
             return f;
         };
+        const ringCache = new Map();
+        const ringFor = (pk) => {
+            let r = ringCache.get(pk);
+            if (r === undefined) { r = typeof this._ringPeek === 'function' ? this._ringPeek(pk) : ''; ringCache.set(pk, r); }
+            return r;
+        };
+        const ringSurfaces = this._RING_SURFACES;
         document.querySelectorAll('img[data-avatar-pubkey]').forEach(img => {
             const pk = img.getAttribute('data-avatar-pubkey');
+            if (rings.has(pk) && ringSurfaces && img.getAttribute('data-ring') !== 'off' && img.matches(ringSurfaces)) this._setRingClass(img, ringFor(pk));
             const entry = queue.get(pk);
             if (!entry) return;
             // Skip rows already showing this URL to avoid canceling an in-flight load (spurious error swap).
@@ -1222,6 +1232,7 @@ Object.assign(NYM.prototype, {
         });
         const ctxImg = document.getElementById('ctxAvatarImg');
         const ctxPk = this.contextMenuData ? this._safePubkey(this.contextMenuData.pubkey) : null;
+        if (ctxImg && ctxPk && rings.has(ctxPk) && !this.contextMenuData.masked) this._setRingClass(ctxImg, ringFor(ctxPk));
         if (ctxImg && ctxPk && queue.has(ctxPk)) {
             const entry = queue.get(ctxPk);
             if (ctxImg.getAttribute('src') !== entry.url) {
@@ -2135,25 +2146,24 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        const COLLAPSED_CAP = 20;
-        const EXPANDED_STEP = 500;
-        const isExpanded = this.listExpansionStates && this.listExpansionStates.get('userListContent');
-        if (this._userListExpandedCap == null) this._userListExpandedCap = EXPANDED_STEP;
+        const M = typeof this._sbModel === 'function' ? this._sbModel() : null;
+        const first = M ? M.FIRST : 20;
+        const saved = this.listExpansionStates ? this.listExpansionStates.get('userListContent') : 0;
+        const shown = typeof saved === 'number' && saved > first ? saved : first;
         const totalCount = displayUsers.length;
-        let renderCap;
-        if (term) {
-            renderCap = totalCount;
-        } else if (isExpanded) {
-            renderCap = Math.min(totalCount, this._userListExpandedCap);
-        } else {
-            renderCap = Math.min(totalCount, COLLAPSED_CAP);
+        const win = M ? M.window(totalCount, shown, [], { searching: !!term })
+            : { shown, visible: term ? totalCount : Math.min(totalCount, shown), hidden: 0, buttons: [] };
+        if (!term && this.listExpansionStates) {
+            if (win.shown > first) this.listExpansionStates.set('userListContent', win.shown);
+            else this.listExpansionStates.delete('userListContent');
         }
+        const renderCap = win.visible;
         const renderUsers = renderCap < totalCount ? displayUsers.slice(0, renderCap) : displayUsers;
 
         const isLight = themeBitchat && document.body.classList.contains('light-mode');
         const sigParts = [
             themeBitchat ? (isLight ? 'bl' : 'bd') : 'n',
-            term, totalCount, renderCap, isExpanded ? '1' : '0',
+            term, totalCount, renderCap, String(win.shown),
         ];
         for (let i = 0; i < renderUsers.length; i++) {
             const c = renderUsers[i];
@@ -2166,7 +2176,7 @@ Object.assign(NYM.prototype, {
             this._renderUserListItems(userListContent, renderUsers, themeBitchat);
         }
 
-        this._updateUserListViewMoreButton(userListContent, totalCount, renderCap, isExpanded, EXPANDED_STEP);
+        this._updateUserListViewMoreButton(win);
 
         const userListTitle = document.querySelector('#userList .nav-title-text');
         if (userListTitle) {
@@ -2204,7 +2214,9 @@ Object.assign(NYM.prototype, {
             const avatarSrc = this.getAvatarUrl(pubkey);
             const isDev = this.isVerifiedDeveloper(pubkey);
             const isBot = !isDev && this.verifiedBotPubkeys.has(pubkey);
-            const flairKey = this._userFlairKey ? this._userFlairKey(pubkey) : '';
+            const shopItems = this.getUserShopItems ? this.getUserShopItems(pubkey) : null;
+            const ring = this._ringClass ? this._ringClass(pubkey, shopItems) : '';
+            const flairKey = this._userFlairKey ? this._userFlairKey(pubkey, shopItems, ring) : '';
             const isFriend = this.isFriend(pubkey) ? 1 : 0;
             const fp = `${effectiveStatus}|${baseNym}|${userColorClass}|${avatarSrc}|${isDev?1:0}${isBot?1:0}|${flairKey}|${statusHidden?'h':'v'}|f${isFriend}`;
 
@@ -2212,11 +2224,11 @@ Object.assign(NYM.prototype, {
             if (el) {
                 existing.delete(safePk);
                 if (el._fp !== fp) {
-                    this._updateUserItem(el, { baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot, statusHidden });
+                    this._updateUserItem(el, { baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot, statusHidden, ring });
                     el._fp = fp;
                 }
             } else {
-                el = this._createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot, statusHidden });
+                el = this._createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey: safePk, isDev, isBot, statusHidden, ring });
                 el._fp = fp;
             }
             rows.push(el);
@@ -2256,7 +2268,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey, isDev, isBot, statusHidden }) {
+    _createUserItem({ baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey, isDev, isBot, statusHidden, ring }) {
         const item = document.createElement('div');
         item.className = userColorClass ? `user-item list-item ${userColorClass}` : 'user-item list-item';
         item.dataset.pubkey = pubkey;
@@ -2266,7 +2278,7 @@ Object.assign(NYM.prototype, {
         wrap.className = statusHidden ? 'user-avatar-wrap no-status' : 'user-avatar-wrap';
 
         const img = document.createElement('img');
-        img.className = 'avatar-user-list';
+        img.className = 'avatar-user-list' + (ring || '');
         img.alt = '';
         img.loading = 'lazy';
         img.dataset.avatarPubkey = pubkey;
@@ -2288,7 +2300,7 @@ Object.assign(NYM.prototype, {
         return item;
     },
 
-    _updateUserItem(el, { baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey, isDev, isBot, statusHidden }) {
+    _updateUserItem(el, { baseNym, effectiveStatus, userColorClass, avatarSrc, pubkey, isDev, isBot, statusHidden, ring }) {
         el.className = userColorClass ? `user-item list-item ${userColorClass}` : 'user-item list-item';
         el.dataset.nym = baseNym;
 
@@ -2318,6 +2330,7 @@ Object.assign(NYM.prototype, {
         if (img) {
             if (img.getAttribute('src') !== avatarSrc) img.src = avatarSrc;
             img.classList.remove('status-online', 'status-away', 'status-offline');
+            if (typeof this._setRingClass === 'function') this._setRingClass(img, ring || '');
         }
         let dot = wrap.querySelector('.user-status-dot');
         if (!dot) {
@@ -2368,10 +2381,11 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _userFlairKey(pubkey) {
-        const items = this.getUserShopItems && this.getUserShopItems(pubkey);
-        if (!items || !items.flair) return '';
-        return Array.isArray(items.flair) ? items.flair.join(',') : items.flair;
+    _userFlairKey(pubkey, shopItems, ring) {
+        const items = shopItems !== undefined ? shopItems : (this.getUserShopItems && this.getUserShopItems(pubkey));
+        const ringKey = ring !== undefined ? ring : (this._ringClass ? this._ringClass(pubkey, items) : '');
+        if (!items || !items.flair) return ringKey ? '|' + ringKey : '';
+        return (Array.isArray(items.flair) ? items.flair.join(',') : items.flair) + (ringKey ? '|' + ringKey : '');
     },
 
     _evictStaleUsers() {
@@ -2400,62 +2414,8 @@ Object.assign(NYM.prototype, {
         if (removed > 0) this._userListSig = '';
     },
 
-    _updateUserListViewMoreButton(container, totalCount, renderCap, isExpanded, expandedStep) {
-        const list = container.parentElement;
-        if (!list) return;
-
-        const searchInput = list.querySelector('.search-input');
-        const searchActive = !!(searchInput && searchInput.value.trim().length > 0);
-
-        let btn = container.querySelector('.view-more-btn');
-
-        if (searchActive || totalCount <= 20) {
-            if (btn) btn.remove();
-            list.classList.remove('list-collapsed', 'list-expanded');
-            return;
-        }
-
-        if (isExpanded) {
-            list.classList.remove('list-collapsed');
-            list.classList.add('list-expanded');
-        } else {
-            list.classList.add('list-collapsed');
-            list.classList.remove('list-expanded');
-        }
-
-        if (!btn) {
-            btn = document.createElement('div');
-            btn.className = 'view-more-btn';
-            container.appendChild(btn);
-        } else if (btn.parentElement !== container || btn !== container.lastElementChild) {
-            container.appendChild(btn);
-        }
-
-        const remaining = totalCount - renderCap;
-        if (!isExpanded) {
-            btn.textContent = `View ${this.abbreviateNumber(totalCount - 20)} more...`;
-            btn.onclick = () => {
-                this.listExpansionStates.set('userListContent', true);
-                this._userListExpandedCap = expandedStep;
-                this._userListSig = '';
-                this.updateUserList();
-            };
-        } else if (remaining > 0) {
-            btn.textContent = `Show ${this.abbreviateNumber(Math.min(remaining, expandedStep))} more...`;
-            btn.onclick = () => {
-                this._userListExpandedCap = (this._userListExpandedCap || expandedStep) + expandedStep;
-                this._userListSig = '';
-                this.updateUserList();
-            };
-        } else {
-            btn.textContent = 'Show less';
-            btn.onclick = () => {
-                this.listExpansionStates.set('userListContent', false);
-                this._userListExpandedCap = expandedStep;
-                this._userListSig = '';
-                this.updateUserList();
-            };
-        }
+    _updateUserListViewMoreButton(win) {
+        if (typeof this._sbMoreRow === 'function') this._sbMoreRow('userListContent', win);
     },
 
     unblockByPubkey(pubkey) {

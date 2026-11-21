@@ -483,6 +483,7 @@
             const NT = window.NostrTools;
             for (const ev of (res && Array.isArray(res.events) ? res.events : [])) {
                 if (!ev || (ev.kind !== 20000 && ev.kind !== 23333)) continue;
+                if (typeof this._bridgeBlocked === 'function' && this._bridgeBlocked(ev)) continue;
                 if (typeof this._encryptedBlobDrop === 'function' && this._encryptedBlobDrop(ev)) continue;
                 let good = false;
                 try { good = !!(NT && typeof NT.verifyEvent === 'function' && NT.verifyEvent(ev) === true); } catch (_) { good = false; }
@@ -1066,6 +1067,7 @@
         },
 
         _ctCloseModal(id) {
+            if (id === 'sendLaterModal') this._slPicker = null;
             const modal = document.getElementById(id);
             if (modal) modal.classList.remove('active');
         },

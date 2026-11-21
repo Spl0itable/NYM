@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../i18n/i18n.dart';
@@ -18,8 +19,10 @@ import 'cosmetics.dart'
         messageStyleDecoration;
 import 'shop_catalog.dart';
 import 'shop_models.dart';
+import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/nym_svg_bytes.dart';
+import 'avatar_ring.dart';
 
 /// Renders a catalog item's inline SVG tinted to [color] via `currentColor`.
 class ShopSvgIcon extends StatelessWidget {
@@ -41,6 +44,91 @@ class ShopSvgIcon extends StatelessWidget {
       NymSvgLoader(svg, color: color),
       width: size,
       height: size,
+    );
+  }
+}
+
+class ShopItemIcon extends StatelessWidget {
+  const ShopItemIcon({
+    super.key,
+    required this.item,
+    required this.size,
+    required this.color,
+  });
+
+  final ShopItem item;
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.type == 'avatar-ring') {
+      return ShopRingIcon(ringId: item.id, size: size);
+    }
+    return ShopSvgIcon(svg: item.icon, size: size, color: color);
+  }
+}
+
+class ShopRingIcon extends StatelessWidget {
+  const ShopRingIcon({super.key, required this.ringId, required this.size});
+
+  final String ringId;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final visual = AvatarRingVisual.byId(ringId);
+    if (visual == null) return SizedBox.square(dimension: size);
+    return SizedBox.square(
+      key: ValueKey('shopRingIcon-$ringId'),
+      dimension: size,
+      child: CustomPaint(
+        painter: AvatarRingIconPainter(
+          visual: visual,
+          isLight: context.nym.isLight,
+          highContrast: context.highContrast,
+        ),
+      ),
+    );
+  }
+}
+
+class ShopRingPreview extends StatelessWidget {
+  const ShopRingPreview({
+    super.key,
+    required this.ringId,
+    required this.seed,
+    this.imageUrl,
+  });
+
+  final String ringId;
+  final String seed;
+  final String? imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final fill = context.nym.bg;
+    return KeyedSubtree(
+      key: ValueKey('shopRingPreview-$ringId'),
+      child: ShopPreviewBox(
+        color: fill,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            for (final (i, size) in const [64.0, 32.0, 20.0].indexed) ...[
+              if (i > 0) const SizedBox(width: 14),
+              NymAvatar(
+                seed: seed,
+                size: size,
+                imageUrl: imageUrl,
+                ringId: ringId,
+                ringFill: fill,
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
@@ -710,9 +798,11 @@ class ShopCosmeticBubblePreview extends StatelessWidget {
 
 /// Preview box for flair and supporter rows only; style/cosmetic demos and bundle chips render bare.
 class ShopPreviewBox extends StatelessWidget {
-  const ShopPreviewBox({super.key, required this.child});
+  const ShopPreviewBox({super.key, required this.child, this.color});
 
   final Widget child;
+
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -723,7 +813,7 @@ class ShopPreviewBox extends StatelessWidget {
       alignment: Alignment.center,
       constraints: const BoxConstraints(minHeight: 50),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
+        color: color ?? Colors.white.withValues(alpha: 0.03),
         border: Border.all(color: c.glassBorder),
         borderRadius: NymRadius.rsm,
       ),
@@ -738,9 +828,19 @@ class ShopPreviewBox extends StatelessWidget {
 
 /// Per-type preview: flair and supporter rows boxed, style and cosmetic demos bare and centered.
 class ShopItemPreview extends StatelessWidget {
-  const ShopItemPreview({super.key, required this.item, this.bubble = true});
+  const ShopItemPreview({
+    super.key,
+    required this.item,
+    this.bubble = true,
+    this.seed = '',
+    this.imageUrl,
+  });
 
   final ShopItem item;
+
+  final String seed;
+
+  final String? imageUrl;
 
   /// The user's chat layout, so demos render as they would in chat.
   final bool bubble;
@@ -790,6 +890,8 @@ class ShopItemPreview extends StatelessWidget {
         return Center(
           child: ShopCosmeticBubblePreview(cosmeticId: item.id, bubble: bubble),
         );
+      case 'avatar-ring':
+        return ShopRingPreview(ringId: item.id, seed: seed, imageUrl: imageUrl);
       default:
         return const SizedBox.shrink();
     }
@@ -984,7 +1086,7 @@ class _BundleChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (item != null) ...[
-            ShopSvgIcon(svg: item.icon, size: 14, color: c.text),
+            ShopItemIcon(item: item, size: 14, color: c.text),
             const SizedBox(width: 4),
           ],
           Text(label, style: TextStyle(color: c.text, fontSize: 11)),

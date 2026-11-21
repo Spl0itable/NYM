@@ -1058,10 +1058,14 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       case _ColumnKind.channel:
         return NymSvgIcon(_channelSvg(d), size: 16, color: c.textDim);
       case _ColumnKind.pm:
-        return NymAvatar(
-          seed: d.pubkey,
-          size: 20,
-          imageUrl: app.users[d.pubkey]?.profile?.picture,
+        return Consumer(
+          builder: (context, ref, _) => NymAvatar(
+            seed: d.pubkey,
+            size: 20,
+            imageUrl: app.users[d.pubkey]?.profile?.picture,
+            ringId: ref.watch(
+                userCosmeticsProvider(d.pubkey).select((x) => x.ringId)),
+          ),
         );
       case _ColumnKind.group:
         final g = app.groups.where((g) => g.id == d.groupId).toList();
@@ -1254,10 +1258,14 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
         return NymSvgIcon(_channelSvg(d), size: size * 0.85, color: c.textDim);
       case _ColumnKind.pm:
         final u = app.users[d.pubkey];
-        return NymAvatar(
-          seed: d.pubkey,
-          size: size,
-          imageUrl: u?.profile?.picture,
+        return Consumer(
+          builder: (context, ref, _) => NymAvatar(
+            seed: d.pubkey,
+            size: size,
+            imageUrl: u?.profile?.picture,
+            ringId: ref.watch(
+                userCosmeticsProvider(d.pubkey).select((x) => x.ringId)),
+          ),
         );
       case _ColumnKind.group:
         final g = app.groups.where((g) => g.id == d.groupId).toList();
@@ -1739,6 +1747,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   final AnchoredUnits _anchors = AnchoredUnits();
   late final ListAnchorKeeper _keeper =
       ListAnchorKeeper(controller: _itemScroll, units: _anchors);
+  late final BottomFollow _follow = BottomFollow()
+    ..anchor = (() => _anchors.anchor ?? 0);
+  bool _followArmed = false;
   final ReaderAway _reader = ReaderAway();
   final OwnSend _own = OwnSend();
   bool _ownPin = false;
@@ -1799,10 +1810,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       _reader.reset();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (_itemScroll.isAttached) {
-          _itemScroll.jumpTo(index: 0);
-          _keeper.reset(target: 0);
-        }
+        if (_itemScroll.isAttached) _jumpToNewest();
         widget.onAtBottomChanged?.call(true);
       });
     }
@@ -1825,8 +1833,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     if (positions.isEmpty) return;
     _nav.update();
     ItemPosition? newest;
+    final newestIndex = _groups?.offset ?? 0;
     for (final p in positions) {
-      if (p.index == 0) {
+      if (p.index == newestIndex) {
         newest = p;
         break;
       }
@@ -1909,14 +1918,15 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     final unitByIndex = <int, String>{};
     final atByIndex = <int, int>{};
     final dayStarts = <int>{};
+    final offset = _slotOffset(cached, groups);
     for (var f = 0; f < groups.length; f++) {
-      final revIndex = groups.length - 1 - f;
+      final revIndex = offset + groups.length - 1 - f;
       atByIndex[revIndex] = groups[f].first.message.createdAt;
       if (starts.contains(f)) dayStarts.add(revIndex);
       for (final e in groups[f]) {
         indexById[e.message.id] = revIndex;
       }
-      final unit = 'cvgroup_${groups[f].first.message.id}';
+      final unit = _unitOf(groups[f]);
       indexByUnit[unit] = revIndex;
       unitByIndex[revIndex] = unit;
     }
@@ -1932,7 +1942,36 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       unitByIndex: unitByIndex,
       atByIndex: atByIndex,
       dayStarts: dayStarts,
+      offset: offset,
     );
+  }
+
+  static const int _slotReserve = 64;
+
+  static String _unitOf(List<MessageGroupEntry> group) =>
+      'cvgroup_${group.first.message.id}';
+
+  int _slotOffset(_ColumnGroups? prev, List<List<MessageGroupEntry>> groups) {
+    if (prev == null || prev.groups.isEmpty || groups.isEmpty) {
+      return _slotReserve;
+    }
+    final newest = _unitOf(prev.groups.last);
+    for (var f = groups.length - 1, k = 0;
+        f >= 0 && k <= prev.offset;
+        f--, k++) {
+      if (_unitOf(groups[f]) == newest) return prev.offset - k;
+    }
+    return _slotReserve;
+  }
+
+  double _bottomAlignment(int index) => index == 0 || _viewportHeight <= 0
+      ? 0
+      : _bottomInset / _viewportHeight;
+
+  void _jumpToNewest() {
+    final newest = _groups?.offset ?? 0;
+    _itemScroll.jumpTo(index: newest, alignment: _bottomAlignment(newest));
+    _keeper.reset(target: newest);
   }
 
   void _keepAnchor() {
@@ -1951,8 +1990,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _ownPin = false;
         if (!mounted || !_itemScroll.isAttached) return;
-        _itemScroll.jumpTo(index: 0);
-        _keeper.reset(target: 0);
+        _jumpToNewest();
       });
     }
     if (scroller.scrollCount != _seenScrolls) {
@@ -1961,12 +1999,14 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     }
     if (scroller.animating) return;
     final app = ref.read(appStateProvider);
+    final before = _groups;
     final built =
         _groupsFor(app, ref.read(settingsProvider), _messagesNow(app));
     final positions = _positions.itemPositions.value;
     ItemPosition? newest;
+    final newestIndex = before?.offset ?? 0;
     for (final p in positions) {
-      if (p.index == 0) {
+      if (p.index == newestIndex) {
         newest = p;
         break;
       }
@@ -1974,6 +2014,19 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     final follow = !_reader.away &&
         newest != null &&
         _bottomInset - newest.itemLeadingEdge * _viewportHeight < 120;
+    final moved = before == null ||
+        before.groups.isEmpty ||
+        built.indexByUnit[_unitOf(before.groups.last)] != before.offset;
+    if (follow && !moved) {
+      if (ref.read(settingsProvider).autoscroll) {
+        _follow.armed = true;
+        _followArmed = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _follow.armed = false;
+        });
+      }
+      return;
+    }
     final old = _unitByIndex;
     _keeper.keep(
       positions: positions,
@@ -1982,6 +2035,10 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       viewportHeight: _viewportHeight,
       bottomInset: _bottomInset,
       follow: follow,
+      newestIndex: newestIndex,
+      newestTo: built.offset,
+      newestUnitTo:
+          built.groups.isEmpty ? null : _unitOf(built.groups.last),
     );
   }
 
@@ -1994,7 +2051,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       }
     }
     if (nearest == null) return;
-    if (nearest.index == 0 && nearest.itemLeadingEdge >= -0.01) {
+    if (nearest.index == (_groups?.offset ?? 0) &&
+        nearest.itemLeadingEdge >= -0.01) {
       _restore = null;
       return;
     }
@@ -2070,18 +2128,22 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     if (messages.length != _lastMessageCount) {
       final added = messages.length > _lastMessageCount;
       _lastMessageCount = messages.length;
-      if (added && settings.autoscroll && _atBottom && !_reader.away) {
+      if (added &&
+          settings.autoscroll &&
+          _atBottom &&
+          !_reader.away &&
+          !_followArmed) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted &&
               _atBottom &&
               !_reader.away &&
               _itemScroll.isAttached) {
-            _itemScroll.jumpTo(index: 0);
-            _keeper.reset(target: 0);
+            _jumpToNewest();
           }
         });
       }
     }
+    _followArmed = false;
 
     // An open thread for this conversation swaps the list for the in-place ThreadView.
     final activeThread = ref.watch(activeThreadProvider);
@@ -2124,7 +2186,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                 ? ThreadView(
                     key: ValueKey(activeThread),
                     thread: activeThread,
-                    showTyping: false)
+                    showTyping: false,
+                    columnsMode: true)
                 : ColoredBox(
               color: transparent
                   ? Colors.transparent
@@ -2152,8 +2215,13 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                             final scroller = ref.read(
                                 messageListScrollerProvider(
                                     widget.desc.storageKey));
-                            scroller.bind(_itemScroll, built.indexById);
-                            _nav.bind(built.indexById, groups.length - 1);
+                            scroller.bind(_itemScroll, built.indexById,
+                                newest: built.offset,
+                                newestAlignment: () =>
+                                    _bottomAlignment(built.offset));
+                            _nav.bind(built.indexById,
+                                built.offset + groups.length - 1,
+                                newestIndex: built.offset);
                             _nav.observeLive(messages,
                                 away: !_atBottom ||
                                     !ref
@@ -2173,7 +2241,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                 ..sync(scroller.readerJumps)
                                 ..reset();
                               _keeper.reset(
-                                target: restore?.index ?? 0,
+                                target: restore?.index ?? built.offset,
                                 anchorUnit: restore == null
                                     ? null
                                     : built.unitByIndex[restore.index],
@@ -2191,13 +2259,19 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                 itemScrollController: _itemScroll,
                                 itemPositionsListener: _positions,
                                 reverse: true,
-                                initialScrollIndex: restore?.index ?? 0,
-                                initialAlignment: restore?.alignment ?? 0,
+                                physics: KeepReadingPhysics(follow: _follow),
+                                initialScrollIndex:
+                                    restore?.index ?? built.offset,
+                                initialAlignment: restore?.alignment ??
+                                    _bottomAlignment(built.offset),
                                 padding: const EdgeInsets.all(10),
-                                itemCount: groups.length,
+                                itemCount: built.offset + groups.length,
                                 itemBuilder: (context, revIndex) {
-                                  final entries =
-                                      groups[groups.length - 1 - revIndex];
+                                  if (revIndex < built.offset) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  final entries = groups[
+                                      built.offset + groups.length - 1 - revIndex];
                                   final unitId = built.unitByIndex[revIndex]!;
                                   // Per-row RepaintBoundary, keyed by the group's lead id so appends don't restart snap-in animations.
                                   final group = MessageGroup(
@@ -2207,7 +2281,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                       // Jump within this column on a quote tap.
                                       scrollKey: widget.desc.storageKey,
                                       onReactionPicker: (msg) =>
-                                          showReactionPicker(context, ref, msg),
+                                          showReactionPicker(
+                                              this.context, ref, msg),
                                       trailingFor: widget.desc.storageKey == BotChatController.conversationKey
                                           ? (m) => botRunTrailing(m, context.nym)
                                           : null,
@@ -2219,33 +2294,28 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                       AnchoredUnit(
                                       id: unitId,
                                       units: _anchors,
-                                      child: (_navBreak != null &&
-                                                  entries.first.message.id ==
-                                                      _navBreak) ||
-                                              built.dayStarts
-                                                  .contains(revIndex)
-                                          ? Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.stretch,
-                                              children: [
-                                                if (built.dayStarts
-                                                    .contains(revIndex))
-                                                  DaySeparator(
-                                                    createdAt: built
-                                                        .atByIndex[revIndex]!,
-                                                    useBubbles:
-                                                        settings.useBubbles,
-                                                  ),
-                                                if (_navBreak != null &&
-                                                    entries.first.message
-                                                            .id ==
-                                                        _navBreak)
-                                                  ChatNavDivider(
-                                                      cover: _navDivider),
-                                                group,
-                                              ],
-                                            )
-                                          : group,
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          if (built.dayStarts
+                                              .contains(revIndex))
+                                            DaySeparator(
+                                              createdAt:
+                                                  built.atByIndex[revIndex]!,
+                                              useBubbles:
+                                                  settings.useBubbles,
+                                            ),
+                                          if (_navBreak != null &&
+                                              entries.first.message.id ==
+                                                  _navBreak)
+                                            ChatNavDivider(
+                                                cover: _navDivider),
+                                          KeyedSubtree(
+                                              key: const ValueKey('unit'),
+                                              child: group),
+                                        ],
+                                      ),
                                     )),
                                   );
                                 },
@@ -2288,7 +2358,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
               ),
             ),
           ),
-          TypingIndicatorRow(storageKey: widget.desc.storageKey),
+          TypingIndicatorRow(
+              storageKey: widget.desc.storageKey,
+              threadRoot: threadOpen ? activeThread.rootId : null),
         ],
       ),
     );
@@ -3486,6 +3558,7 @@ class _ColumnGroups {
     required this.unitByIndex,
     required this.atByIndex,
     required this.dayStarts,
+    required this.offset,
   });
 
   final int rev;
@@ -3499,4 +3572,5 @@ class _ColumnGroups {
   final Map<int, String> unitByIndex;
   final Map<int, int> atByIndex;
   final Set<int> dayStarts;
+  final int offset;
 }

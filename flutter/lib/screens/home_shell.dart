@@ -17,6 +17,8 @@ import '../features/mesh/mesh_controller.dart'
     show MeshController, meshScreenOpenProvider;
 import '../core/constants/storage_keys.dart';
 import '../features/i18n/i18n.dart';
+import '../features/layout/chat_cover.dart';
+import '../features/layout/chat_covered.dart';
 import '../features/layout/info_dock.dart';
 import '../features/layout/info_dock_host.dart';
 import '../features/layout/layout_model.dart';
@@ -570,7 +572,10 @@ class HomeShellState extends ConsumerState<HomeShell>
           Positioned.fill(
             child: isWide
                 ? _wide(context, useColumns)
-                : _mobile(context, useColumns),
+                : ChatCoveredScope(
+                    covered: _drawerOpen,
+                    child: _mobile(context, useColumns),
+                  ),
           ),
           // Call UI renders nothing when idle.
           const Positioned.fill(child: CallOverlay()),
@@ -767,7 +772,14 @@ class HomeShellState extends ConsumerState<HomeShell>
           child: ExcludeSemantics(
             key: const ValueKey('phoneChatPage'),
             excluding: hideChat,
-            child: _content(context, useColumns, compact: true),
+            child: ChatCoverGate(
+              listCovers: hideChat && _listDrag == null,
+              listOpaque: context.nym.bgSecondary.a >= 1,
+              settle: MediaQuery.of(context).disableAnimations
+                  ? Duration.zero
+                  : NymMotion.slide * 2,
+              child: _content(context, useColumns, compact: true),
+            ),
           ),
         ),
 

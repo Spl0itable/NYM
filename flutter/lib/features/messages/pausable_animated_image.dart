@@ -40,12 +40,21 @@ class _PausableAnimatedImageState extends State<PausableAnimatedImage> {
   ImageInfo? _frame;
   bool _listening = false;
   bool _visible = true;
+  bool _ticking = true;
   bool _error = false;
+
+  bool get _active => _visible && _ticking;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final ticking = TickerMode.valuesOf(context).enabled;
+    if (ticking != _ticking) {
+      _ticking = ticking;
+      if (!ticking) _pause();
+    }
     _resolve();
+    _attachIfVisible();
   }
 
   @override
@@ -70,7 +79,7 @@ class _PausableAnimatedImageState extends State<PausableAnimatedImage> {
 
   void _attachIfVisible() {
     final stream = _stream;
-    if (!_visible || _listening || stream == null) return;
+    if (!_active || _listening || stream == null) return;
     _listener ??= ImageStreamListener(_onFrame, onError: _onError);
     try {
       stream.addListener(_listener!);
@@ -110,7 +119,7 @@ class _PausableAnimatedImageState extends State<PausableAnimatedImage> {
       _frame = info;
     });
     // Deferred pause: went offscreen before the first frame arrived.
-    if (!_visible) _pause();
+    if (!_active) _pause();
   }
 
   void _onError(Object error, StackTrace? stackTrace) {

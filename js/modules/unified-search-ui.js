@@ -2,6 +2,7 @@
     const S = () => window.NymUnifiedSearch;
     const MODAL_ID = 'unifiedSearchModal';
     const SEARCH_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>';
+    const HISTORY_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>';
 
     Object.assign(NYM.prototype, {
         _us(key, vars) {
@@ -258,7 +259,12 @@
             const input = modal.querySelector('#usInput');
             input.addEventListener('input', () => this._usOnInput(input.value));
             input.addEventListener('keydown', (e) => this._usKey(e));
+            modal.querySelector('#usResults').addEventListener('mousedown', (e) => {
+                if (e.target.closest && e.target.closest('[data-us-remove], .us-row.us-recent, .us-row.us-clearHistory')) e.preventDefault();
+            });
             modal.querySelector('#usResults').addEventListener('click', (e) => {
+                const rm = e.target.closest && e.target.closest('[data-us-remove]');
+                if (rm) { e.stopPropagation(); this._usRemoveRecent(parseInt(rm.dataset.usRemove, 10)); return; }
                 const row = e.target.closest && e.target.closest('[data-us-idx]');
                 if (row) this._usActivate(parseInt(row.dataset.usIdx, 10));
             });
@@ -300,6 +306,7 @@
                     this.closeUnifiedSearch();
                 }, true);
             }
+            if (typeof this._shLoad === 'function') this._shLoad();
             this._usRender();
             setTimeout(() => { try { input.focus(); } catch (_) { } }, 30);
         },
@@ -345,7 +352,17 @@
                     st.active = -1;
                     this._usRender();
                 }
-                if (st.rows.length) this._usActivate(st.active < 0 ? 0 : st.active);
+                const i = st.active >= 0 ? st.active : st.rows.findIndex((r) => r.kind !== 'recent' && r.kind !== 'clearHistory');
+                if (i >= 0 && i < st.rows.length) { this._usActivate(i); return; }
+                if (typeof this._shRecord === 'function') this._shRecord(input ? input.value : st.query);
+                return;
+            }
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                const input = document.getElementById('usInput');
+                const row = st.rows[st.active];
+                if (!row || row.kind !== 'recent' || (e.key === 'Backspace' && input && input.value !== '')) return;
+                e.preventDefault();
+                this._usRemoveRecent(st.active);
             }
         },
 
@@ -384,29 +401,52 @@
             this._usLast = r;
             const q = r.query;
             st.rows = [];
-            if (!q.text) {
-                countEl.textContent = '';
-                box.innerHTML = `<div class="us-state" id="usEmpty">${SEARCH_SVG}<div class="us-state-title">${esc(this._us('empty'))}</div><div class="us-state-hint">${esc(this._us('emptyHint'))}</div></div>`;
-                this._usPaintActive();
-                return;
-            }
-            const empty = !r.channels.total && !r.join && !r.nyms.total && !r.messages.total;
-            if (empty) {
-                countEl.textContent = '';
-                const hint = q.text.length < S().CONFIG.minMessageChars ? `<div class="us-state-hint">${esc(this._us('shortMessages'))}</div>` : '';
-                box.innerHTML = `<div class="us-state" id="usNoResults">${SEARCH_SVG}<div class="us-state-title">${esc(this._us('noResults', { q: st.query.trim() }))}</div>${hint}</div>`;
-                this._usPaintActive();
-                return;
-            }
-            countEl.textContent = this._us('resultCount', { n: r.channels.total + r.nyms.total + r.messages.total });
             const row = (kind, data, label, inner) => {
                 const i = st.rows.length;
                 st.rows.push(Object.assign({ kind }, data));
                 return `<div class="us-row us-${kind}" role="option" id="usOpt${i}" data-us-idx="${i}" data-us-id="${esc(data.rid || '')}" aria-selected="false" aria-label="${esc(label)}">${inner}</div>`;
             };
             const more = (group, shown, total) => row('more', { group, rid: 'more-' + group }, this._us('showMore'), `<span class="us-more">${esc(this._us('showMore'))} (${total - shown})</span>`);
-            const groupHtml = (id, title, total, body) => `<div class="us-group" role="group" aria-labelledby="usG${id}"><div class="us-group-title" id="usG${id}" role="presentation"><span>${esc(title)}</span> · ${total}</div>${body}</div>`;
+            const groupHtml = (id, title, total, body) => `<div class="us-group" role="group" aria-labelledby="usG${id}"><div class="us-group-title" id="usG${id}" role="presentation"><span>${esc(title)}</span>${total == null ? '' : ' · ' + total}</div>${body}</div>`;
+            const H = window.NymSearchHistory;
+            const remembered = H && typeof this._shItems === 'function' && typeof this.rememberSearches === 'function' && this.rememberSearches() ? this._shItems() : [];
+            const recentRow = (e, tokens) => {
+                const i = st.rows.length;
+                return row('recent', { q: e.q, rid: 'recent-' + e.q }, this._sh('recentRow', { q: e.q }),
+                    `<span class="us-conv us-glyph" aria-hidden="true">${HISTORY_SVG}</span><span class="us-name">${this._usHighlight(e.q, S().highlight(e.q, tokens))}</span><button type="button" class="us-remove" tabindex="-1" aria-label="${esc(this._sh('remove', { q: e.q }))}" data-us-remove="${i}">&#x2715;</button>`);
+            };
+            if (!q.text) {
+                countEl.textContent = '';
+                const recent = H && remembered.length ? H.recent(remembered) : [];
+                if (recent.length) {
+                    let body = '';
+                    for (const e of recent) body += recentRow(e, []);
+                    body += row('clearHistory', { rid: 'clear-history' }, this._sh('clearAll'), `<span class="us-more">${esc(this._sh('clearAll'))}</span>`);
+                    box.innerHTML = groupHtml('r', this._sh('recent'), null, body) + `<div class="us-state-hint us-recent-foot">${esc(this._us('emptyHint'))}</div>`;
+                } else {
+                    box.innerHTML = `<div class="us-state" id="usEmpty">${SEARCH_SVG}<div class="us-state-title">${esc(this._us('empty'))}</div><div class="us-state-hint">${esc(this._us('emptyHint'))}</div></div>`;
+                }
+                if (st.active >= st.rows.length) st.active = st.rows.length - 1;
+                this._usPaintActive();
+                return;
+            }
             let html = '';
+            const suggested = H && remembered.length ? H.suggest(remembered, st.query) : [];
+            if (suggested.length) {
+                let body = '';
+                for (const e of suggested) body += recentRow(e, [q.text]);
+                html += groupHtml('r', this._sh('recent'), null, body);
+            }
+            const empty = !r.channels.total && !r.join && !r.nyms.total && !r.messages.total;
+            if (empty) {
+                countEl.textContent = '';
+                const hint = q.text.length < S().CONFIG.minMessageChars ? `<div class="us-state-hint">${esc(this._us('shortMessages'))}</div>` : '';
+                box.innerHTML = html + `<div class="us-state" id="usNoResults">${SEARCH_SVG}<div class="us-state-title">${esc(this._us('noResults', { q: st.query.trim() }))}</div>${hint}</div>`;
+                if (st.active >= st.rows.length) st.active = st.rows.length - 1;
+                this._usPaintActive();
+                return;
+            }
+            countEl.textContent = this._us('resultCount', { n: r.channels.total + r.nyms.total + r.messages.total });
             if (r.channels.total || r.join) {
                 let body = '';
                 for (const it of r.channels.items) {
@@ -464,6 +504,20 @@
                 this._usRender();
                 return;
             }
+            if (row.kind === 'recent') { this._usRunRecent(row.q); return; }
+            if (row.kind === 'clearHistory') {
+                if (typeof this._shClear === 'function') this._shClear();
+                st.active = -1;
+                this._usRender();
+                this._shAnnounce(this._sh('cleared'));
+                const input = document.getElementById('usInput');
+                if (input) { try { input.focus(); } catch (_) { } }
+                return;
+            }
+            if (typeof this._shRecord === 'function') {
+                const input = document.getElementById('usInput');
+                this._shRecord(input ? input.value : st.query);
+            }
             this.closeUnifiedSearch();
             if (row.kind === 'channel') {
                 const it = row.item;
@@ -495,6 +549,37 @@
                 return;
             }
             if (row.kind === 'message') this.unifiedSearchJump(row.item.key, row.item.msg);
+        },
+
+        _usRunRecent(q) {
+            const st = this._usState;
+            if (!st) return;
+            clearTimeout(this._usTimer);
+            const input = document.getElementById('usInput');
+            if (input) {
+                input.value = q;
+                try { input.setSelectionRange(q.length, q.length); } catch (_) { }
+                try { input.focus(); } catch (_) { }
+            }
+            st.query = q;
+            st.limits = Object.assign({}, S().CONFIG.pages);
+            st.active = -1;
+            if (typeof this._shRecord === 'function') this._shRecord(q);
+            this._usRender();
+        },
+
+        _usRemoveRecent(i) {
+            const st = this._usState;
+            const row = st && st.rows[i];
+            if (!row || row.kind !== 'recent' || typeof this._shRemove !== 'function') return;
+            if (!this._shRemove(row.q)) return;
+            const keep = st.active;
+            this._usRender();
+            st.active = keep < 0 ? -1 : Math.min(keep, st.rows.length - 1);
+            this._usPaintActive();
+            this._shAnnounce(this._sh('removed'));
+            const input = document.getElementById('usInput');
+            if (input) { try { input.focus(); } catch (_) { } }
         },
 
         _usSwitchTo(key) {

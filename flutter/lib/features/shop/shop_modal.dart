@@ -18,18 +18,16 @@ import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/identity/modal_chrome.dart';
 import '../../services/api/api_client.dart';
+import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../i18n/i18n.dart';
-import '../nymbot/bot_credits_modal.dart' show kBotCreditsBuyNotice;
-import '../nymbot/nymbot_models.dart' show CreditTier;
-import '../nymbot/nymbot_providers.dart'
-    show botBuyRequestProvider, botChatControllerProvider;
-import 'cosmetics.dart' show CosmeticAura, cosmeticAuraFor;
+import 'cosmetics.dart' show CosmeticAura, cosmeticAuraFor, shopRingIdOrNull;
 import 'shop_catalog.dart';
 import 'shop_controller.dart';
 import 'shop_models.dart';
 import 'shop_widgets.dart';
+import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_label.dart';
 import '../../widgets/common/nym_field.dart';
@@ -70,10 +68,6 @@ String _errorMessage(Object e) {
   }
   return e.toString();
 }
-
-const String kShopCreditsText =
-    'Credits pay for private messages with Nymbot. Standard and Pro credits '
-    'are charged on the tokens each reply uses.';
 
 const String kShopFlairNotice = 'Flair cannot be purchased in this app. '
     'Anything you already own works here as usual.';
@@ -128,22 +122,21 @@ class _ShopModalState extends ConsumerState<ShopModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final bigText = MediaQuery.textScalerOf(context).scale(10) > 15;
-    final body = Stack(
-      children: [
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (bigText)
-              Flexible(child: SingleChildScrollView(child: _header(c)))
-            else
+    final body = SingleChildScrollView(
+      key: const ValueKey('shopScroll'),
+      child: Stack(
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
               _header(c),
-            _tabs(c),
-            Flexible(flex: bigText ? 2 : 1, child: _body(c)),
-          ],
-        ),
-        ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
-      ],
+              _tabs(c),
+              _body(c),
+            ],
+          ),
+          ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
+        ],
+      ),
     );
     return NymDiscardGuard(
       isDirty: () => _recoveryController.text.trim().isNotEmpty,
@@ -198,46 +191,55 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          FitWordsText(
-            tr('Shop').toUpperCase(),
-            textKey: const ValueKey('shopTitle'),
-            style: TextStyle(
-              color: c.primary,
-              fontSize: 24,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 4),
-          // Where purchases happen when selling here isn't possible; a statement with no tap target.
-          if (shopPurchasesDisabled) ...[
-            Container(
+          NymSheetDragRegion(
+            inScroll: true,
+            child: SizedBox(
               width: double.infinity,
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: c.insetFill,
-                border: Border.all(color: c.insetBorder),
-                borderRadius: NymRadius.rsm,
-              ),
-              child: Text(
-                tr(kShopFlairNotice),
-                style: TextStyle(color: c.textDim, fontSize: 12, height: 1.45),
-              ),
-            ),
-          ],
-          // Subtitle inherits the bold title weight; right room reserved for the close chip.
-          Padding(
-            padding: const EdgeInsets.only(right: 28),
-            child: Text(
-              tr('Get addon packs to change the styling of your messages '
-                  'and nickname that others will see across all channels '
-                  '(only in the Nymchat app).'),
-              key: const ValueKey('shopSubtitle'),
-              style: TextStyle(
-                color: c.textDim,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                height: 1.5,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  FitWordsText(
+                    tr('Shop').toUpperCase(),
+                    textKey: const ValueKey('shopTitle'),
+                    style: TextStyle(
+                      color: c.primary,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  if (shopPurchasesDisabled) ...[
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: c.insetFill,
+                        border: Border.all(color: c.insetBorder),
+                        borderRadius: NymRadius.rsm,
+                      ),
+                      child: Text(
+                        tr(kShopFlairNotice),
+                        style: TextStyle(color: c.textDim, fontSize: 12, height: 1.45),
+                      ),
+                    ),
+                  ],
+                  Padding(
+                    padding: const EdgeInsets.only(right: 28),
+                    child: Text(
+                      tr('Get addon packs to change the styling of your messages '
+                          'and nickname that others will see across all channels '
+                          '(only in the Nymchat app).'),
+                      key: const ValueKey('shopSubtitle'),
+                      style: TextStyle(
+                        color: c.textDim,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -336,7 +338,10 @@ class _ShopModalState extends ConsumerState<ShopModal> {
   void _revealTab() {
     final ctx = _tabKeys[_tab]?.currentContext;
     if (!mounted || ctx == null) return;
-    Scrollable.ensureVisible(ctx,
+    final box = ctx.findRenderObject();
+    final row = Scrollable.maybeOf(ctx);
+    if (box == null || row == null) return;
+    row.position.ensureVisible(box,
         alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
   }
 
@@ -402,11 +407,8 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     if (_tab == ShopTab.limited) {
       return _limitedBody(c, state);
     }
-    if (_tab == ShopTab.credits) {
-      return _creditsBody(c);
-    }
     final items = _itemsForTab(_tab, state);
-    return SingleChildScrollView(
+    return Padding(
       padding: const EdgeInsets.all(20),
       child: _cardWrap(c, state, items),
     );
@@ -414,7 +416,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
 
   Widget _recordPendingBody(NymColors c, ShopState state) {
     final identity = _shopIdentity(ref);
-    return SingleChildScrollView(
+    return Padding(
       padding: const EdgeInsets.all(40),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -502,6 +504,8 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       availability: availability,
       // Sample Genesis edition only on the unowned preview; inventory shows the real one.
       sampleEdition: (!inventory && item.id == 'flair-genesis') ? 69 : null,
+      previewSeed: item.type == 'avatar-ring' ? _previewSeed() : '',
+      previewPicture: item.type == 'avatar-ring' ? _previewPicture() : null,
       onBuy: () => _buy(item),
       onActivate: () => _activate(item),
       onGift: () => _gift(item),
@@ -509,49 +513,22 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     );
   }
 
-  Widget _creditsBody(NymColors c) {
-    final text = TextStyle(color: c.textDim, fontSize: 14, height: 1.5);
-    return SingleChildScrollView(
-      key: const ValueKey('shopCredits'),
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _categoryTitle(c, tr('Nymbot Credits')),
-          const SizedBox(height: 15),
-          if (botCreditPurchasesDisabled)
-            Text(tr(kBotCreditsBuyNotice), style: text)
-          else ...[
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 560),
-              child: Text(tr(kShopCreditsText), style: text),
-            ),
-            const SizedBox(height: 14),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: IntrinsicWidth(
-                key: const ValueKey('shopBuyCredits'),
-                child: _OrangePillButton(
-                    label: tr('BUY'), onTap: _buyCredits),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
+  String _previewSeed() {
+    final self = ref.watch(appStateProvider.select((s) => s.selfPubkey));
+    return self.isNotEmpty ? self : 'Your_Nick';
   }
 
-  void _buyCredits() {
-    final pro = ref.read(botChatControllerProvider).isPro;
-    ref
-        .read(botBuyRequestProvider.notifier)
-        .request(pro ? CreditTier.pro : CreditTier.standard);
+  String? _previewPicture() {
+    final self = ref.watch(appStateProvider.select((s) => s.selfPubkey));
+    if (self.isEmpty) return null;
+    return ref.watch(
+        appStateProvider.select((s) => s.users[self]?.profile?.picture));
   }
 
   /// Limited drops with supply gating, then bundles with chips and savings.
   Widget _limitedBody(NymColors c, ShopState state) {
     final ctrl = ref.read(shopControllerProvider.notifier);
-    return SingleChildScrollView(
+    return Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -600,7 +577,9 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         active.flair.map(ShopCatalog.byId).whereType<ShopItem>().toList();
     final activeCosmetics =
         active.cosmetics.map(ShopCatalog.byId).whereType<ShopItem>().toList();
-    return SingleChildScrollView(
+    final activeRing =
+        active.ring != null ? ShopCatalog.byId(active.ring!) : null;
+    return Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -622,6 +601,11 @@ class _ShopModalState extends ConsumerState<ShopModal> {
                 for (final f in activeFlairs)
                   _ActiveChip(name: f.name, icon: f.icon, iconLeading: false),
               ],
+            ),
+          if (activeRing != null && activeRing.type == 'avatar-ring')
+            _ActiveSummaryBlock(
+              title: tr('Active Avatar Ring'),
+              chips: [_ActiveChip(name: activeRing.name, ringId: activeRing.id)],
             ),
           if (activeCosmetics.isNotEmpty)
             _ActiveSummaryBlock(
@@ -670,12 +654,12 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         return ShopCatalog.styles;
       case ShopTab.flair:
         return ShopCatalog.flair;
+      case ShopTab.rings:
+        return ShopCatalog.rings;
       case ShopTab.special:
         return ShopCatalog.special;
       case ShopTab.limited:
         return [...ShopCatalog.limited, ...ShopCatalog.bundles];
-      case ShopTab.credits:
-        return const [];
       case ShopTab.inventory:
         return state.owned.keys
             .map(ShopCatalog.byId)
@@ -692,6 +676,8 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         return active.flair.contains(item.id);
       case 'cosmetic':
         return active.cosmetics.contains(item.id);
+      case 'avatar-ring':
+        return active.ring == item.id;
       case 'supporter':
         return active.supporter;
       default:
@@ -708,6 +694,8 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         await ctrl.toggleFlair(item.id);
       case 'cosmetic':
         await ctrl.toggleCosmetic(item.id);
+      case 'avatar-ring':
+        await ctrl.toggleRing(item.id);
       case 'supporter':
         await ctrl.toggleSupporter();
     }
@@ -839,8 +827,14 @@ class _ShopItemCard extends StatelessWidget {
     this.ownedItem,
     this.availability,
     this.sampleEdition,
+    this.previewSeed = '',
+    this.previewPicture,
     bool? purchasesDisabled,
   }) : purchasesDisabled = purchasesDisabled ?? shopPurchasesDisabled;
+
+  final String previewSeed;
+
+  final String? previewPicture;
 
   /// Hides BUY and GIFT where this platform can't sell; injectable for tests.
 
@@ -880,7 +874,9 @@ class _ShopItemCard extends StatelessWidget {
 
   /// Flair and supporter rows sit in the preview box; other demos render bare.
   bool get _boxedPreview =>
-      item.type == 'nickname-flair' || item.type == 'supporter';
+      item.type == 'nickname-flair' ||
+      item.type == 'supporter' ||
+      item.type == 'avatar-ring';
 
   @override
   Widget build(BuildContext context) {
@@ -918,11 +914,14 @@ class _ShopItemCard extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           // Always tinted `--text`, legendary included.
-          ShopSvgIcon(
-            svg: item.icon,
-            size: 32,
-            color: c.text,
-          ),
+          if (item.type == 'avatar-ring')
+            Center(child: ShopRingIcon(ringId: item.id, size: 32))
+          else
+            ShopSvgIcon(
+              svg: item.icon,
+              size: 32,
+              color: c.text,
+            ),
           const SizedBox(height: 10),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -971,7 +970,7 @@ class _ShopItemCard extends StatelessWidget {
             ),
           ],
           // Bundles show chips, others a preview; inventory shows none except the supporter badge row.
-          if (!inventory || item.type == 'supporter') ...[
+          if (!inventory || item.type == 'supporter' || item.type == 'avatar-ring') ...[
             // Collapsed CSS gaps: 10 after the description, 6 to a box after a supply badge.
             if (_showsSupplyBadge)
               SizedBox(height: _boxedPreview ? 6 : 10)
@@ -1097,7 +1096,12 @@ class _ShopItemCard extends StatelessWidget {
     if (inventory && item.type == 'supporter') {
       return const ShopPreviewBox(child: SupporterBadge());
     }
-    return ShopItemPreview(item: item, bubble: bubble);
+    return ShopItemPreview(
+      item: item,
+      bubble: bubble,
+      seed: previewSeed,
+      imageUrl: previewPicture,
+    );
   }
 
   /// Limited-tab flair preview with a bold nym and stamped edition.
@@ -1226,11 +1230,13 @@ class _ActiveItemsPreview extends ConsumerWidget {
     final cosmetics =
         active.cosmetics.where((x) => x != 'cosmetic-redacted').toList();
     final redacted = active.cosmetics.contains('cosmetic-redacted');
+    final ringId = shopRingIdOrNull(active.ring);
     // Counts every active cosmetic, redacted included.
     final hasActive = active.style != null ||
         supporter ||
         active.cosmetics.isNotEmpty ||
-        active.flair.isNotEmpty;
+        active.flair.isNotEmpty ||
+        ringId != null;
     if (!hasActive) return const SizedBox.shrink();
 
     final id = ref.watch(nostrControllerProvider).identity;
@@ -1247,9 +1253,25 @@ class _ActiveItemsPreview extends ConsumerWidget {
     final authorColor = redacted
         ? (c.isLight ? const Color(0xBF1A1A1A) : const Color(0xCCFFFFFF))
         : c.primary;
+    final selfPk = id?.pubkey;
     final author = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (ringId != null) ...[
+          NymAvatar(
+            key: const ValueKey('shopActiveRing'),
+            seed: selfPk ?? nym,
+            size: 18,
+            imageUrl: selfPk == null
+                ? null
+                : ref.watch(appStateProvider
+                    .select((s) => s.users[selfPk]?.profile?.picture)),
+            ringId: ringId,
+            ringFill: Color.alphaBlend(
+                c.secondaryA(0.04), Color.alphaBlend(c.bgSecondary, c.bg)),
+          ),
+          const SizedBox(width: 4),
+        ],
         Flexible(
           child: NymLabel(
             '${bubble ? '' : '<'}$nym',
@@ -1396,11 +1418,17 @@ class _SupporterContentLine extends StatelessWidget {
 
 /// Active-item chip; special items lead with the icon, flair trails it.
 class _ActiveChip {
-  const _ActiveChip({required this.name, this.icon, this.iconLeading = true});
+  const _ActiveChip({
+    required this.name,
+    this.icon,
+    this.iconLeading = true,
+    this.ringId,
+  });
 
   final String name;
   final String? icon;
   final bool iconLeading;
+  final String? ringId;
 }
 
 /// Secondary-tinted panel with a title and chips.
@@ -1443,6 +1471,10 @@ class _ActiveSummaryBlock extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (chip.ringId != null) ...[
+                        ShopRingIcon(ringId: chip.ringId!, size: 14),
+                        const SizedBox(width: 5),
+                      ],
                       if (chip.icon != null && chip.iconLeading) ...[
                         ShopSvgIcon(svg: chip.icon!, size: 14, color: c.text),
                         const SizedBox(width: 5),
@@ -1535,7 +1567,7 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
         const SizedBox(height: 12),
         Row(
           children: [
-            ShopSvgIcon(svg: widget.item.icon, size: 24, color: c.text),
+            ShopItemIcon(item: widget.item, size: 24, color: c.text),
             const SizedBox(width: 8),
             Expanded(
               child: Text(

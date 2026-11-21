@@ -51,7 +51,7 @@ function parseJson(s, fallback) {
 }
 
 function blankActive() {
-  return { style: null, flair: [], cosmetics: [], supporter: false };
+  return { style: null, ring: null, flair: [], cosmetics: [], supporter: false };
 }
 
 export function blankShop() {

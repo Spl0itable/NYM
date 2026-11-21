@@ -28,7 +28,7 @@ const NYM_SETTINGS_SECTION_KEYS = {
     data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed', 'botPmClearedAt', 'botMaxRuns', 'botAnonEnabled', 'botProModel', 'reportedTargets']
 };
 
-const NYM_SETTINGS_NEVER_SYNCED = new Set(['connectionMode', 'relayUrl', 'relayDirectMode', 'relayDirectAck', 'relayFallbackNoticeOff', 'meshEnabled', 'meshGhostMode', 'ghostMode', 'attestAuthority', 'sidebarSectionCollapsed', 'settingsSectionsCollapsed', 'settingsSectionsSplit', 'globalEmojiBlocks', 'globalEmojiBlockUrls', 'aiConsent', 'aiTranslateConsent', 'keypairMode', 'randomKeypairPerSession', 'autoEphemeral', 'vault', 'screenSecurity', 'incognitoKeyboard', 'syncDevice', 'pqDeviceId', 'backgroundConnectivity', 'backgroundConnectivityChosen', 'backgroundConnectivityTs', 'backgroundConnectivityFp']);
+const NYM_SETTINGS_NEVER_SYNCED = new Set(['connectionMode', 'relayUrl', 'relayDirectMode', 'relayDirectAck', 'relayFallbackNoticeOff', 'meshEnabled', 'meshGhostMode', 'ghostMode', 'attestAuthority', 'sidebarSectionCollapsed', 'settingsSectionsCollapsed', 'settingsSectionsSplit', 'globalEmojiBlocks', 'globalEmojiBlockUrls', 'aiConsent', 'aiTranslateConsent', 'keypairMode', 'randomKeypairPerSession', 'autoEphemeral', 'vault', 'screenSecurity', 'incognitoKeyboard', 'syncDevice', 'pqDeviceId', 'backgroundConnectivity', 'backgroundConnectivityChosen', 'backgroundConnectivityTs', 'backgroundConnectivityFp', 'rememberSearches']);
 
 // Sealed classically, never to the root-derived key (a circular lock). Spec §5.1.
 const NYM_PQ_ROOT_CATEGORY = 'nymchat-pq-root';
@@ -113,7 +113,7 @@ Object.assign(NYM.prototype, {
     _dropThrowawayLeftovers() {
         if (!this._settingsSyncLocal()) return;
         const self = this.pubkey || '';
-        const rx = /^(nym_ephemeral_keys_|nym_groups_|nym_left_groups_|nym_last_pm_sync_|nym_nickname_|nym_image_blur_|nym_pq_link_prompt_|nym_pm_support_tokens_|nym_botanon_|nym_locked_chats:|nym_locked_pending:|nym_pinned_chats:|nym_pinned_pending:|nym_scheduled_cache:|nym_seen_marks:|nym_seen_first:|nym_unread_mentions:|nym_sidebar_folders_pending:)([0-9a-f]{64})$/;
+        const rx = /^(nym_ephemeral_keys_|nym_groups_|nym_left_groups_|nym_last_pm_sync_|nym_nickname_|nym_image_blur_|nym_pq_link_prompt_|nym_pm_support_tokens_|nym_botanon_|nym_locked_chats:|nym_locked_pending:|nym_pinned_chats:|nym_pinned_pending:|nym_scheduled_cache:|nym_seen_marks:|nym_seen_first:|nym_unread_mentions:|nym_sidebar_folders_pending:|nym_search_history:)([0-9a-f]{64})$/;
         const old = new Set();
         const drop = [];
         try {
@@ -1599,40 +1599,11 @@ Object.assign(NYM.prototype, {
         const outerTags = [['p', this.pubkey], ['d', await this._syncOuterDTag(dTag)], ['k', 'nym-sync']];
 
         if (this.privkey) {
-            // Returns null when the sealed plaintext outgrows what NIP-44 can carry.
-            const build = (seal, wrap) => {
-                const sealUnsigned = { kind: 13, content: seal(rumorJson), created_at: this.randomNow(), tags: [] };
-                const sealed = NT.finalizeEvent(sealUnsigned, this.privkey);
-                const sealJson = JSON.stringify(sealed);
-                if (enc.encode(sealJson).length > 65535) return null;
-                const ephSk = NT.generateSecretKey();
-                const wrapUnsigned = {
-                    kind: 1059, content: wrap(sealJson, ephSk),
-                    created_at: this.randomNow(), tags: outerTags
-                };
-                return NT.finalizeEvent(wrapUnsigned, ephSk);
-            };
-            const classical = () => build(
-                (pt) => NT.nip44.encrypt(pt, NT.nip44.getConversationKey(this.privkey, this.pubkey)),
-                (pt, ephSk) => NT.nip44.encrypt(pt, NT.nip44.getConversationKey(ephSk, this.pubkey))
-            );
-
-            // Settings reveal more than most messages, so seal them post-quantum too.
+            const extraTags = outerTags.slice(1);
             const selfKemPk = typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
             if (selfKemPk) {
-                const NC = window.NymCrypto;
-                // Layered unless a device on this account can only open the combined form (pqSelfUsesPq2).
                 const pq2 = this.pqSelfUsesPq2();
-                const wrapped = pq2
-                    ? build(
-                        (pt) => NC.pq2Encrypt(pt, this.privkey, this.pubkey, selfKemPk),
-                        (pt, ephSk) => NC.pq2Encrypt(pt, ephSk, this.pubkey, selfKemPk)
-                    )
-                    : build(
-                        (pt) => NC.pqEncrypt(pt, this.privkey, this.pubkey, selfKemPk),
-                        (pt, ephSk) => NC.pqEncrypt(pt, ephSk, this.pubkey, selfKemPk)
-                    );
-                // The ~1.5 KB/layer KEM overhead can exceed the relay cap; fall back rather than skip the sync.
+                const wrapped = await this._settingsCryptoCall(pq2 ? 'pq2Nip59Wrap' : 'pqNip59Wrap', [rumor, this.privkey, this.pubkey, selfKemPk, null, extraTags]);
                 if (wrapped && JSON.stringify(['EVENT', wrapped]).length <= 65000) {
                     this.sendDMToRelays(['EVENT', wrapped]);
                     return durable();
@@ -1642,7 +1613,7 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            const wrapped = classical();
+            const wrapped = await this._settingsCryptoCall('nip59Wrap', [rumor, this.privkey, this.pubkey, null, extraTags]);
             if (!wrapped) {
                 console.warn(`[NostrSync] ${dTag} sealed payload exceeds NIP-44 plaintext limit; skipping publish`);
                 return d1Ok;
@@ -1651,33 +1622,43 @@ Object.assign(NYM.prototype, {
             return durable();
         }
 
-        const useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
-        const useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
-        // No signer can seal a relay wrap; the D1 row is authoritative, so its result decides.
-        if (!useExt && !useN46) return d1Ok;
+        const signer = this._signerOps();
+        if (!signer) return d1Ok;
 
-        const sealContent = useExt
-            ? await window.nostr.nip44.encrypt(this.pubkey, rumorJson)
-            : await _nip46Encrypt(this.pubkey, rumorJson);
+        const sealContent = await signer.encrypt(this.pubkey, rumorJson);
         const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
-        const seal = useExt
-            ? await window.nostr.signEvent(sealUnsigned)
-            : await _nip46SignEvent(sealUnsigned);
+        const seal = await signer.sign(sealUnsigned);
         const sealJson = JSON.stringify(seal);
         if (enc.encode(sealJson).length > 65535) {
             console.warn(`[NostrSync] ${dTag} sealed payload exceeds NIP-44 plaintext limit; skipping publish`);
             return d1Ok;
         }
         const ephSk = NT.generateSecretKey();
-        const ckWrap = NT.nip44.getConversationKey(ephSk, this.pubkey);
-        const wrapContent = NT.nip44.encrypt(sealJson, ckWrap);
-        const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: outerTags };
-        const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
+        const wrapWith = (content) => NT.finalizeEvent({ kind: 1059, content, created_at: this.randomNow(), tags: outerTags }, ephSk);
+        const selfKemPk = typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
+        if (selfKemPk) {
+            const pqWrapped = wrapWith(window.NymCrypto.pq2Encrypt(sealJson, ephSk, this.pubkey, selfKemPk));
+            if (JSON.stringify(['EVENT', pqWrapped]).length <= 65000) {
+                this.sendDMToRelays(['EVENT', pqWrapped]);
+                return durable();
+            }
+            console.warn(`[NostrSync] ${dTag} too large for a post-quantum wrap; falling back to NIP-44`);
+        }
+        const wrapped = wrapWith(NT.nip44.encrypt(sealJson, NT.nip44.getConversationKey(ephSk, this.pubkey)));
         this._sendWrappedIfFits(wrapped, dTag);
         return durable();
     },
 
     // Encrypts to self via local nsec, NIP-07 or NIP-46; post-quantum where possible (harvest-now-decrypt-later).
+    _settingsCryptoCall(op, args) {
+        const NC = window.NymCrypto;
+        const run = () => {
+            try { return NC[op](...args); } catch (_) { return null; }
+        };
+        if (typeof this._cryptoCall !== 'function') return Promise.resolve(run());
+        return this._cryptoCall(op, args, run).catch(run);
+    },
+
     async _encryptSettingsBlob(plaintext, opts) {
         const NT = window.NostrTools;
         const NC = window.NymCrypto;
@@ -1690,11 +1671,8 @@ Object.assign(NYM.prototype, {
         try {
             if (this.privkey) {
                 if (selfKemPk) {
-                    try {
-                        return usePq2
-                            ? NC.pq2Encrypt(plaintext, this.privkey, this.pubkey, selfKemPk)
-                            : NC.pqEncrypt(plaintext, this.privkey, this.pubkey, selfKemPk);
-                    } catch (_) { /* fall through to NIP-44 */ }
+                    const blob = await this._settingsCryptoCall(usePq2 ? 'pq2Encrypt' : 'pqEncrypt', [plaintext, this.privkey, this.pubkey, selfKemPk]);
+                    if (blob) return blob;
                 }
                 const ck = NT.nip44.getConversationKey(this.privkey, this.pubkey);
                 return NT.nip44.encrypt(plaintext, ck);
@@ -1711,14 +1689,8 @@ Object.assign(NYM.prototype, {
     },
 
     async _signerEncryptToSelf(plaintext) {
-        if (window.nostr?.nip44?.encrypt) {
-            return await window.nostr.nip44.encrypt(this.pubkey, plaintext);
-        }
-        if (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined'
-            && _nip46State && _nip46State.connected) {
-            return await _nip46Encrypt(this.pubkey, plaintext);
-        }
-        return null;
+        const signer = this._signerOps();
+        return signer ? await signer.encrypt(this.pubkey, plaintext) : null;
     },
 
     // Reads both formats; the prefix says which, so no migration is needed.
@@ -1737,11 +1709,8 @@ Object.assign(NYM.prototype, {
                     : (keys ? [{ kemSk: keys.secretKey, kemPk: keys.publicKey }] : []);
                 for (const c of tried) {
                     if (!c.kemSk) continue;
-                    let inner;
-                    try {
-                        inner = NC.pq2Open(ciphertext, this.pubkey, this.pubkey,
-                            { kemSk: c.kemSk, kemPk: c.kemPk });
-                    } catch (_) { continue; }
+                    const inner = await this._settingsCryptoCall('pq2Open', [ciphertext, this.pubkey, this.pubkey, { kemSk: c.kemSk, kemPk: c.kemPk }]);
+                    if (inner == null) continue;
                     try {
                         if (this.privkey) {
                             return NT.nip44.decrypt(inner,
@@ -1761,9 +1730,8 @@ Object.assign(NYM.prototype, {
                         : (keys ? [{ sk: this.privkey, kemSk: keys.secretKey, kemPk: keys.publicKey }] : []);
                     for (const c of candidates) {
                         if (!c.kemSk) continue;
-                        try {
-                            return NC.pqDecrypt(ciphertext, this.pubkey, c);
-                        } catch (_) { }
+                        const plain = await this._settingsCryptoCall('pqDecrypt', [ciphertext, this.pubkey, c]);
+                        if (plain != null) return plain;
                     }
                     return null;
                 }
@@ -1776,14 +1744,8 @@ Object.assign(NYM.prototype, {
     },
 
     async _signerDecryptFromSelf(ciphertext) {
-        if (window.nostr?.nip44?.decrypt) {
-            return await window.nostr.nip44.decrypt(this.pubkey, ciphertext);
-        }
-        if (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined'
-            && _nip46State && _nip46State.connected) {
-            return await _nip46Decrypt(this.pubkey, ciphertext);
-        }
-        return null;
+        const signer = this._signerOps();
+        return signer ? await signer.decrypt(this.pubkey, ciphertext) : null;
     },
 
     // SHA-256 hex of a string (used to gate redundant settings writes).

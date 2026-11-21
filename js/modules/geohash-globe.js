@@ -364,6 +364,7 @@ Object.assign(NYM.prototype, {
         const modal = document.getElementById('geohashExplorerModal');
         if (!modal) return;
         modal.style.display = 'flex';
+        modal.classList.add('active');
         const gh = (typeof focusGeohash === 'string' && this.isValidGeohash(focusGeohash))
             ? focusGeohash.toLowerCase() : null;
         setTimeout(() => {
@@ -382,7 +383,10 @@ Object.assign(NYM.prototype, {
 
     closeGeohashExplorer() {
         const modal = document.getElementById('geohashExplorerModal');
-        if (modal) modal.style.display = 'none';
+        if (modal) {
+            modal.style.display = 'none';
+            modal.classList.remove('active');
+        }
 
         if (this._geomapCleanup) {
             try { this._geomapCleanup(); } catch (_) {}
@@ -2439,6 +2443,7 @@ Object.assign(NYM.prototype, {
                 if (run.cancelled) return;
                 if (roomBlocked || this._gxPeekHidden(ev)) continue;
                 if (typeof this._quietHit === 'function' && this._quietHit(ev)) continue;
+                if (typeof this._bridgeBlocked === 'function' && this._bridgeBlocked(ev)) continue;
                 if (typeof this._encryptedBlobDrop === 'function' && this._encryptedBlobDrop(ev)) continue;
                 if (!(await this._verifyRelayEventAsync(ev))) continue;
                 const clean = cf && typeof ev.content === 'string' ? this._gxPeekContent(ev, cf) : ev.content;

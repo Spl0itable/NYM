@@ -18,7 +18,7 @@ Object.assign(NYM.prototype, {
     'nym_pq_root', 'nym_botpm_git', 'nym_login_resume'],
 
   // Prefixes of extra secrets encrypted alongside the identity keys (per-pubkey group ephemeral keys).
-  _VAULT_EXTRA_PREFIXES: ['nym_ephemeral_keys_', 'nym_sidebar_folders:', 'nym_group_invites_'],
+  _VAULT_EXTRA_PREFIXES: ['nym_ephemeral_keys_', 'nym_sidebar_folders:', 'nym_search_history:', 'nym_group_invites_'],
 
   _vaultExtraKeyNames() {
     const names = [];

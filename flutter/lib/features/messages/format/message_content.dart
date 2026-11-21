@@ -51,6 +51,7 @@ import '../media_fallbacks.dart';
 import 'link_preview.dart';
 import 'nym_format.dart';
 import 'discord_timestamp.dart';
+import 'playback_keeper.dart';
 import 'video_message.dart';
 import '../../../core/utils/safe_url.dart';
 import '../../../widgets/common/hollow_bullet.dart';
@@ -425,6 +426,7 @@ class MessageContent extends ConsumerWidget {
           monospace: monospace,
           onChannelRef: onChannelRef,
           onMentionTap: onMentionTap,
+          playbackScope: hostMessageId,
         );
       case HeadingBlock(:final level, :final inlines):
         final scale = level == 1 ? 1.5 : (level == 2 ? 1.3 : 1.15);
@@ -436,6 +438,7 @@ class MessageContent extends ConsumerWidget {
           weight: FontWeight.w700,
           onChannelRef: onChannelRef,
           onMentionTap: onMentionTap,
+          playbackScope: hostMessageId,
         );
       case SubtextBlock(:final inlines):
         return _RichInline(
@@ -447,6 +450,7 @@ class MessageContent extends ConsumerWidget {
           monospace: monospace,
           onChannelRef: onChannelRef,
           onMentionTap: onMentionTap,
+          playbackScope: hostMessageId,
         );
       case ListBlock():
         return _ListView(
@@ -458,6 +462,7 @@ class MessageContent extends ConsumerWidget {
           monospace: monospace,
           onChannelRef: onChannelRef,
           onMentionTap: onMentionTap,
+          playbackScope: hostMessageId,
         );
       case CodeBlock(:final code, :final lang):
         return _CodeBox(code: code, lang: lang, size: size);
@@ -473,7 +478,8 @@ class MessageContent extends ConsumerWidget {
           blurMedia: blurImages,
         );
       case MediaBlock(:final items):
-        return _MediaGallery(items: items, blur: blurImages);
+        return _MediaGallery(
+            items: items, blur: blurImages, scope: hostMessageId);
       case AudioBlock():
         return audioOrMediaNote(block);
     }
@@ -562,6 +568,7 @@ class _RichInline extends StatefulWidget {
     this.onChannelRef,
     this.onMentionTap,
     this.blurMedia = false,
+    this.playbackScope,
   });
 
   final List<InlineNode> inlines;
@@ -570,6 +577,8 @@ class _RichInline extends StatefulWidget {
   final FontWeight? weight;
 
   final bool blurMedia;
+
+  final String? playbackScope;
 
   /// 1–6 emoji only: enlarge emoji.
   final bool emojiOnly;
@@ -901,7 +910,8 @@ class _RichInlineState extends State<_RichInline> {
           case InlineGalleryNode(:final items):
             flushText();
             spans.add(WidgetSpan(
-                child: blurred(_MediaGallery(items: items))));
+                child: blurred(_MediaGallery(
+                    items: items, scope: widget.playbackScope))));
           case AudioInlineNode(:final block):
             flushText();
             spans.add(WidgetSpan(
@@ -1069,7 +1079,10 @@ class _RichInlineState extends State<_RichInline> {
             c, children, base, key, () => _reveals.reveal(key));
       case InlineGalleryNode(:final items):
         return WidgetSpan(
-          child: _MediaGallery(items: items, blur: widget.blurMedia),
+          child: _MediaGallery(
+              items: items,
+              blur: widget.blurMedia,
+              scope: widget.playbackScope),
         );
       case AudioInlineNode(:final block):
         return WidgetSpan(
@@ -1335,10 +1348,12 @@ class _ListView extends StatelessWidget {
     this.onChannelRef,
     this.onMentionTap,
     this.blurMedia = false,
+    this.playbackScope,
   });
 
   final ListBlock block;
   final bool blurMedia;
+  final String? playbackScope;
   final Color color;
   final double size;
   final bool nested;
@@ -1396,6 +1411,7 @@ class _ListView extends StatelessWidget {
                       onChannelRef: onChannelRef,
                       onMentionTap: onMentionTap,
                       blurMedia: blurMedia,
+                      playbackScope: playbackScope,
                     ),
                     for (final child in block.items[i].children)
                       _ListView(
@@ -1408,6 +1424,7 @@ class _ListView extends StatelessWidget {
                         monospace: monospace,
                         onChannelRef: onChannelRef,
                         onMentionTap: onMentionTap,
+                        playbackScope: playbackScope,
                       ),
                   ],
                 ),
@@ -1540,6 +1557,7 @@ class _MentionChip extends ConsumerWidget {
             .select((s) => s.hasBlockedKeyword('', t.nym, t.pubkey)));
     Widget chip = text;
     if (t != null && !chipHidden) {
+      final cosmetics = ref.watch(userCosmeticsProvider(t.pubkey));
       chip = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1547,12 +1565,13 @@ class _MentionChip extends ConsumerWidget {
               seed: t.pubkey,
               size: size,
               imageUrl: users[t.pubkey]?.profile?.picture,
-              ring: context.nym.avatarRing),
+              ring: context.nym.avatarRing,
+              ringId: cosmetics.ringId),
           const SizedBox(width: 3),
           text,
           // Flair and supporter badge, hidden when the user has none.
           CosmeticNymBadges(
-            cosmetics: ref.watch(userCosmeticsProvider(t.pubkey)),
+            cosmetics: cosmetics,
             flairSize: size,
             supporterHeight: size,
           ),
@@ -3362,6 +3381,7 @@ class _QuoteBox extends ConsumerWidget {
     final users = ref.watch(usersProvider);
     final t = resolveTarget(author, users);
     final authorSize = size - 1;
+    final cosmetics = t == null ? null : ref.watch(userCosmeticsProvider(t.pubkey));
     return Text.rich(
       TextSpan(
         children: [
@@ -3375,6 +3395,7 @@ class _QuoteBox extends ConsumerWidget {
                   size: authorSize,
                   imageUrl: users[t.pubkey]?.profile?.picture,
                   ring: c.avatarRing,
+                  ringId: cosmetics?.ringId,
                 ),
               ),
             ),
@@ -3402,7 +3423,7 @@ class _QuoteBox extends ConsumerWidget {
             WidgetSpan(
               alignment: PlaceholderAlignment.middle,
               child: CosmeticNymBadges(
-                cosmetics: ref.watch(userCosmeticsProvider(t.pubkey)),
+                cosmetics: cosmetics!,
                 flairSize: authorSize,
                 supporterHeight: authorSize,
               ),
@@ -3422,26 +3443,38 @@ class _QuoteBox extends ConsumerWidget {
 
   Widget _quoteChild(BuildContext context, NymColors c, FormatBlock child) {
     final dim = c.textDim;
+    final host = hostMessageId;
+    final scope = host == null ? null : 'quote-$host';
     switch (child) {
       case ParagraphBlock(:final inlines):
         return _RichInline(
-            inlines: inlines, color: dim, size: size - 1, blurMedia: blurMedia);
+            inlines: inlines,
+            color: dim,
+            size: size - 1,
+            blurMedia: blurMedia,
+            playbackScope: scope);
       case HeadingBlock(:final inlines):
         return _RichInline(
             inlines: inlines,
             color: dim,
             size: size,
             weight: FontWeight.w700,
-            blurMedia: blurMedia);
+            blurMedia: blurMedia,
+            playbackScope: scope);
       case SubtextBlock(:final inlines):
         return _RichInline(
             inlines: inlines,
             color: dim,
             size: (size - 1) * 0.8,
-            blurMedia: blurMedia);
+            blurMedia: blurMedia,
+            playbackScope: scope);
       case ListBlock():
         return _ListView(
-            block: child, color: dim, size: size - 1, blurMedia: blurMedia);
+            block: child,
+            color: dim,
+            size: size - 1,
+            blurMedia: blurMedia,
+            playbackScope: scope);
       case CodeBlock(:final code, :final lang):
         return _CodeBox(code: code, lang: lang, size: size - 1);
       case QuoteBlock():
@@ -3454,7 +3487,7 @@ class _QuoteBox extends ConsumerWidget {
           blurMedia: blurMedia,
         );
       case MediaBlock(:final items):
-        return _MediaGallery(items: items, blur: blurMedia);
+        return _MediaGallery(items: items, blur: blurMedia, scope: scope);
       case AudioBlock():
         return audioOrMediaNote(child);
     }
@@ -3463,21 +3496,31 @@ class _QuoteBox extends ConsumerWidget {
 
 /// 1–4-up media grid; images open fullscreen, videos play inline.
 class _MediaGallery extends StatelessWidget {
-  const _MediaGallery({required this.items, this.blur = false});
+  const _MediaGallery({required this.items, this.blur = false, this.scope});
   final List<MediaItem> items;
   final bool blur;
+  final String? scope;
 
   @override
   Widget build(BuildContext context) {
     // Single item: max 300x300, min height 80.
     if (items.length == 1) {
       return _MediaTile(
-          item: items.first, maxSize: 300, blur: blur, gallery: items);
+          item: items.first,
+          maxSize: 300,
+          blur: blur,
+          gallery: items,
+          scope: scope);
     }
     // Always 2 columns; 3 items use a tall left hero; tiles cap at 220px tall but the grid grows to fit.
     const gap = 4.0;
     Widget tile(MediaItem m) => _MediaTile(
-        item: m, maxSize: 220, blur: blur, inGallery: true, gallery: items);
+        item: m,
+        maxSize: 220,
+        blur: blur,
+        inGallery: true,
+        gallery: items,
+        scope: scope);
     Widget body;
     if (items.length == 3) {
       // The hero spans both rows at 2x220 plus the gap.
@@ -3524,8 +3567,10 @@ class _MediaTile extends ConsumerWidget {
     this.blur = false,
     this.inGallery = false,
     this.gallery,
+    this.scope,
   });
   final MediaItem item;
+  final String? scope;
   final double maxSize;
 
   /// Sibling media for prev/next paging in the fullscreen viewer.
@@ -3555,12 +3600,15 @@ class _MediaTile extends ConsumerWidget {
     final mirrors = ref.watch(mediaFallbacksProvider).fallbacksFor(item.url);
 
     if (item.isVideo) {
+      final scope = this.scope;
       return VideoMessage(
         url: item.url,
         fallbackUrls: mirrors,
         maxSize: maxSize,
         bordered: !inGallery,
         borderRadius: inGallery ? BorderRadius.zero : null,
+        playbackKey:
+            scope == null ? null : PlaybackKeeper.keyFor(scope, item.url),
       );
     }
 

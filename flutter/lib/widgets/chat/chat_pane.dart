@@ -39,11 +39,11 @@ import '../../features/shop/cosmetics.dart';
 import '../../features/shop/shop_catalog.dart';
 import '../../features/shop/shop_widgets.dart' show FlairBadge, SupporterMark;
 import '../../features/shop/shop_modal.dart';
+import '../../features/shop/ring_ticker_gate.dart';
 import '../../models/channel.dart';
 import '../../models/group.dart';
 import '../../features/pms/last_seen.dart';
 import '../../features/pms/pm_logic.dart';
-import '../../features/presence/nyms_online.dart';
 import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -814,14 +814,22 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         onlineIn = view.id.toLowerCase();
       case ViewKind.pm:
         final user = app.users[view.id];
+        final ringId = isBot || app.personMaskLabel(view.id).isNotEmpty
+            ? null
+            : ref.watch(userCosmeticsProvider(view.id).select((x) => x.ringId));
         avatar = SizedBox(
           width: 36,
           height: 36,
-          child: NymAvatar(
-              seed: view.id,
-              size: 36,
-              imageUrl: user?.profile?.picture,
-              backdrop: c.primaryA(0.14)),
+          child: RingTickerGate(
+            child: NymAvatar(
+                seed: view.id,
+                size: 36,
+                imageUrl: user?.profile?.picture,
+                backdrop: c.primaryA(0.14),
+                ringId: ringId,
+                ringFeatured: true,
+                ringFill: flattenOver(c.glassBg, c.bg)),
+          ),
         );
         final base = stripPubkeySuffix(title);
         final suffix = getPubkeySuffix(view.id);
@@ -1070,10 +1078,9 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         // Channel-scoped count of recent (not strictly online) non-hidden users, excluding self.
         final now = DateTime.now().millisecondsSinceEpoch;
         final key = view.id.toLowerCase();
-        final count = channelOnlineNymsCount(app.users.values, key,
-            nowMs: now,
-            selfPubkey: app.selfPubkey,
-            isPersonHidden: (u) => app.isPersonHidden(u.pubkey, u.nym));
+        final count = ref
+            .read(appStateProvider.notifier)
+            .channelOnlineCount(key, nowMs: now, from: app);
         return (
           svg: null,
           text: tr('{count} online nyms', {'count': _abbreviateCount(count)})
@@ -1144,11 +1151,10 @@ class _ChannelOnlineLine extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(appStateProvider.notifier);
     final count = ref.watch(appStateProvider.select((s) =>
-        channelOnlineNymsCount(s.users.values, channel,
-            nowMs: DateTime.now().millisecondsSinceEpoch,
-            selfPubkey: s.selfPubkey,
-            isPersonHidden: (u) => s.isPersonHidden(u.pubkey, u.nym))));
+        notifier.channelOnlineCount(channel,
+            nowMs: DateTime.now().millisecondsSinceEpoch, from: s)));
     return line(count);
   }
 }

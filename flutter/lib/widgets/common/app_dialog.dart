@@ -297,30 +297,31 @@ class _AppDialogState extends State<_AppDialog> {
                           ],
                   ),
                   clipBehavior: Clip.antiAlias,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Container(
-                        margin: const EdgeInsets.fromLTRB(32, 32, 32, 24),
-                        padding: const EdgeInsets.only(bottom: 14),
-                        decoration: BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(color: c.glassBorder),
+                  child: SingleChildScrollView(
+                    key: const ValueKey('appDialogScroll'),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Container(
+                          margin: const EdgeInsets.fromLTRB(32, 32, 32, 24),
+                          padding: const EdgeInsets.only(bottom: 14),
+                          decoration: BoxDecoration(
+                            border: Border(
+                              bottom: BorderSide(color: c.glassBorder),
+                            ),
+                          ),
+                          child: Text(
+                            widget.title.toUpperCase(),
+                            style: TextStyle(
+                              color: c.primary,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.5,
+                            ),
                           ),
                         ),
-                        child: Text(
-                          widget.title.toUpperCase(),
-                          style: TextStyle(
-                            color: c.primary,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 1.5,
-                          ),
-                        ),
-                      ),
-                      Flexible(
-                        child: SingleChildScrollView(
+                        Padding(
                           padding: const EdgeInsets.fromLTRB(32, 0, 32, 20),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -340,17 +341,17 @@ class _AppDialogState extends State<_AppDialog> {
                             ],
                           ),
                         ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(32, 8, 32, 32),
-                        child: DialogActions(
-                          children: [
-                            if (!widget.alertOnly) _cancelButton(c),
-                            _okButton(c),
-                          ],
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(32, 8, 32, 32),
+                          child: DialogActions(
+                            children: [
+                              if (!widget.alertOnly) _cancelButton(c),
+                              _okButton(c),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),

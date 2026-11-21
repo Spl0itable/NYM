@@ -1092,6 +1092,7 @@
                 this.displaySystemMessage('Still uploading — send again once the attachments finish.');
                 return false;
             }
+            if (typeof this._lapseChannelTyping === 'function') this._lapseChannelTyping(this.currentGeohash);
             const first = S.read().accounts.find((a) => a.id === acctId);
             if (!first || !this._sendAsSafe(acctId)) {
                 this._sendAsSay('removed');

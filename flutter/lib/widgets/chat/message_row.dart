@@ -43,7 +43,8 @@ import '../../features/p2p/p2p_models.dart';
 import '../../features/p2p/p2p_service.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../features/reactions/quick_context_items.dart';
-import '../../features/threads/thread_view.dart' show openMessageThread;
+import '../../features/threads/thread_view.dart'
+    show openMessageThread, openThreadFor;
 import '../../features/reactions/quick_react_popup.dart';
 import '../../features/reactions/message_action_sheet.dart';
 import '../../features/reactions/hover_actions.dart';
@@ -300,6 +301,7 @@ class MessageRow extends ConsumerStatefulWidget {
     required this.reactions,
     this.mentioned = false,
     this.grouped = false,
+    this.snapIn = true,
     this.showAvatar = true,
     this.showName = true,
     this.inGroup = false,
@@ -328,6 +330,8 @@ class MessageRow extends ConsumerStatefulWidget {
   final GlobalKey? bubbleAnchorKey;
 
   final bool grouped;
+
+  final bool snapIn;
 
   final bool showAvatar;
 
@@ -390,7 +394,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
   bool _relativeTickerSubscribed = false;
 
   /// Snap-in plays only for live-appended grouped messages (created in the last few seconds); latched on first build.
-  late final bool _snapIn = widget.grouped &&
+  late final bool _snapIn = widget.snapIn &&
+      widget.grouped &&
       widget.settings.useBubbles &&
       !widget.message.isHistorical &&
       DateTime.now().difference(widget.message.dateTime).inMilliseconds < 5000;
@@ -684,7 +689,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
     _barFull = [
       ...resolveHoverActions(_barSlots, [
         if (widget.onReactionPicker != null) 'react',
-        for (final item in _sheetItems(context))
+        for (final item in _sheetItems(context, _acts(context, measure: false)))
           if (item.id case final String id) id,
       ]),
       'more',
@@ -1355,6 +1360,9 @@ class _MessageRowState extends ConsumerState<MessageRow>
           size: 22,
           imageUrl: mask.isNotEmpty ? null : users[pk]?.profile?.picture,
           ring: c.avatarRing,
+          ringId: mask.isNotEmpty
+              ? null
+              : ref.watch(userCosmeticsProvider(pk).select((x) => x.ringId)),
         ),
         const SizedBox(width: 6),
         Flexible(
@@ -1497,7 +1505,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
                             size: fontSize + 2,
                             imageUrl: _authorPicture,
                             localOnly: message.localOnlyRow,
-                            ring: c.avatarRing),
+                            ring: c.avatarRing,
+                            ringId: _cosmetics.ringId),
                         const SizedBox(width: 4),
                         Flexible(
                           child: NymLabel(
@@ -1645,7 +1654,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
                 size: 18,
                 imageUrl: _authorPicture,
                 localOnly: message.localOnlyRow,
-                ring: c.avatarRing),
+                ring: c.avatarRing,
+                ringId: _cosmetics.ringId),
             const SizedBox(width: 4),
             Flexible(
               child: _authorLine(
@@ -2181,7 +2191,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
                         size: 32,
                         imageUrl: _authorPicture,
                         localOnly: message.localOnlyRow,
-                        ring: c.avatarRing),
+                        ring: c.avatarRing,
+                        ringId: _cosmetics.ringId),
                   )
                 : const SizedBox.shrink(),
           ),
@@ -2286,7 +2297,6 @@ class _MessageRowState extends ConsumerState<MessageRow>
   /// Own channel or group message with readers shows reader avatars instead of the PM tick.
   bool get _showReaderAvatars =>
       message.isOwn &&
-      !message.isPM &&
       (message.isGroup || _isChannelMessage) &&
       _visibleReaders.isNotEmpty;
 
@@ -2352,6 +2362,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
                           size: 14,
                           imageUrl: users[visible[i].key]?.profile?.picture,
                           ring: c.avatarRing,
+                          ringId: ref.watch(ringPeekProvider(visible[i].key)),
                         ),
                       ),
                     ),
@@ -2437,7 +2448,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
       kind: kind,
     ));
     // Buzz and burst on add as soon as it lands locally; a rate-limited toggle stays silent.
-    if (!wasReacted && _selfReactedLocally(r.emoji)) {
+    if (!wasReacted && _selfReactedLocally(ref.read, r.emoji)) {
       Haptics.light();
       // Post-frame so the badge is laid out; falls back to the message center.
       ReactionBurst.playAtBadge(context, message.id, r.emoji,
@@ -2445,8 +2456,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
     }
   }
 
-  bool _selfReactedLocally(String emoji) {
-    final list = ref.read(appStateProvider).reactions[message.id] ?? const [];
+  bool _selfReactedLocally(ChatToolsReader read, String emoji) {
+    final list = read(appStateProvider).reactions[message.id] ?? const [];
     return list.any((x) => x.emoji == emoji && x.userReacted);
   }
 
@@ -2494,28 +2505,46 @@ class _MessageRowState extends ConsumerState<MessageRow>
     );
   }
 
-  List<QuickContextItem> _sheetItems(BuildContext context) =>
-      buildQuickContextItems(
-        context,
-        ref,
-        message,
-        onTranslate: _redactBlanked ? null : _showTranslated,
-        onEdit: () => ref.read(pendingEditProvider.notifier).request(
-              messageId: message.id,
-              content: message.content,
-            ),
-        onThread: _barThreadable
-            ? () =>
-                openMessageThread(ref, message, storageKey: widget.scrollKey)
-            : null,
+  _RowActs _acts(BuildContext context, {bool measure = true}) => _RowActs(
+        row: context,
+        host: context.findAncestorStateOfType<MessageSelectionState>()?.context ??
+            context,
+        read: ProviderScope.containerOf(context, listen: false).read,
+        center: measure ? _globalCenterOfContext(context) : null,
       );
+
+  List<QuickContextItem> _sheetItems(BuildContext context, _RowActs acts) {
+    final read = acts.read;
+    final key = _translateKey;
+    final message = this.message;
+    final scrollKey = widget.scrollKey;
+    return buildQuickContextItems(
+      context,
+      ref,
+      message,
+      host: acts.host,
+      onTranslate: _redactBlanked
+          ? null
+          : () {
+              if (mounted && _redactBlanked) return;
+              read(translatedMessagesProvider.notifier).show(key);
+            },
+      onEdit: () => read(pendingEditProvider.notifier).request(
+            messageId: message.id,
+            content: message.content,
+          ),
+      onThread: _barThreadable
+          ? () => openThreadFor(read, message, storageKey: scrollKey)
+          : null,
+    );
+  }
 
   void _runBarAction(BuildContext context, String id) {
     if (id == 'react') {
       widget.onReactionPicker?.call(message);
       return;
     }
-    for (final item in _sheetItems(context)) {
+    for (final item in _sheetItems(context, _acts(context))) {
       if (item.id == id) {
         item.onTap();
         return;
@@ -2528,7 +2557,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
     final rect = Rect.fromCenter(center: at, width: 0, height: 0);
     final recents = ref.read(visibleRecentEmojisProvider);
     final emojis = quickReactEmojis(recents);
-    final items = _sheetItems(context);
+    final acts = _acts(context);
+    final items = _sheetItems(context, acts);
     final picker = widget.onReactionPicker;
     final onMore = picker == null ? null : () => picker(message);
     if (messageSheetFits(
@@ -2546,7 +2576,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
           avatarUrl: ref.read(usersProvider)[message.pubkey]?.profile?.picture,
         ),
         emojis: emojis,
-        onReact: (emoji) => _quickReact(context, emoji),
+        onReact: (emoji) => _reactWith(acts, emoji),
         onMore: onMore,
         items: items,
       );
@@ -2557,19 +2587,23 @@ class _MessageRowState extends ConsumerState<MessageRow>
       anchorRect: rect,
       spotlightRect: _globalRectOfContext(context),
       emojis: emojis,
-      onReact: (emoji) => _quickReact(context, emoji),
+      onReact: (emoji) => _reactWith(acts, emoji),
       onMore: onMore ?? () {},
       contextItems: items,
     );
   }
 
-  void _quickReact(BuildContext context, String emoji) {
-    final controller = ref.read(nostrControllerProvider);
-    final view = ref.read(currentViewProvider);
-    final already = _selfReactedLocally(emoji) ||
-        reactions.any((r) => r.emoji == emoji && r.userReacted);
+  void _quickReact(BuildContext context, String emoji) =>
+      _reactWith(_acts(context), emoji);
+
+  void _reactWith(_RowActs acts, String emoji) {
+    final read = acts.read;
+    final controller = read(nostrControllerProvider);
+    final view = read(currentViewProvider);
+    final already = _selfReactedLocally(read, emoji) ||
+        widget.reactions.any((r) => r.emoji == emoji && r.userReacted);
     if (!controller.anonLaneRecentsQuiet(messageId: message.id)) {
-      ref.read(recentEmojisProvider.notifier).record(emoji);
+      read(recentEmojisProvider.notifier).record(emoji);
     }
     if (already) return;
     unawaited(controller.toggleReaction(
@@ -2578,10 +2612,10 @@ class _MessageRowState extends ConsumerState<MessageRow>
       target: reactionTargetFor(message),
       kind: inferOriginalKind(message, view: view),
     ));
-    if (_selfReactedLocally(emoji)) {
+    if (_selfReactedLocally(read, emoji)) {
       Haptics.light();
-      ReactionBurst.playAtBadge(context, message.id, emoji,
-          fallbackCenter: _globalCenterOfContext(context));
+      ReactionBurst.playAtBadge(acts.live, message.id, emoji,
+          fallbackCenter: acts.center);
     }
   }
 
@@ -2718,12 +2752,17 @@ class _MessageRowState extends ConsumerState<MessageRow>
         selfPubkey: app.selfPubkey,
         liveNym: app.users[message.pubkey]?.nym,
         translatable: !_redactBlanked);
+    final read = ProviderScope.containerOf(context, listen: false).read;
+    final key = _translateKey;
     ContextMenuPanel.show(
       context,
       target: target,
       message: message,
       onReact: () => widget.onReactionPicker?.call(message),
-      onTranslateInline: (lang) => _showTranslated(lang: lang),
+      onTranslateInline: (lang) {
+        if (_redactBlanked) return;
+        read(translatedMessagesProvider.notifier).show(key, lang: lang);
+      },
     );
   }
 
@@ -2904,6 +2943,11 @@ class _MessageRowState extends ConsumerState<MessageRow>
           return _queuedTag(context);
         }
         if (message.isPM && !message.isGroup) return _deliveryTicks(context);
+        if (message.isGroup &&
+            message.isOwn &&
+            message.deliveryStatus == DeliveryStatus.failed) {
+          return _deliveryTicks(context);
+        }
         return const SizedBox.shrink();
       },
     );
@@ -3055,6 +3099,15 @@ class _MessageRowState extends ConsumerState<MessageRow>
   void _retryFailedPm() {
     final content = message.content;
     if (content.trim().isEmpty) return;
+    final groupId = message.groupId;
+    if (message.isGroup) {
+      if (groupId == null || groupId.isEmpty) return;
+      final appState = ref.read(appStateProvider.notifier);
+      appState.removeMessage(message.id);
+      appState.switchView(ChatView.group(groupId));
+      ref.read(nostrControllerProvider).sendCurrent(content);
+      return;
+    }
     final view = ref.read(currentViewProvider);
     final peer = message.conversationPubkey ??
         (view.kind == ViewKind.pm ? view.id : null);
@@ -3068,6 +3121,22 @@ class _MessageRowState extends ConsumerState<MessageRow>
     controller.startPM(peer);
     controller.sendCurrent(content);
   }
+}
+
+class _RowActs {
+  _RowActs({
+    required this.row,
+    required this.host,
+    required this.read,
+    required this.center,
+  });
+
+  final BuildContext row;
+  final BuildContext host;
+  final ChatToolsReader read;
+  final Offset? center;
+
+  BuildContext get live => row.mounted ? row : host;
 }
 
 /// A reaction badge: tap toggles, long-press shows reactors; no hover tooltip, as in the PWA.
@@ -4688,12 +4757,15 @@ class MessageGroup extends ConsumerStatefulWidget {
     this.onReactionPicker,
     this.scrollKey,
     this.trailingFor,
+    this.showThreadAffordances = true,
   });
 
   final Widget? Function(Message m)? trailingFor;
 
   final List<MessageGroupEntry> entries;
   final Settings settings;
+
+  final bool showThreadAffordances;
 
   /// Forwarded so a quote tap jumps this list; null in the single-chat view.
   final String? scrollKey;
@@ -4712,6 +4784,14 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
 
   /// Live swipe offset of the last bubble, so the group avatar slides with it.
   final ValueNotifier<double> _avatarDx = ValueNotifier<double>(0);
+
+  late final Set<String> _builtIds;
+
+  @override
+  void initState() {
+    super.initState();
+    _builtIds = {for (final e in widget.entries) e.message.id};
+  }
 
   @override
   void dispose() {
@@ -4740,10 +4820,12 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
               columnsMode: widget.columnsMode,
               scrollKey: widget.scrollKey,
               grouped: useBubbles && i > 0,
+              snapIn: !_builtIds.contains(entries[i].message.id),
               showName: !(useBubbles && i > 0),
               showAvatar: false,
               inGroup: useBubbles,
               onReactionPicker: onReactionPicker,
+              showThreadAffordances: widget.showThreadAffordances,
               bubbleAnchorKey: i == entries.length - 1 ? _bubbleKey : null,
               swipeAvatarDx: useBubbles && !self && i == entries.length - 1
                   ? _avatarDx
@@ -4812,6 +4894,10 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
                 pubkey: first.pubkey,
                 imageUrl: picture,
                 localOnly: first.localOnlyRow,
+                ringId: first.localOnlyRow
+                    ? null
+                    : ref.watch(userCosmeticsProvider(first.pubkey)
+                        .select((x) => x.ringId)),
                 bubbleKey: _bubbleKey,
                 onTap: () => _openAvatarMenu(context, ref, last),
               ),
@@ -4843,12 +4929,15 @@ class _StickyGroupAvatar extends ConsumerStatefulWidget {
     required this.onTap,
     this.bubbleKey,
     this.localOnly = false,
+    this.ringId,
   });
 
   final String pubkey;
   final String? imageUrl;
   final bool localOnly;
   final VoidCallback onTap;
+
+  final String? ringId;
 
   /// Aligns the resting avatar to the last bubble rather than the reactions/translation rows; null uses the foot.
   final GlobalKey? bubbleKey;
@@ -4882,6 +4971,7 @@ class _StickyGroupAvatarState extends ConsumerState<_StickyGroupAvatar> {
             imageUrl: widget.imageUrl,
             localOnly: widget.localOnly,
             ring: context.nym.avatarRing,
+            ringId: widget.ringId,
           ),
         ),
       ),
@@ -4986,12 +5076,35 @@ class RenderStickyAvatarTrack extends RenderProxyBox {
     final fallback = math.max(0.0, size.height - _avatar);
     final bubble = _bubbleKey?.currentContext?.findRenderObject();
     if (bubble is RenderBox && bubble.attached && bubble.hasSize) {
-      final bubbleBottom = bubble
-          .localToGlobal(Offset(0, bubble.size.height), ancestor: this)
-          .dy;
+      final bubbleBottom = _layoutBottomOf(bubble) ??
+          bubble
+              .localToGlobal(Offset(0, bubble.size.height), ancestor: this)
+              .dy;
       return (bubbleBottom - _avatar).clamp(0.0, fallback);
     }
     return fallback;
+  }
+
+  double? _layoutBottomOf(RenderBox bubble) {
+    var dy = bubble.size.height;
+    RenderObject from = bubble;
+    RenderObject to = this;
+    while (!identical(from, to)) {
+      final up = from.depth >= to.depth;
+      final node = up ? from : to;
+      final parent = node.parent;
+      if (parent is! RenderBox) return null;
+      final data = node.parentData;
+      final step = data is BoxParentData ? data.offset.dy : 0.0;
+      if (up) {
+        dy += step;
+        from = parent;
+      } else {
+        dy -= step;
+        to = parent;
+      }
+    }
+    return dy;
   }
 
   double _computeTop(double maxTop) {

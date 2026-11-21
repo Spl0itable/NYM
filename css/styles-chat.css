@@ -2596,7 +2596,7 @@ body.chat-bubbles .edited-indicator-irc {
     border: 1px solid var(--field-border);
     border-radius: var(--radius-md);
     color: var(--text-bright, #ffffff);
-    padding: 10px 16px;
+    padding: var(--composer-pad-y, 10px) 16px;
     font-family: var(--font-sans);
     font-size: var(--user-text-size);
     outline: none;
@@ -2633,7 +2633,7 @@ div.message-input .custom-emoji {
     cursor: text;
     width: 1.4em;
     height: 1.4em;
-    vertical-align: -0.3em;
+    vertical-align: top;
 }
 
 div.message-input .rich-mark {
@@ -2706,6 +2706,10 @@ div.message-input .rich-md-codeblock {
     background: rgba(255, 255, 255, 0.08);
     border-radius: 4px;
     padding: 0 3px;
+}
+
+div.message-input .rich-md-code {
+    line-height: 1;
 }
 
 div.message-input .rich-md-codeblock {
@@ -2784,6 +2788,8 @@ div.message-input .rich-md-quote {
 }
 
 .message-input-row {
+    --composer-line: calc(var(--user-text-size) * 1.4);
+    --composer-pad-y: max(9px, calc((var(--composer-row, 44px) - 2px - var(--composer-line)) / 2));
     position: relative;
     display: flex;
     align-items: flex-end;
@@ -2908,7 +2914,7 @@ body.light-mode .input-container.composer-pill .message-input:focus {
 
 .input-container.composer-pill .send-split .send-btn,
 .input-container.composer-pill .send-split .send-menu-btn {
-    height: 34px;
+    height: calc(var(--composer-row, 44px) - 8px);
 }
 
 .input-container.composer-pill .send-split .send-btn {
@@ -2919,6 +2925,11 @@ body.light-mode .input-container.composer-pill .message-input:focus {
 }
 
 .input-container.composer-pill .send-split .send-menu-btn {
+    border-top-right-radius: calc(var(--radius-md) - 4px);
+    border-bottom-right-radius: calc(var(--radius-md) - 4px);
+}
+
+.input-container.composer-pill .send-split .send-btn:has(+ .send-menu-btn[hidden]) {
     border-top-right-radius: calc(var(--radius-md) - 4px);
     border-bottom-right-radius: calc(var(--radius-md) - 4px);
 }
@@ -2942,7 +2953,7 @@ body.light-mode .input-container.composer-pill .message-input:focus {
 .input-inline-actions {
     position: absolute;
     right: 8px;
-    bottom: 10px;
+    bottom: calc(1px + var(--composer-pad-y, 10px) + (var(--composer-line, 21px) - 26px) / 2);
     display: flex;
     align-items: center;
     gap: 2px;
@@ -3533,7 +3544,7 @@ body.light-mode .ts-picker-input {
 }
 
 .icon-btn.input-btn {
-    height: 42px;
+    height: var(--composer-row, 44px);
     padding: 0 12px;
     display: flex;
     align-items: center;
@@ -3913,8 +3924,8 @@ body.chat-bubbles .msg-skeleton .message-group-stack .message:last-child { margi
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 44px;
-    padding: 6px 10px;
+    height: var(--composer-row, 44px);
+    padding: 0 10px;
     border-radius: var(--radius-sm);
     background: var(--bg-tertiary);
     border: 1px solid var(--glass-border);
@@ -5679,7 +5690,7 @@ body.cl-shielded > *:not(#clShield) {
 
 .icon-btn.input-btn.attach-btn {
     flex: 0 0 auto;
-    width: 42px;
+    width: var(--composer-row, 44px);
     padding: 0;
 }
 
@@ -5702,8 +5713,14 @@ body.cl-shielded > *:not(#clShield) {
 }
 
 .send-split .send-btn {
+    height: var(--composer-row, 44px);
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
+}
+
+.send-split .send-btn:has(+ .send-menu-btn[hidden]) {
+    border-top-right-radius: var(--radius-sm);
+    border-bottom-right-radius: var(--radius-sm);
 }
 
 .send-split #sendBtn {
@@ -5724,7 +5741,7 @@ body.cl-shielded > *:not(#clShield) {
     align-items: center;
     justify-content: center;
     width: 24px;
-    height: 42px;
+    height: var(--composer-row, 44px);
     padding: 0;
     background: rgb(from var(--primary) r g b / 0.1);
     border: 1px solid rgb(from var(--primary) r g b / 0.3);
@@ -6086,7 +6103,7 @@ body.a11y-contrast .composer-menu-item.is-disabled .composer-menu-label {
 
 .input-buttons .icon-btn.input-btn.media-voice-btn {
     flex: 0 0 auto;
-    width: 42px;
+    width: var(--composer-row, 44px);
     padding: 0;
 }
 

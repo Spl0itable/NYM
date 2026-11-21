@@ -28,11 +28,14 @@ class ChatNavEntry {
 }
 
 class ScheduleResult {
-  const ScheduleResult(this.ok, {this.reason, this.id});
+  const ScheduleResult(this.ok, {this.reason, this.id, this.code});
   final bool ok;
   final String? reason;
   final String? id;
+  final String? code;
 }
+
+const _signerRetryMs = 10 * 60 * 1000;
 
 class ScheduleApiError implements Exception {
   ScheduleApiError(this.message, {this.code = '', this.status = 0});
@@ -54,11 +57,13 @@ class ChatNavBlockContext {
     required this.server,
     required this.online,
     required this.localKey,
+    this.hardcore = false,
   });
   final bool meshOnly;
   final bool server;
   final bool online;
   final bool localKey;
+  final bool hardcore;
 }
 
 class ChatNavHooks {
@@ -82,6 +87,9 @@ class ChatNavHooks {
     this.decryptNote,
     this.blockContext,
     this.sendText,
+    this.sendNowRefusal,
+    this.restoreText,
+    this.localNoteKey,
     this.groupSendBlocked,
     this.laneRefusal,
     this.notice,
@@ -125,9 +133,15 @@ class ChatNavHooks {
   final Future<String?> Function(String json)? encryptNote;
   final Future<String?> Function(String blob)? decryptNote;
   final ChatNavBlockContext Function(String key)? blockContext;
-  final Future<bool> Function(String key, String text)? sendText;
+  final Future<bool> Function(String key, String text,
+      {String? threadRoot, String? quoteSource})? sendText;
+  final Future<String?> Function(String key, String text,
+      {String? threadRoot, String? quoteSource, bool quiet})? sendNowRefusal;
+  final Future<String> Function(String key, String text)? restoreText;
+  final bool Function()? localNoteKey;
   final String? Function(String key, String text)? groupSendBlocked;
-  final String? Function(String key, String? threadRoot)? laneRefusal;
+  final String? Function(String key, String? threadRoot, String? quoteSource,
+      {bool composer})? laneRefusal;
   final void Function(String text)? notice;
   final void Function(String text, void Function() undo)? undoNotice;
   final String Function(String kind, String id)? chatName;
@@ -1108,7 +1122,13 @@ class ChatNavService {
   List<ScheduledItem>? _sched;
   String? _schedPk;
   Timer? _refreshTimer;
-  final Map<String, ({String text, Map<String, String> chat})?> _noteCache = {};
+  final Map<String, ScheduleNote> _noteCache = {};
+  final Map<String, int> _noteRetryAt = {};
+  final List<Map<String, dynamic>> _journal = [];
+  final Set<String> _sendingNow = {};
+  int _seq = 0;
+  int _req = 0;
+  int _applied = 0;
 
   List<ScheduledItem> scheduledItems() {
     final pk = hooks.selfPubkey();
@@ -1134,6 +1154,39 @@ class ChatNavService {
     _prefs.write(
         _schedKey, jsonEncode([for (final x in items) x.toJson(withText: true)]));
     _changed();
+  }
+
+  List<ScheduledItem> _itemsFor(String pk) {
+    if (pk == hooks.selfPubkey()) return scheduledItems();
+    try {
+      final raw = _prefs.read('${ChatNavKeys.scheduled}:$pk');
+      if (raw != null && raw.isNotEmpty) {
+        final v = jsonDecode(raw);
+        if (v is List) return scheduleNormalize(v.cast<Object?>());
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  void _setItemsFor(String pk, List<ScheduledItem> items) {
+    if (pk == hooks.selfPubkey()) {
+      _setScheduled(items);
+      return;
+    }
+    _prefs.write('${ChatNavKeys.scheduled}:$pk',
+        jsonEncode([for (final x in items) x.toJson(withText: true)]));
+  }
+
+  void _setToken(String pk, String id, String token) {
+    _setItemsFor(pk, [
+      for (final x in _itemsFor(pk))
+        if (x.id == id) (x..sendToken = token) else x,
+    ]);
+  }
+
+  void _dropItem(String pk, String id) {
+    _mutate({'t': 'drop', 'id': id}, pk: pk);
+    _setItemsFor(pk, _itemsFor(pk).where((x) => x.id != id).toList());
   }
 
   List<Map<String, dynamic>> _rawItems() =>
@@ -1164,6 +1217,7 @@ class ChatNavService {
       online: ctx.online,
       kind: kind,
       localKey: ctx.localKey,
+      hardcore: ctx.hardcore,
     );
     return r == null ? null : t(r);
   }
@@ -1177,8 +1231,29 @@ class ChatNavService {
     return t("Couldn't schedule it: {error}", {'error': '$err'});
   }
 
+  void _mutate(Map<String, dynamic> entry, {String? pk}) {
+    _seq++;
+    _journal.add({'seq': _seq, 'pk': pk ?? hooks.selfPubkey(), ...entry});
+    if (_journal.length > 200) _journal.removeRange(0, _journal.length - 200);
+  }
+
+  static ScheduledItem _keep(ScheduledItem it, Map<String, dynamic> src) {
+    final q = src['quote'];
+    return it
+      ..text = src['text'] is String ? src['text'] as String : ''
+      ..threadRoot = src['threadRoot'] is String ? src['threadRoot'] as String : ''
+      ..quote = q is Map ? {for (final e in q.entries) '${e.key}': '${e.value}'} : null
+      ..quoteSource =
+          src['quoteSource'] is String ? src['quoteSource'] as String : '';
+  }
+
   Future<ScheduleResult> schedule(String key, String text, int at,
-      {String? replaces, String? threadRoot}) async {
+      {String? replaces,
+      String? threadRoot,
+      Map<String, String>? quote,
+      String? quoteSource,
+      bool quiet = false,
+      bool stored = false}) async {
     final content = text.trim();
     if (content.isEmpty) return const ScheduleResult(false);
     ScheduleResult refuse(String msg) {
@@ -1195,11 +1270,17 @@ class ChatNavService {
       final blocked = hooks.groupSendBlocked?.call(key, content);
       if (blocked != null) return refuse(blocked);
     }
-    final laneBlocked = hooks.laneRefusal?.call(key, threadRoot);
+    final laneBlocked = hooks.laneRefusal
+        ?.call(key, threadRoot, quoteSource, composer: !stored);
     if (laneBlocked != null) return refuse(laneBlocked);
     final build = hooks.buildScheduled;
     final api = hooks.scheduleApi;
     if (build == null || api == null) return refuse(t(ChatNavStrings.serverBlocked));
+    final extras = scheduleNoteExtras({
+      'threadRoot': threadRoot,
+      'quote': quote,
+      'quoteSource': quoteSource,
+    });
     ScheduleBuild built;
     try {
       built = await build(key, content, at, threadRoot);
@@ -1209,7 +1290,8 @@ class ChatNavService {
     final chat = scheduleChatOf(key);
     String? note;
     try {
-      note = await hooks.encryptNote?.call(scheduleNoteJson(content, chat));
+      note = await hooks.encryptNote
+          ?.call(scheduleNoteJson(content, chat, scheduleNoteExtrasJson(extras)));
     } catch (_) {
       note = null;
     }
@@ -1227,78 +1309,150 @@ class ChatNavService {
       'note': note,
       'replaces': ?replaces,
     };
+    final since = _seq;
+    final pk = hooks.selfPubkey();
     try {
       await api('schedule-add', body);
     } catch (err) {
-      return refuse(_errorText(err));
+      final status = err is ScheduleApiError ? err.status : 0;
+      final code = err is ScheduleApiError ? err.code : '';
+      final refused = replaces != null &&
+          (code == 'gone' || code == 'sent' || code == 'sending');
+      var held = false;
+      if (refused) {
+        final now = await _refresh(since, owner: pk);
+        held = now.any((x) => x.id == id);
+      } else if (status == 0 || status >= 500) {
+        try {
+          final data = await api('schedule-list', const {});
+          final raw = data['items'];
+          held = raw is List && raw.any((x) => x is Map && x['id'] == id);
+        } catch (_) {
+          held = false;
+        }
+      }
+      if (!held) {
+        final msg = _errorText(err);
+        _notice(msg);
+        return ScheduleResult(false, reason: msg, code: refused ? code : null);
+      }
     }
-    final items = scheduledItems().where((x) => x.id != replaces).toList()
-      ..add(ScheduledItem(
-          id: id, at: at, chat: chat, status: 'pending', note: note, text: content));
-    _noteCache[note] = (text: content, chat: chat);
+    if (hooks.selfPubkey() != pk) return ScheduleResult(true, id: id);
+    final src = <String, dynamic>{
+      'text': content,
+      ...scheduleNoteExtrasJson(extras),
+    };
+    final item = _keep(
+        ScheduledItem(id: id, at: at, chat: chat, status: 'pending', note: note),
+        src);
+    if (replaces != null) _mutate({'t': 'drop', 'id': replaces});
+    _mutate({'t': 'add', 'item': item.toJson(withText: true)});
+    _noteCache[note] = (
+      text: content,
+      chat: chat,
+      threadRoot: extras.threadRoot,
+      quote: extras.quote,
+      quoteSource: extras.quoteSource,
+    );
+    final items = scheduledItems()
+        .where((x) => x.id != replaces && x.id != id)
+        .toList()
+      ..add(item);
     _setScheduled(scheduleNormalize([for (final x in items) x.toJson(withText: true)]));
-    _notice(t('Scheduled for {time}. Held by Nymchat until it sends.',
-        {'time': formatScheduleTime(at)}));
+    if (!quiet) {
+      _notice(t('Scheduled for {time}. Held by Nymchat until it sends.',
+          {'time': formatScheduleTime(at)}));
+    }
     _armRefresh();
     return ScheduleResult(true, id: id);
   }
 
-  Future<({String text, Map<String, String> chat})?> _openNote(String blob) async {
+  Future<ScheduleNote?> _openNote(String blob) async {
     if (blob.isEmpty) return null;
-    if (_noteCache.containsKey(blob)) return _noteCache[blob];
-    ({String text, Map<String, String> chat})? parsed;
+    final hit = _noteCache[blob];
+    if (hit != null) return hit;
+    final local = hooks.localNoteKey?.call() ?? true;
+    final retryAt = _noteRetryAt[blob];
+    if (retryAt != null && !local && _nowMs < retryAt) return null;
+    ScheduleNote? parsed;
     try {
       final json = await hooks.decryptNote?.call(blob);
       parsed = json == null ? null : scheduleNoteParse(json);
     } catch (_) {
       parsed = null;
     }
-    _noteCache[blob] = parsed;
+    if (parsed != null) {
+      _noteRetryAt.remove(blob);
+      _noteCache[blob] = parsed;
+      if (_noteCache.length > 500) _noteCache.remove(_noteCache.keys.first);
+    } else if (local) {
+      _noteRetryAt.remove(blob);
+    } else {
+      _noteRetryAt[blob] = _nowMs + _signerRetryMs;
+      if (_noteRetryAt.length > 500) _noteRetryAt.remove(_noteRetryAt.keys.first);
+    }
     return parsed;
   }
 
-  Future<List<ScheduledItem>> refreshScheduled() async {
+  Future<List<ScheduledItem>> refreshScheduled() => _refresh(_seq);
+
+  Future<List<ScheduledItem>> _refresh(int since, {String? owner}) async {
     final api = hooks.scheduleApi;
-    if (api == null || hooks.selfPubkey().isEmpty) return scheduledItems();
+    final pk = owner ?? hooks.selfPubkey();
+    if (api == null || pk.isEmpty || hooks.selfPubkey() != pk) {
+      return scheduledItems();
+    }
+    final req = ++_req;
     Map<String, dynamic> data;
     try {
       data = await api('schedule-list', const {});
     } catch (_) {
       return scheduledItems();
     }
+    if (hooks.selfPubkey() != pk) return scheduledItems();
     final prev = {for (final x in scheduledItems()) x.id: x};
     final raw = data['items'];
-    final out = <ScheduledItem>[];
+    final out = <Map<String, dynamic>>[];
     for (final it in scheduleNormalize(raw is List ? raw.cast<Object?>() : const [])) {
       final old = prev[it.id];
-      var text = old?.text ?? '';
-      var chat = (old != null && (old.chat['t'] ?? '').isNotEmpty) ? old.chat : null;
-      if (text.isEmpty || chat == null) {
+      Map<String, dynamic>? src;
+      Map<String, String>? chat;
+      if (old != null && old.text.isNotEmpty && (old.chat['t'] ?? '').isNotEmpty) {
+        src = old.toJson(withText: true);
+        chat = old.chat;
+      } else {
         final p = await _openNote(it.note);
         if (p != null) {
-          text = p.text;
+          src = scheduleNoteJsonMap(p);
           chat = p.chat;
         }
       }
-      if (chat == null) continue;
-      out.add(ScheduledItem(
+      final row = ScheduledItem(
         id: it.id,
         at: it.at,
-        chat: chat,
+        chat: chat ?? it.chat,
         status: it.status,
         attempts: it.attempts,
         error: it.error,
         sentAt: it.sentAt,
         note: it.note,
-        text: text,
-      ));
+      );
+      out.add(_keep(row, src ?? const {}).toJson(withText: true));
     }
+    if (hooks.selfPubkey() != pk || req < _applied) return scheduledItems();
+    _applied = req;
+    final later = [
+      for (final e in _journal)
+        if ((e['seq'] as int) > since && e['pk'] == pk) e,
+    ];
+    final merged = scheduleNormalize(
+        scheduleHoldTaking(_rawItems(), scheduleReplay(out, later)));
     final failedNow = scheduleNewFailures(
-        _rawItems(), [for (final x in out) x.toJson()]);
-    _setScheduled(out);
+        _rawItems(), [for (final x in merged) x.toJson()]);
+    _setScheduled(merged);
     if (failedNow.isNotEmpty) _notice(t(ChatNavStrings.failedNotice));
     _armRefresh();
-    return out;
+    return merged;
   }
 
   void _armRefresh() {
@@ -1312,38 +1466,176 @@ class ChatNavService {
     });
   }
 
-  Future<bool> cancelScheduled(String id) async {
+  Future<({String code, String error})> _take(String id,
+      {String? token}) async {
     final api = hooks.scheduleApi;
-    if (api == null) return false;
+    if (api == null) return (code: 'retry', error: '');
     try {
-      final r = await api('schedule-cancel', {'id': id});
-      if (r['removed'] == true || r['status'] == 'gone') {
-        _setScheduled(scheduledItems().where((x) => x.id != id).toList());
-        return true;
+      final r = await api('schedule-cancel', {'id': id, 'token': ?token});
+      if (r['removed'] == true) return (code: 'removed', error: '');
+      if (r['status'] == 'gone') {
+        return (code: r['taken'] == true ? 'taken' : 'gone', error: '');
       }
+      return (code: 'retry', error: '');
     } catch (err) {
       final msg = err is ScheduleApiError ? err.message : '$err';
-      _notice(t("Couldn't cancel it: {error}", {'error': msg}));
-      unawaited(refreshScheduled());
-      return false;
+      if (err is ScheduleApiError &&
+          err.status == 409 &&
+          (err.code == 'sent' || err.code == 'sending')) {
+        return (code: err.code, error: msg);
+      }
+      return (code: 'retry', error: msg);
     }
-    return false;
   }
 
-  Future<bool> sendScheduledNow(String id) async {
+  ScheduledItem? _find(String id) {
     ScheduledItem? it;
     for (final x in scheduledItems()) {
       if (x.id == id) it = x;
     }
-    if (it == null || it.text.isEmpty) return false;
+    return it;
+  }
+
+  Future<bool> cancelScheduled(String id) async {
+    final pk = hooks.selfPubkey();
+    final it = _find(id);
+    final token =
+        it != null && scheduleSendTokenValid(it.sendToken) ? it.sendToken : null;
+    final took = await _take(id, token: token);
+    if (took.code == 'removed' || took.code == 'gone' || took.code == 'taken') {
+      _dropItem(pk, id);
+      return true;
+    }
+    if (hooks.selfPubkey() == pk) {
+      _notice(t("Couldn't cancel it: {error}", {'error': took.error}));
+      unawaited(refreshScheduled());
+    }
+    return false;
+  }
+
+  Future<String?> _sendNowGate(ScheduledItem it, String key,
+      {required bool quiet}) async {
+    if (it.text.trim().isEmpty || key.isEmpty) return t(ChatNavStrings.noText);
+    final gate = hooks.sendNowRefusal;
+    if (gate == null) return null;
+    return gate(key, it.text,
+        threadRoot: it.threadRoot.isEmpty ? null : it.threadRoot,
+        quoteSource: it.quoteSource.isEmpty ? null : it.quoteSource,
+        quiet: quiet);
+  }
+
+  Future<bool> _liveSend(ScheduledItem it, String key) async {
+    final send = hooks.sendText;
+    if (send == null) return false;
+    try {
+      return await send(key, it.text,
+          threadRoot: it.threadRoot.isEmpty ? null : it.threadRoot,
+          quoteSource: key.startsWith('pm-') && it.quoteSource.isNotEmpty
+              ? it.quoteSource
+              : null);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _rehold(ScheduledItem it, String key) async {
+    final at = max(it.at, _nowSec + 90);
+    final r = await schedule(key, it.text, at,
+        threadRoot: it.threadRoot.isEmpty ? null : it.threadRoot,
+        quote: it.quote,
+        quoteSource: it.quoteSource.isEmpty ? null : it.quoteSource,
+        quiet: true,
+        stored: true);
+    if (r.ok) {
+      _notice(t(ChatNavStrings.sendNowHeld, {'time': formatScheduleTime(at)}));
+      return;
+    }
+    var where = '';
+    try {
+      where = await hooks.restoreText?.call(key, it.text) ?? '';
+    } catch (_) {
+      where = '';
+    }
+    _notice(t(where == 'composer'
+        ? ChatNavStrings.sendNowComposer
+        : where == 'copied'
+            ? ChatNavStrings.sendNowLost
+            : ChatNavStrings.sendNowFailed));
+  }
+
+  Future<bool> sendScheduledNow(String id) async {
+    final pk = hooks.selfPubkey();
+    final it = _find(id);
+    if (it == null ||
+        !scheduleItemActions(it.toJson(withText: true)).contains('now')) {
+      return false;
+    }
+    final key = scheduleChatKey(it.chat);
     if (!hooks.online()) {
       _notice(t("You're offline. Try again when you're back online."));
       return false;
     }
-    if (!await cancelScheduled(id)) return false;
-    final send = hooks.sendText;
-    if (send == null) return false;
-    return send(scheduleChatKey(it.chat), it.text);
+    if (!_sendingNow.add(id)) return false;
+    try {
+      final gate = await _sendNowGate(it, key, quiet: false);
+      if (gate != null) {
+        if (gate.isNotEmpty) _notice(gate);
+        return false;
+      }
+      if (hooks.selfPubkey() != pk) return false;
+      var token = it.sendToken;
+      if (!scheduleSendTokenValid(token)) {
+        final rng = hooks.random ?? Random.secure();
+        token = scheduleId([for (var i = 0; i < 16; i++) rng.nextInt(256)]);
+        _setToken(pk, id, token);
+      }
+      final took = await _take(id, token: token);
+      final here = hooks.selfPubkey() == pk;
+      switch (took.code) {
+        case 'retry':
+          if (here) {
+            _notice(t(ChatNavStrings.sendNowRetry));
+            unawaited(refreshScheduled());
+          }
+          return false;
+        case 'sent':
+        case 'sending':
+          _setToken(pk, id, '');
+          if (here) {
+            _notice(scheduleErrorText(took.code, _tr));
+            unawaited(refreshScheduled());
+          }
+          return false;
+        case 'taken':
+          _dropItem(pk, id);
+          if (here) {
+            _notice(t(ChatNavStrings.gone));
+            unawaited(refreshScheduled());
+          }
+          return false;
+      }
+      if (!here) return false;
+      if (took.code == 'gone') {
+        final now = await refreshScheduled();
+        if (scheduleTakenElsewhere(it.toJson(withText: true),
+            [for (final x in now) x.toJson(withText: true)])) {
+          _dropItem(pk, id);
+          _notice(t(ChatNavStrings.gone));
+          return false;
+        }
+        if (hooks.selfPubkey() != pk) return false;
+      }
+      final again = await _sendNowGate(it, key, quiet: true);
+      if (hooks.selfPubkey() != pk) return false;
+      final sent = again == null && await _liveSend(it, key);
+      _dropItem(pk, id);
+      if (sent) return true;
+      if (again != null && again.isNotEmpty) _notice(again);
+      if (hooks.selfPubkey() == pk) await _rehold(it, key);
+      return false;
+    } finally {
+      _sendingNow.remove(id);
+    }
   }
 
   Future<ScheduleResult> reschedule(String id, int at) async {
@@ -1351,8 +1643,18 @@ class ChatNavService {
     for (final x in scheduledItems()) {
       if (x.id == id) it = x;
     }
-    if (it == null || it.text.isEmpty) return const ScheduleResult(false);
-    return schedule(scheduleChatKey(it.chat), it.text, at, replaces: id);
+    if (it == null) {
+      final msg = t(ChatNavStrings.gone);
+      _notice(msg);
+      return ScheduleResult(false, reason: msg, code: 'gone');
+    }
+    if (it.text.isEmpty) return const ScheduleResult(false);
+    return schedule(scheduleChatKey(it.chat), it.text, at,
+        replaces: id,
+        threadRoot: it.threadRoot.isEmpty ? null : it.threadRoot,
+        quote: it.quote,
+        quoteSource: it.quoteSource.isEmpty ? null : it.quoteSource,
+        stored: true);
   }
 
   String scheduledItemStatus(ScheduledItem it) =>
@@ -1365,6 +1667,7 @@ class ChatNavService {
       'late': 'It was too late to send.',
       'partial': 'Some copies may not have arrived.',
       'retry': 'Retrying.',
+      'deposited': ChatNavStrings.depositedDetail,
     };
     final s = map[it.error];
     if (s != null) return t(s);

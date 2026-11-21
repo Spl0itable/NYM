@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../features/duo/duo_rail.dart';
+import '../../features/layout/chat_cover.dart';
 import '../../features/layout/layout_model.dart';
 import '../../features/i18n/i18n.dart';
 import 'app_dialog.dart';
@@ -178,8 +179,36 @@ class _NymSheetFrameState extends State<NymSheetFrame>
 
   bool get _expands => widget.expandable && nymSheetExpands(MediaQuery.sizeOf(context).width);
 
+  Animation<double>? _route;
+  bool _coversChat = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context)?.animation;
+    if (identical(route, _route)) return;
+    _route?.removeStatusListener(_onRoute);
+    _route = route?..addStatusListener(_onRoute);
+  }
+
+  void _onRoute(AnimationStatus _) => _syncCover();
+
+  void _syncCover() {
+    if (_coversChat &&
+        _drag == 0 &&
+        _pos == null &&
+        !_closing &&
+        (_route?.isCompleted ?? false)) {
+      ChatCover.hold(this);
+    } else {
+      ChatCover.release(this);
+    }
+  }
+
   @override
   void dispose() {
+    _route?.removeStatusListener(_onRoute);
+    ChatCover.release(this);
     _settle.dispose();
     super.dispose();
   }
@@ -252,9 +281,11 @@ class _NymSheetFrameState extends State<NymSheetFrame>
   Future<void> close() async {
     final route = ModalRoute.of(context);
     _closing = true;
+    _syncCover();
     await Navigator.of(context).maybePop();
     _closing = false;
     if (!mounted) return;
+    _syncCover();
     if (route == null || route.isActive) {
       if (_pos != null) setState(() => _pos = null);
       _snapBack();
@@ -272,6 +303,9 @@ class _NymSheetFrameState extends State<NymSheetFrame>
   Widget _build(BuildContext context, BoxConstraints? box) {
     final c = context.nym;
     final mq = MediaQuery.of(context);
+    _coversChat = (widget.fullHeight || (box != null && _full)) &&
+        nymSheetFits(mq.size.width);
+    _syncCover();
     final avail = mq.size.height - mq.padding.top;
     final expands = box != null;
     var minH = widget.fullHeight ? avail * 0.96 : 0.0;
@@ -380,15 +414,18 @@ class _NymSheetDragScope extends InheritedWidget {
 }
 
 class NymSheetDragRegion extends StatelessWidget {
-  const NymSheetDragRegion({super.key, required this.child});
+  const NymSheetDragRegion({super.key, required this.child, this.inScroll = false});
 
   final Widget child;
+  final bool inScroll;
 
   @override
   Widget build(BuildContext context) {
     final scope =
         context.dependOnInheritedWidgetOfExactType<_NymSheetDragScope>();
-    if (scope == null || scope.state.widget.dragAnywhere) return child;
+    if (scope == null || (scope.state.widget.dragAnywhere && !inScroll)) {
+      return child;
+    }
     final s = scope.state;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,

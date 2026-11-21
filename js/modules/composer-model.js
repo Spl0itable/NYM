@@ -58,9 +58,21 @@
 
     function sendMenuItems(ctx) {
         const c = ctx || {};
-        const out = [{ id: 'later', label: STRINGS.sendLater }];
+        const out = [];
+        if (!c.editing) out.push({ id: 'later', label: STRINGS.sendLater });
         if (c.canAnon) out.push({ id: 'anon', label: STRINGS.sendAnon });
         return out;
+    }
+
+    function sendLaterReady(state) {
+        const s = state || {};
+        if (!s.connected || s.editing || s.recording) return false;
+        return (s.attachments || 0) > 0 || !!s.quoting || !!String(s.text || '').trim();
+    }
+
+    function sendMenuShown(ctx) {
+        const c = ctx || {};
+        return sendMenuItems(c).length > 0 || !!c.sendAs;
     }
 
     function presentation(width) {
@@ -95,6 +107,6 @@
 
     G.NymComposer = {
         STRINGS, ATTACH_ORDER, SHEET_MAX_WIDTH, MAIN_MENU,
-        attachItems, primaryAction, canSendAnon, sendMenuItems, presentation, menuStep, isMenuKey, mainMenuRows,
+        attachItems, primaryAction, canSendAnon, sendMenuItems, sendLaterReady, sendMenuShown, presentation, menuStep, isMenuKey, mainMenuRows,
     };
 })();

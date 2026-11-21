@@ -21,6 +21,7 @@ import '../../core/crypto/pq.dart' as pq;
 import '../../features/calls/call_signaling.dart';
 import '../../features/groups/wrap_outbox.dart';
 import '../../features/identity/pq_registry.dart';
+import '../../features/messages/bridge_block.dart';
 import '../../features/messages/encrypted_blob.dart';
 import '../../features/messages/server_quiet.dart';
 import '../../features/messages/trust_graph.dart';
@@ -44,6 +45,7 @@ import 'event_mapper.dart';
 import 'event_signer.dart';
 import 'identity_service.dart';
 import '../../core/utils/isolate_gate.dart';
+import '../../core/utils/revisioned_list.dart';
 
 enum RelaySwitchOutcome { done, proxyUnreachable, offline, busy, failed }
 
@@ -255,14 +257,15 @@ class NostrService {
   /// Process-wide gift-wrap worker shared so unwrap and wrap bursts coalesce.
   static final CryptoWorker _cryptoWorker = CryptoWorker.instance;
 
-  /// Our ML-KEM keypair from the controller, to strip the layered outer layer before a signer; null without a root.
-  ({Uint8List kemSk, Uint8List kemPk})? Function()? selfKemForUnwrap;
+  void Function(String wrapId)? onSignerCannotOpenBitchat;
 
   Uint8List? Function(String realPubkey)? pqPeerKey;
 
   Uint8List? Function()? pqSelfKey;
 
   bool Function()? pqSelfLayered;
+
+  bool Function()? pqSelfAllCapable;
 
   ({Uint8List? kem, bool layered}) _pqTarget(String realPubkey) {
     if (realPubkey == identity.pubkey) {
@@ -288,6 +291,12 @@ class NostrService {
   /// Newest verified ids for persisting across launches.
   static List<String> snapshotVerifiedIds({int max = 20000}) =>
       _verifier.snapshotVerifiedIds(max: max);
+
+  static int get freshVerifiedIdCount => _verifier.freshVerifiedCount;
+
+  static List<String> takeFreshVerifiedIds() => _verifier.takeFreshVerified();
+
+  static void clearVerifiedIds() => _verifier.clearVerified();
 
   /// Called when a signature newly verifies, for a debounced persist.
   static set onVerifiedIdsChanged(void Function()? cb) =>
@@ -371,6 +380,8 @@ class NostrService {
     }
     // Set here so a pool swapped in by fallback carries the geo gate too.
     _pool.geoOriginAllows = poolAdmitsEvent;
+    final boot = _pool;
+    if (boot is RelayPoolProxy) boot.downRule = ProxyDownRule(link: _link);
   }
 
   /// Persistent /api counters kept on the service so they survive a pool swap.
@@ -1160,7 +1171,7 @@ class NostrService {
   void probePool({bool wake = true}) {
     _foreground = true;
     RelayConnection.backgrounded = false;
-    _link.resumed(relayClock());
+    if (wake || !_link.foreground) _link.resumed(relayClock());
     if (wake) _wakePools(network: false);
   }
 
@@ -2014,11 +2025,15 @@ class NostrService {
     // NIP-46: no local identity key, so self-addressed wraps unwrap via the remote `nip44_decrypt`.
     final sig = signer;
     if (sig != null && sig.isRemote && _isAddressedToSelf(wrap)) {
+      if (wrap.content.startsWith('v2:')) {
+        if (sink == null) onSignerCannotOpenBitchat?.call(wrap.id);
+        return;
+      }
       // Cap concurrent remote decrypts; gate only the RPC round-trips.
       await _remoteUnwrapGate.acquire();
       ({NostrEvent seal, Map<String, dynamic> rumor, bool isPq})? res;
       try {
-        res = await _unwrapRemote(wrap, sig, selfKem: selfKemForUnwrap?.call());
+        res = await _unwrapRemote(wrap, sig, selfKems: _pqSelfKeys);
       } finally {
         _remoteUnwrapGate.release();
       }
@@ -2071,12 +2086,11 @@ class NostrService {
     return false;
   }
 
-  /// Unwraps a self-addressed wrap via the signer; layered PQ needs [selfKem] from the root; null on failure.
   Future<({NostrEvent seal, Map<String, dynamic> rumor, bool isPq})?>
       _unwrapRemote(
     NostrEvent wrap,
     EventSigner sig, {
-    ({Uint8List kemSk, Uint8List kemPk})? selfKem,
+    List<({Uint8List kemSk, Uint8List kemPk})> selfKems = const [],
   }) async {
     try {
       // Both layers were sealed to our identity key on this path.
@@ -2084,10 +2098,15 @@ class NostrService {
       var usedPq = false;
       Future<String> strip(String content, String senderPk) async {
         if (!pq.isPq2Payload(content)) return content;
-        if (selfKem == null) throw StateError('no post-quantum key on this device');
-        usedPq = true;
-        return pq.pq2Open(
-            content, senderPk, recipPk, selfKem.kemSk, selfKem.kemPk);
+        for (final k in selfKems) {
+          try {
+            final inner =
+                await pq.pq2Open(content, senderPk, recipPk, k.kemSk, k.kemPk);
+            usedPq = true;
+            return inner;
+          } catch (_) {}
+        }
+        throw StateError('no post-quantum key on this device');
       }
 
       final sealJson = await sig.nip44Decrypt(
@@ -2818,6 +2837,7 @@ class NostrService {
         recipientKemPks: kemByTarget.isEmpty ? null : kemByTarget,
         layeredPubkeys: layeredTargets.isEmpty ? null : layeredTargets,
       );
+      var localReached = 0;
       for (var i = 0; i < wraps.length; i++) {
         final wrap = wraps[i];
         if (wrap != null) {
@@ -2826,33 +2846,42 @@ class NostrService {
           }
           publishDmQueued(wrap,
               tier: tierFor(i < recipients.length ? recipients[i] : ''));
+          if (i < recipients.length && recipients[i] != self) localReached++;
           onWrap?.call(wrap);
         }
       }
       onCoverage?.call(pqCount, recipients.length, rootCount);
-      return true;
+      return localReached > 0 || !recipients.any((pk) => pk != self);
     }
 
     // NIP-46: the seal can't be hybrid, but the wrap can; coverage counts the same.
     var remotePq = 0;
     var remoteRoot = 0;
+    var remoteReached = 0;
     for (final pk in recipients) {
       final kem = kemOf?.call(pk);
       if (kem != null) {
         remotePq++;
         if (rootSeededFor?.call(pk) ?? false) remoteRoot++;
       }
-      final wrap = await _wrapAndPublish(rumor, encryptTo(pk),
-          expiration: expiration,
-          recipientKemPublicKey: kem,
-          layered: kem != null && layeredOf(pk),
-          tier: tierFor(pk),
-          queuedKey: queuedKey,
-          signerOverride: signerOverride);
-      if (wrap != null) onWrap?.call(wrap);
+      NostrEvent? wrap;
+      try {
+        wrap = await _wrapAndPublish(rumor, encryptTo(pk),
+            expiration: expiration,
+            recipientKemPublicKey: kem,
+            layered: kem != null && layeredOf(pk),
+            tier: tierFor(pk),
+            queuedKey: queuedKey,
+            signerOverride: signerOverride);
+      } catch (_) {
+        wrap = null;
+      }
+      if (wrap == null) continue;
+      if (pk != self) remoteReached++;
+      onWrap?.call(wrap);
     }
     onCoverage?.call(remotePq, recipients.length, remoteRoot);
-    return true;
+    return remoteReached > 0 || !recipients.any((pk) => pk != self);
   }
 
   /// Publishes a gift-wrapped kind-69420 delivery/read receipt.
@@ -2918,6 +2947,7 @@ class NostrService {
     String? activity,
     String Function(String memberPubkey)? encryptTo,
     EventSigner? signerOverride,
+    String? threadRoot,
   }) async {
     if (recipients.isEmpty) return false;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -2934,6 +2964,7 @@ class NostrService {
         tags: [
           ...tags,
           if (groupId == null) ['p', pk],
+          ...TypingThread.marker(status, threadRoot, channel: false),
         ],
         content: '',
       );
@@ -2956,19 +2987,24 @@ class NostrService {
     required String nym,
     bool isGeohash = true,
     String? activity,
+    String? threadRoot,
+    EventSigner? signerOverride,
   }) async {
-    final sig = signer;
+    final sig = signerOverride ?? signer;
     if (sig == null) return null;
     final nowSec = max(DateTime.now().millisecondsSinceEpoch ~/ 1000,
         (_channelTypingLastAt[channelKey] ?? 0) + 1);
     _channelTypingLastAt[channelKey] = nowSec;
     final signed = await sig.sign(
       UnsignedEvent(
-        pubkey: identity.pubkey,
+        pubkey: signerOverride?.pubkey ?? identity.pubkey,
         createdAt: nowSec,
         kind: EventKind.channelTyping,
-        tags: UploadActivity.channelTags(
-            status, activity, isGeohash ? 'g' : 'd', channelKey, nym),
+        tags: [
+          ...UploadActivity.channelTags(
+              status, activity, isGeohash ? 'g' : 'd', channelKey, nym),
+          ...TypingThread.marker(status, threadRoot, channel: true),
+        ],
         content: '',
       ),
     );
@@ -3191,13 +3227,16 @@ class NostrService {
       }
     }
 
-    if (selfKem != null) {
+    final signerSealsPq = (pqSelfLayered?.call() ?? false) &&
+        (pqSelfAllCapable?.call() ?? false);
+    final inlineKem = sig is LocalSigner || signerSealsPq ? selfKem : null;
+    if (inlineKem != null) {
       final wrapped = await build(
         // Outer seal: the signer or local key produces the inner NIP-44.
         (pt) async => pq.pq2Seal(
-            await sig.nip44Encrypt(self, pt), self, self, selfKem.kemPk),
+            await sig.nip44Encrypt(self, pt), self, self, inlineKem.kemPk),
         // The wrap layer uses a throwaway key, so it never needs the signer.
-        selfKem.kemPk,
+        inlineKem.kemPk,
       );
       if (wrapped != null) {
         publishDmQueued(wrapped, tier: WrapTier.normal);
@@ -3226,11 +3265,24 @@ class NostrService {
       'https://raw.githubusercontent.com/permissionlesstech/bitchat/refs/heads/main/relays/online_relays_gps.csv';
 
   /// Upstream (Android) and vetted (iOS) directories, kept apart since each client selects by its own rule.
-  final List<GeoRelay> _geoRelaysUpstream = [];
-  final List<GeoRelay> _geoRelaysVetted = [];
+  final _geoRelaysUpstream = RevisionedList<GeoRelay>();
+  final _geoRelaysVetted = RevisionedList<GeoRelay>();
+  final _geoRelaysAll = RevisionedList<GeoRelay>();
 
   /// All geo relays loaded so far.
-  final List<GeoRelay> geoRelays = [];
+  List<GeoRelay> get geoRelays => _geoRelaysAll;
+
+  static const int _geoRankMemoCap = 512;
+  final Map<String, ({List<GeoRelay> closest, Set<String> allow})>
+      _geoRankMemo = {};
+  int _geoRankMemoRevision = -1;
+  int _geoRankRuns = 0;
+
+  @visibleForTesting
+  int get geoRankRuns => _geoRankRuns;
+
+  @visibleForTesting
+  int get geoRankMemoSize => _geoRankMemo.length;
 
   /// Geo relays for entered geohash channels: the only ones in low-data mode, else prioritized.
   final Set<String> currentGeoRelays = <String>{};
@@ -3467,6 +3519,7 @@ class NostrService {
   void Function(String id)? onEncryptedBlob;
 
   bool poolAdmitsEvent(NostrEvent e, String? relayUrl) {
+    if (isBridgeBlockedEvent(e)) return false;
     if (isEncryptedBlobChannelEvent(e)) {
       final sink = onEncryptedBlob;
       if (sink != null && e.id.isNotEmpty && e.computeId() == e.id) sink(e.id);
@@ -3487,9 +3540,9 @@ class NostrService {
     // decodeGeohash accepts junk characters, so validate first.
     if (!ch.isValidGeohash(gh)) return true;
 
-    final closest = closestGeoRelays(gh);
-    if (closest.isEmpty) return true;
-    final allow = {for (final r in closest) r.url};
+    if (geoRelays.isEmpty) return true;
+    final allow = _geoRank(gh).allow;
+    if (allow.isEmpty) return true;
     if (allow.contains(relayUrl)) return true;
 
     final connected = pool.connectedRelayUrls;
@@ -3502,6 +3555,35 @@ class NostrService {
   List<GeoRelay> closestGeoRelays(String geohash,
       {int count = RelayConfig.geoRelayCount}) {
     if (geoRelays.isEmpty || geohash.isEmpty) return const [];
+    if (count == RelayConfig.geoRelayCount) return _geoRank(geohash).closest;
+    return _rankGeoRelays(geohash, count);
+  }
+
+  ({List<GeoRelay> closest, Set<String> allow}) _geoRank(String geohash) {
+    final revision = _geoRelaysAll.revision +
+        _geoRelaysUpstream.revision +
+        _geoRelaysVetted.revision;
+    if (revision != _geoRankMemoRevision) {
+      _geoRankMemo.clear();
+      _geoRankMemoRevision = revision;
+    }
+    final hit = _geoRankMemo[geohash];
+    if (hit != null) return hit;
+    final closest = List<GeoRelay>.unmodifiable(
+        _rankGeoRelays(geohash, RelayConfig.geoRelayCount));
+    final entry = (
+      closest: closest,
+      allow: Set<String>.unmodifiable({for (final r in closest) r.url}),
+    );
+    if (_geoRankMemo.length >= _geoRankMemoCap) {
+      _geoRankMemo.remove(_geoRankMemo.keys.first);
+    }
+    _geoRankMemo[geohash] = entry;
+    return entry;
+  }
+
+  List<GeoRelay> _rankGeoRelays(String geohash, int count) {
+    _geoRankRuns++;
     final center = ch.decodeGeohash(geohash);
 
     // Compute distance once per relay and tiebreak explicitly: List.sort is unstable and ties are common.

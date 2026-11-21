@@ -25,6 +25,7 @@ import '../emoji/emoji_picker.dart';
 import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart';
+import '../../core/theme/nym_a11y.dart';
 import '../shop/cosmetics.dart';
 import '../reactions/quick_react_popup.dart';
 import '../reactions/reactors_modal.dart';
@@ -359,6 +360,11 @@ class _Top extends ConsumerWidget {
             seed: call.peerPubkey!,
             size: 22,
             imageUrl: users[call.peerPubkey!]?.profile?.picture, // Rule 4
+            ringId: ref.watch(appStateProvider.select(
+                    (s) => s.personMaskLabel(call.peerPubkey!).isNotEmpty))
+                ? null
+                : ref.watch(userCosmeticsProvider(call.peerPubkey!)
+                    .select((x) => x.ringId)),
           ),
           const SizedBox(width: 6),
           Flexible(
@@ -547,13 +553,28 @@ class _Tile extends StatelessWidget {
             else
               // 84px with a 2px ring, so the avatar is 80px.
               Center(
-                child: Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: c.border, width: 2),
-                  ),
-                  child: NymAvatar(seed: seed, size: 80),
-                ),
+                child: Consumer(builder: (context, ref, _) {
+                  final ringId = pubkey.isEmpty ||
+                          ref.watch(appStateProvider.select(
+                              (s) => s.personMaskLabel(pubkey).isNotEmpty))
+                      ? null
+                      : ref.watch(userCosmeticsProvider(pubkey)
+                          .select((x) => x.ringId));
+                  return Container(
+                    decoration: ringId != null
+                        ? null
+                        : BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: c.border, width: 2),
+                          ),
+                    child: NymAvatar(
+                      seed: seed,
+                      size: ringId == null ? 80 : 84,
+                      ringId: ringId,
+                      ringFill: flattenOver(c.bgTertiary, c.bg),
+                    ),
+                  );
+                }),
               ),
             if (sharing)
               Positioned(
@@ -1692,7 +1713,14 @@ class _MentionAutocompleteState extends State<_MentionAutocomplete> {
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                   child: Row(
                     children: [
-                      NymAvatar(seed: widget.pubkeys[i], size: 22),
+                      Consumer(
+                        builder: (context, ref, _) => NymAvatar(
+                          seed: widget.pubkeys[i],
+                          size: 22,
+                          ringId:
+                              ref.watch(ringPeekProvider(widget.pubkeys[i])),
+                        ),
+                      ),
                       const SizedBox(width: 8),
                       Flexible(
                         child: DefaultTextStyle(

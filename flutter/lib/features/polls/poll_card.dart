@@ -145,7 +145,8 @@ class _PollCardState extends ConsumerState<PollCard> {
               seed: poll.pubkey,
               size: 18,
               imageUrl: authorPic,
-              ring: c.avatarRing),
+              ring: c.avatarRing,
+              ringId: cosmetics.ringId),
           const SizedBox(width: 4),
           if (brackets)
             Text('<', style: TextStyle(color: authorColor, fontSize: fontSize)),

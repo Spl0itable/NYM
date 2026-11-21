@@ -170,6 +170,9 @@ class StorageKeys {
   static const pubkeyFormat = 'nym_pubkey_format';
   static const voiceSpeed = 'nym_voice_speed';
   static const keepCallHistory = 'nym_keep_call_history';
+  static const rememberSearches = 'nym_remember_searches';
+  static const searchHistoryPrefix = 'nym_search_history:';
+  static String searchHistoryFor(String pubkey) => '$searchHistoryPrefix$pubkey';
   static const botAnonEnabled = 'nym_botanon_enabled';
 
   // PMs / groups

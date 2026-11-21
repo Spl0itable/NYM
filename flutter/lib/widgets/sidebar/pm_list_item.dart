@@ -121,11 +121,16 @@ class PMListItem extends ConsumerWidget {
                     key: const ValueKey('sidebarLead'),
                     width: kSidebarIcon,
                     height: kSidebarIcon,
-                    child: NymAvatar(
-                        seed: pubkey,
-                        size: kSidebarIcon,
-                        imageUrl: picture,
-                        ring: c.avatarRing),
+                    child: Consumer(
+                      builder: (context, ref, _) => NymAvatar(
+                          seed: pubkey,
+                          size: kSidebarIcon,
+                          imageUrl: picture,
+                          ring: c.avatarRing,
+                          ringId: ref.watch(userCosmeticsProvider(pubkey)
+                              .select((x) => x.ringId)),
+                          ringFill: flattenOver(c.bgSecondary, c.bg)),
+                    ),
                   ),
                   const SizedBox(width: kSidebarGap),
                   Expanded(

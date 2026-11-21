@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:isolate';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 
 import '../../models/nostr_event.dart';
 import '../utils/isolate_gate.dart';
@@ -11,10 +12,15 @@ import 'schnorr.dart' as schnorr;
 /// Off-main BIP340 verification that batches a turn's events into one `compute`; per-event verdicts, fails closed.
 class IsolateVerifier {
   IsolateVerifier(
-      {this.maxBatch = 256, this.verifiedCacheCap = 100000, IsolateGate? gate})
-      : _gate = gate ?? IsolateGate.shared;
+      {this.maxBatch = 256,
+      this.verifiedCacheCap = 100000,
+      IsolateGate? gate,
+      VerifierIsolate? worker})
+      : _gate = gate ?? IsolateGate.shared,
+        _worker = worker ?? (gate == null ? VerifierIsolate.shared : null);
 
   final IsolateGate _gate;
+  final VerifierIsolate? _worker;
 
   /// Max events per `compute` payload; the buffer flushes early at this size.
   final int maxBatch;
@@ -54,6 +60,34 @@ class IsolateVerifier {
     _evictVerified();
   }
 
+  final LinkedHashSet<String> _fresh = LinkedHashSet<String>();
+  int _epoch = 0;
+
+  void _noteFresh(String id) {
+    _fresh.remove(id);
+    _fresh.add(id);
+    while (_fresh.length > verifiedCacheCap) {
+      _fresh.remove(_fresh.first);
+    }
+  }
+
+  int get freshVerifiedCount => _fresh.length;
+
+  List<String> takeFreshVerified() {
+    final out = <String>[
+      for (final id in _fresh)
+        if (_verifiedIds.contains(id)) id,
+    ];
+    _fresh.clear();
+    return out;
+  }
+
+  void clearVerified() {
+    _epoch++;
+    _verifiedIds.clear();
+    _fresh.clear();
+  }
+
   /// The newest [max] verified ids (oldest first), for persisting across launches.
   List<String> snapshotVerifiedIds({int max = 20000}) {
     final n = _verifiedIds.length;
@@ -88,6 +122,7 @@ class IsolateVerifier {
       final ok = schnorr.verifyEvent(event);
       if (ok && event.kind != _presenceKind) {
         _rememberVerified(computedId);
+        _noteFresh(computedId);
         onNewVerified?.call();
       }
       return Future<bool>.value(ok);
@@ -131,13 +166,19 @@ class IsolateVerifier {
     final payload = <Map<String, dynamic>>[
       for (final e in batch) e.toJson(),
     ];
-    return spawn(verifyEventsBatch, payload).then((results) {
+    final epoch = _epoch;
+    final worker = _worker;
+    final hop = worker != null
+        ? worker.run(payload)
+        : spawn(verifyEventsBatch, payload);
+    return hop.then((results) {
       // Guard positional alignment so a bad result length can never resolve to `true`.
       var anyNew = false;
       for (var i = 0; i < waiters.length; i++) {
         final ok = i < results.length && results[i] == true;
-        if (ok && batch[i].kind != _presenceKind) {
+        if (ok && batch[i].kind != _presenceKind && epoch == _epoch) {
           _rememberVerified(ids[i]);
+          _noteFresh(ids[i]);
           anyNew = true;
         }
         if (!waiters[i].isCompleted) waiters[i].complete(ok);
@@ -164,4 +205,112 @@ Future<List<bool>> verifyEventsBatch(List<Map<String, dynamic>> events) async {
     }
   }
   return out;
+}
+
+class _VerifierLink {
+  _VerifierLink(this.replies, this.exits);
+
+  final RawReceivePort replies;
+  final RawReceivePort exits;
+  final Completer<SendPort> ready = Completer<SendPort>();
+  final Map<int, Completer<List<bool>>> pending = <int, Completer<List<bool>>>{};
+  Isolate? isolate;
+  bool closed = false;
+}
+
+class VerifierIsolate {
+  static final VerifierIsolate shared = VerifierIsolate();
+
+  _VerifierLink? _link;
+  int _seq = 0;
+  int _spawns = 0;
+
+  @visibleForTesting
+  int get spawns => _spawns;
+
+  @visibleForTesting
+  int get inFlight => _link?.pending.length ?? 0;
+
+  Future<List<bool>> run(List<Map<String, dynamic>> events) {
+    final link = _link ?? _spawn();
+    return link.ready.future.then((port) {
+      if (link.closed) throw StateError('verifier isolate closed');
+      final id = ++_seq;
+      final reply = Completer<List<bool>>();
+      link.pending[id] = reply;
+      port.send(<Object?>[id, events]);
+      return reply.future;
+    });
+  }
+
+  @visibleForTesting
+  Future<void> close() async {
+    final link = _link;
+    if (link != null) _fail(link, StateError('verifier isolate closed'));
+  }
+
+  _VerifierLink _spawn() {
+    _spawns++;
+    final link = _VerifierLink(
+      RawReceivePort()..keepIsolateAlive = false,
+      RawReceivePort()..keepIsolateAlive = false,
+    );
+    _link = link;
+    link.ready.future.ignore();
+    link.replies.handler = (Object? msg) {
+      if (msg is SendPort) {
+        if (!link.ready.isCompleted) link.ready.complete(msg);
+        return;
+      }
+      if (msg is! List || msg.length != 2) return;
+      final reply = link.pending.remove(msg[0]);
+      final out = msg[1];
+      reply?.complete(
+          out is List ? [for (final ok in out) ok == true] : const <bool>[]);
+    };
+    link.exits.handler =
+        (Object? _) => _fail(link, StateError('verifier isolate exited'));
+    Isolate.spawn(_verifierIsolateMain, link.replies.sendPort,
+            onExit: link.exits.sendPort, debugName: 'nym-verify')
+        .then((iso) {
+      if (link.closed) {
+        iso.kill(priority: Isolate.immediate);
+      } else {
+        link.isolate = iso;
+      }
+    }, onError: (Object e) => _fail(link, e));
+    return link;
+  }
+
+  void _fail(_VerifierLink link, Object error) {
+    if (link.closed) return;
+    link.closed = true;
+    if (identical(_link, link)) _link = null;
+    link.replies.close();
+    link.exits.close();
+    link.isolate?.kill(priority: Isolate.immediate);
+    if (!link.ready.isCompleted) link.ready.completeError(error);
+    final waiting = List<Completer<List<bool>>>.of(link.pending.values);
+    link.pending.clear();
+    for (final reply in waiting) {
+      reply.completeError(error);
+    }
+  }
+}
+
+void _verifierIsolateMain(SendPort replies) {
+  final requests = RawReceivePort();
+  requests.handler = (Object? msg) {
+    if (msg is! List || msg.length != 2) return;
+    final id = msg[0];
+    final events = msg[1];
+    if (events is! List) {
+      replies.send(<Object?>[id, const <bool>[]]);
+      return;
+    }
+    verifyEventsBatch(events.cast<Map<String, dynamic>>()).then(
+        (out) => replies.send(<Object?>[id, out]),
+        onError: (Object _) => replies.send(<Object?>[id, const <bool>[]]));
+  };
+  replies.send(requests.sendPort);
 }

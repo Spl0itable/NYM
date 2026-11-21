@@ -941,6 +941,10 @@ Future<void> showSendMenu(
   ]);
 }
 
+void _closePanel(BuildContext context) {
+  if (ModalRoute.of(context) is PopupRoute) Navigator.of(context).pop();
+}
+
 Future<void> _showPanel(BuildContext context, Widget child) {
   final isLight = context.nym.isLight;
   return showNymSheet<void>(
@@ -1059,6 +1063,7 @@ class SendLaterSheet extends ConsumerStatefulWidget {
     this.replaces,
     this.at,
     this.threadRoot,
+    this.quoteSource,
     this.onScheduled,
   });
 
@@ -1067,6 +1072,7 @@ class SendLaterSheet extends ConsumerStatefulWidget {
   final String? replaces;
   final int? at;
   final String? threadRoot;
+  final String? quoteSource;
   final VoidCallback? onScheduled;
 
   static Future<void> open(
@@ -1076,6 +1082,7 @@ class SendLaterSheet extends ConsumerStatefulWidget {
     String? replaces,
     int? at,
     String? threadRoot,
+    String? quoteSource,
     VoidCallback? onScheduled,
   }) {
     return _showPanel(
@@ -1086,6 +1093,7 @@ class SendLaterSheet extends ConsumerStatefulWidget {
         replaces: replaces,
         at: at,
         threadRoot: threadRoot,
+        quoteSource: quoteSource,
         onScheduled: onScheduled,
       ),
     );
@@ -1127,11 +1135,18 @@ class _SendLaterSheetState extends ConsumerState<SendLaterSheet> {
     final res = widget.replaces != null
         ? await nav.reschedule(widget.replaces!, at)
         : await nav.schedule(widget.storageKey, widget.draft, at,
-            threadRoot: widget.threadRoot);
+            threadRoot: widget.threadRoot, quoteSource: widget.quoteSource);
+    if (res.ok) widget.onScheduled?.call();
     if (!mounted) return;
     if (res.ok) {
-      widget.onScheduled?.call();
       Navigator.of(context).maybePop();
+      return;
+    }
+    final code = res.code;
+    if (widget.replaces != null &&
+        (code == 'gone' || code == 'sent' || code == 'sending')) {
+      _closePanel(context);
+      unawaited(ScheduledListPanel.open(context, widget.storageKey));
       return;
     }
     setState(() {
@@ -1343,7 +1358,7 @@ class _ScheduledRow extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final nav = ref.read(chatNavProvider);
-    final open = item.status == 'pending' || item.status == 'failed';
+    final acts = scheduleItemActions(item.toJson(withText: true));
     final err = nav.scheduleFailText(item);
     final itemStatus = nav.scheduledItemStatus(item);
     ButtonStyle style({bool danger = false}) => OutlinedButton.styleFrom(
@@ -1388,39 +1403,44 @@ class _ScheduledRow extends ConsumerWidget {
             const SizedBox(height: 4),
             Text(err, style: TextStyle(color: c.danger, fontSize: 13)),
           ],
-          if (open) ...[
+          if (acts.isNotEmpty) ...[
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                OutlinedButton(
-                  key: ValueKey('scheduled-edit-${item.id}'),
-                  style: style(),
-                  onPressed: () {
-                    Navigator.of(context).maybePop();
-                    unawaited(SendLaterSheet.open(
-                      context,
-                      storageKey: scheduleChatKey(item.chat),
-                      draft: item.text,
-                      replaces: item.id,
-                      at: item.at,
-                    ));
-                  },
-                  child: Text(tr(ChatNavStrings.editTime)),
-                ),
-                OutlinedButton(
-                  key: ValueKey('scheduled-now-${item.id}'),
-                  style: style(),
-                  onPressed: () => unawaited(nav.sendScheduledNow(item.id)),
-                  child: Text(tr(ChatNavStrings.sendNow)),
-                ),
-                OutlinedButton(
-                  key: ValueKey('scheduled-cancel-${item.id}'),
-                  style: style(danger: true),
-                  onPressed: () => unawaited(nav.cancelScheduled(item.id)),
-                  child: Text(tr(ChatNavStrings.cancel)),
-                ),
+                if (acts.contains('edit'))
+                  OutlinedButton(
+                    key: ValueKey('scheduled-edit-${item.id}'),
+                    style: style(),
+                    onPressed: () {
+                      _closePanel(context);
+                      unawaited(SendLaterSheet.open(
+                        context,
+                        storageKey: scheduleChatKey(item.chat),
+                        draft: item.text,
+                        replaces: item.id,
+                        at: item.at,
+                      ));
+                    },
+                    child: Text(tr(ChatNavStrings.editTime)),
+                  ),
+                if (acts.contains('now'))
+                  OutlinedButton(
+                    key: ValueKey('scheduled-now-${item.id}'),
+                    style: style(),
+                    onPressed: () => unawaited(nav.sendScheduledNow(item.id)),
+                    child: Text(tr(ChatNavStrings.sendNow)),
+                  ),
+                if (acts.contains('cancel') || acts.contains('stop'))
+                  OutlinedButton(
+                    key: ValueKey('scheduled-cancel-${item.id}'),
+                    style: style(danger: true),
+                    onPressed: () => unawaited(nav.cancelScheduled(item.id)),
+                    child: Text(tr(acts.contains('stop')
+                        ? ChatNavStrings.stopRetrying
+                        : ChatNavStrings.cancel)),
+                  ),
               ],
             ),
           ],

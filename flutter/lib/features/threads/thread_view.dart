@@ -7,6 +7,7 @@ import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
+import '../chat_tools/chat_tools_ui.dart' show ChatToolsReader;
 import '../../widgets/chat/message_row.dart';
 import '../../widgets/chat/message_selection.dart';
 import '../../widgets/chat/typing_indicator.dart';
@@ -20,9 +21,13 @@ import '../../widgets/chat/list_anchor.dart';
 
 /// Focuses the conversation first so the shared composer targets it, then swaps the message area to [m]'s thread.
 void openMessageThread(WidgetRef ref, Message m,
+        {String? storageKey, bool silent = false}) =>
+    openThreadFor(ref.read, m, storageKey: storageKey, silent: silent);
+
+void openThreadFor(ChatToolsReader read, Message m,
     {String? storageKey, bool silent = false}) {
   if (!appThreadsEnabled) return;
-  final app = ref.read(appStateProvider);
+  final app = read(appStateProvider);
   final key = storageKey ?? app.view.storageKey;
   var root = m;
   final rootRef = m.threadRoot;
@@ -39,11 +44,11 @@ void openMessageThread(WidgetRef ref, Message m,
   }
   final view = _viewForStorageKey(key) ?? app.view;
   if (view != app.view) {
-    ref.read(appStateProvider.notifier).switchView(view);
+    read(appStateProvider.notifier).switchView(view);
   }
   // Post-frame so it wins over listeners that clear the thread; use the captured notifier since this ref may be disposed.
   final target = ActiveThread(view: view, rootId: threadKeyForMessage(root));
-  final activeThread = ref.read(activeThreadProvider.notifier);
+  final activeThread = read(activeThreadProvider.notifier);
   WidgetsBinding.instance.addPostFrameCallback((_) {
     activeThread.state = target;
   });
@@ -59,11 +64,18 @@ ChatView? _viewForStorageKey(String key) {
 
 /// In-place thread view that replaces the message list while a thread is open, above the shared composer.
 class ThreadView extends ConsumerStatefulWidget {
-  const ThreadView({super.key, required this.thread, this.showTyping = true});
+  const ThreadView({
+    super.key,
+    required this.thread,
+    this.showTyping = true,
+    this.columnsMode = false,
+  });
   final ActiveThread thread;
 
   /// False inside a columns deck, where the column hosts its own typing row.
   final bool showTyping;
+
+  final bool columnsMode;
 
   @override
   ConsumerState<ThreadView> createState() => _ThreadViewState();
@@ -172,25 +184,42 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
       }
     }
 
-    Widget row(Message m) {
-      final base = MessageRow(
-        key: ValueKey('thread_${m.id}'),
-        message: m,
-        settings: settings,
-        reactions: reactions[m.id] ?? const [],
-        scrollKey: storageKey,
-        onReactionPicker: (msg) => showReactionPicker(context, ref, msg),
-        showThreadAffordances: false,
-      );
-      final status = widget.thread.view == const ChatView.pm(kNymbotPubkey)
-          ? botRunTrailing(m, c)
-          : null;
-      if (status == null) return base;
-      return Column(
-        key: ValueKey('thread_run_${m.id}'),
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [base, status],
-      );
+    final useBubbles = settings.useBubbles;
+    final mentionToken = '@${splitNymSuffix(app.selfNym).base}';
+    final botThread = widget.thread.view == const ChatView.pm(kNymbotPubkey);
+
+    Widget groupOf(List<MessageGroupEntry> entries) => MessageGroup(
+          key: ValueKey('thread_${entries.first.message.id}'),
+          entries: entries,
+          settings: settings,
+          columnsMode: widget.columnsMode,
+          scrollKey: storageKey,
+          onReactionPicker: (msg) => showReactionPicker(context, ref, msg),
+          showThreadAffordances: false,
+          trailingFor: botThread ? (m) => botRunTrailing(m, c) : null,
+        );
+
+    List<List<MessageGroupEntry>> groupsOf(List<Message> list) =>
+        splitGroupsByDay(
+          buildMessageGroups(
+            list,
+            reactions: reactions,
+            useBubbles: useBubbles,
+            mentionToken: mentionToken,
+          ),
+          (MessageGroupEntry e) => e.message.createdAt,
+        );
+
+    final replyRows = <Widget>[];
+    var prevAt = root?.createdAt ?? 0;
+    for (final g in groupsOf(replies)) {
+      final at = g.first.message.createdAt;
+      if (!DayClock.instance.sameDay(prevAt, at)) {
+        replyRows.add(DaySeparator(createdAt: at, useBubbles: useBubbles));
+      }
+      replyRows.add(groupOf(g));
+      replyRows.add(const SizedBox(height: 3));
+      prevAt = g.last.message.createdAt;
     }
 
     final containerColor = c.isLight
@@ -251,15 +280,16 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
             builder: (keepAlives) => ListView(
               addAutomaticKeepAlives: keepAlives,
               controller: _scroll,
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              padding: EdgeInsets.symmetric(
+                  vertical: 8, horizontal: widget.columnsMode ? 10 : 4),
               children: [
                 for (final w in <Widget>[
                 if (root != null) ...[
                   DaySeparator(
                     createdAt: root.createdAt,
-                    useBubbles: settings.useBubbles,
+                    useBubbles: useBubbles,
                   ),
-                  row(root),
+                  for (final g in groupsOf([root])) groupOf(g),
                 ] else
                   Padding(
                     padding: const EdgeInsets.all(16),
@@ -293,25 +323,16 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
                     ],
                   ),
                 ),
-                for (var i = 0; i < replies.length; i++) ...[
-                  if (!DayClock.instance.sameDay(
-                      i == 0
-                          ? (root?.createdAt ?? 0)
-                          : replies[i - 1].createdAt,
-                      replies[i].createdAt))
-                    DaySeparator(
-                      createdAt: replies[i].createdAt,
-                      useBubbles: settings.useBubbles,
-                    ),
-                  row(replies[i]),
-                  const SizedBox(height: 3),
-                ],
+                ...replyRows,
               ])
                   MessageSelection.item(context, w),
               ],
             ))),
           ),
-          if (widget.showTyping) const TypingIndicatorRow(),
+          if (widget.showTyping)
+            TypingIndicatorRow(
+                storageKey: widget.thread.view.storageKey,
+                threadRoot: widget.thread.rootId),
         ],
       ),
     );

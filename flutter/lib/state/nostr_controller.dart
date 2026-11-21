@@ -73,6 +73,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart'
     show DefaultCacheManager;
 import '../features/messages/archive_gate.dart';
 import '../features/messages/bitchat_verify.dart' show kBitchatVerifyLabel;
+import '../features/messages/bridge_block.dart';
 import '../features/messages/encrypted_blob.dart';
 import '../features/messages/trust_graph.dart';
 import '../features/messages/media_fallbacks.dart';
@@ -229,6 +230,7 @@ class NostrController {
   NostrController(this._ref) {
     _ref.read(appStateProvider.notifier).groupMemberKeyTs =
         (gid) => _groups?.memberKeyTsOf(gid) ?? const <String, int>{};
+    _ref.read(otherUsersShopProvider.notifier).ownOtherKey = _shopLookupBarred;
     StorageGuard.pruners
       ..clear()
       ..add(() => DefaultCacheManager().emptyCache())
@@ -301,6 +303,9 @@ class NostrController {
     };
     _ref.listen<ActiveThread?>(activeThreadProvider, (prev, next) {
       if (next != null) _markOpenThreadSeen();
+      for (final at in [prev, next]) {
+        if (at != null) _typingThrottle.remove(at.view.storageKey);
+      }
     });
     _ref.read(blockedRelaysProvider.notifier).onLocalChange = syncSettings;
     _ref.listen<List<String>>(blockedRelaysProvider, (prev, next) {
@@ -640,7 +645,11 @@ class NostrController {
       final first = list.first;
       if (first is! Map) return null;
       final ev = NostrEvent.fromJson(Map<String, dynamic>.from(first));
-      if (ev.id != eventId || isEncryptedBlobChannelEvent(ev)) return null;
+      if (ev.id != eventId ||
+          isEncryptedBlobChannelEvent(ev) ||
+          isBridgeBlockedEvent(ev)) {
+        return null;
+      }
       return await _verifyArchived(ev) ? ev : null;
     } catch (_) {
       return null;
@@ -732,6 +741,12 @@ class NostrController {
   final Map<String, Timer> _typingStartTimers = {};
   final Map<String, Timer> _typingStopTimers = {};
   final Set<String> _typingStartedFor = <String>{};
+  final Map<String, String> _typists = {};
+
+  bool _typingKeyMoved(String key, String? pubkey) {
+    final by = _typists[key];
+    return by != null && by != pubkey;
+  }
 
   /// `messageId:emoji` → toggle rate-limit state: 3 toggles per 30s, then a 60s cooldown.
   final Map<String, _ReactionRateTracker> _reactionToggleTracker = {};
@@ -1068,6 +1083,7 @@ class NostrController {
       service.pmD1Down = _pmD1DownPks.contains(identity.pubkey);
       _service = service;
       _wireBlobDrops(service);
+      _wireSignerHooks(service);
       service.onDmAccepted = _onDmAccepted;
       service.receiptsOff = () => receiptsOff;
       service.setBlockedRelays(_ref.read(blockedRelaysProvider));
@@ -1079,6 +1095,7 @@ class NostrController {
       service.pqPeerKey = _pqLayeredPeerKey;
       service.pqSelfKey = pqSelfKey;
       service.pqSelfLayered = pqSelfUsesLayered;
+      service.pqSelfAllCapable = pqSelfAllDevicesCapable;
       final attest =
           _attest ??= _newAttest();
       appAttestAuthority = attest.authorityPubkey;
@@ -1898,9 +1915,12 @@ class NostrController {
     _deletedIdsPersistTimer = null;
     _pqKeysPersistTimer?.cancel();
     _pqKeysPersistTimer = null;
-    _verifiedIdsPersistTimer?.cancel();
-    _verifiedIdsPersistTimer = null;
+    _verifiedIdsChanged = false;
+    _verifiedCheckpointTimer?.cancel();
+    _verifiedCheckpointTimer = null;
+    _verifiedDeltaCount = 0;
     NostrService.onVerifiedIdsChanged = null;
+    NostrService.clearVerifiedIds();
     _pqAnnounceTimer?.cancel();
     _pqAnnounceTimer = null;
     // Flush pending persists before the handles they read are dropped.
@@ -1952,6 +1972,7 @@ class NostrController {
       await _cache?.close();
     } catch (_) {}
     _cache = null;
+    _ref.read(appStateProvider.notifier).setReactionDeltaTracking(false);
     try {
       await _service?.stop();
     } catch (_) {}
@@ -1981,16 +2002,7 @@ class NostrController {
     _presenceStatuses.clear();
     _stopGeoPresenceSend();
     _stopAllAnonPresence();
-    _typingThrottle.clear();
-    for (final t in _typingStartTimers.values) {
-      t.cancel();
-    }
-    _typingStartTimers.clear();
-    for (final t in _typingStopTimers.values) {
-      t.cancel();
-    }
-    _typingStopTimers.clear();
-    _typingStartedFor.clear();
+    _cancelTypingTimers();
     for (final t in _groupReactionTimers.values) {
       t.cancel();
     }
@@ -2258,6 +2270,9 @@ class NostrController {
       try {
         await _flush().timeout(drainBudget);
       } catch (_) {}
+      try {
+        await _saveVerifiedIdsIfChanged().timeout(drainBudget);
+      } catch (_) {}
     }
     await _closeSendAs(
         settle: persist ? drainBudget : null,
@@ -2397,7 +2412,37 @@ class NostrController {
     appState.onBlobPointersPurged = (keys) => keys.forEach(_markDirty);
   }
 
+  void _wireSignerHooks(NostrService service) {
+    service.onSignerCannotOpenBitchat = (_) => _noteSignerBitchatArrived();
+  }
+
+  String? _signerBitchatNoticeFor;
+
+  void _noteSignerBitchatArrived() {
+    final self = _identity?.pubkey;
+    if (self == null || _signerBitchatNoticeFor == self) return;
+    _signerBitchatNoticeFor = self;
+    _emitSystemMessage(tr(
+        "A Bitchat PM arrived that this login can't open. Bitchat encrypts "
+        "with your private key directly, which a remote signer can't do. To "
+        'read Bitchat PMs, log in with your nsec on this device.'));
+  }
+
+  final Set<String> _signerBitchatSendNoted = <String>{};
+
+  void _noteSignerCannotReachBitchat(String self, String peer) {
+    if (isVerifiedBot(peer)) return;
+    if (!_signerBitchatSendNoted.add('$self:$peer')) return;
+    _ref.read(appStateProvider.notifier).addSystemMessage(
+        tr('Sent as a standard PM only. If this person uses Bitchat, they '
+            "can't read it: Bitchat needs your private key on this device, "
+            "which a remote signer can't use."),
+        storageKey: PmLogic.pmStorageKey(peer),
+        id: 'sys-signer-bitchat');
+  }
+
   void _onEvent(NostrEvent event) {
+    if (isBridgeBlockedEvent(event)) return;
     final appState = _ref.read(appStateProvider.notifier);
     if (appState.dropsEncryptedBlob(event)) return;
     if (_localEchoIds.isNotEmpty) _localEchoIds.remove(event.id);
@@ -3579,6 +3624,7 @@ class NostrController {
     } catch (_) {
       return;
     }
+    if (isBridgeBlockedEvent(parsed)) return;
     if (isEncryptedBlobChannelEvent(parsed)) {
       if (parsed.id.isNotEmpty && parsed.computeId() == parsed.id) {
         _ref.read(appStateProvider.notifier).noteDroppedBlobId(parsed.id);
@@ -4033,6 +4079,9 @@ class NostrController {
     if (index == null) return false;
     return index.accounts.any((a) => a.pubkey == pubkey);
   }
+
+  bool _shopLookupBarred(String pubkey) =>
+      _isOwnOtherKey(pubkey) || _isAnonBotPubkey(pubkey);
 
   /// Earned trust and PoW-floor observation; must also run on the D1 backfill path or restored history is filtered out.
   void _observeMessageTrust(NostrEvent event) {
@@ -5666,6 +5715,7 @@ class NostrController {
         expiresAtMs: DateTime.now().millisecondsSinceEpoch +
             UploadActivity.expiryMs(info.ttlSec),
         activity: info.activity,
+        threadRoot: info.threadRoot,
       );
       appState.notePeerActivity(
           info.pubkey!, ((rumor['created_at'] as num?)?.toInt() ?? 0) * 1000);
@@ -6185,6 +6235,7 @@ class NostrController {
     final service = _service;
     final view = state.view;
     _markDirty(view.storageKey);
+    _lapseTyping(view);
 
     String? threadRoot;
     final at = _ref.read(activeThreadProvider);
@@ -6325,6 +6376,7 @@ class NostrController {
             ?.shouldSendOverMesh(view) ??
         false;
     if (mesh) return const SendAsResult.refused();
+    _lapseTyping(view);
     final svc = sendAsService;
     final sender = await svc.resolve(accountId);
     if (sender == null) {
@@ -7672,6 +7724,12 @@ class NostrController {
         enabled: pqEnabled,
       );
 
+  bool pqSelfAllDevicesCapable() => PqPolicy.allDevicesCapable(
+        _pqDevices,
+        _pqDeviceIdCached ?? '',
+        nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      );
+
   /// False as soon as one live device on the account only opens the combined format.
   bool pqSelfUsesLayered() => PqPolicy.allDevicesLayered(
         _pqDevices,
@@ -7817,21 +7875,74 @@ class NostrController {
     _schedulePersistPqKeys();
   }
 
-  /// Debounced (30s) persist of verified signature ids so the next launch skips re-verifying.
-  Timer? _verifiedIdsPersistTimer;
-  void _schedulePersistVerifiedIds() {
-    if (_verifiedIdsPersistTimer != null) return;
+  @visibleForTesting
+  static Duration verifiedCheckpointEvery = const Duration(minutes: 3);
+  @visibleForTesting
+  static Duration verifiedBackgroundCheckpointEvery =
+      const Duration(minutes: 10);
+  @visibleForTesting
+  static int verifiedCheckpointBurst = 2000;
+  @visibleForTesting
+  static Duration verifiedInactiveGap = const Duration(seconds: 30);
+  static const int _verifiedSnapshotMax = 20000;
+
+  bool _verifiedIdsChanged = false;
+  Timer? _verifiedCheckpointTimer;
+  int _verifiedDeltaCount = 0;
+  DateTime _verifiedWrittenAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _noteVerifiedIdsChanged() {
     if (PanicWipe.inProgress) return;
-    _verifiedIdsPersistTimer = Timer(const Duration(seconds: 30), () {
-      _verifiedIdsPersistTimer = null;
-      final cache = _cache;
-      if (cache == null || !cache.isOpen) return;
-      if (PanicWipe.inProgress) return;
-      unawaited(cache
-          .saveMetaSet(CacheStore.metaVerifiedEventIds,
-              NostrService.snapshotVerifiedIds().toSet())
-          .catchError((_) {}));
+    _verifiedIdsChanged = true;
+    if (NostrService.freshVerifiedIdCount >= verifiedCheckpointBurst) {
+      unawaited(_checkpointVerifiedIds());
+      return;
+    }
+    _verifiedCheckpointTimer ??= Timer(
+        _appInForeground
+            ? verifiedCheckpointEvery
+            : verifiedBackgroundCheckpointEvery, () {
+      _verifiedCheckpointTimer = null;
+      unawaited(_checkpointVerifiedIds());
     });
+  }
+
+  Future<void> _checkpointVerifiedIds() async {
+    _verifiedCheckpointTimer?.cancel();
+    _verifiedCheckpointTimer = null;
+    final cache = _cache;
+    if (cache == null || !cache.isOpen || PanicWipe.inProgress) return;
+    final pending = NostrService.freshVerifiedIdCount;
+    if (pending == 0) return;
+    if (_verifiedDeltaCount + pending > _verifiedSnapshotMax) {
+      await _saveVerifiedIdsIfChanged();
+      return;
+    }
+    final fresh = NostrService.takeFreshVerifiedIds();
+    if (fresh.isEmpty) return;
+    _verifiedDeltaCount += fresh.length;
+    _verifiedWrittenAt = DateTime.now();
+    try {
+      await cache.appendMetaSetDelta(CacheStore.metaVerifiedEventIds, fresh);
+    } catch (_) {}
+  }
+
+  Future<void> _saveVerifiedIdsIfChanged() async {
+    _verifiedCheckpointTimer?.cancel();
+    _verifiedCheckpointTimer = null;
+    if (!_verifiedIdsChanged) return;
+    final cache = _cache;
+    if (cache == null || !cache.isOpen) return;
+    if (PanicWipe.inProgress) return;
+    _verifiedIdsChanged = false;
+    NostrService.takeFreshVerifiedIds();
+    _verifiedDeltaCount = 0;
+    _verifiedWrittenAt = DateTime.now();
+    try {
+      await cache.saveMetaSet(CacheStore.metaVerifiedEventIds,
+          NostrService.snapshotVerifiedIds(max: _verifiedSnapshotMax).toSet());
+      await cache.clearMetaSetDeltas(CacheStore.metaVerifiedEventIds);
+    } catch (_) {}
   }
 
   Timer? _pqKeysPersistTimer;
@@ -7909,6 +8020,7 @@ class NostrController {
       final keys = derive(epoch);
       if (keys == null || !same(keys, announced)) continue;
       _pqEpoch = epoch;
+      _pushPqKeysToPeers();
       await _ref
           .read(keyValueStoreProvider)
           .setString(StorageKeys.pqEpoch, '$epoch');
@@ -8009,9 +8121,12 @@ class NostrController {
   /// Our decrypt candidates: current epoch first, then a few previous ones.
   List<({Uint8List kemSk, Uint8List kemPk})> pqSelfCandidateKeys() {
     final privkey = _identity?.privkey;
-    if (privkey == null) return const [];
+    final root = _pqRoot;
+    if (privkey == null) {
+      return root == null ? const [] : pqRootCandidates(root, _pqEpoch);
+    }
     // Root-derived first; the nsec-derived half is permanent (spec §4).
-    return pqSelfCandidates(privkey, _pqEpoch, root: _pqRoot);
+    return pqSelfCandidates(privkey, _pqEpoch, root: root);
   }
 
   // The post-quantum root secret (docs/PQ-ROOT-SPEC.md).
@@ -8612,9 +8727,13 @@ class NostrController {
 
     final plan = _pmPlanFor(identity, recipientPubkey);
 
+    final signerSend = (claim?.signer ?? service.signer)?.isRemote ?? false;
+    final noteBitchat =
+        plan.bitchat && signerSend && recipientPubkey != identity.pubkey;
+
     // One rumor per chunk: Bitchat drops TLV values over 255 bytes.
     final bitchatRumors = <UnsignedEvent>[];
-    if (plan.bitchat) {
+    if (plan.bitchat && !signerSend) {
       for (final chunk in bitchat.chunkBitchatContent(rumor.content)) {
         final encoded = bitchat.encodeBitchatMessage(
           chunk,
@@ -8643,7 +8762,7 @@ class NostrController {
     }
 
     final supportToken = pmSupportTokenFor(recipientPubkey);
-    await service.publishPM(
+    final sent = await service.publishPM(
       rumor: PmLogic.withSupportToken(rumor, supportToken),
       recipientPubkey: recipientPubkey,
       settings: _msgSettings,
@@ -8659,6 +8778,9 @@ class NostrController {
       queuedKey: queuedKey,
       signerOverride: claim?.signer,
     );
+    if (sent && noteBitchat) {
+      _noteSignerCannotReachBitchat(identity.pubkey, recipientPubkey);
+    }
   }
 
   PmSupportTokens? _pmSupportTokens;
@@ -8975,13 +9097,13 @@ class NostrController {
           {String? threadRoot}) =>
       _sendMessageContent(content, threadRoot: threadRoot, viewOverride: view);
 
-  Future<void> _sendMessageContent(String content,
+  Future<bool> _sendMessageContent(String content,
       {String? threadRoot,
       ChatView? viewOverride,
       bool noThread = false,
       String? quoteSource}) async {
     final trimmed = content.trim();
-    if (trimmed.isEmpty) return;
+    if (trimmed.isEmpty) return false;
     final appState = _ref.read(appStateProvider.notifier);
     final state = _ref.read(appStateProvider);
     final service = _service;
@@ -9006,17 +9128,18 @@ class NostrController {
     if (meshBridge != null && meshBridge.shouldSendOverMesh(view)) {
       await meshBridge.sendFromComposer(view, trimmed, threadRoot: threadRoot);
       if (view.kind != ViewKind.channel) _rotateAfterSend();
-      return;
+      return true;
     }
 
     if (view.kind == ViewKind.channel) {
       // Optimistic local echo with a temp `_optim_*` id.
       final echo = appState.sendLocal(trimmed,
           threadRoot: threadRoot, viewOverride: view);
-      if (service == null || identity == null) return;
+      if (service == null || identity == null) return false;
       final isGeo = state.channels
           .any((c) => c.key == view.id.toLowerCase() && c.isGeohash);
       final claim = _claimChannelKey(service, identity);
+      final typed = _takeTypingForSend(view, identity);
       final ahead = _channelSendTail;
       final turn = Completer<void>();
       _channelSendTail = turn.future;
@@ -9069,8 +9192,9 @@ class NostrController {
       } finally {
         if (!turn.isCompleted) turn.complete();
         if (identical(_channelSendTail, turn.future)) _channelSendTail = null;
+        if (typed) _stopTypingAfterSend(view, identity, claim);
       }
-      return;
+      return true;
     }
 
     if (view.kind == ViewKind.pm) {
@@ -9088,17 +9212,17 @@ class NostrController {
               .read(botChatControllerProvider.notifier)
               .handleBotPMCommand(trimmed,
                   hardcore: hardcore, threadRoot: threadRoot, quoteSource: quoteSource));
-          return;
+          return true;
         }
         // Route through the engine so exactly one bot-addressed wrap is published and its id rides the paid request.
         unawaited(_ref
             .read(botChatControllerProvider.notifier)
             .sendUserBotPM(trimmed, hardcore: hardcore, quoteSource: quoteSource));
-        return;
+        return true;
       }
       if (appState.ownSendingWith(view.storageKey, trimmed,
           threadRoot: threadRoot)) {
-        return;
+        return true;
       }
       final nymMessageId = PmLogic.generateSharedEventId();
       final echo = appState.sendLocal(trimmed,
@@ -9110,10 +9234,10 @@ class NostrController {
           .expirationFor(DateTime.now().millisecondsSinceEpoch ~/ 1000);
       if (service == null || identity == null) {
         appState.markOwnSendState(nymMessageId, DeliveryStatus.failed);
-        return;
+        return false;
       }
       final claim = _claimChannelKey(service, identity);
-      final typed = _takeTypingUnderClaim(view, claim);
+      final typed = _takeTypingUnderClaim(view, claim, identity);
       final base = PmLogic.buildPmRumor(
         selfPubkey: identity.pubkey,
         recipientPubkey: view.id,
@@ -9169,20 +9293,27 @@ class NostrController {
         if (echo != null) appState.markOptimisticFailed(echo.id);
       }
       if (typed) _sendTypingStopUnderClaim(view, identity, claim);
-      return;
+      return true;
     }
 
     if (view.kind == ViewKind.group) {
       final group = appState.groupById(view.id);
       if (service == null || identity == null || group == null) {
         appState.sendLocal(trimmed, viewOverride: view);
-        return;
+        return false;
       }
       final blocked =
           _ref.read(groupToolsProvider).sendBlockedReason(group.id, trimmed);
       if (blocked != null) {
         _emitSystemMessage(blocked);
-        return;
+        return false;
+      }
+      final groupSigner = _signer;
+      if (groupSigner is Nip46SignerAdapter && !groupSigner.connected) {
+        _emitSystemMessage(tr(
+            "Your remote signer isn't connected, so this group message can't "
+            'be signed. Reconnect it and try again.'));
+        return false;
       }
       // Build and send first so we know the shared id, then echo with it.
       final ek = _groups!.keysFor(group.id);
@@ -9198,7 +9329,7 @@ class NostrController {
       groupEcho?.expiresAt = _msgSettings
           .expirationFor(DateTime.now().millisecondsSinceEpoch ~/ 1000);
       final claim = _claimChannelKey(service, identity);
-      final typed = _takeTypingUnderClaim(view, claim);
+      final typed = _takeTypingUnderClaim(view, claim, identity);
       final rumor = GroupLogic.buildGroupMessageRumor(
         group: group,
         selfPubkey: identity.pubkey,
@@ -9214,7 +9345,7 @@ class NostrController {
         ],
       );
       String? selfTarget;
-      await service.publishGroupMessage(
+      final reached = await service.publishGroupMessage(
         rumor: rumor,
         recipients: group.members,
         encryptTo: (pk) {
@@ -9241,8 +9372,13 @@ class NostrController {
             pqRoot:
                 total > 0 && pq == total && root == total && _pqRoot != null),
       );
+      if (!reached && groupEcho != null) {
+        appState.markOptimisticFailed(groupEcho.id);
+      }
       if (typed) _sendTypingStopUnderClaim(view, identity, claim);
+      return reached;
     }
+    return false;
   }
 
   /// Random/hardcore removes the saved session nsec; persistent saves the current one if none is stored.
@@ -9333,12 +9469,40 @@ class NostrController {
     _claimChannelKey(service, identity);
   }
 
-  bool _takeTypingUnderClaim(ChatView view, _ChannelClaim claim) {
+  bool _takeTypingForSend(ChatView view, Identity sender) {
+    final key = view.storageKey;
+    _typingStopTimers.remove(key)?.cancel();
+    _typingStartTimers.remove(key)?.cancel();
+    _typingThrottle.remove(key);
+    return _typingStartedFor.remove(key) &&
+        !_typingKeyMoved(key, sender.pubkey);
+  }
+
+  void _stopTypingAfterSend(
+      ChatView view, Identity identity, _ChannelClaim claim) {
+    if (claim.signer != null) {
+      _sendTypingStopUnderClaim(view, identity, claim);
+      return;
+    }
+    if (_identity?.pubkey != identity.pubkey) return;
+    unawaited(_sendTypingStop(view));
+  }
+
+  void _lapseTyping(ChatView view) {
+    final key = view.storageKey;
+    _typingStopTimers.remove(key)?.cancel();
+    _typingStartTimers.remove(key)?.cancel();
+    _typingStartedFor.remove(key);
+  }
+
+  bool _takeTypingUnderClaim(
+      ChatView view, _ChannelClaim claim, Identity sender) {
     if (claim.signer == null) return false;
     final key = view.storageKey;
     _typingStopTimers.remove(key)?.cancel();
     _typingStartTimers.remove(key)?.cancel();
-    return _typingStartedFor.remove(key);
+    return _typingStartedFor.remove(key) &&
+        !_typingKeyMoved(key, sender.pubkey);
   }
 
   void _sendTypingStopUnderClaim(
@@ -11240,6 +11404,8 @@ class NostrController {
     final identity = _identity;
     final view = state.view;
 
+    if (anonLaneEditRefused(messageId)) return false;
+
     if (view.kind == ViewKind.pm && anonSuppressSendTo(view.id)) {
       _emitSystemMessage(tr(
           'Editing is off in the anonymous Nymbot chat — an edit would be signed by your real key. Send a new message instead.'));
@@ -11359,6 +11525,12 @@ class NostrController {
     final service = _service;
     final identity = _identity;
     final view = state.view;
+
+    if (_anonLaneRef(messageId)) {
+      _emitSystemMessage(tr(
+          'Deleting is off on anonymous Nymbot messages: a deletion would be signed by your real key and would link the chat to you.'));
+      return false;
+    }
 
     final kind = originalKind ?? _viewDeletionKind(state);
     final target = appState.messageById(messageId);
@@ -11922,6 +12094,12 @@ class NostrController {
     _presenceGate.note(kind);
   }
 
+  String? _typingThreadRoot(ChatView view) {
+    if (!appThreadsEnabled) return null;
+    final at = _ref.read(activeThreadProvider);
+    return at != null && at.view == view ? at.rootId : null;
+  }
+
   void _armTypingStop(String key, ChatView view) {
     _typingStopTimers.remove(key)?.cancel();
     _typingStopTimers[key] =
@@ -11929,6 +12107,7 @@ class NostrController {
       _typingStopTimers.remove(key);
       _typingStartTimers.remove(key)?.cancel();
       if (!_typingStartedFor.remove(key)) return;
+      if (_typingKeyMoved(key, _identity?.pubkey)) return;
       unawaited(_sendTypingStop(view));
     });
   }
@@ -11939,6 +12118,21 @@ class NostrController {
     final service = _service;
     final identity = sender ?? _identity;
     if (service == null || identity == null) return;
+    if (view.kind == ViewKind.channel) {
+      final entry = _ref
+          .read(appStateProvider)
+          .channels
+          .where((c) => c.key == view.id.toLowerCase());
+      if (entry.isEmpty) return;
+      await service.publishChannelTyping(
+        status: 'stop',
+        channelKey: entry.first.key,
+        isGeohash: entry.first.isGeohash,
+        nym: _wireNym(identity),
+        signerOverride: signerOverride,
+      );
+      return;
+    }
     if (view.kind == ViewKind.pm) {
       if (_anonLaneTypingQuiet(view)) return;
       await service.publishTyping(
@@ -11983,6 +12177,14 @@ class NostrController {
     if (!_indicatorScopeAllows(scope, ctx)) return;
 
     final key = view.storageKey;
+    if (_anonLaneTypingQuiet(view)) return;
+    final typist = identity.pubkey;
+    if (_typingKeyMoved(key, typist)) {
+      _typingStartedFor.remove(key);
+      _typingStartTimers.remove(key)?.cancel();
+      _typingThrottle.remove(key);
+    }
+    _typists[key] = typist;
     final now = DateTime.now().millisecondsSinceEpoch;
     _armTypingStop(key, view);
     if (_typingStartedFor.contains(key)) {
@@ -11995,19 +12197,23 @@ class NostrController {
         _typingStartTimers.remove(key);
         final current = _ref.read(appStateProvider).view;
         if (current.storageKey != key) return;
+        if (_identity?.pubkey != typist) return;
+        if (_anonLaneTypingQuiet(current)) return;
         _typingStartedFor.add(key);
         _typingThrottle[key] = DateTime.now().millisecondsSinceEpoch;
-        unawaited(
-            _publishTypingSignal(current, 'start', chatActivityFor(key)));
+        unawaited(_publishTypingSignal(current, 'start', chatActivityFor(key),
+            threadRoot: _typingThreadRoot(current)));
       });
       return;
     }
 
-    await _publishTypingSignal(view, 'start', chatActivityFor(key));
+    await _publishTypingSignal(view, 'start', chatActivityFor(key),
+        threadRoot: _typingThreadRoot(view));
   }
 
   Future<void> _publishTypingSignal(
-      ChatView view, String status, String? activity) async {
+      ChatView view, String status, String? activity,
+      {String? threadRoot}) async {
     final service = _service;
     final identity = _identity;
     if (service == null || identity == null) return;
@@ -12023,6 +12229,7 @@ class NostrController {
         isGeohash: entry.first.isGeohash,
         nym: _wireNym(identity),
         activity: activity,
+        threadRoot: threadRoot,
       );
       return;
     }
@@ -12033,7 +12240,8 @@ class NostrController {
           status: status,
           recipients: [view.id],
           ttlSec: _typingTtlSec,
-          activity: activity);
+          activity: activity,
+          threadRoot: threadRoot);
     } else {
       final group = _ref.read(appStateProvider.notifier).groupById(view.id);
       if (group == null) return;
@@ -12051,20 +12259,40 @@ class NostrController {
         ttlSec: _typingTtlSec,
         activity: activity,
         encryptTo: (pk) => ek.encryptionPubkeyFor(pk, identity.pubkey),
+        threadRoot: threadRoot,
       );
     }
   }
 
-  final Map<int, ({String kind, ChatView view})> _chatActivities = {};
+  final Map<int,
+          ({String kind, ChatView view, String? threadRoot, String pubkey})>
+      _chatActivities = {};
   final Map<String, Timer> _chatActivityTimers = {};
   int _chatActivitySeq = 0;
 
-  String? chatActivityFor(String storageKey) {
-    String? found;
+  String? chatActivityFor(String storageKey) =>
+      _chatActivityOf(storageKey)?.kind;
+
+  ({String kind, ChatView view, String? threadRoot, String pubkey})?
+      _chatActivityOf(String storageKey) {
+    final live = identity?.pubkey;
+    ({String kind, ChatView view, String? threadRoot, String pubkey})? found;
     for (final a in _chatActivities.values) {
-      if (a.view.storageKey == storageKey) found = a.kind;
+      if (a.view.storageKey == storageKey && a.pubkey == live) found = a;
     }
     return found;
+  }
+
+  void _dropChatActivitiesOfOtherKeys() {
+    final live = identity?.pubkey;
+    _chatActivities.removeWhere((_, a) => a.pubkey != live);
+    final idle = [
+      for (final key in _chatActivityTimers.keys)
+        if (_chatActivityOf(key) == null) key,
+    ];
+    for (final key in idle) {
+      _chatActivityTimers.remove(key)?.cancel();
+    }
   }
 
   bool _chatActivityAllowed(ChatView view) {
@@ -12086,8 +12314,15 @@ class NostrController {
     if (!UploadActivity.isKind(kind)) return null;
     final view = target ?? _ref.read(appStateProvider).view;
     if (!_chatActivityAllowed(view)) return null;
+    final typist = identity;
+    if (typist == null) return null;
     final token = ++_chatActivitySeq;
-    _chatActivities[token] = (kind: kind, view: view);
+    _chatActivities[token] = (
+      kind: kind,
+      view: view,
+      threadRoot: _typingThreadRoot(view),
+      pubkey: typist.pubkey,
+    );
     _publishChatActivity(view);
     _chatActivityTimers[view.storageKey] ??= Timer.periodic(
         const Duration(milliseconds: UploadActivity.refreshMs),
@@ -12099,6 +12334,10 @@ class NostrController {
     if (token == null) return;
     final entry = _chatActivities.remove(token);
     if (entry == null) return;
+    if (entry.pubkey != identity?.pubkey) {
+      _dropChatActivitiesOfOtherKeys();
+      return;
+    }
     final key = entry.view.storageKey;
     if (chatActivityFor(key) != null) {
       _publishChatActivity(entry.view);
@@ -12121,15 +12360,18 @@ class NostrController {
   }
 
   void _publishChatActivity(ChatView view) {
-    final kind = chatActivityFor(view.storageKey);
-    if (kind == null || !_chatActivityAllowed(view)) return;
-    unawaited(publishActivitySignal(view, 'start', kind));
+    _dropChatActivitiesOfOtherKeys();
+    final activity = _chatActivityOf(view.storageKey);
+    if (activity == null || !_chatActivityAllowed(view)) return;
+    unawaited(publishActivitySignal(view, 'start', activity.kind,
+        threadRoot: activity.threadRoot));
   }
 
   @visibleForTesting
   Future<void> publishActivitySignal(
-          ChatView view, String status, String? activity) =>
-      _publishTypingSignal(view, status, activity);
+          ChatView view, String status, String? activity,
+          {String? threadRoot}) =>
+      _publishTypingSignal(view, status, activity, threadRoot: threadRoot);
 
   /// 'pms', 'groups' or 'pms-groups' limit contexts, 'disabled' suppresses, anything else allows all.
   bool _indicatorScopeAllows(String scope, String context) {
@@ -12380,6 +12622,7 @@ class NostrController {
       expiresAtMs: DateTime.now().millisecondsSinceEpoch +
           UploadActivity.expiryMs(signal?.ttl ?? 0),
       activity: signal?.activity,
+      threadRoot: TypingThread.rootOf(event.tags, channel: true),
     );
   }
 
@@ -12626,11 +12869,43 @@ class NostrController {
       messageId.isNotEmpty &&
       (_ref.read(appStateProvider.notifier).messageById(messageId)?.anonLane ?? true);
 
-  String? scheduleLaneRefusal(String key, String? threadRoot) {
+  String? scheduleLaneRefusal(
+      String key, String? threadRoot, String? quoteSource,
+      {bool composer = false}) {
     if (!key.startsWith('pm-') || !isVerifiedBot(key.substring(3))) return null;
-    final lane = _ref.read(botChatControllerProvider.notifier).laneFor(threadRoot, _composerQuotes[key]);
-    return lane == false ? null : tr(kBotLaneLinkRefusal);
+    final bot = _ref.read(botChatControllerProvider.notifier);
+    final noted =
+        composer ? _composerQuotes[chatViewForKey(key)?.storageKey] : null;
+    final quotes = <String?>{quoteSource, ?noted};
+    return quotes.every((q) => bot.laneFor(threadRoot, q) == false)
+        ? null
+        : tr(kBotLaneLinkRefusal);
   }
+
+  Future<String?> scheduledSendRefusal(String key, String text,
+      {String? threadRoot, String? quoteSource, bool quiet = false}) async {
+    final view = chatViewForKey(key);
+    if (view == null || text.trim().isEmpty) {
+      return tr(ChatNavStrings.noText);
+    }
+    if (view.kind == ViewKind.pm && isVerifiedBot(view.id)) {
+      final lane = scheduleLaneRefusal(key, threadRoot, quoteSource);
+      if (lane != null) return lane;
+      final consent = quiet
+          ? await AiConsent.instance.allowed()
+          : await AiConsent.instance.ensure();
+      if (!consent) return quiet ? '' : AiConsentStrings.offNotice;
+    }
+    if (view.kind == ViewKind.group) {
+      final group = _ref.read(appStateProvider.notifier).groupById(view.id);
+      if (group == null) return tr(ChatNavStrings.groupGone);
+      final blocked =
+          _ref.read(groupToolsProvider).sendBlockedReason(group.id, text.trim());
+      if (blocked != null) return blocked;
+    }
+    return null;
+  }
+
 
   void noteComposerQuote(ChatView view, String? messageId) {
     if (messageId == null || messageId.isEmpty) {
@@ -12638,6 +12913,13 @@ class NostrController {
     } else {
       _composerQuotes[view.storageKey] = messageId;
     }
+  }
+
+  bool anonLaneEditRefused(String? messageId) {
+    if (!_anonLaneRef(messageId)) return false;
+    _emitSystemMessage(tr(
+        'Editing is off in the anonymous Nymbot chat — an edit would be signed by your real key. Send a new message instead.'));
+    return true;
   }
 
   bool anonLaneZapRefused(String? messageId) {
@@ -13799,10 +14081,12 @@ class NostrController {
   // Persistence hydration / flush.
 
   Future<void> _hydrateFromCache(AppStateNotifier appState) async {
+    appState.setReactionDeltaTracking(false);
     try {
       final cache = debugCacheFactory?.call() ?? CacheStore();
       await cache.open();
       _cache = cache;
+      appState.setReactionDeltaTracking(true);
       _eventTimeCeilings.onChanged = _schedulePersistEventTimeCeilings;
       EventMapper.ceilings = _eventTimeCeilings;
       // PMs hydrate only when caching is enabled; otherwise wipe the store.
@@ -13848,7 +14132,14 @@ class NostrController {
       final verifiedIds =
           await cache.loadMetaSet(CacheStore.metaVerifiedEventIds);
       if (verifiedIds.isNotEmpty) NostrService.seedVerifiedIds(verifiedIds);
-      NostrService.onVerifiedIdsChanged = _schedulePersistVerifiedIds;
+      final verifiedDeltas =
+          await cache.loadMetaSetDeltas(CacheStore.metaVerifiedEventIds);
+      if (verifiedDeltas.isNotEmpty) {
+        NostrService.seedVerifiedIds(verifiedDeltas);
+        _verifiedDeltaCount = verifiedDeltas.length;
+        _verifiedIdsChanged = true;
+      }
+      NostrService.onVerifiedIdsChanged = _noteVerifiedIdsChanged;
       if (!cachePms) unawaited(cache.clearPms());
       // Reactions hydrate after messages; rows whose target is gone (e.g. aged out) are deleted.
       if (reactions.isNotEmpty) {
@@ -13983,9 +14274,10 @@ class NostrController {
     _dirtyChannelKeys.clear();
     _dirtyPmKeys.clear();
     _pendingCursorRecs.clear();
+    final reactionDelta =
+        _ref.read(appStateProvider.notifier).takeReactionDelta();
     try {
-      final reactionEntries =
-          _ref.read(appStateProvider.notifier).reactionEntriesSnapshot();
+      final reactionEntries = reactionDelta.entries;
 
       // Assemble here, encode in a worker isolate, then write, keeping serialization off the main thread.
       final channelPayload = <String, List<Message>>{};
@@ -14054,6 +14346,9 @@ class NostrController {
         for (final e in changedReactions.entries) {
           await cache.saveReactionsJson(e.key, e.value, txn);
         }
+        for (final id in reactionDelta.dropped) {
+          await cache.saveReactionsJson(id, '', txn);
+        }
         for (final e in cursorRecs.entries) {
           if (!cachePms && e.key != StorageSync.channelCoveredKey) continue;
           await cache.saveCursorMeta(e.key, e.value, executor: txn);
@@ -14061,9 +14356,11 @@ class NostrController {
       });
       profilePayload.forEach((pk, p) => _lastPersistedProfile[pk] = p);
       changedReactions.forEach((id, j) => _lastPersistedReactionJson[id] = j);
+      reactionDelta.dropped.forEach(_lastPersistedReactionJson.remove);
       final evictedPm = await cache.enforceLruLimits();
       if (evictedPm > 0) _storageSync?.notePmEvicted(evictedPm);
     } catch (e) {
+      _ref.read(appStateProvider.notifier).restoreReactionDelta(reactionDelta);
       _dirtyChannelKeys.addAll(channelKeys);
       _dirtyPmKeys.addAll(pmKeys);
       cursorRecs.forEach((k, v) => _pendingCursorRecs.putIfAbsent(k, () => v));
@@ -14219,8 +14516,9 @@ class NostrController {
     );
 
     // The other-users shop fetcher must never query our own pubkey.
-    _ref.read(otherUsersShopProvider.notifier).selfPubkey =
-        identity.pubkey.toLowerCase();
+    _ref.read(otherUsersShopProvider.notifier)
+      ..selfPubkey = identity.pubkey.toLowerCase()
+      ..ownOtherKey = _shopLookupBarred;
 
     // Broadcast `shop-update` presence after our shop items change so peers re-fetch.
     final shop = _ref.read(shopControllerProvider.notifier);
@@ -14283,7 +14581,7 @@ class NostrController {
       RegExp(r'^nym_lightning_address_(global|[0-9a-f]{64})$');
 
   static final _sessionScopedKey = RegExp(
-      r'^(nym_ephemeral_keys_|nym_groups_|nym_left_groups_|nym_group_upload_owed_|nym_botpm_inflight_|nym_locked_chats:|nym_locked_pending:|nym_pinned_chats:|nym_pinned_pending:|nym_seen_first:|nym_seen_marks:|nym_unread_mentions:|nym_scheduled_cache:)([0-9a-f]{64})$');
+      r'^(nym_ephemeral_keys_|nym_groups_|nym_left_groups_|nym_group_upload_owed_|nym_botpm_inflight_|nym_locked_chats:|nym_locked_pending:|nym_pinned_chats:|nym_pinned_pending:|nym_seen_first:|nym_seen_marks:|nym_unread_mentions:|nym_scheduled_cache:|nym_search_history:)([0-9a-f]{64})$');
 
   final Set<String> _throwawayPks = {};
   final List<String> _throwawayNeedleList = [];
@@ -14590,6 +14888,11 @@ class NostrController {
       _flushTimer?.cancel();
       _flushScheduled = false;
       unawaited(_flush());
+      unawaited(_saveVerifiedIdsIfChanged());
+    } else if (!backgrounded &&
+        !PanicWipe.inProgress &&
+        DateTime.now().difference(_verifiedWrittenAt) >= verifiedInactiveGap) {
+      unawaited(_checkpointVerifiedIds());
     }
   }
 
@@ -15474,11 +15777,6 @@ class NostrController {
       return key;
     };
     groups.rootSeededFor = pqPeerIsRootSeeded;
-    // A signer login strips the layered format's outer layer itself with the root-derived key.
-    _service?.selfKemForUnwrap = () {
-      final k = _pqSelfKeys();
-      return k == null ? null : (kemSk: k.secretKey, kemPk: k.publicKey);
-    };
     groups.layeredFor = (memberPubkey) => _pqRegistry.acceptsLayered(
           memberPubkey,
           nowSec: DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -16177,6 +16475,7 @@ class NostrController {
   set serviceForTest(NostrService service) {
     _service = service;
     _wireBlobDrops(service);
+    _wireSignerHooks(service);
   }
 
   @visibleForTesting
@@ -17633,6 +17932,7 @@ class NostrController {
       server: _storageSync != null && _identity != null,
       online: _ref.read(appStateProvider).connectedRelays > 0,
       localKey: _identity?.privkey != null,
+      hardcore: _hardcoreRotating,
     );
   }
 
@@ -17652,11 +17952,20 @@ class NostrController {
     return sig.nip44Decrypt(identity.pubkey, blob);
   }
 
-  Future<bool> sendScheduledText(String key, String text) async {
+  bool get scheduleNoteKeyLocal => _identity?.privkey != null;
+
+  Future<bool> sendScheduledText(String key, String text,
+      {String? threadRoot, String? quoteSource}) async {
     final view = chatViewForKey(key);
     if (view == null) return false;
-    await _sendMessageContent(text, viewOverride: view);
-    return true;
+    final refused = await scheduledSendRefusal(key, text,
+        threadRoot: threadRoot, quoteSource: quoteSource, quiet: true);
+    if (refused != null) return false;
+    return _sendMessageContent(text,
+        viewOverride: view,
+        threadRoot: threadRoot,
+        noThread: threadRoot == null,
+        quoteSource: quoteSource);
   }
 
   Future<NostrEvent> _scheduledWrap(
@@ -18473,10 +18782,20 @@ class NostrController {
 
   String? _archivedWrapHold(NostrEvent wrap) {
     final c = wrap.content;
-    if (!pq.isPqPayload(c) && !pq.isPq2Payload(c)) return null;
-    if (!_pqRootSettled) return 'hold';
-    if (_pqRootLocked) return 'retry';
-    return null;
+    if (pq.isPqPayload(c) || pq.isPq2Payload(c)) {
+      if (!_pqRootSettled) return 'hold';
+      if (_pqRootLocked) return 'retry';
+    }
+    return _signerMayOpenLater(wrap) ? 'hold' : null;
+  }
+
+  bool _signerMayOpenLater(NostrEvent wrap) {
+    final id = _identity;
+    if (id == null || id.privkey != null) return false;
+    if (_signer?.isRemote != true) return false;
+    if (wrap.content.startsWith('v2:')) return false;
+    return wrap.tags
+        .any((t) => t.length > 1 && t[0] == 'p' && t[1] == id.pubkey);
   }
 
   Future<void> _awaitGiftWrapIdle() async {
@@ -19644,6 +19963,7 @@ class NostrController {
               pubkey: nymbotPubkey,
               typing: true,
               expiresAtMs: until,
+              everywhere: true,
             );
       } else {
         _clearBotThinking(storageKey);
@@ -19980,8 +20300,23 @@ class NostrController {
     await sync.pmDelete(wrapIds);
   }
 
+  void _cancelTypingTimers() {
+    _typingThrottle.clear();
+    for (final t in _typingStartTimers.values) {
+      t.cancel();
+    }
+    _typingStartTimers.clear();
+    for (final t in _typingStopTimers.values) {
+      t.cancel();
+    }
+    _typingStopTimers.clear();
+    _typingStartedFor.clear();
+    _typists.clear();
+  }
+
   Future<void> dispose() async {
     _answersClosed = true;
+    _cancelTypingTimers();
     KeyValueStore.holdSessionKeysFor(this, null);
     _stopGeoPresenceSend();
     _geoPresenceViewSub?.close();

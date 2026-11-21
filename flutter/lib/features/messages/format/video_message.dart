@@ -10,6 +10,7 @@ import '../../i18n/i18n.dart';
 import '../../../core/utils/safe_url.dart';
 import 'media_source.dart';
 import 'message_content.dart' show proxiedMedia;
+import 'playback_keeper.dart';
 import '../../layout/pointer_input.dart';
 
 const double _kVideoRadius = 12;
@@ -23,6 +24,7 @@ class VideoMessage extends StatefulWidget {
     this.maxSize = 300,
     this.borderRadius,
     this.bordered = true,
+    this.playbackKey,
   });
 
   final String url;
@@ -34,12 +36,16 @@ class VideoMessage extends StatefulWidget {
   final BorderRadius? borderRadius;
   final bool bordered;
 
+  final String? playbackKey;
+
   @override
   State<VideoMessage> createState() => _VideoMessageState();
 }
 
 class _VideoMessageState extends State<VideoMessage> {
-  VideoPlayerController? _controller;
+  SharedPlayback? _session;
+
+  VideoPlayerController? get _controller => _session?.controller;
 
   /// Desktop hover only; [MouseRegion] never fires on touch.
   bool _hovered = false;
@@ -53,10 +59,54 @@ class _VideoMessageState extends State<VideoMessage> {
   String? _activeUrl;
 
   @override
+  void initState() {
+    super.initState();
+    _bind(widget.playbackKey);
+  }
+
+  @override
+  void didUpdateWidget(VideoMessage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.playbackKey == widget.playbackKey) return;
+    _unbind(oldWidget.playbackKey);
+    _initializing = false;
+    _failed = false;
+    _bind(widget.playbackKey);
+  }
+
+  @override
   void dispose() {
-    _controller?.removeListener(_onValue);
-    _controller?.dispose();
+    _unbind(widget.playbackKey);
     super.dispose();
+  }
+
+  void _bind(String? key) {
+    PlaybackKeeper.watch(key, _onStarted);
+    final s = PlaybackKeeper.join(key, this);
+    if (s != null) _attach(s);
+  }
+
+  void _unbind(String? key) {
+    PlaybackKeeper.unwatch(key, _onStarted);
+    final s = _session;
+    _session = null;
+    if (s == null) return;
+    s.controller.removeListener(_onValue);
+    PlaybackKeeper.leave(s, this);
+  }
+
+  void _attach(SharedPlayback s) {
+    if (identical(_session, s)) return;
+    s.controller.addListener(_onValue);
+    _session = s;
+    _initializing = false;
+    _failed = false;
+  }
+
+  void _onStarted() {
+    if (!mounted || _session != null) return;
+    final s = PlaybackKeeper.join(widget.playbackKey, this);
+    if (s != null) setState(() => _attach(s));
   }
 
   void _onValue() {
@@ -89,16 +139,22 @@ class _VideoMessageState extends State<VideoMessage> {
       await controller.dispose();
       return false;
     }
+    final key = widget.playbackKey;
     if (!mounted) {
-      await controller.dispose();
+      if (key == null) {
+        await controller.dispose();
+      } else {
+        final s = PlaybackKeeper.start(key, this, controller);
+        if (s.holders > 1 && identical(s.controller, controller)) {
+          await controller.play();
+        }
+        PlaybackKeeper.leave(s, this);
+      }
       return true;
     }
-    controller.addListener(_onValue);
-    setState(() {
-      _controller = controller;
-      _initializing = false;
-    });
-    await controller.play();
+    final s = PlaybackKeeper.start(key, this, controller);
+    setState(() => _attach(s));
+    if (identical(s.controller, controller)) await controller.play();
     return true;
   }
 
@@ -313,7 +369,8 @@ class _VideoMessageState extends State<VideoMessage> {
       PageRouteBuilder<void>(
         opaque: false,
         barrierColor: Colors.black.withValues(alpha: 0.9),
-        pageBuilder: (_, _, _) => FullscreenVideoView(controller: controller),
+        pageBuilder: (_, _, _) => FullscreenVideoView(
+            controller: controller, playbackKey: widget.playbackKey),
       ),
     );
   }
@@ -347,8 +404,10 @@ class _ExpandButton extends StatelessWidget {
 
 /// Full-screen overlay reusing [controller]; backdrop or close dismisses, video tap toggles play.
 class FullscreenVideoView extends StatefulWidget {
-  const FullscreenVideoView({super.key, required this.controller});
+  const FullscreenVideoView(
+      {super.key, required this.controller, this.playbackKey});
   final VideoPlayerController controller;
+  final String? playbackKey;
 
   @override
   State<FullscreenVideoView> createState() => _FullscreenVideoState();
@@ -363,11 +422,20 @@ class _FullscreenVideoState extends State<FullscreenVideoView> {
   void initState() {
     super.initState();
     widget.controller.addListener(_onValue);
+    final s = PlaybackKeeper.join(widget.playbackKey, this);
+    _session = s != null && identical(s.controller, widget.controller)
+        ? s
+        : null;
+    if (_session == null && s != null) PlaybackKeeper.leave(s, this);
   }
+
+  SharedPlayback? _session;
 
   @override
   void dispose() {
     widget.controller.removeListener(_onValue);
+    final s = _session;
+    if (s != null) PlaybackKeeper.leave(s, this);
     super.dispose();
   }
 

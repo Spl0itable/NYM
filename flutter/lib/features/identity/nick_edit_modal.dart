@@ -40,6 +40,7 @@ import 'nym_identicon.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/hit_slop.dart';
 import '../media_notes/profile_image.dart';
+import '../messages/inline_network_image.dart' show InlineNetworkImage;
 
 class NickEditModal extends ConsumerStatefulWidget {
   const NickEditModal({super.key});
@@ -77,6 +78,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   /// Local preview paths for the on-screen thumbnail only.
   String? _avatarPath;
   String? _bannerPath;
+  String? _bannerPick;
+  String _owner = '';
 
   /// Upload progress state: bar visibility, label, and fill fraction.
   bool _uploading = false;
@@ -108,6 +111,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       if (stored != _pubkeyFormat) setState(() => _pubkeyFormat = stored);
     });
     final id = ref.read(nostrControllerProvider).identity;
+    _owner = id?.pubkey ?? '';
     // Prefer the live `selfNym` (updated from the saved profile) over the derived ephemeral nym.
     final selfNym = ref.read(appStateProvider).selfNym;
     final nym = selfNym.isNotEmpty ? selfNym : (id?.nym ?? '');
@@ -153,50 +157,35 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final media = MediaQuery.of(context);
-    // Pad by the keyboard height and cap the modal height so lower fields stay visible.
     final keyboardInset = media.viewInsets.bottom;
-    final bigText = MediaQuery.textScalerOf(context).scale(10) > 15;
-    final column = Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (!bigText) _modalHeader(c),
-        Flexible(
-          child: SingleChildScrollView(
-            padding: bigText ? EdgeInsets.zero : const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (bigText) _modalHeader(c),
-                if (bigText)
-                  Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: _formGroups(c),
-                    ),
-                  )
-                else
-                  ..._formGroups(c),
-                if (bigText) ...[
-                  _actions(c),
-                  _logoutRow(c),
-                ],
-              ],
-            ),
+    final content = SingleChildScrollView(
+      key: const ValueKey('nickEditScroll'),
+      child: Stack(
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              NymSheetDragRegion(inScroll: true, child: _modalHeader(c)),
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: _formGroups(c),
+                ),
+              ),
+              _actions(c),
+              _logoutRow(c),
+            ],
           ),
-        ),
-        if (!bigText) ...[
-          _actions(c),
-          _logoutRow(c),
+          ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
         ],
-      ],
+      ),
     );
-    final close = ModalChrome.closeChip(c, () => Navigator.of(context).pop());
     return NymDiscardGuard(
       isDirty: () => _dirty,
       child: nymSheetOr(
         context,
-        Stack(children: [column, close]),
+        content,
         (_) => Center(
           child: AnimatedPadding(
             duration: const Duration(milliseconds: 150),
@@ -211,19 +200,14 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               constraints: const BoxConstraints(maxWidth: 500),
               child: Material(
                 color: Colors.transparent,
-                child: Stack(
-                  children: [
-                    ModalChrome.box(
-                      c,
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight: (media.size.height - keyboardInset) * 0.9,
-                        ),
-                        child: column,
-                      ),
+                child: ModalChrome.box(
+                  c,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: (media.size.height - keyboardInset) * 0.9,
                     ),
-                    close,
-                  ],
+                    child: content,
+                  ),
                 ),
               ),
             ),
@@ -485,51 +469,122 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label(c, tr('Banner')),
-        Builder(builder: (_) {
-          final remoteBanner =
-              _bannerPath == null ? proxiedAvatarUrl(_currentBannerUrl) : null;
-          return Container(
-            height: 80,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.03),
-              borderRadius: NymRadius.rsm,
-              border: Border.all(color: c.glassBorder),
-              image: _bannerPath != null
-                  ? DecorationImage(
-                      image: FileImage(File(_bannerPath!)), fit: BoxFit.cover)
-                  : (remoteBanner != null
-                      ? DecorationImage(
-                          image: NetworkImage(remoteBanner), fit: BoxFit.cover)
-                      : null),
-            ),
-            alignment: Alignment.center,
-            child: (_bannerPath == null && remoteBanner == null)
-                ? Text(tr('No banner set'), style: TextStyle(color: c.textDim))
-                : null,
-          );
-        }),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _smallButton(c, tr('Choose banner'), () => _pickImage(false)),
-            if (_bannerPath != null) ...[
-              _smallButton(
-                  c,
-                  tr('Remove'),
-                  () => setState(() {
-                        _bannerPath = null;
-                        _currentBannerUrl = _origBannerUrl;
-                      }),
-                  danger: true),
-            ],
+            _bannerPreview(c),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _smallButton(
+                          c, tr('Choose banner'), () => _pickImage(false)),
+                      if (_bannerPath != null) ...[
+                        _smallButton(
+                            c,
+                            tr('Remove'),
+                            () => setState(() {
+                                  _bannerPath = null;
+                                  _currentBannerUrl = _origBannerUrl;
+                                }),
+                            danger: true),
+                      ],
+                    ],
+                  ),
+                  if (_uploading && _uploadLabel == 'Uploading banner…')
+                    _uploadProgressBar(c),
+                ],
+              ),
+            ),
           ],
         ),
-        if (_uploading && _uploadLabel == 'Uploading banner…')
-          _uploadProgressBar(c),
       ],
+    );
+  }
+
+  Widget _bannerPreview(NymColors c) {
+    final own = _owner.isNotEmpty && _pubkey == _owner;
+    final local = own ? _bannerPick ?? _bannerPath : null;
+    final remote =
+        own && local == null ? proxiedAvatarUrl(_currentBannerUrl) : null;
+    final broken = Center(
+      key: const ValueKey('nickBannerError'),
+      child: Opacity(
+        opacity: 0.6,
+        child: Icon(Icons.broken_image_outlined, size: 16, color: c.textDim),
+      ),
+    );
+    final Widget image;
+    if (local != null) {
+      image = Image.file(
+        File(local),
+        key: const ValueKey('nickBannerLocal'),
+        fit: BoxFit.cover,
+        width: 140,
+        height: 48,
+        errorBuilder: (_, _, _) => broken,
+      );
+    } else if (remote != null) {
+      image = InlineNetworkImage(
+        key: ValueKey('nickBannerImage:$remote'),
+        url: remote,
+        width: 140,
+        height: 48,
+        fit: BoxFit.cover,
+        placeholder: const SizedBox.expand(key: ValueKey('nickBannerLoading')),
+        errorChild: broken,
+      );
+    } else {
+      image = Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Opacity(
+              opacity: 0.6,
+              child: Text(
+                tr('No banner set'),
+                style: TextStyle(color: c.textDim, fontSize: 11),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return Container(
+      key: const ValueKey('nickBannerPreview'),
+      width: 140,
+      height: 48,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: NymRadius.rxs,
+        border: Border.all(color: c.glassBorder),
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          image,
+          if (_bannerPick != null)
+            ColoredBox(
+              key: const ValueKey('nickBannerUploading'),
+              color: Colors.black.withValues(alpha: 0.4),
+              child: Center(
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: c.primary),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -704,6 +759,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               ),
             ),
             IconButton(
+              tooltip: tr('Show/hide'),
               icon: NymSvgIcon(NymIcons.nsecEye, size: 18, color: c.textDim),
               onPressed: () =>
                   setState(() => _pqRootVisible = !_pqRootVisible),
@@ -995,6 +1051,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             ),
             IconButton(
               // Same eye glyph for both states; only the visibility flips.
+              tooltip: tr('Show/hide'),
               icon: NymSvgIcon(NymIcons.nsecEye, size: 18, color: c.textDim),
               onPressed: () => setState(() => _nsecVisible = !_nsecVisible),
             ),
@@ -1201,6 +1258,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       _uploading = true;
       _uploadProgress = 0.15;
       _uploadLabel = avatar ? 'Uploading avatar…' : 'Uploading banner…';
+      if (!avatar) _bannerPick = path;
     });
 
     String? url;
@@ -1222,6 +1280,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       setState(() {
         _uploading = false;
         _uploadProgress = 0;
+        _bannerPick = null;
       });
       await showAppAlert(context, tr('Upload failed — try again.'));
       return;
@@ -1236,6 +1295,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       } else {
         _currentBannerUrl = url;
         _bannerPath = path;
+        _bannerPick = null;
       }
     });
     if (avatar && mounted) {

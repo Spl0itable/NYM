@@ -413,6 +413,7 @@ Object.assign(NYM.prototype, {
             event.created_at = Math.floor(Date.now() / 1000);
         }
 
+        if (this._bridgeBlocked(event)) return;
         if (this.hasBlockedContentPrefix(event.content)) return;
         if (this._encryptedBlobDrop(event) || this._pointsAtDroppedBlob(event)) return;
         if (typeof event.content === 'string') {
@@ -1089,6 +1090,11 @@ Object.assign(NYM.prototype, {
         return _RX_BLOCKED_CONTENT_BLOB.test(content.trimStart());
     },
 
+    _bridgeBlocked(ev) {
+        const R = typeof window !== 'undefined' ? window.NymBridgeBlock : null;
+        return !!(R && R.isBridgeBlockedEvent(ev));
+    },
+
     _encryptedBlobDrop(ev) {
         const B = typeof window !== 'undefined' ? window.NymEncryptedBlob : null;
         const BV = typeof window !== 'undefined' ? window.NymBitchatVerify : null;
@@ -1540,7 +1546,7 @@ Object.assign(NYM.prototype, {
             this._noteReceiptWrap(wrapped && wrapped.id);
             this.sendDMToRelays(['EVENT', wrapped], { tier: 2 });
         } else {
-            await this._sendGiftWrapsAsync([recipientPubkey], rumor, null);
+            await this._sendGiftWrapsAsync([recipientPubkey], rumor, null, null, { receipt: true });
         }
     },
 
@@ -1572,7 +1578,88 @@ Object.assign(NYM.prototype, {
         const UA = window.NymUploadActivity;
         const decoded = UA ? UA.decode(rumor.tags) : null;
         const activity = decoded ? decoded.activity : null;
-        return status ? { status, groupId, ttl: ttl > 0 ? ttl : 0, pubkey: rumor.pubkey, activity } : null;
+        const threadRoot = this.typingThreadRootOf(rumor.tags, groupId ? 'group' : 'pm');
+        return status ? { status, groupId, ttl: ttl > 0 ? ttl : 0, pubkey: rumor.pubkey, activity, threadRoot } : null;
+    },
+
+    typingThreadRootOf(tags, where) {
+        if (!Array.isArray(tags)) return null;
+        const channel = where === 'channel';
+        for (const t of tags) {
+            if (!Array.isArray(t) || typeof t[0] !== 'string' || typeof t[1] !== 'string') continue;
+            if (channel) {
+                if (t[0] === 'e' && t[3] === 'root') return /^[0-9a-f]{64}$/i.test(t[1]) ? t[1] : null;
+            } else if (t[0] === 'nymthread' && t[1]) {
+                return t[1];
+            }
+        }
+        return null;
+    },
+
+    _typingThreadRootNow() {
+        return typeof this._threadRootForSend === 'function' ? (this._threadRootForSend() || null) : null;
+    },
+
+    _typingThreadRootFor(dest) {
+        const root = this._typingThreadRootNow();
+        const ctx = this.activeThread && this.activeThread.ctx;
+        if (!root || !dest || !ctx) return null;
+        if (dest.group) return ctx.type === 'group' && ctx.groupId === dest.group ? root : null;
+        if (dest.pm) return ctx.type === 'pm' && ctx.pubkey === dest.pm ? root : null;
+        if (dest.geohash) return !ctx.isPM && ctx.storageKey === `#${dest.geohash}` ? root : null;
+        return null;
+    },
+
+    _typingShownIn(entry, viewRoot, threadsOn, rootLocal) {
+        if (!entry) return false;
+        if (entry.everywhere === true) return true;
+        const root = entry.threadRoot || null;
+        const view = viewRoot || null;
+        if (root === view) return true;
+        return view === null && (threadsOn === false || rootLocal === false);
+    },
+
+    _typingRootLocal(convKey, root) {
+        if (!root || !convKey || typeof this._hasLocalThreadRoot !== 'function') return true;
+        const key = String(convKey);
+        const channel = key.startsWith('channel-');
+        const list = channel
+            ? (this.messages && this.messages.get(`#${key.slice('channel-'.length)}`))
+            : (this.pmMessages && this.pmMessages.get(key));
+        return !!list && this._hasLocalThreadRoot(list, root, !channel);
+    },
+
+    _typingQuietTo(dest) {
+        if (!dest || !dest.pm) return false;
+        if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(dest.pm)) return true;
+        return typeof this._anonLaneTyping === 'function' && !!this._anonLaneTyping(dest.pm);
+    },
+
+    _typingPmDest() {
+        if (this.currentGroup) return { key: `group:${this.currentGroup}`, group: this.currentGroup };
+        if (this.currentPM) return { key: `pm:${this.currentPM}`, pm: this.currentPM };
+        return null;
+    },
+
+    _lapseChannelTyping(geohash) {
+        if (this._typingStopTimer) { clearTimeout(this._typingStopTimer); this._typingStopTimer = null; }
+        if (this._typingStartTimer) { clearTimeout(this._typingStartTimer); this._typingStartTimer = null; }
+        if (this._channelTypingStartedFor && geohash) this._channelTypingStartedFor.delete(geohash);
+    },
+
+    _noteTypist(key) {
+        if (!this._typists) this._typists = new Map();
+        this._typists.set(key, this.pubkey);
+    },
+
+    _typingKeyMoved(key, pubkey) {
+        const by = this._typists && this._typists.get(key);
+        return !!by && by !== pubkey;
+    },
+
+    _typingViewRoot() {
+        if (this._cvActive) return null;
+        return this._typingThreadRootNow();
     },
 
     _activityTargetNow() {
@@ -1593,7 +1680,7 @@ Object.assign(NYM.prototype, {
         }
         if (t.pm) {
             if (!this._canSendGiftWraps() || !this.isTypingIndicatorAllowedFor('pm')) return null;
-            if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(t.pm)) return null;
+            if (this._typingQuietTo({ pm: t.pm })) return null;
             return { key: `pm:${t.pm}`, pm: t.pm };
         }
         if (t.geohash) {
@@ -1612,6 +1699,15 @@ Object.assign(NYM.prototype, {
         return found;
     },
 
+    _chatActivityRecordFor(key) {
+        if (!this._chatActivities) return null;
+        let found = null;
+        for (const a of this._chatActivities.values()) {
+            if (a.dest.key === key && a.pubkey === this.pubkey) found = a;
+        }
+        return found;
+    },
+
     beginChatActivity(kind, target) {
         const UA = window.NymUploadActivity;
         if (!UA || !UA.isKind(kind)) return null;
@@ -1621,7 +1717,7 @@ Object.assign(NYM.prototype, {
         if (!this._chatActivityTimers) this._chatActivityTimers = new Map();
         this._chatActivitySeq = (this._chatActivitySeq || 0) + 1;
         const token = this._chatActivitySeq;
-        this._chatActivities.set(token, { kind, dest, pubkey: this.pubkey });
+        this._chatActivities.set(token, { kind, dest, pubkey: this.pubkey, threadRoot: this._typingThreadRootFor(dest) });
         this._publishChatActivity(dest);
         if (!this._chatActivityTimers.has(dest.key)) {
             this._chatActivityTimers.set(dest.key, setInterval(() => this._publishChatActivity(dest), UA.REFRESH_MS));
@@ -1664,11 +1760,12 @@ Object.assign(NYM.prototype, {
 
     _publishChatActivity(dest) {
         this._dropChatActivitiesOfOtherKeys();
-        const kind = this._chatActivityFor(dest.key);
-        if (!kind) return;
+        const activity = this._chatActivityRecordFor(dest.key);
+        if (!activity) return;
         if (!this._activityDest(dest.pm ? { pm: dest.pm } : dest.group ? { group: dest.group } : { geohash: dest.geohash })) return;
-        if (dest.geohash) this._sendChannelTypingEvent('start', dest.geohash, kind);
-        else this._sendTypingEventTo(dest, 'start', kind);
+        const threadRoot = activity.threadRoot || null;
+        if (dest.geohash) this._sendChannelTypingEvent('start', dest.geohash, activity.kind, undefined, threadRoot);
+        else this._sendTypingEventTo(dest, 'start', activity.kind, undefined, threadRoot);
     },
 
     handleTypingSignal() {
@@ -1676,15 +1773,25 @@ Object.assign(NYM.prototype, {
         const context = this.currentGroup ? 'group' : 'pm';
         if (!this.isTypingIndicatorAllowedFor(context)) return;
 
+        const dest = this._typingPmDest();
+        if (!dest || this._typingQuietTo(dest)) return;
         const now = Date.now();
-        const convKey = this.currentGroup ? `group:${this.currentGroup}` : `pm:${this.currentPM}`;
+        const convKey = dest.key;
+        const typist = this.pubkey;
         if (!this._pmTypingStartedFor) this._pmTypingStartedFor = new Set();
+        if (this._typingKeyMoved(convKey, typist)) {
+            this._pmTypingStartedFor.delete(convKey);
+            if (this._typingStartTimer) { clearTimeout(this._typingStartTimer); this._typingStartTimer = null; }
+            this._typingThrottleTime = 0;
+        }
+        this._noteTypist(convKey);
         const already = this._pmTypingStartedFor.has(convKey);
 
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingStopTimer = setTimeout(() => {
             if (this._typingStartTimer) { clearTimeout(this._typingStartTimer); this._typingStartTimer = null; }
             if (!this._pmTypingStartedFor || !this._pmTypingStartedFor.delete(convKey)) return;
+            if (this._typingKeyMoved(convKey, this.pubkey)) return;
             this._sendTypingEvent('stop');
         }, this._typingStopDelay);
 
@@ -1697,6 +1804,9 @@ Object.assign(NYM.prototype, {
         if (this._typingStartTimer) return;
         this._typingStartTimer = setTimeout(() => {
             this._typingStartTimer = null;
+            const cur = this._typingPmDest();
+            if (!cur || cur.key !== convKey || this._typingQuietTo(cur)) return;
+            if (this.pubkey !== typist) return;
             this._typingThrottleTime = Date.now();
             this._pmTypingStartedFor.add(convKey);
             this._sendTypingEvent('start');
@@ -1713,19 +1823,20 @@ Object.assign(NYM.prototype, {
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingThrottleTime = 0;
         this._pmTypingStartedFor.delete(convKey);
+        if (this._typingKeyMoved(convKey, claim && claim.pubkey ? claim.pubkey : this.pubkey)) return;
         this._sendTypingEvent('stop', claim);
     },
 
     async _sendTypingEvent(status, claim) {
-        const dest = this.currentGroup ? { key: `group:${this.currentGroup}`, group: this.currentGroup }
-            : this.currentPM ? { key: `pm:${this.currentPM}`, pm: this.currentPM } : null;
+        const dest = this._typingPmDest();
         if (!dest) return;
         const activity = this._chatActivityFor(dest.key);
         if (activity && status === 'stop') return;
-        return this._sendTypingEventTo(dest, status, activity, claim);
+        const threadRoot = status === 'start' && typeof this._threadRootForSend === 'function' ? this._threadRootForSend() : null;
+        return this._sendTypingEventTo(dest, status, activity, claim, threadRoot);
     },
 
-    async _sendTypingEventTo(dest, status, activity, claim) {
+    async _sendTypingEventTo(dest, status, activity, claim, threadRoot) {
         if (!this._canSendGiftWraps()) return;
         if (claim && claim.sk && !this._claimHolds(claim)) return;
         const me = this._claimSender(claim);
@@ -1735,11 +1846,13 @@ Object.assign(NYM.prototype, {
         const ttlSec = Math.floor(this._typingExpireMs / 1000);
         const tags = UA ? UA.encode(status, activity, ttlSec)
             : (status === 'start' ? [['typing', status], ['ttl', String(ttlSec)]] : [['typing', status]]);
+        const marker = status === 'start' && threadRoot ? ['nymthread', threadRoot] : null;
 
         if (dest.group) {
             const group = this.groupConversations.get(dest.group);
             if (!group) return;
             tags.push(['g', dest.group]);
+            if (marker) tags.push(marker);
             const roster = typeof this._gnAccepted === 'function' ? this._gnAccepted(dest.group, group.members) : group.members;
             const otherMembers = roster.filter(pk => pk !== me.pubkey);
             if (otherMembers.length === 0) return;
@@ -1748,9 +1861,10 @@ Object.assign(NYM.prototype, {
             // Ephemeral keys so typing wraps don't expose the real-pubkey membership set to relays.
             await this._sendGiftWrapsAsync(otherMembers, rumor, null, dest.group, { claim });
         } else if (dest.pm) {
-            if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(dest.pm)) return;
-            if (this._anonLaneTyping(dest.pm)) return;
+            if (this._typingQuietTo(dest)) return;
+            if (threadRoot && typeof this._anonLaneMessageIds === 'function' && this._anonLaneMessageIds(dest.pm, threadRoot)) return;
             tags.push(['p', dest.pm]);
+            if (marker) tags.push(marker);
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: me.pubkey };
             if (me.sk) {
                 const wrapped = await this._pmSignalWrapAsync(rumor, dest.pm, me.sk);
@@ -1802,7 +1916,7 @@ Object.assign(NYM.prototype, {
                 this.renderTypingIndicator();
             }, ttlMs);
 
-            convTypers.set(senderPubkey, { nym, timeout, timestamp: Date.now(), ttlMs, activity: parsed.activity || null });
+            convTypers.set(senderPubkey, { nym, timeout, timestamp: Date.now(), ttlMs, activity: parsed.activity || null, threadRoot: parsed.threadRoot || null });
         }
 
         this.renderTypingIndicator();
@@ -1814,7 +1928,8 @@ Object.assign(NYM.prototype, {
             document.getElementById('typingIndicator'),
             document.getElementById('typingIndicatorAvatars'),
             document.getElementById('typingIndicatorText'),
-            this._activeTypingConvKey()
+            this._activeTypingConvKey(),
+            this._typingViewRoot()
         );
     },
 
@@ -1825,7 +1940,7 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    _renderTypingInto(el, avatarsEl, textEl, convKey) {
+    _renderTypingInto(el, avatarsEl, textEl, convKey, viewRoot) {
         if (!el || !avatarsEl || !textEl) return;
 
         const convTypers = convKey ? this.typingUsers.get(convKey) : null;
@@ -1840,8 +1955,11 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        const threadsOn = typeof this.threadsEnabled !== 'function' || this.threadsEnabled();
         const typers = convTypers ? Array.from(convTypers.entries()).filter(([pk, entry]) =>
-            !(typeof this.isPersonHidden === 'function' && this.isPersonHidden(pk, entry && entry.nym))) : [];
+            this._typingShownIn(entry, viewRoot, threadsOn,
+                threadsOn && entry && entry.threadRoot ? this._typingRootLocal(convKey, entry.threadRoot) : true)
+            && !(typeof this.isPersonHidden === 'function' && this.isPersonHidden(pk, entry && entry.nym))) : [];
 
         if (typers.length === 0) {
             el.classList.remove('active');
@@ -1872,6 +1990,12 @@ Object.assign(NYM.prototype, {
                     img.loading = 'lazy';
                     avatarsEl.appendChild(img);
                 }
+            }
+        }
+        if (typeof this._setRingClass === 'function') {
+            for (const img of avatarsEl.querySelectorAll('img[data-avatar-pubkey]')) {
+                const pk = img.dataset.avatarPubkey;
+                this._setRingClass(img, this._ringPeek(pk));
             }
         }
 
@@ -1964,11 +2088,11 @@ Object.assign(NYM.prototype, {
     _canPublishChannelEvent() {
         if (!this.connected || !this.pubkey) return false;
         return !!this.privkey
-            || !!(window.nostr?.signEvent)
+            || (this.nostrLoginMethod === 'extension' && !!(window.nostr?.signEvent))
             || (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected);
     },
 
-    async _sendChannelTypingEvent(status, geohash, activity, claim) {
+    async _sendChannelTypingEvent(status, geohash, activity, claim, threadRoot) {
         if (!geohash || !this._canPublishChannelEvent()) return;
         const sender = claim && claim.pubkey ? claim : { pubkey: this.pubkey, nym: this.nym, sk: null };
         if (!sender.sk && sender.pubkey !== this.pubkey) return;
@@ -1989,6 +2113,7 @@ Object.assign(NYM.prototype, {
             content: '',
             pubkey: sender.pubkey
         };
+        if (status === 'start' && threadRoot) event.tags.push(['e', threadRoot, '', 'root']);
         try {
             const signed = sender.sk ? window.NostrTools.finalizeEvent(event, sender.sk) : await this.signEvent(event);
             this.sendToRelay(["EVENT", signed]);
@@ -2001,25 +2126,50 @@ Object.assign(NYM.prototype, {
         if (this.inPMMode || !this.currentGeohash) return;
         if (!this._canPublishChannelEvent()) return;
 
-        const now = Date.now();
-        if (now - this._typingThrottleTime < this._typingSendInterval) return;
-        this._typingThrottleTime = now;
+        const geohash = this.currentGeohash;
+        const key = `channel:${geohash}`;
+        const typist = this.pubkey;
+        if (!this._channelTypingStartedFor) this._channelTypingStartedFor = new Set();
+        if (this._typingKeyMoved(key, typist)) {
+            this._channelTypingStartedFor.delete(geohash);
+            if (this._typingStartTimer) { clearTimeout(this._typingStartTimer); this._typingStartTimer = null; }
+            this._typingThrottleTime = 0;
+        }
+        this._noteTypist(key);
+        const already = this._channelTypingStartedFor.has(geohash);
 
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
-        const geohash = this.currentGeohash;
-        if (!this._channelTypingStartedFor) this._channelTypingStartedFor = new Set();
-        this._channelTypingStartedFor.add(geohash);
-        this._sendChannelTypingEvent('start', geohash);
         this._typingStopTimer = setTimeout(() => {
-            if (this._channelTypingStartedFor) this._channelTypingStartedFor.delete(geohash);
-            if (this._chatActivityFor(`channel:${geohash}`)) return;
+            this._typingStopTimer = null;
+            if (this._typingStartTimer) { clearTimeout(this._typingStartTimer); this._typingStartTimer = null; }
+            if (!this._channelTypingStartedFor || !this._channelTypingStartedFor.delete(geohash)) return;
+            if (this._typingKeyMoved(key, this.pubkey)) return;
+            if (this._chatActivityFor(key)) return;
             this._sendChannelTypingEvent('stop', geohash);
-        }, 4000);
+        }, this._typingStopDelay);
+
+        if (already) {
+            const now = Date.now();
+            if (now - this._typingThrottleTime < this._typingSendInterval) return;
+            this._typingThrottleTime = now;
+            this._sendChannelTypingEvent('start', geohash, undefined, undefined, this._typingThreadRootNow());
+            return;
+        }
+        if (this._typingStartTimer) return;
+        this._typingStartTimer = setTimeout(() => {
+            this._typingStartTimer = null;
+            if (this.inPMMode || this.currentGeohash !== geohash || this.pubkey !== typist) return;
+            if (!this.isTypingIndicatorAllowedFor('channel') || !this._canPublishChannelEvent()) return;
+            this._typingThrottleTime = Date.now();
+            this._channelTypingStartedFor.add(geohash);
+            this._sendChannelTypingEvent('start', geohash, undefined, undefined, this._typingThreadRootNow());
+        }, this._typingStartDebounce);
     },
 
     sendChannelTypingStop(geohash, claim) {
         const targetGeohash = geohash || this.currentGeohash;
         if (!targetGeohash) return;
+        if (this._typingStartTimer && !this.inPMMode) { clearTimeout(this._typingStartTimer); this._typingStartTimer = null; }
         // Only emit 'stop' if we emitted a 'start' for this geohash.
         if (!this._channelTypingStartedFor || !this._channelTypingStartedFor.has(targetGeohash)) return;
         if (!this.isTypingIndicatorAllowedFor('channel')) return;
@@ -2027,6 +2177,7 @@ Object.assign(NYM.prototype, {
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingThrottleTime = 0;
         this._channelTypingStartedFor.delete(targetGeohash);
+        if (this._typingKeyMoved(`channel:${targetGeohash}`, claim && claim.pubkey ? claim.pubkey : this.pubkey)) return;
         if (this._chatActivityFor(`channel:${targetGeohash}`)) return;
         this._sendChannelTypingEvent('stop', targetGeohash, undefined, claim);
     },
@@ -2077,7 +2228,7 @@ Object.assign(NYM.prototype, {
                 convTypers.delete(event.pubkey);
                 this.renderTypingIndicator();
             }, ttlMs);
-            convTypers.set(event.pubkey, { nym: displayNym, timeout, timestamp: Date.now(), ttlMs, activity });
+            convTypers.set(event.pubkey, { nym: displayNym, timeout, timestamp: Date.now(), ttlMs, activity, threadRoot: this.typingThreadRootOf(event.tags, 'channel') });
         }
         this.renderTypingIndicator();
     },
@@ -2217,6 +2368,85 @@ Object.assign(NYM.prototype, {
         return usePq2
             ? this.pq2Nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs, extraTags)
             : this.pqNip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs, extraTags);
+    },
+
+    _signerOps() {
+        if (this.privkey) return null;
+        if (this.nostrLoginMethod === 'extension') {
+            const ext = typeof window !== 'undefined' ? window.nostr : null;
+            if (!ext || typeof ext.signEvent !== 'function' || !ext.nip44
+                || typeof ext.nip44.encrypt !== 'function' || typeof ext.nip44.decrypt !== 'function') return null;
+            const holds = async () => {
+                if (!(await this._extensionHoldsIdentity(ext))) throw new Error('Signer key does not match this identity');
+            };
+            return {
+                kind: 'extension',
+                encrypt: async (pk, text) => { await holds(); return ext.nip44.encrypt(pk, text); },
+                decrypt: async (pk, text) => { await holds(); return ext.nip44.decrypt(pk, text); },
+                sign: async (ev) => { await holds(); return this._signedByIdentity(await ext.signEvent(ev)); }
+            };
+        }
+        if (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected) {
+            return {
+                kind: 'nip46',
+                encrypt: (pk, text) => _nip46Encrypt(pk, text),
+                decrypt: (pk, text) => _nip46Decrypt(pk, text),
+                sign: async (ev) => this._signedByIdentity(await _nip46SignEvent(ev))
+            };
+        }
+        return null;
+    },
+
+    _signerLogin() {
+        return !this.privkey && (this.nostrLoginMethod === 'extension' || this.nostrLoginMethod === 'nip46');
+    },
+
+    _extensionHoldsIdentity(ext) {
+        const now = Date.now();
+        const seen = this._extKeySeen;
+        if (seen && seen.ext === ext && seen.pubkey === this.pubkey && now - seen.at < 30000) return seen.ok;
+        const ok = Promise.resolve()
+            .then(() => (typeof ext.getPublicKey === 'function' ? ext.getPublicKey() : null))
+            .then((pk) => !!pk && pk === this.pubkey, () => false);
+        this._extKeySeen = { ext, pubkey: this.pubkey, at: now, ok };
+        return ok;
+    },
+
+    _signedByIdentity(signed) {
+        if (!signed || !this.pubkey || signed.pubkey !== this.pubkey) throw new Error('Signer key does not match this identity');
+        return signed;
+    },
+
+    async signerWrapAsync(event, recipientPublicKey, recipientKemPublicKey = null, pq2 = false, expirationTs = null, extraTags = null) {
+        const signer = this._signerOps();
+        if (!signer) throw new Error('No signer for this login');
+        const NT = window.NostrTools;
+        const rumor = { created_at: Math.floor(Date.now() / 1000), content: '', tags: [], ...event, pubkey: this.pubkey };
+        delete rumor.id;
+        rumor.id = NT.getEventHash(rumor);
+        const sealContent = await signer.encrypt(recipientPublicKey, JSON.stringify(rumor));
+        const seal = await signer.sign({ kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] });
+        const sealJson = JSON.stringify(seal);
+        const ephSk = NT.generateSecretKey();
+        const content = recipientKemPublicKey
+            ? (pq2
+                ? window.NymCrypto.pq2Encrypt(sealJson, ephSk, recipientPublicKey, recipientKemPublicKey)
+                : window.NymCrypto.pqEncrypt(sealJson, ephSk, recipientPublicKey, recipientKemPublicKey))
+            : NT.nip44.encrypt(sealJson, NT.nip44.getConversationKey(ephSk, recipientPublicKey));
+        const wrap = { kind: 1059, content, created_at: this.randomNow(), tags: [['p', recipientPublicKey]] };
+        if (Array.isArray(extraTags)) for (const t of extraTags) wrap.tags.push(t);
+        if (expirationTs) wrap.tags.push(['expiration', String(expirationTs)]);
+        return NT.finalizeEvent(wrap, ephSk);
+    },
+
+    async wrapAsSenderAsync(me, event, recipientPublicKey, recipientKemPublicKey = null, usePq2 = false, expirationTs = null, extraTags = null) {
+        if (me && me.sk) {
+            return recipientKemPublicKey
+                ? this.pqWrapForPeerAsync(usePq2, event, me.sk, recipientPublicKey, recipientKemPublicKey, expirationTs, extraTags)
+                : this.nip59WrapEventAsync(event, me.sk, recipientPublicKey, expirationTs, extraTags);
+        }
+        if (me && me.pubkey && me.pubkey !== this.pubkey) throw new Error('No key for this identity');
+        return this.signerWrapAsync(event, recipientPublicKey, recipientKemPublicKey, usePq2, expirationTs, extraTags);
     },
 
     requestUserProfile(pubkey) {
@@ -2553,6 +2783,10 @@ Object.assign(NYM.prototype, {
 
     async publishDeletionEvent(messageId, originalKind, claim) {
         try {
+            if (this._anonLaneMsg(messageId)) {
+                this.displaySystemMessage(this.uiText('Deleting is off on anonymous Nymbot messages: a deletion would be signed by your real key and would link the chat to you.'));
+                return false;
+            }
             if (claim && !claim.sk && claim.pubkey !== this.pubkey) return;
             if (!claim && this._hardcoreRotating()) return;
             const tags = [['e', messageId]];

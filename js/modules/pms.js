@@ -5,10 +5,10 @@ const NYMBOT_TURN_OUT = 700;
 
 Object.assign(NYM.prototype, {
 
-    _pmHeaderAvatarHtml(pubkey, avatarSrc, safePk) {
+    _pmHeaderAvatarHtml(pubkey, avatarSrc, safePk, ring) {
         const dotStatus = this._pmHeaderDotStatus(pubkey);
         const isHidden = dotStatus === 'hidden';
-        return `<span class="user-avatar-wrap pm-header-avatar${isHidden ? ' no-status' : ''}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="user-status-dot status-${isHidden ? 'offline' : dotStatus}"></span></span>`;
+        return `<span class="user-avatar-wrap pm-header-avatar${isHidden ? ' no-status' : ''}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message${ring || ''}" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="user-status-dot status-${isHidden ? 'offline' : dotStatus}"></span></span>`;
     },
 
     refreshPMHeaderStatus() {
@@ -304,6 +304,7 @@ Object.assign(NYM.prototype, {
     },
 
     manualRetryDM(eventId) {
+        if (this.currentGroup && typeof this._groupRetryFailed === 'function' && this._groupRetryFailed(eventId)) return;
         if (!this.currentPM) return;
         const conversationKey = this.getPMConversationKey(this.currentPM);
         const msgs = this.pmMessages.get(conversationKey);
@@ -558,6 +559,20 @@ Object.assign(NYM.prototype, {
         return { go: false };
     },
 
+    _signerBitchatSendNotice(recipientPubkey) {
+        if (!recipientPubkey || (typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(recipientPubkey))) return;
+        if (!this._signerBitchatSendNoted) this._signerBitchatSendNoted = new Set();
+        if (this._signerBitchatSendNoted.has(recipientPubkey)) return;
+        this._signerBitchatSendNoted.add(recipientPubkey);
+        this.displaySystemMessage(this.uiText("Sent as a standard PM only. If this person uses Bitchat, they can't read it: Bitchat needs your private key on this device, which a remote signer or browser extension can't use."));
+    },
+
+    _signerBitchatReceiveNotice() {
+        if (this._signerBitchatReceiveNoted) return;
+        this._signerBitchatReceiveNoted = true;
+        this.displaySystemMessage(this.uiText("A Bitchat PM arrived that this login can't open. Bitchat encrypts with your private key directly, which a remote signer or browser extension can't do. To read Bitchat PMs, log in with your nsec on this device."));
+    },
+
     async sendNIP17PM(content, recipientPubkey, options = {}) {
         const claim = options.claim || null;
         const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
@@ -606,8 +621,8 @@ Object.assign(NYM.prototype, {
 
         const early = this._pmSendingBubble({ to: recipientPubkey, content, me, now, nowMs, nymMessageId, threadRoot, fileOffer, expirationTs });
 
-        if (me.sk) {
-            const NT = window.NostrTools;
+        const viaSigner = !me.sk && me.pubkey === this.pubkey && !!this._signerOps();
+        if (me.sk || viaSigner) {
             // Ensure at least one announcement lookup, for sends that skip opening the conversation.
             if (typeof this.ensurePqAnnouncement === 'function') {
                 try { await this.ensurePqAnnouncement(recipientPubkey); } catch (_) { }
@@ -624,7 +639,7 @@ Object.assign(NYM.prototype, {
             const retryWraps = [];
 
             // Known bitchat users and unknown peers get a bitchat-format wrap so bitchat apps can decrypt.
-            if (plan.bitchat) {
+            if (plan.bitchat && me.sk) {
                 // Bitchat caps a TLV value at 255 bytes, so send one wrap per chunk.
                 const chunks = this.chunkBitchatContent(content);
                 for (const chunk of chunks) {
@@ -654,9 +669,7 @@ Object.assign(NYM.prototype, {
 
             if (plan.nym) {
                 const lead = longPieces ? await this._botLongLead(rumor, longPieces, async (part) => {
-                    const w = recipientKemPk
-                        ? await this.pqWrapForPeerAsync(plan.pq2, part, me.sk, recipientPubkey, recipientKemPk, expirationTs, supportWrapTags)
-                        : await this.nip59WrapEventAsync(part, me.sk, recipientPubkey, expirationTs, supportWrapTags);
+                    const w = await this.wrapAsSenderAsync(me, part, recipientPubkey, recipientKemPk, plan.pq2, expirationTs, supportWrapTags);
                     this.sendDMToRelays(['EVENT', w]);
                     retryWraps.push(['EVENT', w]);
                     this._recordGiftWrapId(nymMessageId, w.id);
@@ -664,18 +677,15 @@ Object.assign(NYM.prototype, {
                     return w;
                 }, async (part) => {
                     const selfKemPk = claim && claim.sk ? null : this.pqSelfKeyFor();
-                    const w = selfKemPk
-                        ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), part, me.sk, me.pubkey, selfKemPk, expirationTs, supportWrapTags)
-                        : await this.nip59WrapEventAsync(part, me.sk, me.pubkey, expirationTs, supportWrapTags);
+                    const w = await this.wrapAsSenderAsync(me, part, me.pubkey, selfKemPk, this.pqSelfUsesPq2(), expirationTs, supportWrapTags);
                     this.sendDMToRelays(['EVENT', w]);
                     retryWraps.push(['EVENT', w]);
                     this._recordGiftWrapId(nymMessageId, w.id);
                     this._archivePMEvent(w);
                 }) : null;
-                const nymWrapped = recipientKemPk
-                    ? await this.pqWrapForPeerAsync(plan.pq2, rumor, me.sk, recipientPubkey, recipientKemPk, expirationTs, supportWrapTags)
-                    : await this.nip59WrapEventAsync(rumor, me.sk, recipientPubkey, expirationTs, supportWrapTags);
+                const nymWrapped = await this.wrapAsSenderAsync(me, rumor, recipientPubkey, recipientKemPk, plan.pq2, expirationTs, supportWrapTags);
                 this.sendDMToRelays(['EVENT', nymWrapped]);
+                if (plan.bitchat && viaSigner) this._signerBitchatSendNotice(recipientPubkey);
                 sentWrappedEvents.push(['EVENT', nymWrapped]);
                 retryWraps.push(['EVENT', nymWrapped]);
                 wrapped = nymWrapped;
@@ -691,16 +701,16 @@ Object.assign(NYM.prototype, {
             }
 
             if (recipientPubkey !== me.pubkey) {
-                // Post-quantum when possible so the archive isn't the weakest link.
                 const selfKemPk = claim && claim.sk ? null : this.pqSelfKeyFor();
-                const selfWrapped = selfKemPk
-                    ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), rumor, me.sk, me.pubkey, selfKemPk, expirationTs, supportWrapTags)
-                    : await this.nip59WrapEventAsync(rumor, me.sk, me.pubkey, expirationTs, supportWrapTags);
-                this.sendDMToRelays(['EVENT', selfWrapped]);
-                retryWraps.push(['EVENT', selfWrapped]);
-                this._recordGiftWrapId(nymMessageId, selfWrapped.id);
-                // Archive our self-addressed copy so sent messages restore across devices without the relay echo.
-                this._archivePMEvent(selfWrapped);
+                const selfCopy = async () => {
+                    const selfWrapped = await this.wrapAsSenderAsync(me, rumor, me.pubkey, selfKemPk, this.pqSelfUsesPq2(), expirationTs, supportWrapTags);
+                    this.sendDMToRelays(['EVENT', selfWrapped]);
+                    retryWraps.push(['EVENT', selfWrapped]);
+                    this._recordGiftWrapId(nymMessageId, selfWrapped.id);
+                    this._archivePMEvent(selfWrapped);
+                };
+                if (me.sk) await selfCopy();
+                else await selfCopy().catch(() => { });
             }
 
             if (wrapped && typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(wrapped.id, nymMessageId);
@@ -737,144 +747,6 @@ Object.assign(NYM.prototype, {
             });
             if (pmList.length > this.pmStorageLimit) {
                 this.pmMessages.set(conversationKey, pmList.slice(-this.pmStorageLimit));
-            }
-            this.persistPMMessages(conversationKey);
-
-            this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
-
-            this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
-            this.movePMToTop(recipientPubkey);
-
-            if (this.inPMMode && this.currentPM === recipientPubkey) {
-                this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
-                this._scheduleScrollToBottom();
-            }
-            if (typeof this.refreshMessagePqBadge === 'function') this.refreshMessagePqBadge(nymMessageId);
-            this._pmSendingArm(sentMsg, sentWrappedEvents, retryWraps);
-            return wrapped.id;
-        }
-
-        // Extension or NIP-46 remote signer path (seal via signer, wrap locally)
-        const _useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
-        const _useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
-        if (_useExt || _useN46) {
-            const NT = window.NostrTools;
-            // The signer seals, but the wrap is ours and can be hybridized; see pqSendCapable (pq.js).
-            const plan = this.pqPmPlan(recipientPubkey);
-            const recipientKemPk = plan.kemPk;
-
-            rumor.id = NT.getEventHash(rumor);
-
-            // Seal (kind 13) signed by identity via extension or remote signer.
-            const sealContent = _useExt
-                ? await window.nostr.nip44.encrypt(recipientPubkey, JSON.stringify(rumor))
-                : await _nip46Encrypt(recipientPubkey, JSON.stringify(rumor));
-            const sealUnsigned = {
-                kind: 13, content: sealContent, created_at: this.randomNow(), tags: []
-            };
-            const seal = _useExt
-                ? await window.nostr.signEvent(sealUnsigned)
-                : await _nip46SignEvent(sealUnsigned);
-
-            // GiftWrap (kind 1059) with local ephemeral key.
-            const ephSk = NT.generateSecretKey();
-            // Use the format the recipient announced; a `pk2`-only peer can't open a combined wrap.
-            const wrapContent = recipientKemPk
-                ? (plan.pq2
-                    ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, recipientPubkey, recipientKemPk)
-                    : window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, recipientPubkey, recipientKemPk))
-                : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, recipientPubkey));
-            const wrapUnsigned = {
-                kind: 1059,
-                content: wrapContent,
-                created_at: this.randomNow(),
-                tags: [['p', recipientPubkey], ...(supportWrapTags || [])]
-            };
-
-            if (expirationTs) {
-                wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
-            }
-
-            const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
-
-            const sentWrappedEvents = [['EVENT', wrapped]];
-            const retryWraps = [['EVENT', wrapped]];
-            this.sendDMToRelays(['EVENT', wrapped]);
-            this._depositPMEvent(wrapped);
-
-            if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                const eventIdToDelete = wrapped.id;
-                setTimeout(() => {
-                    this.publishDeletionEvent(eventIdToDelete, 1059);
-                }, 600000); // 10 minutes
-            }
-
-            // Self-wrap so our own message is retrievable from relays after reload.
-            if (recipientPubkey !== this.pubkey) {
-                try {
-                    const selfSealContent = _useExt
-                        ? await window.nostr.nip44.encrypt(this.pubkey, JSON.stringify(rumor))
-                        : await _nip46Encrypt(this.pubkey, JSON.stringify(rumor));
-                    const selfSealUnsigned = {
-                        kind: 13, content: selfSealContent, created_at: this.randomNow(), tags: []
-                    };
-                    const selfSeal = _useExt
-                        ? await window.nostr.signEvent(selfSealUnsigned)
-                        : await _nip46SignEvent(selfSealUnsigned);
-                    const selfEphSk = NT.generateSecretKey();
-                    const selfKemPk = (typeof this.pqSelfKeyFor === 'function' && this.pqSelfUsesPq2())
-                        ? this.pqSelfKeyFor() : null;
-                    const selfWrapContent = selfKemPk
-                        ? window.NymCrypto.pq2Encrypt(JSON.stringify(selfSeal), selfEphSk, this.pubkey, selfKemPk)
-                        : NT.nip44.encrypt(JSON.stringify(selfSeal), NT.nip44.getConversationKey(selfEphSk, this.pubkey));
-                    const selfWrapUnsigned = {
-                        kind: 1059,
-                        content: selfWrapContent,
-                        created_at: this.randomNow(),
-                        tags: [['p', this.pubkey], ...(supportWrapTags || [])]
-                    };
-                    if (expirationTs) selfWrapUnsigned.tags.push(['expiration', String(expirationTs)]);
-                    const selfWrapped = NT.finalizeEvent(selfWrapUnsigned, selfEphSk);
-                    this.sendDMToRelays(['EVENT', selfWrapped]);
-                    retryWraps.push(['EVENT', selfWrapped]);
-                } catch (_) { /* Self-wrap failed — non-critical */ }
-            }
-
-            // Show locally — reuse the rumor's created_at (now) so the local
-            // message sorts identically to how the recipient sees it.
-            if (wrapped && typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(wrapped.id, nymMessageId);
-            const conversationKey = this.getPMConversationKey(recipientPubkey);
-            if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
-            const extPmList = this.pmMessages.get(conversationKey);
-            const sentMsg = this._pmSendingAdopt(extPmList, early, {
-                id: wrapped.id,
-                author: this.nym,
-                pubkey: this.pubkey,
-                content,
-                created_at: now,
-                _ms: nowMs,
-                _seq: ++this._msgSeq,
-                timestamp: new Date(now * 1000),
-                isOwn: true,
-                isPM: true,
-                conversationKey,
-                conversationPubkey: recipientPubkey,
-                eventKind: 1059,
-                nymMessageId,  // For tracking Nymchat delivery/read receipts
-                threadRoot: threadRoot || undefined,
-                expiresAt: expirationTs || undefined,
-                senderVerified: true,
-                pqEncrypted: !!recipientKemPk,
-                pqRoot: !!recipientKemPk && plan.rootSeeded && this.pqHasRoot(),
-                isFileOffer: !!fileOffer,
-                fileOffer,
-                deliveryStatus: 'sending'
-            });
-            extPmList.sort((a, b) => {
-                return this._compareMessages(a, b);
-            });
-            if (extPmList.length > this.pmStorageLimit) {
-                this.pmMessages.set(conversationKey, extPmList.slice(-this.pmStorageLimit));
             }
             this.persistPMMessages(conversationKey);
 
@@ -1173,13 +1045,10 @@ Object.assign(NYM.prototype, {
                 return { seal, rumor, isPq: usedPq };
             };
 
-            // Pick the active remote-signer NIP-44 decrypt (extension or NIP-46).
-            const _extDecrypt = window.nostr?.nip44?.decrypt
-                ? (peer, ct) => window.nostr.nip44.decrypt(peer, ct) : null;
-            const _n46Decrypt = (this.nostrLoginMethod === 'nip46'
-                && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected)
-                ? (peer, ct) => _nip46Decrypt(peer, ct) : null;
-            const remoteDecrypt = _extDecrypt || _n46Decrypt;
+            const signer = this.privkey ? null : this._signerOps();
+            const remoteDecrypt = signer ? (peer, ct) => signer.decrypt(peer, ct) : null;
+            const wrapPTag = (event.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
+            const wrapToIdentity = !wrapPTag || wrapPTag[1] === this.pubkey;
 
             const anonCandidates = typeof this.botAnonCandidatesFor === 'function'
                 ? this.botAnonCandidatesFor(event) : [];
@@ -1221,20 +1090,30 @@ Object.assign(NYM.prototype, {
                 ({ seal, rumor } = res);
                 isPqWrap = !!res.isPq;
                 if (!probe) this._noteWrapDecrypted(event.id);
-            } else if (remoteDecrypt) {
-                try {
-                    const r = await unwrapWithRemoteSigner(remoteDecrypt);
-                    ({ seal, rumor } = r);
-                    isPqWrap = !!r.isPq;
-                } catch (_remErr) {
-                    // Remote signers can't use our local ephemeral keys, so try them here for group messages.
-                    const ephResult = this._tryDecryptWithEphemeralKeys(event);
-                    if (ephResult) {
-                        ({ seal, rumor } = ephResult);
-                    } else {
-                        throw _remErr;
-                    }
+            } else if (!wrapToIdentity) {
+                const ephSks = this._ephemeralCandidateSks(event);
+                if (!ephSks.length) return;
+                const candidates = [
+                    ...this.pqUnwrapCandidates(ephSks),
+                    ...ephSks.map(sk => ({ sk, bitchat: false }))
+                ];
+                let res = await this._cryptoCall('unwrapGiftWrap', [event, candidates],
+                    () => window.NymCrypto.unwrapGiftWrap(event, candidates));
+                if (!res && this._isPqPayload(event.content)) {
+                    try { res = window.NymCrypto.unwrapGiftWrap(event, candidates); }
+                    catch (_) { res = null; }
                 }
+                if (!res) return;
+                ({ seal, rumor } = res);
+                isPqWrap = !!res.isPq;
+                if (!probe) this._noteWrapDecrypted(event.id);
+            } else if (isBitchatFormat(event.content) && this._signerLogin()) {
+                if (!probe) this._signerBitchatReceiveNotice();
+                return;
+            } else if (remoteDecrypt) {
+                const r = await unwrapWithRemoteSigner(remoteDecrypt);
+                ({ seal, rumor } = r);
+                isPqWrap = !!r.isPq;
                 if (!probe) this._noteWrapDecrypted(event.id);
             } else {
                 return;
@@ -2588,6 +2467,7 @@ Object.assign(NYM.prototype, {
     _pmWrapRetryable(ev) {
         if (!ev || typeof ev.id !== 'string') return false;
         if (this._decryptedWrapIds && this._decryptedWrapIds.has(ev.id)) return false;
+        if (typeof this._signerLogin === 'function' && this._signerLogin() && typeof ev.content === 'string' && ev.content.startsWith('v2:')) return false;
         if (!this.privkey) return 'hold';
         if (typeof this.vaultEnabled === 'function' && this.vaultEnabled() && !this._vaultKey) return 'hold';
         if (this._isPqPayload(ev.content)) {
@@ -3268,7 +3148,7 @@ Object.assign(NYM.prototype, {
                     }
                     this.renderTypingIndicator();
                 }, 30000);
-                typers.set(botPk, { nym: 'Nymbot', timeout, timestamp: Date.now(), ttlMs: 30000 });
+                typers.set(botPk, { nym: 'Nymbot', timeout, timestamp: Date.now(), ttlMs: 30000, everywhere: true });
             };
             arm();
             this._botTypingHeartbeat = setInterval(arm, 20000);
@@ -4234,6 +4114,7 @@ Object.assign(NYM.prototype, {
         const suffix = this.getPubkeySuffix(pubkey);
         const safePk = this._safePubkey(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
+        const ringCls = this._ringPeek(pubkey);
         const friendBadge = this.getFriendBadgeHtml(pubkey);
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
             ? `<span class="verified-badge" data-tip="${this.verifiedDeveloper.title}">✓</span>`
@@ -4241,12 +4122,12 @@ Object.assign(NYM.prototype, {
                 ? `<span class="verified-badge" data-tip="${this.verifiedBot.title}">✓</span>`
                 : '';
         const supporterMark = this._supporterMarkFor(pubkey);
-        const pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterMark}|${friendBadge}`;
+        const pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${ringCls}|${verifiedBadge}|${supporterMark}|${friendBadge}`;
         if (channelEl.dataset.pmHeaderSig === pmHeaderSig) return;
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const lastSeenHtml = typeof this._pmLastSeenHtml === 'function' ? this._pmLastSeenHtml(pubkey) : '';
         const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterMark}${friendBadge}`;
-        channelEl.innerHTML = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>${lastSeenHtml}`;
+        channelEl.innerHTML = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk, ringCls)}${displayNym}</span>${lastSeenHtml}`;
         channelEl.dataset.pmHeaderSig = pmHeaderSig;
         // Preserve the header's click-to-open-profile behavior across rebuilds.
         const row = channelEl.querySelector('.pm-header-row');
@@ -4308,10 +4189,11 @@ Object.assign(NYM.prototype, {
             supporterBadge = this._supporterBadgeMarkup();
         }
         const authorSig = `${clean}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterBadge}|${friendBadge}`;
+        const authorRing = this._ringClass(pubkey, userShopItems);
         document.querySelectorAll(`.message[data-pubkey="${safePk}"] .message-author`).forEach(el => {
             // Update only the inner span to preserve bubble-time and the click handler.
             const clickable = el.querySelector('.author-clickable');
-            const avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
+            const avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message${authorRing}" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
             if (clickable) {
                 if (clickable.dataset.authorSig === authorSig) return;
                 clickable.dataset.authorSig = authorSig;
@@ -4483,7 +4365,7 @@ Object.assign(NYM.prototype, {
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
             const safePk = this._safePubkey(pubkey);
             item.innerHTML = `
-<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">
+<img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm${this._ringClass(pubkey, userShopItems)}" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">
 <span class="pm-name">${window.NymSuffix.sqHtml(cleanBaseNym, suffix)}${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
 ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
@@ -4552,7 +4434,6 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         this._clearSidebarSkel('pmList');
         const newTime = parseInt(newItem.dataset.lastMessageTime);
         const existingItems = Array.from(pmList.querySelectorAll('.pm-item'));
-        const viewMoreBtn = pmList.querySelector('.view-more-btn');
 
         let insertBefore = null;
         for (const item of existingItems) {
@@ -4565,8 +4446,6 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 
         if (insertBefore) {
             pmList.insertBefore(newItem, insertBefore);
-        } else if (viewMoreBtn) {
-            pmList.insertBefore(newItem, viewMoreBtn);
         } else {
             pmList.appendChild(newItem);
         }
@@ -4635,6 +4514,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const safePk = this._safePubkey(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
+        const ringCls = this._ringPeek(pubkey);
         const friendBadge = this.getFriendBadgeHtml(pubkey);
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
             ? `<span class="verified-badge" data-tip="${this.verifiedDeveloper.title}">✓</span>`
@@ -4644,11 +4524,11 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         const supporterMark = this._supporterMarkFor(pubkey);
         const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterMark}${friendBadge}`;
         const lastSeenHtml = this._pmLastSeenHtml(pubkey);
-        const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>${lastSeenHtml}`;
+        const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk, ringCls)}${displayNym}</span>${lastSeenHtml}`;
 
         const _pmHeaderEl = document.getElementById('currentChannel');
         _pmHeaderEl.innerHTML = pmHeaderHtml;
-        _pmHeaderEl.dataset.pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterMark}|${friendBadge}`;
+        _pmHeaderEl.dataset.pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${ringCls}|${verifiedBadge}|${supporterMark}|${friendBadge}`;
         delete _pmHeaderEl.dataset.groupHeaderSig;
 
         const _pmHeaderRow = _pmHeaderEl.querySelector('.pm-header-row');
@@ -4707,12 +4587,14 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             if (quietRead) (this._heldChannelCloses || (this._heldChannelCloses = new Set())).add(prevChannelKey);
             else this.closeChannelSubscription(prevChannelKey);
         }
+        const samePM = !!(this.inPMMode && this.currentPM === pubkey && !this.currentGroup);
         this.inPMMode = true;
         this.currentPM = pubkey;
         this.currentGroup = null;
         this.currentChannel = null;
         this.currentGeohash = null;
         this.userScrolledUp = false;
+        if (this.pendingQuote && !samePM) this.clearQuoteReply();
         if (this.pendingEdit) this.cancelEditMessage();
 
         if (window.innerWidth <= 1024) {
@@ -4736,6 +4618,8 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         document.querySelectorAll('.pm-item').forEach(item => {
             item.classList.toggle('active', item.dataset.pubkey === pubkey);
         });
+        this.updateViewMoreButton('channelList');
+        this.updateViewMoreButton('pmList');
 
         const conversationKey = this.getPMConversationKey(pubkey);
         this.clearUnreadCount(conversationKey);
@@ -4872,16 +4756,14 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             }
         });
 
-        const viewMoreBtn = list.querySelector('.view-more-btn');
-        if (viewMoreBtn) {
-            viewMoreBtn.style.display = term ? 'none' : 'block';
-        }
+        this.updateViewMoreButton('pmList');
     },
 
     async sendEditedPM(newContent, originalMessageId, recipientPubkey, originalNymMessageId, claim) {
         try {
             if (!this.connected) throw new Error('Not connected to relay');
-            if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(recipientPubkey)) {
+            if ((this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(recipientPubkey))
+                || (typeof this._anonLaneMsg === 'function' && this._anonLaneMsg([originalNymMessageId, originalMessageId]))) {
                 this.displaySystemMessage('Editing is off in the anonymous Nymbot chat — an edit would be signed by your real key. Send a new message instead.');
                 return false;
             }
@@ -4906,16 +4788,13 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
                 ? now + this.settings.dmTTLSeconds : null;
 
-            if (me.sk) {
-                const NT = window.NostrTools;
+            if (me.sk || (me.pubkey === this.pubkey && this._signerOps())) {
                 // Same rule as the original send; see pqPmPlan (pq.js).
                 const plan = this.pqPmPlan(recipientPubkey);
                 const recipientKemPk = plan.kemPk;
 
                 if (plan.nym) {
-                    const nymWrapped = recipientKemPk
-                        ? await this.pqWrapForPeerAsync(plan.pq2, rumor, me.sk, recipientPubkey, recipientKemPk, expirationTs)
-                        : await this.nip59WrapEventAsync(rumor, me.sk, recipientPubkey, expirationTs);
+                    const nymWrapped = await this.wrapAsSenderAsync(me, rumor, recipientPubkey, recipientKemPk, plan.pq2, expirationTs);
                     this.sendDMToRelays(['EVENT', nymWrapped]);
                     this._recordGiftWrapId(nymMessageId, nymWrapped.id);
                     this._depositPMEvent(nymWrapped);
@@ -4923,54 +4802,14 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 
                 if (recipientPubkey !== me.pubkey) {
                     const selfKemPk = this.pqSelfKeyFor();
-                    const selfWrapped = selfKemPk
-                        ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), rumor, me.sk, me.pubkey, selfKemPk, expirationTs)
-                        : await this.nip59WrapEventAsync(rumor, me.sk, me.pubkey, expirationTs);
-                    this.sendDMToRelays(['EVENT', selfWrapped]);
-                    this._recordGiftWrapId(nymMessageId, selfWrapped.id);
-                }
-            } else if (this._canSendGiftWraps()) {
-                // Extension or NIP-46 remote signer path: seal via signer, wrap locally.
-                const NT = window.NostrTools;
-                const _useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
-                const enc44 = (peer, text) => _useExt ? window.nostr.nip44.encrypt(peer, text) : _nip46Encrypt(peer, text);
-                const signEvt = (u) => _useExt ? window.nostr.signEvent(u) : _nip46SignEvent(u);
-
-                // Hybrid on the wrap only (see pqSendCapable); this branch needs its own plan.
-                const editPlan = this.pqPmPlan(recipientPubkey);
-                const editKemPk = editPlan.kemPk;
-                const sealContent = await enc44(recipientPubkey, JSON.stringify(rumor));
-                const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
-                const seal = await signEvt(sealUnsigned);
-                const ephSk = NT.generateSecretKey();
-                const ephPk = NT.getPublicKey(ephSk);
-                const wrapContent = editKemPk
-                    ? (editPlan.pq2
-                        ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, recipientPubkey, editKemPk)
-                        : window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, recipientPubkey, editKemPk))
-                    : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, recipientPubkey));
-                const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: [['p', recipientPubkey]], pubkey: ephPk };
-                if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
-                const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
-                this.sendDMToRelays(['EVENT', wrapped]);
-                this._depositPMEvent(wrapped);
-
-                // Self-wrap so our own edit is retrievable from relays after reload.
-                if (recipientPubkey !== this.pubkey) {
-                    try {
-                        const selfSealContent = await enc44(this.pubkey, JSON.stringify(rumor));
-                        const selfSealUnsigned = { kind: 13, content: selfSealContent, created_at: this.randomNow(), tags: [] };
-                        const selfSeal = await signEvt(selfSealUnsigned);
-                        const selfEphSk = NT.generateSecretKey();
-                        const selfKemPk = typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
-                        const selfWrapContent = selfKemPk
-                            ? window.NymCrypto.pq2Encrypt(JSON.stringify(selfSeal), selfEphSk, this.pubkey, selfKemPk)
-                            : NT.nip44.encrypt(JSON.stringify(selfSeal), NT.nip44.getConversationKey(selfEphSk, this.pubkey));
-                        const selfWrapUnsigned = { kind: 1059, content: selfWrapContent, created_at: this.randomNow(), tags: [['p', this.pubkey]] };
-                        if (expirationTs) selfWrapUnsigned.tags.push(['expiration', String(expirationTs)]);
-                        const selfWrapped = NT.finalizeEvent(selfWrapUnsigned, selfEphSk);
+                    const selfCopy = async () => {
+                        const selfWrapped = await this.wrapAsSenderAsync(me, rumor, me.pubkey, selfKemPk, this.pqSelfUsesPq2(), expirationTs);
                         this.sendDMToRelays(['EVENT', selfWrapped]);
-                    } catch (_) { /* Self-wrap failed — non-critical */ }
+                        this._recordGiftWrapId(nymMessageId, selfWrapped.id);
+                        this._archivePMEvent(selfWrapped);
+                    };
+                    if (me.sk) await selfCopy();
+                    else await selfCopy().catch(() => { });
                 }
             }
 
@@ -5690,6 +5529,8 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 
         document.querySelectorAll('.channel-item').forEach(i => i.classList.remove('active'));
         document.querySelectorAll('.pm-item').forEach(i => i.classList.remove('active'));
+        this.updateViewMoreButton('channelList');
+        this.updateViewMoreButton('pmList');
 
         const container = document.getElementById('messagesContainer');
         if (container) {

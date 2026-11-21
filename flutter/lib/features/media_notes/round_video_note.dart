@@ -8,8 +8,10 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../i18n/i18n.dart';
+import '../layout/chat_cover.dart';
 import '../messages/media_fallbacks.dart';
 import '../messages/format/media_source.dart';
+import '../messages/format/playback_keeper.dart';
 import 'media_note_files.dart';
 import 'media_notes.dart';
 import 'voice_note_player.dart' show activeMediaNoteProvider;
@@ -23,39 +25,141 @@ class RoundVideoNote extends ConsumerStatefulWidget {
     this.localPath,
     this.size = kRoundNoteSize,
     this.autoStart = true,
+    this.playbackScope,
   });
 
   final MediaNote note;
   final String? localPath;
   final double size;
   final bool autoStart;
+  final String? playbackScope;
 
   @override
   ConsumerState<RoundVideoNote> createState() => _RoundVideoNoteState();
 }
 
 class _RoundVideoNoteState extends ConsumerState<RoundVideoNote> {
-  final Object _token = Object();
-  VideoPlayerController? _controller;
+  final Key _visibilityKey = UniqueKey();
+  SharedPlayback? _session;
   bool _starting = false;
   bool _failed = false;
-  bool _sound = false;
   bool _visible = false;
+  bool _covered = false;
+  bool _ticking = true;
   String? _tempPath;
+
+  bool get _shown => _visible && !_covered && _ticking;
+
+  VideoPlayerController? get _controller => _session?.controller;
+
+  bool get _sound => _session?.sound ?? false;
+
+  String? _keyOf(RoundVideoNote w) {
+    final scope = w.playbackScope;
+    if (scope == null) return null;
+    return PlaybackKeeper.keyFor(scope, w.localPath ?? w.note.url);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _bind(_keyOf(widget));
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final covered = ChatCoverScope.of(context);
+    final ticking = TickerMode.valuesOf(context).enabled;
+    if (covered == _covered && ticking == _ticking) return;
+    _covered = covered;
+    _ticking = ticking;
+    _session
+      ?..markCovered(this, covered)
+      ..markTicking(this, ticking);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _covered == covered && _ticking == ticking) {
+        _followCover();
+      }
+    });
+  }
+
+  void _followCover() {
+    if (!_covered && _ticking) {
+      _playIfShown();
+      return;
+    }
+    final s = _session;
+    if (s != null &&
+        !s.sound &&
+        !s.shown &&
+        s.controller.value.isPlaying) {
+      s.controller.pause();
+    }
+  }
+
+  @override
+  void didUpdateWidget(RoundVideoNote oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final old = _keyOf(oldWidget);
+    final key = _keyOf(widget);
+    if (old == key &&
+        oldWidget.note.url == widget.note.url &&
+        oldWidget.localPath == widget.localPath) {
+      return;
+    }
+    _unbind(old);
+    _failed = false;
+    _bind(key);
+    if (_session == null && _shown && widget.autoStart) _ensure();
+  }
 
   @override
   void dispose() {
-    _controller?.removeListener(_onValue);
-    _controller?.dispose();
+    _unbind(_keyOf(widget));
+    VisibilityDetectorController.instance.forget(_visibilityKey);
     MediaNoteFiles.deleteQuietly(_tempPath);
     super.dispose();
   }
 
+  void _bind(String? key) {
+    PlaybackKeeper.watch(key, _onStarted);
+    final s = PlaybackKeeper.join(key, this);
+    if (s != null) _attach(s);
+  }
+
+  void _unbind(String? key) {
+    PlaybackKeeper.unwatch(key, _onStarted);
+    final s = _session;
+    _session = null;
+    if (s == null) return;
+    s.controller.removeListener(_onValue);
+    PlaybackKeeper.leave(s, this);
+  }
+
+  void _attach(SharedPlayback s) {
+    if (identical(_session, s)) return;
+    s.controller.addListener(_onValue);
+    _session = s;
+    _failed = false;
+    s.markVisible(this, _visible);
+    s.markCovered(this, _covered);
+    s.markTicking(this, _ticking);
+  }
+
+  void _onStarted() {
+    if (!mounted || _session != null) return;
+    final s = PlaybackKeeper.join(_keyOf(widget), this);
+    if (s == null) return;
+    setState(() => _attach(s));
+    if (_shown && !s.controller.value.isPlaying) s.controller.play();
+  }
+
   void _onValue() {
-    final c = _controller;
-    if (c == null || !mounted) return;
-    final v = c.value;
-    if (_sound &&
+    final s = _session;
+    if (s == null || !mounted) return;
+    final v = s.controller.value;
+    if (s.sound &&
         v.isInitialized &&
         v.duration > Duration.zero &&
         !v.isPlaying &&
@@ -67,16 +171,23 @@ class _RoundVideoNoteState extends ConsumerState<RoundVideoNote> {
   }
 
   Future<void> _ensure() async {
-    if (_controller != null || _starting || _failed) return;
+    if (_session != null || _starting || _failed) return;
     _starting = true;
     try {
       final local = widget.localPath;
       if (local != null) {
         final bytes = await MediaNoteFiles.readLocal(local);
-        _tempPath = await MediaNoteFiles.writeTemp(bytes, widget.note.mime);
-        final c = VideoPlayerController.file(File(_tempPath!));
-        await c.initialize();
-        _adopt(c);
+        final temp = await MediaNoteFiles.writeTemp(bytes, widget.note.mime);
+        _tempPath = temp;
+        final c = VideoPlayerController.file(File(temp));
+        try {
+          await c.initialize();
+        } catch (_) {
+          await c.dispose();
+          rethrow;
+        }
+        _tempPath = null;
+        _adopt(c, onRelease: () => MediaNoteFiles.deleteQuietly(temp));
         return;
       }
       final opened = await openMediaSource([
@@ -92,10 +203,6 @@ class _RoundVideoNoteState extends ConsumerState<RoundVideoNote> {
           await c.dispose();
           return false;
         }
-        if (!mounted) {
-          await c.dispose();
-          return true;
-        }
         _adopt(c);
         return true;
       });
@@ -107,55 +214,78 @@ class _RoundVideoNoteState extends ConsumerState<RoundVideoNote> {
     }
   }
 
-  void _adopt(VideoPlayerController c) {
-    if (!mounted) {
+  void _adopt(VideoPlayerController c, {VoidCallback? onRelease}) {
+    final key = _keyOf(widget);
+    if (!mounted && key == null) {
       c.dispose();
+      onRelease?.call();
       return;
     }
-    c.addListener(_onValue);
     c.setVolume(0);
     c.setLooping(true);
-    setState(() => _controller = c);
-    if (_visible) c.play();
+    final s = PlaybackKeeper.start(key, this, c, onRelease: onRelease);
+    if (!mounted) {
+      PlaybackKeeper.leave(s, this);
+      return;
+    }
+    setState(() => _attach(s));
+    if (_shown && !s.controller.value.isPlaying) s.controller.play();
   }
 
   void _onVisibility(VisibilityInfo info) {
+    if (!mounted) return;
     final visible = info.visibleFraction > 0.4;
-    if (visible == _visible) return;
+    if (visible && _visible) return;
     _visible = visible;
-    final c = _controller;
+    final s = _session;
+    s?.markVisible(this, visible);
     if (visible) {
-      if (c == null) {
-        if (widget.autoStart) _ensure();
-      } else if (!c.value.isPlaying) {
-        c.play();
-      }
-    } else if (c != null && c.value.isPlaying) {
-      c.pause();
-      if (_sound) _backToLoop(play: false);
+      _playIfShown();
+    } else if (!_covered &&
+        s != null &&
+        !s.seen &&
+        s.controller.value.isPlaying) {
+      s.controller.pause();
+      if (s.sound) _backToLoop(play: false);
+    }
+  }
+
+  void _playIfShown() {
+    if (!_shown) return;
+    final s = _session;
+    if (s == null) {
+      if (widget.autoStart) _ensure();
+    } else if (!s.controller.value.isPlaying) {
+      s.controller.play();
     }
   }
 
   Future<void> _backToLoop({bool play = true}) async {
-    final c = _controller;
-    if (c == null) return;
-    _sound = false;
+    final s = _session;
+    if (s == null) return;
+    final c = s.controller;
+    s.sound = false;
     await c.setVolume(0);
     await c.setLooping(true);
-    if (play) await c.play();
+    if ((_covered || !_ticking) && !s.shown) {
+      if (c.value.isPlaying) await c.pause();
+    } else if (play) {
+      await c.play();
+    }
     if (mounted) setState(() {});
   }
 
   Future<void> _tap() async {
     await _ensure();
-    final c = _controller;
-    if (c == null) return;
-    if (_sound) {
+    final s = _session;
+    if (s == null || !mounted) return;
+    final c = s.controller;
+    if (s.sound) {
       await _backToLoop();
       return;
     }
-    ref.read(activeMediaNoteProvider.notifier).state = _token;
-    _sound = true;
+    ref.read(activeMediaNoteProvider.notifier).state = s;
+    s.sound = true;
     await c.setLooping(false);
     await c.seekTo(Duration.zero);
     await c.setVolume(1);
@@ -167,7 +297,8 @@ class _RoundVideoNoteState extends ConsumerState<RoundVideoNote> {
   Widget build(BuildContext context) {
     final colors = context.nym;
     ref.listen<Object?>(activeMediaNoteProvider, (_, next) {
-      if (next != _token && _sound) _backToLoop();
+      final s = _session;
+      if (s != null && !identical(next, s) && s.sound) _backToLoop();
     });
     final c = _controller;
     final ready = c != null && c.value.isInitialized;
@@ -206,7 +337,7 @@ class _RoundVideoNoteState extends ConsumerState<RoundVideoNote> {
       );
     }
     return VisibilityDetector(
-      key: ValueKey('round-${widget.note.url}-${widget.localPath}'),
+      key: _visibilityKey,
       onVisibilityChanged: _onVisibility,
       child: Semantics(
         button: true,

@@ -1,5 +1,7 @@
 // Slash-command dispatcher; modal-opening commands go through optional hooks and degrade to the PWA's system text when unset.
 
+import 'dart:collection';
+
 import '../../core/utils/nym_utils.dart';
 import '../../models/user.dart';
 import '../i18n/i18n.dart';
@@ -111,6 +113,117 @@ class ResolvedTarget {
 
 final RegExp _hex64Re = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
 
+class NymIndex {
+  Map<String, User>? _users;
+  final Map<String, int> _seq = {};
+  final Map<String, String> _keyOf = {};
+  final Map<String, List<String>> _byNym = {};
+  int _next = 0;
+  int builds = 0;
+
+  static String keyFor(String nym) => stripPubkeySuffix(nym).toLowerCase();
+
+  bool _tracks(Map<String, User> users) =>
+      identical(users, _users) && users.length == _seq.length;
+
+  void _build(Map<String, User> users) {
+    builds++;
+    _users = users;
+    _seq.clear();
+    _keyOf.clear();
+    _byNym.clear();
+    _next = 0;
+    users.forEach((pubkey, user) {
+      _seq[pubkey] = _next++;
+      final key = keyFor(user.nym);
+      _keyOf[pubkey] = key;
+      (_byNym[key] ??= <String>[]).add(pubkey);
+    });
+  }
+
+  void _unfile(String pubkey) {
+    final key = _keyOf.remove(pubkey);
+    if (key == null) return;
+    final list = _byNym[key];
+    if (list == null) return;
+    list.remove(pubkey);
+    if (list.isEmpty) _byNym.remove(key);
+  }
+
+  void _file(String pubkey, String key) {
+    final seq = _seq[pubkey]!;
+    _keyOf[pubkey] = key;
+    final list = _byNym[key] ??= <String>[];
+    var i = list.length;
+    while (i > 0 && _seq[list[i - 1]]! > seq) {
+      i--;
+    }
+    list.insert(i, pubkey);
+  }
+
+  void put(Map<String, User> users, String pubkey) {
+    if (!identical(users, _users)) return;
+    final user = users[pubkey];
+    if (user == null) {
+      removed(users, pubkey);
+      return;
+    }
+    if (!_seq.containsKey(pubkey)) {
+      _seq[pubkey] = _next++;
+      _file(pubkey, keyFor(user.nym));
+      return;
+    }
+    renamed(users, pubkey, user.nym);
+  }
+
+  void removed(Map<String, User> users, String pubkey) {
+    if (!identical(users, _users)) return;
+    if (_seq.remove(pubkey) == null) return;
+    _unfile(pubkey);
+  }
+
+  void renamed(Map<String, User> users, String pubkey, String nym) {
+    if (!identical(users, _users) || !_seq.containsKey(pubkey)) return;
+    final key = keyFor(nym);
+    if (_keyOf[pubkey] == key) return;
+    _unfile(pubkey);
+    _file(pubkey, key);
+  }
+
+  List<String> named(Map<String, User> users, String lowerNym) {
+    if (!_tracks(users)) _build(users);
+    return _byNym[lowerNym] ?? const <String>[];
+  }
+}
+
+class UsersView extends UnmodifiableMapView<String, User> {
+  UsersView(super.map, [this._index, this._source]);
+
+  final NymIndex? _index;
+  final Map<String, User>? _source;
+  Map<String, List<String>>? _byNym;
+  int _indexed = -1;
+
+  List<String> pubkeysNamed(String lowerNym) {
+    final shared = _index;
+    final source = _source;
+    if (shared != null && source != null) {
+      return shared.named(source, lowerNym);
+    }
+    var index = _byNym;
+    if (index == null || _indexed != length) {
+      index = <String, List<String>>{};
+      forEach((pubkey, user) {
+        (index![stripPubkeySuffix(user.nym).toLowerCase()] ??= <String>[])
+            .add(pubkey);
+      });
+      _byNym = index;
+      _indexed = length;
+    }
+    return index[lowerNym] ?? const <String>[];
+  }
+}
+
 ResolvedTarget? resolveTarget(String raw, Map<String, User> users) {
   final input = raw.trim().replaceFirst(RegExp(r'^@'), '');
   if (input.isEmpty) return null;
@@ -124,6 +237,19 @@ ResolvedTarget? resolveTarget(String raw, Map<String, User> users) {
   final hashIndex = input.indexOf('#');
   final searchNym = hashIndex == -1 ? input : input.substring(0, hashIndex);
   final searchSuffix = hashIndex == -1 ? null : input.substring(hashIndex + 1);
+
+  if (users is UsersView) {
+    final want = searchNym.toLowerCase();
+    for (final pubkey in users.pubkeysNamed(want)) {
+      final user = users[pubkey];
+      if (user == null) continue;
+      final cleanNym = stripPubkeySuffix(user.nym);
+      if (cleanNym.toLowerCase() != want) continue;
+      if (searchSuffix != null && !pubkey.endsWith(searchSuffix)) continue;
+      return ResolvedTarget(pubkey, cleanNym);
+    }
+    return null;
+  }
 
   final matches = <ResolvedTarget>[];
   users.forEach((pubkey, user) {

@@ -414,6 +414,8 @@ Object.assign(NYM.prototype, {
         this._renderThreadView(container);
         this._setThreadComposerHint(true);
         this._threadMarkOpenSeen();
+        this._typingThrottleTime = 0;
+        if (typeof this.renderTypingIndicator === 'function') this.renderTypingIndicator();
 
         if (opts.push !== false) {
             this._pushNavigation({
@@ -570,6 +572,8 @@ Object.assign(NYM.prototype, {
             container.classList.remove('thread-view-active');
             this.renderMessagesWithVirtualScroll(container, at.ctx.storageKey, true, !!at.ctx.isPM);
         }
+        this._typingThrottleTime = 0;
+        if (typeof this.renderTypingIndicator === 'function') this.renderTypingIndicator();
         // Only for user-initiated closes, not navigation itself.
         if (opts.nav !== false) {
             const current = this.navigationHistory && this.navigationHistory[this.navigationIndex];
@@ -781,6 +785,7 @@ Object.assign(NYM.prototype, {
         this.activeThread = null;
         this._threadContainer = null;
         this._setThreadComposerHint(false);
+        this._typingThrottleTime = 0;
         if (container) container.classList.remove('thread-view-active');
     },
 

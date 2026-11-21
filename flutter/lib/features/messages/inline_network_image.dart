@@ -86,6 +86,7 @@ class InlineNetworkImage extends StatefulWidget {
     this.fallbackUrls = const [],
     this.width,
     this.height,
+    this.decodeSize,
     this.fit = BoxFit.contain,
     this.placeholder,
     this.errorChild,
@@ -102,6 +103,7 @@ class InlineNetworkImage extends StatefulWidget {
 
   final double? width;
   final double? height;
+  final double? decodeSize;
   final BoxFit fit;
   final Widget? placeholder;
   final Widget? errorChild;
@@ -333,15 +335,15 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
   }
 
   int? _decodeCacheWidth(BuildContext context) {
-    final logical = (widget.width ?? widget.height);
+    final logical = widget.decodeSize ?? (widget.width ?? widget.height);
     if (logical == null || !logical.isFinite || logical <= 0) return null;
     final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0;
     return (logical * dpr).ceil();
   }
 
   ImageProvider? _coverDecode(BuildContext context, ImageProvider image) {
-    final w = widget.width;
-    final h = widget.height;
+    final w = widget.decodeSize ?? widget.width;
+    final h = widget.decodeSize ?? widget.height;
     if (widget.fit != BoxFit.cover ||
         w == null ||
         h == null ||

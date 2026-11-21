@@ -318,6 +318,10 @@ body.light-mode .verified-badge::before {
         outline: none;
     }
 
+    .message-input-row {
+        --composer-line: calc(16px * 1.4);
+    }
+
     .modal-content {
         margin: 20px;
     }

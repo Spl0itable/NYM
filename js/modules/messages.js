@@ -1641,8 +1641,11 @@ Object.assign(NYM.prototype, {
         const time = this.settings.showTimestamps ?
             this._rowTimeFormat('time', displayTimestamp).format(displayTimestamp) : '';
 
-        const userShopItems = this.getUserShopItems(message.pubkey);
-        const flairHtml = this.getFlairForUser(message.pubkey);
+        const shopBlind = !!message._optimistic && message.pubkey !== this.pubkey;
+        const userShopItems = shopBlind ? null : this.getUserShopItems(message.pubkey);
+        const flairHtml = shopBlind ? '' : this.getFlairForUser(message.pubkey);
+        const ringCls = shopBlind ? '' : this._ringClass(message.pubkey, userShopItems);
+        const ringOff = shopBlind ? ' data-ring="off"' : '';
         const supporterBadge = userShopItems?.supporter ?
             `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>` : '';
         const friendBadge = !message.isOwn && this.isFriend(message.pubkey)
@@ -1692,11 +1695,11 @@ Object.assign(NYM.prototype, {
             if (message.isGroup && message.groupId) messageEl.dataset.groupId = message.groupId;
 
             const cleanAuthor = this.resolveDisplayNym(message.pubkey, message.author);
-            const authorFlairHtml = this.getFlairForUser(message.pubkey);
+            const authorFlairHtml = shopBlind ? '' : this.getFlairForUser(message.pubkey);
             const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk = this._safePubkey(message.pubkey);
             // Dim the suffix as everywhere else a nym is shown.
-            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">${window.NymSuffix.sqHtml(cleanAuthor, this.getPubkeySuffix(message.pubkey))}${authorFlairHtml}`;
+            const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message${ringCls}"${ringOff} data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">${window.NymSuffix.sqHtml(cleanAuthor, this.getPubkeySuffix(message.pubkey))}${authorFlairHtml}`;
 
             const actionContent = message.content.substring(4);
 
@@ -1823,7 +1826,7 @@ Object.assign(NYM.prototype, {
             const baseNym = this.resolveDisplayNym(message.pubkey, message.author);
             const avatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk2 = this._safePubkey(message.pubkey);
-            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk2}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(baseNym, this.getPubkeySuffix(message.pubkey))}${flairHtml}`;
+            const displayAuthorBase = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message${ringCls}"${ringOff} data-avatar-pubkey="${safePk2}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(baseNym, this.getPubkeySuffix(message.pubkey))}${flairHtml}`;
             let displayAuthor = displayAuthorBase; // string used in HTML
             let authorExtraClass = '';
             if (Array.isArray(userShopItems?.cosmetics) && userShopItems.cosmetics.includes('cosmetic-redacted')) {
@@ -1845,7 +1848,9 @@ Object.assign(NYM.prototype, {
                 if (message.isGroup && message.nymMessageId) {
                     const avatarHtml = this._buildGroupReadersHtml(message);
                     const sendingHtml = message.deliveryStatus === 'sending'
-                        ? `<span class="delivery-status sending" title="${this.escapeHtml(this.uiText('Sending'))}">${this.deliveryTicksHtml('sending')}</span>` : '';
+                        ? `<span class="delivery-status sending" title="${this.escapeHtml(this.uiText('Sending'))}">${this.deliveryTicksHtml('sending')}</span>`
+                        : message.deliveryStatus === 'failed'
+                            ? `<span class="delivery-status failed nm-pointer" title="${this.escapeHtml(this.uiText('Failed to send - click to retry'))}" data-retry-event-id="${this.escapeHtml(String(message.id || ''))}">!</span>` : '';
                     deliveryCheckmark = `${sendingHtml}<span class="group-readers" data-nym-msg-id="${message.nymMessageId}">${avatarHtml}</span>`;
                 } else if (message.deliveryStatus) {
                     if (message.deliveryStatus === 'read') {
@@ -2045,11 +2050,15 @@ Object.assign(NYM.prototype, {
 
         if (typeof this._maybeTranslateBotWelcomePM === 'function') this._maybeTranslateBotWelcomePM(messageEl, message);
 
-        if (!this._bulkAppending && !message.isHistorical &&
+        if (!this._bulkAppending && !this._suppressBubbleRewrap && !message.isHistorical &&
             this._isBubbleGroupedWithPrev(messageEl) &&
             document.body.classList.contains('chat-bubbles')) {
             messageEl.classList.add('bubble-snap');
-            setTimeout(() => { messageEl.classList.remove('bubble-snap'); }, 320);
+            setTimeout(() => {
+                messageEl.classList.remove('bubble-snap');
+                const wrapper = messageEl.closest('.message-group');
+                if (wrapper) this._syncAllAvatarOffsets([wrapper]);
+            }, 320);
         }
 
         if (document.body.classList.contains('chat-bubbles')) {
@@ -2078,10 +2087,11 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        if (this.reactions && typeof this.updateMessageReactions === 'function') {
+        const reactionRow = messageEl.classList.contains('message');
+        if (this.reactions && reactionRow && typeof this._updateMessageReactionsEl === 'function') {
             const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             if (reactionMsgId && this.reactions.has(reactionMsgId)) {
-                this.updateMessageReactions(reactionMsgId);
+                this._updateMessageReactionsEl(reactionMsgId, messageEl);
             }
         }
 
@@ -2117,21 +2127,17 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // PM reactions are keyed by nymMessageId, shared across recipients.
-        const reactionKey = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-        if (reactionKey && this.reactions.has(reactionKey)) {
-            this.updateMessageReactions(reactionKey);
-        }
         // Migrate reactions keyed by event id before nymMessageId was known.
         if (message.isPM && message.nymMessageId && message.nymMessageId !== message.id) {
             if (this._migrateReactionKey(message.id, message.nymMessageId)) {
                 this.updateMessageReactions(message.nymMessageId);
+                if (reactionRow && !messageEl.isConnected) this._updateMessageReactionsEl(message.nymMessageId, messageEl);
             }
         }
 
         const zapKey = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-        if (zapKey && this.zaps.has(zapKey)) {
-            this.updateMessageZaps(zapKey);
+        if (zapKey && reactionRow && this.zaps.has(zapKey) && typeof this._updateMessageZapsEl === 'function') {
+            this._updateMessageZapsEl(zapKey, messageEl);
         }
 
 
@@ -2456,9 +2462,10 @@ Object.assign(NYM.prototype, {
             if (!pubkey || this._mentionPersonHidden(pubkey)) { out[sfx] = { avatar: '', flair: '' }; continue; }
             const safePk = this._safePubkey(pubkey) || '';
             const avatarSrc = this.getAvatarUrl(pubkey);
+            const flair = this.getFlairForUser(pubkey) || '';
             out[sfx] = {
-                avatar: `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`,
-                flair: this.getFlairForUser(pubkey) || ''
+                avatar: `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message${this._ringPeek(pubkey)}" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`,
+                flair
             };
         }
         return out;
@@ -3124,6 +3131,7 @@ Object.assign(NYM.prototype, {
             const stack = wrapper.querySelector(':scope > .message-group-stack');
             if (!avatarBox || !stack) continue;
             const lastMsg = stack.lastElementChild;
+            if (lastMsg && lastMsg.classList.contains('bubble-snap')) continue;
             const contentEl = lastMsg && lastMsg.querySelector(':scope > .message-content');
             if (!contentEl) { writes.push({ avatarBox, below: 0 }); continue; }
             const below = wrapper.getBoundingClientRect().bottom - contentEl.getBoundingClientRect().bottom;
@@ -3158,6 +3166,10 @@ Object.assign(NYM.prototype, {
             const fallback = this.generateAvatarSvg(safePk);
             img.onerror = function () { this.onerror = null; this.src = fallback; };
         }
+        const authorImg = firstMessageEl.querySelector('.message-author img.avatar-message, :scope > img.avatar-message');
+        if (authorImg && authorImg.getAttribute('data-ring') === 'off') img.setAttribute('data-ring', 'off');
+        else img.removeAttribute('data-ring');
+        this._setRingClass(img, authorImg ? [...authorImg.classList].filter((c) => c === 'shop-ring' || c.startsWith('shop-ring-')).join(' ') : '');
         avatarBox.appendChild(img);
         avatarBox.addEventListener('click', (e) => {
             e.preventDefault();
@@ -3310,8 +3322,8 @@ Object.assign(NYM.prototype, {
             let avatarHtml = '', flairHtml = '';
             if (pubkey) {
                 const safePk = this._safePubkey(pubkey) || '';
-                avatarHtml = `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
                 flairHtml = this.getFlairForUser(pubkey) || '';
+                avatarHtml = `<img src="${this.escapeHtml(this.getAvatarUrl(pubkey))}" class="avatar-message${this._ringPeek(pubkey)}" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
             }
             authorEl.innerHTML = `${avatarHtml}${window.NymSuffix.sqHtml(base, suffix)}${flairHtml}`;
         } else {
@@ -3340,6 +3352,10 @@ Object.assign(NYM.prototype, {
     startEditMessage(contextData) {
         const { messageId, content: raw, pubkey } = contextData;
         if (!messageId || !raw || pubkey !== this.pubkey) return;
+        if (typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(messageId)) {
+            this.displaySystemMessage(this.uiText('Editing is off in the anonymous Nymbot chat — an edit would be signed by your real key. Send a new message instead.'));
+            return;
+        }
         const content = this._shownTextFor(raw, messageId);
         const head = content !== raw && raw.endsWith(content) ? raw.slice(0, raw.length - content.length) : '';
 
@@ -3392,6 +3408,7 @@ Object.assign(NYM.prototype, {
         const input = document.getElementById('messageInput');
         input.value = '';
         this.autoResizeTextarea(input);
+        if (typeof this.refreshComposerPrimary === 'function') this.refreshComposerPrimary();
     },
 
     async publishEditedChannelMessage(newContent, originalEventId, claim) {
@@ -4142,6 +4159,7 @@ Object.assign(NYM.prototype, {
         if (content.startsWith('/')) {
             this.handleCommand(content);
         } else if (this.currentGeohash) {
+            this._lapseChannelTyping(this.currentGeohash);
             sent = await this.publishMessagePseudonymous(content, this.currentGeohash, this.currentGeohash, savedQuote, threadRoot, { keep: askBot });
             if (!sent) return false;
         } else {
@@ -4157,8 +4175,12 @@ Object.assign(NYM.prototype, {
         this.hideCommandPalette();
         this.hideAutocomplete();
         this.hideEmojiAutocomplete();
-        this.sendTypingStop();
-        this.sendChannelTypingStop();
+        if (sent) {
+            this._lapseChannelTyping(this.currentGeohash);
+        } else {
+            this.sendTypingStop();
+            this.sendChannelTypingStop();
+        }
         input.focus();
         if (sent) {
             if (window.nymHaptic) window.nymHaptic('light');
@@ -6173,9 +6195,10 @@ Object.assign(NYM.prototype, {
             if (!authorPubkey) { out[cleanAuthor] = { avatar: '', flair: '' }; continue; }
             const safePk = this._safePubkey(authorPubkey) || '';
             const avatarSrc = this.getAvatarUrl(authorPubkey);
+            const flair = this.getFlairForUser(authorPubkey) || '';
             out[cleanAuthor] = {
-                avatar: `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`,
-                flair: this.getFlairForUser(authorPubkey) || ''
+                avatar: `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message${this._ringPeek(authorPubkey)}" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`,
+                flair
             };
         }
         return out;

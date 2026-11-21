@@ -667,14 +667,16 @@
         _clMarkRows() {
             if (typeof document === 'undefined') return;
             const state = this._clState();
-            if (!Object.keys(state.items || {}).length) {
-                document.querySelectorAll('#pmList .cl-locked-row, #channelList .cl-locked-row').forEach((row) => row.classList.remove('cl-locked-row'));
-                return;
-            }
-            document.querySelectorAll('#pmList .pm-item, #channelList .channel-item').forEach((row) => {
-                const k = this._clLockKeyForItem(row);
-                row.classList.toggle('cl-locked-row', !!k && L().isLocked(state, k));
+            const any = Object.keys(state.items || {}).length > 0;
+            const moved = new Set();
+            document.querySelectorAll(any ? '#pmList .pm-item, #channelList .channel-item' : '#pmList .cl-locked-row, #channelList .cl-locked-row').forEach((row) => {
+                const k = any ? this._clLockKeyForItem(row) : null;
+                const on = !!k && L().isLocked(state, k);
+                if (row.classList.contains('cl-locked-row') === on) return;
+                row.classList.toggle('cl-locked-row', on);
+                moved.add(row.classList.contains('pm-item') ? 'pmList' : 'channelList');
             });
+            if (typeof this.updateViewMoreButton === 'function') moved.forEach((id) => this.updateViewMoreButton(id));
         },
 
         _clObserveLists() {

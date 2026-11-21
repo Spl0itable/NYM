@@ -567,7 +567,7 @@ Object.assign(NYM.prototype, {
         if (until > now) {
             const wait = Math.max(1000, Math.min(next, until) - now);
             const timeout = setTimeout(() => this._botThinkingPaint(geohash), wait);
-            typers.set(botPk, { nym: 'Nymbot', timeout, timestamp: now, ttlMs: until - now, run: true });
+            typers.set(botPk, { nym: 'Nymbot', timeout, timestamp: now, ttlMs: until - now, run: true, everywhere: true });
         } else if (prev) {
             typers.delete(botPk);
         }

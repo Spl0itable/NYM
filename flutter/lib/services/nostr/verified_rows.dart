@@ -1,3 +1,4 @@
+import '../../features/messages/bridge_block.dart';
 import '../../features/messages/encrypted_blob.dart';
 import '../../models/nostr_event.dart';
 
@@ -10,6 +11,7 @@ Future<List<NostrEvent>> verifiedRows(
   for (final raw in rows) {
     try {
       final e = NostrEvent.fromJson(raw);
+      if (isBridgeBlockedEvent(e)) continue;
       if (isEncryptedBlobChannelEvent(e)) {
         if (onBlob != null && e.id.isNotEmpty && e.computeId() == e.id) {
           onBlob(e.id);

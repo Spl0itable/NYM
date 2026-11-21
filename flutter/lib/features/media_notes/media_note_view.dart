@@ -25,7 +25,15 @@ MediaNote? localMediaNote(String? name, String? mime) {
 
 Widget audioOrMediaNote(AudioBlock block) {
   final note = block.note;
-  if (note == null) return AudioMessage(url: block.url, fileName: block.fileName);
+  if (note == null) {
+    return Builder(
+      builder: (context) => AudioMessage(
+        url: block.url,
+        fileName: block.fileName,
+        playbackScope: MediaNoteHost.maybeOf(context)?.messageId,
+      ),
+    );
+  }
   return MediaNoteView(note: note);
 }
 
@@ -51,9 +59,11 @@ class MediaNoteView extends StatelessWidget {
     if (note.once) return ViewOnceCard(note: note);
     switch (note.kind) {
       case 'voice':
-        return VoiceNotePlayer(note: note, localPath: path);
+        return VoiceNotePlayer(
+            note: note, localPath: path, playbackScope: host?.messageId);
       case 'round':
-        return RoundVideoNote(note: note, localPath: path);
+        return RoundVideoNote(
+            note: note, localPath: path, playbackScope: host?.messageId);
       case 'photo':
         if (path != null) return _LocalPhoto(path: path);
     }

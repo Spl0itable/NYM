@@ -167,10 +167,26 @@ bool canSendAnon({
 }) =>
     loggedIn && surface == 'channel' && !editing && !mesh;
 
-List<SendMenuItem> sendMenuItems({bool canAnon = false}) => [
-      const SendMenuItem('later', ComposerStrings.sendLater),
+List<SendMenuItem> sendMenuItems({bool canAnon = false, bool editing = false}) => [
+      if (!editing) const SendMenuItem('later', ComposerStrings.sendLater),
       if (canAnon) const SendMenuItem('anon', ComposerStrings.sendAnon),
     ];
+
+bool sendLaterReady({
+  bool connected = false,
+  String text = '',
+  int attachments = 0,
+  bool editing = false,
+  bool quoting = false,
+  bool recording = false,
+}) {
+  if (!connected || editing || recording) return false;
+  return attachments > 0 || quoting || text.trim().isNotEmpty;
+}
+
+bool sendMenuShown(
+        {bool canAnon = false, bool editing = false, bool sendAs = false}) =>
+    sendMenuItems(canAnon: canAnon, editing: editing).isNotEmpty || sendAs;
 
 String menuPresentation(double width) =>
     width <= kComposerSheetMaxWidth ? 'sheet' : 'popover';

@@ -3,6 +3,7 @@
 import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake, sha256 } from './_shared.js';
 import { archiveChannelKey } from './_channel-key.js';
 import { isEncryptedBlobChannelEvent } from './_encrypted-blob.js';
+import { isBridgeBlockedEvent, isBridgeBlockedFrame } from './_bridge-block.js';
 import { isNymchatClient, clientOriginAllowed } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport, packHit } from './_filters.js';
@@ -1008,6 +1009,12 @@ export async function onRequest(context) {
     return true;
   }
 
+  function outboundBridgeRefused(ev) {
+    if (!isBridgeBlockedEvent(ev)) return false;
+    refuseEvent(ev, 'blocked: not accepted');
+    return true;
+  }
+
   function outboundChannelRefused(ev) {
     if (ev.kind !== 20000 && ev.kind !== 23333) return false;
     if (typeof ev.content !== 'string' || typeof ev.pubkey !== 'string') return true;
@@ -1873,6 +1880,7 @@ export async function onRequest(context) {
           if (isForeignAppChannelEvent(raw, relayUrl)) return;
           const eventId = extractEventId(raw);
           if (!eventId) return;
+          if (isBridgeBlockedFrame(raw)) return;
           const prior = seenEvents.get(eventId);
           if (prior !== undefined) {
             // Duplicates aren't forwarded, but a small note tells the client's details panel which relays carried it.
@@ -2358,6 +2366,7 @@ export async function onRequest(context) {
             if (!msg[1] || typeof msg[1] !== 'object') return;
             if (!outboundRateOk(msg[1])) return;
             if (outboundBlobRefused(msg[1])) return;
+            if (outboundBridgeRefused(msg[1])) return;
             if (heldOutbound(msg[1])) return;
             if (outboundBadgeRefused(msg[1])) return;
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
@@ -2374,6 +2383,7 @@ export async function onRequest(context) {
             if (!geoEvt || typeof geoEvt !== 'object') return;
             if (!outboundRateOk(geoEvt)) return;
             if (outboundBlobRefused(geoEvt)) return;
+            if (outboundBridgeRefused(geoEvt)) return;
             if (heldOutbound(geoEvt)) return;
             if (outboundBadgeRefused(geoEvt)) return;
             const evtKind = geoEvt && typeof geoEvt.kind === 'number' ? geoEvt.kind : -1;
@@ -2419,6 +2429,7 @@ export async function onRequest(context) {
             if (!dmEvt || typeof dmEvt !== 'object') return;
             if (!outboundRateOk(dmEvt)) return;
             if (outboundBlobRefused(dmEvt)) return;
+            if (outboundBridgeRefused(dmEvt)) return;
             if (heldOutbound(dmEvt)) return;
             if (isAppRelayOnlyEvent(dmEvt)) { sendAppRelayOnly(JSON.stringify(['EVENT', dmEvt])); return; }
             const evtKind = dmEvt && typeof dmEvt.kind === 'number' ? dmEvt.kind : -1;

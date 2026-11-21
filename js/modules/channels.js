@@ -774,7 +774,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     filterChannels(searchTerm) {
         const items = document.querySelectorAll('.channel-item');
         const term = searchTerm.toLowerCase();
-        const list = document.getElementById('channelList');
 
         const wrapper = document.getElementById('channelSearchWrapper');
         if (wrapper) {
@@ -796,11 +795,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 item.classList.add('search-hidden');
             }
         });
-
-        const viewMoreBtn = list.querySelector('.view-more-btn');
-        if (viewMoreBtn) {
-            viewMoreBtn.style.display = term ? 'none' : 'block';
-        }
+        this.applyHiddenChannels();
+        this.updateViewMoreButton('channelList');
     },
 
     filterUsers(searchTerm) {
@@ -810,13 +806,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const wrapper = document.getElementById('userSearchWrapper');
         if (wrapper) {
             wrapper.classList.toggle('has-value', searchTerm.length > 0);
-        }
-
-        const list = document.getElementById('userListContent');
-
-        const viewMoreBtn = list.querySelector('.view-more-btn');
-        if (viewMoreBtn) {
-            viewMoreBtn.style.display = searchTerm ? 'none' : 'block';
         }
     },
 
@@ -877,6 +866,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     updateChannelPins() {
+        let flipped = false;
         document.querySelectorAll('.channel-item').forEach(item => {
             let key;
 
@@ -887,7 +877,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this._ensureChannelTile(item);
             const pinBtn = item.querySelector('.pin-btn');
 
-            if (this.pinnedChannels.has(key)) {
+            const pin = this.pinnedChannels.has(key);
+            if (item.classList.contains('pinned') !== pin && item.closest && item.closest('#channelList')) flipped = true;
+            if (pin) {
                 item.classList.add('pinned');
                 if (pinBtn) pinBtn.classList.add('pinned');
             } else {
@@ -895,6 +887,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (pinBtn) pinBtn.classList.remove('pinned');
             }
         });
+        if (flipped) this._sbSoon('channelList');
     },
 
     savePinnedChannels() {
@@ -964,21 +957,174 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     // Rows a collapsed list shows before "View N more...".
     COLLAPSED_LIST_VISIBLE: 20,
 
-    _markListOverflow(listId) {
+    _sbRowShown(el) {
+        return !el.classList.contains('search-hidden')
+            && el.style.display !== 'none'
+            && !el.classList.contains('cf-hidden-row')
+            && !el.classList.contains('cl-locked-row');
+    },
+
+    _sbModel() {
+        const g = typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : null);
+        return g && g.NymSidebarMore ? g.NymSidebarMore : null;
+    },
+
+    _sbText(text, args) {
+        if (typeof this.uiText === 'function') return this.uiText(text, args);
+        return args ? String(text).replace(/\{(\w+)\}/g, (m, k) => (args[k] != null ? String(args[k]) : m)) : text;
+    },
+
+    _sbShown(listId) {
+        const v = this.listExpansionStates ? this.listExpansionStates.get(listId) : 0;
+        return typeof v === 'number' && v > this.COLLAPSED_LIST_VISIBLE ? v : this.COLLAPSED_LIST_VISIBLE;
+    },
+
+    _sbStore(listId, shown) {
+        if (!this.listExpansionStates) this.listExpansionStates = new Map();
+        const M = this._sbModel();
+        const keep = M ? M.store(shown) : (shown > this.COLLAPSED_LIST_VISIBLE ? shown : 0);
+        if (keep) this.listExpansionStates.set(listId, keep);
+        else this.listExpansionStates.delete(listId);
+    },
+
+    _sbSearching(list) {
+        const sec = list ? list.parentNode : null;
+        const wrapper = sec && typeof sec.querySelector === 'function' ? sec.querySelector('.search-input-wrapper') : null;
+        const input = wrapper ? wrapper.querySelector('.search-input') : null;
+        return !!(input && typeof input.value === 'string' && input.value.trim().length > 0);
+    },
+
+    _sbRowEl(listId) {
         const list = document.getElementById(listId);
-        if (!list) return [];
-        const visible = Array.from(list.querySelectorAll('.list-item:not(.search-hidden)'))
-            .filter(el => el.style.display !== 'none' && !el.classList.contains('cf-hidden-row'));
-        const isExpanded = this.listExpansionStates.get(listId) || false;
-        const cap = this.COLLAPSED_LIST_VISIBLE;
-        list.querySelectorAll('.list-overflow').forEach(el => el.classList.remove('list-overflow'));
-        if (!isExpanded) {
-            for (let i = cap; i < visible.length; i++) visible[i].classList.add('list-overflow');
+        const sec = list ? list.parentNode : null;
+        const row = sec && typeof sec.querySelector === 'function' ? sec.querySelector(`.sb-more-row[data-more-for="${listId}"]`) : null;
+        if (row && !row._sbBound) {
+            row._sbBound = true;
+            row.addEventListener('click', (e) => {
+                const t = e.target && typeof e.target.closest === 'function' ? e.target : null;
+                if (!t) return;
+                if (t.closest('.sb-less')) { this._sbMore(listId, 'less'); return; }
+                if (t.closest('.sb-more')) this._sbMore(listId, 'more');
+            });
         }
-        return visible;
+        return row;
+    },
+
+    _sbMoreRow(listId, win) {
+        if (!this._sbLast) this._sbLast = new Map();
+        this._sbLast.set(listId, win);
+        const row = this._sbRowEl(listId);
+        if (!row) return;
+        const buttons = win && Array.isArray(win.buttons) ? win.buttons : [];
+        const go = buttons.find((b) => b.kind !== 'less') || null;
+        const back = buttons.some((b) => b.kind === 'less');
+        if (row.hidden !== (!go && !back)) row.hidden = !go && !back;
+        const more = row.querySelector('.sb-more');
+        const less = row.querySelector('.sb-less');
+        if (more) {
+            if (more.hidden !== !go) more.hidden = !go;
+            let t = '';
+            if (go) {
+                const n = typeof this.abbreviateNumber === 'function' ? this.abbreviateNumber(go.n) : go.n;
+                t = go.kind === 'view' ? this._sbText('View {n} more...', { n }) : this._sbText('Show {n} more...', { n });
+            }
+            if (more.textContent !== t) more.textContent = t;
+        }
+        if (less) {
+            if (less.hidden !== !back) less.hidden = !back;
+            const lt = back ? this._sbText('Show less') : '';
+            if (less.textContent !== lt) less.textContent = lt;
+        }
+    },
+
+    _sbRank(el) {
+        const c = el.classList;
+        if (c.contains('pm-item')) return c.contains('chat-pinned') ? -2 : 0;
+        if (!c.contains('channel-item')) return 0;
+        if (el.dataset.geohash === 'nymchat' || el.dataset.channel === 'nymchat') return -4;
+        if (c.contains('pinned')) return -3;
+        if (c.contains('active')) return -2;
+        return c.contains('has-unread') ? -1 : 0;
+    },
+
+    _sbPainted(els) {
+        const rank = els.map((el) => this._sbRank(el));
+        if (!rank.some((r) => r !== 0)) return els;
+        return els.map((el, i) => i).sort((a, b) => (rank[a] - rank[b]) || (a - b)).map((i) => els[i]);
+    },
+
+    _sbMoreApply(listId) {
+        const list = document.getElementById(listId);
+        if (!list) return;
+        const M = this._sbModel();
+        const rows = this._sbPainted(Array.from(list.querySelectorAll('.list-item')).filter((el) => this._sbRowShown(el)));
+        const keep = [];
+        rows.forEach((el, i) => { if (el.classList.contains('active') || el.classList.contains('has-unread')) keep.push(i); });
+        const searching = this._sbSearching(list);
+        const shown = this._sbShown(listId);
+        const win = M ? M.window(rows.length, shown, keep, { searching }) : { shown, visible: rows.length, hidden: 0, buttons: [] };
+        if (!searching) this._sbStore(listId, win.shown);
+        const hide = new Set(M ? M.hiddenRows(rows.length, shown, keep, { searching }) : []);
+        const cut = new Set();
+        rows.forEach((el, i) => { if (hide.has(i)) cut.add(el); });
+        list.querySelectorAll('.list-overflow').forEach((el) => { if (!cut.has(el)) el.classList.remove('list-overflow'); });
+        cut.forEach((el) => { if (!el.classList.contains('list-overflow')) el.classList.add('list-overflow'); });
+        const collapsed = cut.size > 0;
+        if (list.classList.contains('list-collapsed') !== collapsed) list.classList.toggle('list-collapsed', collapsed);
+        this._sbMoreRow(listId, win);
+    },
+
+    _sbHeadVar() {
+        const sc = document.getElementById('sidebar');
+        const h = sc && typeof sc.querySelector === 'function' ? sc.querySelector(':scope > .sidebar-header') : null;
+        if (!sc || !h || typeof h.getBoundingClientRect !== 'function') return;
+        const top = sc.getBoundingClientRect().top;
+        const height = h.getClientRects().length ? Math.max(0, h.getBoundingClientRect().bottom - top) : 0;
+        const want = Math.round(height) + 'px';
+        if (sc.style.getPropertyValue('--ps-head') !== want) sc.style.setProperty('--ps-head', want);
+    },
+
+    _sbMore(listId, kind) {
+        const M = this._sbModel();
+        const win = this._sbLast ? this._sbLast.get(listId) : null;
+        const next = M && win ? M.press(win, kind) : null;
+        if (next == null) return;
+        this._sbStore(listId, next);
+        const row = this._sbRowEl(listId);
+        const back = row ? row.querySelector('.sb-less') : null;
+        const fwd = row ? row.querySelector('.sb-more') : null;
+        const refocus = !!back && document.activeElement === back;
+        const handoff = kind !== 'less' && !!fwd && document.activeElement === fwd;
+        if (kind === 'less') {
+            const list = document.getElementById(listId);
+            const sec = list ? list.parentNode : null;
+            const title = sec && typeof sec.querySelector === 'function' ? sec.querySelector('.nav-title') : null;
+            this._sbHeadVar();
+            if (title && typeof title.scrollIntoView === 'function') title.scrollIntoView({ block: 'nearest' });
+        } else if (listId === 'channelList') {
+            if (typeof this._seedUnreadFromD1Activity === 'function') this._seedUnreadFromD1Activity();
+            this._geohashActivityFetchedAt = 0;
+            this._namedActivityFetchedAt = 0;
+            if (typeof this.fetchGeohashActivityFromD1 === 'function') this.fetchGeohashActivityFromD1().catch(() => { });
+            if (typeof this.fetchNamedChannelActivityFromD1 === 'function') this.fetchNamedChannelActivityFromD1().catch(() => { });
+        }
+        if (listId === 'userListContent') {
+            this._userListSig = '';
+            if (typeof this._doUpdateUserList === 'function') this._doUpdateUserList();
+        } else {
+            this._sbMoreApply(listId);
+        }
+        const go = refocus && row ? row.querySelector('.sb-more') : null;
+        if (go && !go.hidden && typeof go.focus === 'function') go.focus({ preventScroll: true });
+        if (handoff && fwd.hidden && back && !back.hidden && typeof back.focus === 'function') back.focus({ preventScroll: true });
     },
 
     applyHiddenChannels() {
+        let moved = false;
+        const show = (item, value) => {
+            if ((item.style.display === 'none') !== (value === 'none')) moved = true;
+            item.style.display = value;
+        };
         document.querySelectorAll('.channel-item').forEach(item => {
             const channel = item.dataset.channel;
             const geohash = item.dataset.geohash;
@@ -989,22 +1135,23 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
 
             if (key === 'nymchat' || item.classList.contains('active')) {
-                item.style.display = '';
+                show(item, '');
                 return;
             }
 
             if (this.hiddenChannels.has(key)) {
-                item.style.display = 'none';
+                show(item, 'none');
                 return;
             }
 
             if (this.hideNonPinned && !this.pinnedChannels.has(key)) {
-                item.style.display = 'none';
+                show(item, 'none');
                 return;
             }
 
-            item.style.display = '';
+            show(item, '');
         });
+        if (moved && !this._bulkChannelAdd) this.updateViewMoreButton('channelList');
     },
 
     saveHiddenChannels() {
@@ -1793,7 +1940,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     if (at > newest) newest = at;
                 }
             }
-            const batch = got.filter((ev) => !(typeof this._encryptedBlobDrop === 'function' && this._encryptedBlobDrop(ev)));
+            const batch = got.filter((ev) => !(typeof this._bridgeBlocked === 'function' && this._bridgeBlocked(ev))
+                && !(typeof this._encryptedBlobDrop === 'function' && this._encryptedBlobDrop(ev)));
             if (!batch.length) return;
             if (typeof this._preformatBatch === 'function') {
                 for (const ev of batch) {
@@ -2000,6 +2148,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         document.querySelectorAll('.pm-item').forEach(item => {
             item.classList.remove('active');
         });
+        this.updateViewMoreButton('channelList');
+        this.updateViewMoreButton('pmList');
 
         const unreadKey = geohash ? `#${geohash}` : channel;
         this.clearUnreadCount(unreadKey);
@@ -2135,12 +2285,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }).catch(() => { });
             }
 
-            const viewMoreBtn = list.querySelector('.view-more-btn');
-            if (viewMoreBtn) {
-                list.insertBefore(item, viewMoreBtn);
-            } else {
-                list.appendChild(item);
-            }
+            list.appendChild(item);
 
             this.channels.set(key, { channel, geohash });
             // Seed the badge from the live count, since rows are often built after counts are painted.
@@ -2167,120 +2312,17 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
-            // Also suppressed during bulk add; _markListOverflow forces a style recalc per row.
             if (!this._bulkChannelAdd) this.updateViewMoreButton('channelList');
         }
     },
 
     updateViewMoreButton(listId) {
-        const list = document.getElementById(listId);
-        if (!list) return;
-
-        const searchWrapper = list.parentElement?.querySelector('.search-input-wrapper');
-        const searchInput = searchWrapper?.querySelector('.search-input');
-        if (searchInput && searchInput.value.trim().length > 0) {
-            const existingBtn = list.querySelector('.view-more-btn');
-            if (existingBtn) {
-                existingBtn.style.display = 'none';
-            }
+        if (listId === 'userListContent') {
+            this._userListSig = '';
+            if (typeof this.updateUserList === 'function') this.updateUserList();
             return;
         }
-
-        // Only visible rows count toward the collapsed budget.
-        const items = this._markListOverflow(listId);
-        let existingBtn = list.querySelector('.view-more-btn');
-
-        const isExpanded = this.listExpansionStates.get(listId) || false;
-
-        if (items.length > this.COLLAPSED_LIST_VISIBLE) {
-            if (!existingBtn) {
-                const btn = document.createElement('div');
-                btn.className = 'view-more-btn';
-                btn.onclick = () => this.toggleListExpansion(listId);
-                list.appendChild(btn);
-                existingBtn = btn;
-            }
-
-            if (isExpanded) {
-                existingBtn.textContent = 'Show less';
-                list.classList.remove('list-collapsed');
-                list.classList.add('list-expanded');
-            } else {
-                existingBtn.textContent = `View ${this.abbreviateNumber(items.length - this.COLLAPSED_LIST_VISIBLE)} more...`;
-                list.classList.add('list-collapsed');
-                list.classList.remove('list-expanded');
-            }
-
-            existingBtn.style.display = 'block';
-        } else {
-            if (existingBtn) {
-                existingBtn.remove();
-            }
-            list.classList.remove('list-collapsed', 'list-expanded');
-            this.listExpansionStates.delete(listId);
-        }
-    },
-
-    toggleListExpansion(listId) {
-        const list = document.getElementById(listId);
-        if (!list) return;
-
-        let btn = list.querySelector('.view-more-btn');
-        const items = list.querySelectorAll('.list-item');
-
-        const currentState = this.listExpansionStates.get(listId) || false;
-        const newState = !currentState;
-        this.listExpansionStates.set(listId, newState);
-        // Rows revealed by expanding have no badge yet, so re-run the D1 seed.
-        if (newState && listId === 'channelList') {
-            if (typeof this._seedUnreadFromD1Activity === 'function') {
-                this._seedUnreadFromD1Activity();
-            }
-            this._geohashActivityFetchedAt = 0;
-            this._namedActivityFetchedAt = 0;
-            if (typeof this.fetchGeohashActivityFromD1 === 'function') {
-                this.fetchGeohashActivityFromD1().catch(() => { });
-            }
-            if (typeof this.fetchNamedChannelActivityFromD1 === 'function') {
-                this.fetchNamedChannelActivityFromD1().catch(() => { });
-            }
-        }
-        this._markListOverflow(listId);
-
-        if (newState) {
-            list.classList.remove('list-collapsed');
-            list.classList.add('list-expanded');
-
-            if (btn) {
-                btn.remove();
-                btn = document.createElement('div');
-                btn.className = 'view-more-btn';
-                btn.textContent = 'Show less';
-                btn.onclick = () => this.toggleListExpansion(listId);
-                list.appendChild(btn);
-            }
-        } else {
-            list.classList.add('list-collapsed');
-            list.classList.remove('list-expanded');
-
-            if (btn) {
-                btn.remove();
-                btn = document.createElement('div');
-                btn.className = 'view-more-btn';
-                const cap = this.COLLAPSED_LIST_VISIBLE;
-                const visible = Array.from(list.querySelectorAll('.list-item:not(.search-hidden)'))
-                    .filter(el => el.style.display !== 'none');
-                btn.textContent = `View ${this.abbreviateNumber(visible.length - cap)} more...`;
-                btn.onclick = () => this.toggleListExpansion(listId);
-
-                // Insert after the last visible row of the collapsed window, not the raw item count.
-                if (visible.length > cap && visible[cap - 1]) {
-                    visible[cap - 1].insertAdjacentElement('afterend', btn);
-                } else {
-                    list.appendChild(btn);
-                }
-            }
-        }
+        this._sbMoreApply(listId);
     },
 
     removeChannel(channel, geohash = '') {
@@ -2700,7 +2742,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             badge.textContent = shown > 99 ? '99+' : shown;
             badge.style.display = shown > 0 ? 'block' : 'none';
         }
-        item.classList.toggle('has-unread', shown > 0);
+        const unread = shown > 0;
+        if (item.classList.contains('has-unread') === unread) return;
+        item.classList.toggle('has-unread', unread);
+        this._sbSoon(channel.startsWith('pm-') || channel.startsWith('group-') ? 'pmList' : 'channelList');
+    },
+
+    _sbSoon(listId) {
+        if (!this._sbDue) this._sbDue = new Set();
+        if (this._sbDue.has(listId)) return;
+        this._sbDue.add(listId);
+        const run = () => {
+            this._sbDue.delete(listId);
+            this.updateViewMoreButton(listId);
+        };
+        if (typeof queueMicrotask === 'function') queueMicrotask(run);
+        else Promise.resolve().then(run);
     },
 
     _scheduleChannelSort() {
@@ -2730,8 +2787,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     sortChannelsByActivity() {
         const channelList = document.getElementById('channelList');
         const channels = Array.from(channelList.querySelectorAll('.channel-item'));
-
-        const viewMoreBtn = channelList.querySelector('.view-more-btn');
+        const before = channels.slice();
 
         const scrollTop = channelList.scrollTop;
 
@@ -2794,8 +2850,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return bUnread - aUnread;
         });
 
-        channelList.innerHTML = '';
-        channels.forEach(channel => channelList.appendChild(channel));
+        if (channels.some((channel, i) => channel !== before[i])) {
+            let at = channelList.firstElementChild;
+            for (const channel of channels) {
+                if (channel === at) { at = at.nextElementSibling; continue; }
+                channelList.insertBefore(channel, at);
+            }
+        }
 
         // Hidden/blocked state must be settled before updateViewMoreButton counts visible rows.
         this.applyHiddenChannels();

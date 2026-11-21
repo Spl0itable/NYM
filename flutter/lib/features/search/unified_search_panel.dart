@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/semantics.dart'
+    show Assertiveness, CustomSemanticsAction, SemanticsService;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -29,6 +31,8 @@ import '../chat_tools/chat_tools_ui.dart'
 import '../i18n/i18n.dart';
 import '../layout/layout_model.dart' show mentionSuffixRanges;
 import '../shortcuts/shortcuts.dart';
+import 'search_history.dart';
+import 'search_history_providers.dart';
 import 'search_source.dart';
 import 'unified_search.dart';
 import '../../widgets/common/nym_field.dart';
@@ -40,6 +44,9 @@ export '../../widgets/common/nym_label.dart' show nymSuffixStyle;
 
 String _s(String key, [Map<String, Object?>? args]) =>
     tr(kUnifiedSearchStrings[key]!, args);
+
+String _h(String key, [Map<String, Object?>? args]) =>
+    tr(kSearchHistoryStrings[key]!, args);
 
 ChatView searchViewForKey(String key) => key.startsWith('pm-')
     ? ChatView.pm(key.substring(3))
@@ -135,11 +142,14 @@ class UnifiedSearchPanel extends ConsumerStatefulWidget {
 }
 
 class _Row {
-  _Row(this.id, this.label, this.activate);
+  _Row(this.id, this.label, this.activate,
+      {this.remove, this.history = false});
 
   final String id;
   final String label;
   final VoidCallback activate;
+  final VoidCallback? remove;
+  final bool history;
 }
 
 class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
@@ -156,6 +166,7 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
   final Map<String, GlobalKey> _keys = <String, GlobalKey>{};
   UnifiedSearchResult? _memo;
   List<Object?> _memoKey = const [];
+  String? _notice;
 
   @override
   void initState() {
@@ -163,6 +174,9 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
     UnifiedSearchPanel._live = this;
     UnifiedSearchPanel._syncOpen();
     _input.addListener(_onText);
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(ref.read(searchHistoryProvider.notifier).load());
+    });
   }
 
   void _onText() {
@@ -212,6 +226,7 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
   }
 
   void _onChanged(String v) {
+    if (_notice != null) setState(() => _notice = null);
     _debounce?.cancel();
     _debounce = Timer(
         const Duration(milliseconds: UnifiedSearchConfig.debounceMs), () {
@@ -268,23 +283,93 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.enter || k == LogicalKeyboardKey.numpadEnter) {
-      if (_debounce?.isActive ?? false) {
-        _debounce!.cancel();
-        setState(() => _query = _input.text);
-        SchedulerBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _rows.isNotEmpty) _rows.first.activate();
-        });
+      _submit();
+      return KeyEventResult.handled;
+    }
+    if (k == LogicalKeyboardKey.delete ||
+        (k == LogicalKeyboardKey.backspace && _input.text.isEmpty)) {
+      final remove =
+          _active >= 0 && _active < _rows.length ? _rows[_active].remove : null;
+      if (remove != null) {
+        remove();
         return KeyEventResult.handled;
       }
-      if (_rows.isEmpty) return KeyEventResult.handled;
-      _rows[_active < 0 ? 0 : _active].activate();
-      return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.escape) {
       Navigator.of(context).maybePop();
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
+  }
+
+  void _submit() {
+    if (_debounce?.isActive ?? false) {
+      _debounce!.cancel();
+      setState(() {
+        _query = _input.text;
+        _limits = UnifiedSearchConfig.pages;
+        _active = -1;
+      });
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _submitRow();
+      });
+      return;
+    }
+    _submitRow();
+  }
+
+  void _submitRow() {
+    final i = _active >= 0 && _active < _rows.length
+        ? _active
+        : _rows.indexWhere((r) => !r.history);
+    if (i >= 0) {
+      _rows[i].activate();
+    } else {
+      _recordSearch(_input.text);
+    }
+  }
+
+  void _recordSearch(String raw) {
+    unawaited(ref.read(searchHistoryProvider.notifier).record(raw));
+  }
+
+  void _runRecent(String q) {
+    _debounce?.cancel();
+    _input.value = TextEditingValue(
+        text: q, selection: TextSelection.collapsed(offset: q.length));
+    _recordSearch(q);
+    setState(() {
+      _query = q;
+      _limits = UnifiedSearchConfig.pages;
+      _active = -1;
+      _notice = null;
+    });
+    _focus.requestFocus();
+  }
+
+  void _removeRecent(String q) {
+    unawaited(ref.read(searchHistoryProvider.notifier).remove(q));
+    _announce(_h('removed'));
+    _focus.requestFocus();
+  }
+
+  void _clearRecent() {
+    unawaited(ref.read(searchHistoryProvider.notifier).clear());
+    setState(() => _active = -1);
+    _announce(_h('cleared'));
+    _focus.requestFocus();
+  }
+
+  void _announce(String text) {
+    setState(() => _notice = text);
+    final view = View.maybeOf(context);
+    if (view == null) return;
+    SemanticsService.sendAnnouncement(
+      view,
+      text,
+      Directionality.maybeOf(context) ?? TextDirection.ltr,
+      assertiveness: Assertiveness.polite,
+    );
   }
 
   void _close(void Function(ProviderContainer c, BuildContext root) then) {
@@ -296,6 +381,7 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
   }
 
   void _openChannel(SearchChannelItem it) {
+    _recordSearch(_input.text);
     _close((c, _) {
       if (it.kind == 'group') {
         c.read(appStateProvider.notifier).switchView(ChatView.group(it.key));
@@ -311,12 +397,14 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
   }
 
   void _join(SearchJoin j) {
+    _recordSearch(_input.text);
     _close((c, _) => c
         .read(nostrControllerProvider)
         .switchChannel(j.key, geohash: j.geohash ? j.key : ''));
   }
 
   void _openNym(SearchNymItem it) {
+    _recordSearch(_input.text);
     _close((c, root) {
       final self = c.read(appStateProvider).selfPubkey;
       ContextMenuPanel.show(
@@ -335,6 +423,7 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
   void _openMessage(SearchMessageItem it) {
     final m = it.ref;
     if (m is! Message) return;
+    _recordSearch(_input.text);
     _close((c, _) => openSearchHit(c.read, it.key, m));
   }
 
@@ -349,13 +438,15 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
     final rows = <_Row>[];
     final children = <Widget>[];
 
-    Widget header(String title, int total) => Semantics(
+    Widget header(String title, int? total) => Semantics(
           key: ValueKey('searchHeader-$title'),
           header: true,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(4, 14, 4, 6),
             child: Text(
-              '${title.toUpperCase()}  ·  $total',
+              total == null
+                  ? title.toUpperCase()
+                  : '${title.toUpperCase()}  ·  $total',
               style: TextStyle(
                 color: c.textDim,
                 fontSize: 11,
@@ -446,12 +537,16 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
       final i = rows.length;
       rows.add(r);
       final selected = i == _active;
+      final remove = r.remove;
       return Semantics(
         key: _keys.putIfAbsent(r.id, GlobalKey.new),
         button: true,
         selected: selected,
         label: r.label,
         excludeSemantics: true,
+        customSemanticsActions: remove == null
+            ? null
+            : {CustomSemanticsAction(label: _h('removeShort')): remove},
         child: Material(
           color: selected ? c.primaryA(0.12) : Colors.transparent,
           borderRadius: NymRadius.rxs,
@@ -462,14 +557,85 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(minHeight: 44),
               child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                padding: remove == null
+                    ? const EdgeInsets.symmetric(horizontal: 8, vertical: 8)
+                    : const EdgeInsets.symmetric(horizontal: 8),
                 child: child,
               ),
             ),
           ),
         ),
       );
+    }
+
+    final history = ref.watch(searchHistoryProvider);
+    final historyOf = ref.read(searchHistoryProvider.notifier);
+    final recent = !historyOf.remember || !historyOf.loaded
+        ? const <SearchHistoryEntry>[]
+        : q.isEmpty
+            ? recentSearches(history)
+            : suggestSearches(history, _query);
+
+    Widget recentRow(SearchHistoryEntry e) {
+      final key = foldSearchText(e.q);
+      return row(
+        _Row('recent-$key', _h('recentRow', {'q': e.q}), () => _runRecent(e.q),
+            remove: () => _removeRecent(e.q), history: true),
+        Row(children: [
+          SizedBox(
+            width: 36,
+            child: Align(
+                alignment: Alignment.centerLeft,
+                child: Icon(Icons.history, size: 18, color: c.textDim)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _Highlighted(
+              text: e.q,
+              tokens: q.isEmpty ? const [] : [q.text],
+              style: TextStyle(color: c.text, fontSize: 14),
+              hit: TextStyle(
+                  color: c.primary,
+                  fontWeight: FontWeight.w700,
+                  backgroundColor: c.primaryA(0.18)),
+            ),
+          ),
+          IconButton(
+            key: ValueKey('searchHistoryRemove-$key'),
+            tooltip: _h('remove', {'q': e.q}),
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            padding: EdgeInsets.zero,
+            style: const ButtonStyle(
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+            onPressed: () => _removeRecent(e.q),
+            icon: Icon(Icons.close, size: 16, color: c.textDim),
+          ),
+        ]),
+      );
+    }
+
+    if (recent.isNotEmpty) {
+      children.add(header(_h('recent'), null));
+      for (final e in recent) {
+        children.add(recentRow(e));
+      }
+      if (q.isEmpty) {
+        children.add(row(
+          _Row('clearHistory', _h('clearAll'), _clearRecent, history: true),
+          Center(
+            child: Text(_h('clearAll'),
+                key: const ValueKey('searchHistoryClear'),
+                style: TextStyle(color: c.primary, fontSize: 14)),
+          ),
+        ));
+        children.add(Padding(
+          key: const ValueKey('searchRecentFoot'),
+          padding: const EdgeInsets.fromLTRB(8, 16, 8, 0),
+          child: Text(_s('emptyHint'),
+              textAlign: TextAlign.center,
+              style: TextStyle(color: c.textDim, fontSize: 12)),
+        ));
+      }
     }
 
     if (!q.isEmpty) {
@@ -676,16 +842,24 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
 
     final total =
         result.channels.total + result.nyms.total + result.messages.total;
+    Widget list(Key key, List<Widget> items) => ListView(
+          key: key,
+          controller: _scroll,
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+          children: items,
+        );
     Widget body;
     if (q.isEmpty) {
-      body = _State(
-        key: const ValueKey('searchEmptyState'),
-        icon: NymIcons.search,
-        title: _s('empty'),
-        hint: _s('emptyHint'),
-      );
+      body = recent.isNotEmpty
+          ? list(const ValueKey('searchRecentList'), children)
+          : _State(
+              key: const ValueKey('searchEmptyState'),
+              icon: NymIcons.search,
+              title: _s('empty'),
+              hint: _s('emptyHint'),
+            );
     } else if (result.isEmpty) {
-      body = _State(
+      final none = _State(
         key: const ValueKey('searchNoResults'),
         icon: NymIcons.search,
         title: _s('noResults', {'q': _query.trim()}),
@@ -693,13 +867,11 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
             ? _s('shortMessages')
             : null,
       );
+      body = recent.isEmpty
+          ? none
+          : list(const ValueKey('searchResults'), [...children, none]);
     } else {
-      body = ListView(
-        key: const ValueKey('searchResults'),
-        controller: _scroll,
-        padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
-        children: children,
-      );
+      body = list(const ValueKey('searchResults'), children);
     }
 
     final scopeKey = widget.scope ?? '';
@@ -721,6 +893,7 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
                   autofocus: true,
                   textInputAction: TextInputAction.search,
                   onChanged: _onChanged,
+                  onSubmitted: (_) => _submit(),
                   style: TextStyle(color: c.text, fontSize: 15),
                   decoration: NymField.decoration(c,
                     hint: _input.text.isEmpty ? _s('placeholder') : null,
@@ -775,6 +948,16 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
                 }),
               ),
             ]),
+          ),
+        if (_notice != null)
+          Semantics(
+            key: const ValueKey('searchHistoryNotice'),
+            container: true,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(_notice!,
+                  style: TextStyle(color: c.textDim, fontSize: 11)),
+            ),
           ),
         if (!q.isEmpty && !result.isEmpty)
           Semantics(

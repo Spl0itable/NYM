@@ -18,6 +18,7 @@ import {
 } from "./_d1.js";
 import { paceBucketTake, paceBucketSettle } from "./_pace.js";
 import { GIFT_TTL_MS, GIFT_MAX_OPEN, GIFT_LIST_MAX, GIFT_SWEEP_MAX, giftTier, giftCode, giftId, giftAmount, giftPublic } from "./_gift.js";
+import { SHOP_PACK_ID, SHOP_RING_IDS, shopPackSource, shopPackRings, shopPackRingEntry, shopOwnedView, shopBundleHasRings } from "./_shoprings.js";
 
 const SATS_PER_CREDIT_DEFAULT = 100;
 const SHOP_CODE_RE = /^NYM-[0-9A-F]{32}$/;
@@ -337,6 +338,7 @@ export class NymLedger {
       case "shop-redeem": return this._shopRedeem(a);
       case "shop-reserve": return this._shopReserve(a);
       case "shop-supply": return this._shopSupply(a);
+      case "shop-pack-rings": return this._shopPackRings(a);
       case "turn-begin": return this._turnBegin(a.key);
       case "turn-poll": return this._turnPoll(a.key);
       case "turn-touch": return this._turnTouch(a.key);
@@ -932,12 +934,91 @@ export class NymLedger {
     await shopPut(this.env.DB_SHOP, pk, data);
   }
 
+  _writePackRings(rec, skip) {
+    const source = shopPackSource(rec.owned);
+    if (!source) return [];
+    const skipped = Array.isArray(skip) ? skip : [skip];
+    const written = [];
+    for (const id of shopPackRings(rec.owned)) {
+      if (skipped.includes(id)) continue;
+      const ringCode = shopNewCode();
+      rec.owned[id] = Object.assign(shopPackRingEntry(source), { code: ringCode, packBackfill: true });
+      written.push([id, ringCode]);
+    }
+    for (const e of Object.values(rec.owned)) {
+      if (e && typeof e === "object" && e.fromBundle === SHOP_PACK_ID) e.packRings = true;
+    }
+    return written;
+  }
+
+  _lastPackItem(rec, itemId) {
+    const e = rec.owned[itemId];
+    if (!e || e.fromBundle !== SHOP_PACK_ID || !shopPackSource(rec.owned)) return false;
+    return !Object.keys(rec.owned).some((id) => id !== itemId && rec.owned[id] && rec.owned[id].fromBundle === SHOP_PACK_ID);
+  }
+
+  _packPieceLeaving(rec, itemId) {
+    const piece = (id) => !SHOP_RING_IDS.includes(id) && !!rec.owned[id] && rec.owned[id].fromBundle === SHOP_PACK_ID;
+    return piece(itemId) && !Object.keys(rec.owned).some((id) => id !== itemId && piece(id));
+  }
+
+  _movePackRings(fromRec, toRec) {
+    const source = shopPackSource(fromRec.owned);
+    const derived = source ? shopPackRings(fromRec.owned) : [];
+    const moved = [];
+    const kept = [];
+    for (const id of SHOP_RING_IDS) {
+      if (toRec.owned[id]) {
+        if (derived.includes(id)) {
+          const ringCode = shopNewCode();
+          fromRec.owned[id] = Object.assign(shopPackRingEntry(source), { code: ringCode, packBackfill: true, packRings: true });
+          kept.push([id, ringCode]);
+        }
+        continue;
+      }
+      const held = fromRec.owned[id];
+      if (held && held.fromBundle === SHOP_PACK_ID && held.packBackfill) {
+        const ringCode = held.code || shopNewCode();
+        toRec.owned[id] = Object.assign({}, held, { code: ringCode, packRings: true });
+        delete fromRec.owned[id];
+        moved.push([id, ringCode]);
+      } else if (derived.includes(id)) {
+        const ringCode = shopNewCode();
+        toRec.owned[id] = Object.assign(shopPackRingEntry(source), { code: ringCode, packRings: true, packBackfill: true });
+        moved.push([id, ringCode]);
+      }
+    }
+    return { moved, kept };
+  }
+
+  async _putRingCodes(written, owner) {
+    let ok = true;
+    for (const [id, ringCode] of written) {
+      try { await codePut(this.env.DB_CODES, ringCode, id, owner, Date.now()); } catch { ok = false; }
+    }
+    return ok;
+  }
+
+  async _shopPackRings(a) {
+    const pk = String(a.pubkey || "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(pk)) return { error: "Invalid pubkey." };
+    const rec = await this._getShop(pk);
+    if (shopPackSource(rec.owned)) {
+      const written = this._writePackRings(rec, null);
+      if (!(await this._putRingCodes(written, pk))) return { error: "Shop is temporarily unavailable." };
+      await this._putShop(pk, rec);
+    }
+    return { owned: rec.owned, active: rec.active, updatedAt: rec.updatedAt };
+  }
+
   _pruneActive(rec) {
     const a = rec.active || {};
-    if (a.style && !rec.owned[a.style]) a.style = null;
-    if (Array.isArray(a.flair)) a.flair = a.flair.filter((id) => rec.owned[id]);
-    if (Array.isArray(a.cosmetics)) a.cosmetics = a.cosmetics.filter((id) => rec.owned[id]);
-    if (a.supporter && !rec.owned["supporter-badge"]) a.supporter = false;
+    const owned = shopOwnedView(rec.owned);
+    if (a.style && !owned[a.style]) a.style = null;
+    if (a.ring && !owned[a.ring]) a.ring = null;
+    if (Array.isArray(a.flair)) a.flair = a.flair.filter((id) => owned[id]);
+    if (Array.isArray(a.cosmetics)) a.cosmetics = a.cosmetics.filter((id) => owned[id]);
+    if (a.supporter && !owned["supporter-badge"]) a.supporter = false;
     rec.active = a;
   }
 
@@ -1798,14 +1879,19 @@ export class NymLedger {
 
     if (Array.isArray(a.bundle) && a.bundle.length) {
       const granted = [];
+      const withRings = shopBundleHasRings(itemId, a.bundle);
+      const kept = this._writePackRings(crec, a.bundle.map((comp) => String((comp && comp.itemId) || "")));
       for (const comp of a.bundle) {
         const cid = String((comp && comp.itemId) || "");
         const ccode = String((comp && comp.code) || "");
         if (!cid) continue;
         crec.owned[cid] = { at: Date.now(), amountSats: 0, gift: !!a.gift, code: ccode, fromBundle: itemId };
+        if (withRings) crec.owned[cid].packRings = true;
         granted.push({ itemId: cid, code: ccode });
       }
+      this._pruneActive(crec);
       await this._putShop(recipient, crec);
+      await this._putRingCodes(kept, recipient);
       for (const g of granted) {
         if (g.code) { try { await codePut(this.env.DB_CODES, g.code, g.itemId, recipient, Date.now()); } catch {} }
       }
@@ -1814,7 +1900,7 @@ export class NymLedger {
           Object.assign({ itemId, pubkey: recipient, code, bundle: granted, at: Date.now() }, a.claimData || {}));
       } catch {}
       try { await invoiceDelete(this.env.DB_INVOICES, "shop", "pending", invoiceId); } catch {}
-      return { itemId, code, recipient, bundle: granted, owned: crec.owned, active: crec.active };
+      return { itemId, code, recipient, bundle: granted, owned: shopOwnedView(crec.owned), active: crec.active };
     }
 
     let edition = null;
@@ -1827,15 +1913,18 @@ export class NymLedger {
 
     const entry = { at: Date.now(), amountSats: Number(a.amountSats) || 0, gift: !!a.gift, code };
     if (edition) { entry.edition = edition; entry.editionMax = editionMax; }
+    const kept = this._writePackRings(crec, itemId);
     crec.owned[itemId] = entry;
+    this._pruneActive(crec);
     await this._putShop(recipient, crec);
+    await this._putRingCodes(kept, recipient);
     try { await codePut(this.env.DB_CODES, code, itemId, recipient, Date.now()); } catch {}
     try {
       await invoicePut(this.env.DB_INVOICES, "shop", "claimed", invoiceId,
         Object.assign({ itemId, pubkey: recipient, code, edition: edition || null, editionMax, at: Date.now() }, a.claimData || {}));
     } catch {}
     try { await invoiceDelete(this.env.DB_INVOICES, "shop", "pending", invoiceId); } catch {}
-    return { itemId, code, recipient, edition: edition ? { n: edition, max: editionMax } : null, owned: crec.owned, active: crec.active };
+    return { itemId, code, recipient, edition: edition ? { n: edition, max: editionMax } : null, owned: shopOwnedView(crec.owned), active: crec.active };
   }
 
   async _shopSoldOutRefund(a, invoiceId, itemId, recipient) {
@@ -1865,21 +1954,30 @@ export class NymLedger {
     if (!/^[0-9a-f]{64}$/.test(from) || !/^[0-9a-f]{64}$/.test(to)) return { error: "Invalid pubkey." };
     if (from === to) return { error: "Cannot transfer to yourself." };
     const fromRec = await this._getShop(from);
-    if (!this._ownsItem(fromRec, itemId)) return { error: "You do not own this item." };
-    const entry = fromRec.owned[itemId];
+    const owns = this._ownsItem(fromRec, itemId);
+    const packSource = owns ? null : shopPackSource(fromRec.owned);
+    const packRing = !!packSource && shopPackRings(fromRec.owned).includes(itemId);
+    if (!owns && !packRing) return { error: "You do not own this item." };
+    const ringCodes = packRing ? this._writePackRings(fromRec, itemId)
+      : this._lastPackItem(fromRec, itemId) ? this._writePackRings(fromRec, null) : [];
+    const entry = packRing ? shopPackRingEntry(packSource) : fromRec.owned[itemId];
     delete fromRec.owned[itemId];
     this._pruneActive(fromRec);
     const toRec = await this._getShop(to);
+    const toKept = this._writePackRings(toRec, itemId);
     const newCode = shopNewCode();
     toRec.owned[itemId] = { at: Date.now(), amountSats: entry.amountSats || 0, gift: true, code: newCode, transferredFrom: from };
     // Numbered editions keep their number when traded.
     if (entry.edition) { toRec.owned[itemId].edition = entry.edition; toRec.owned[itemId].editionMax = entry.editionMax || 0; }
+    this._pruneActive(toRec);
     await this._putShopsTogether([{ pk: from, data: fromRec }, { pk: to, data: toRec }]);
+    await this._putRingCodes(ringCodes, from);
+    await this._putRingCodes(toKept, to);
     try { await codePut(this.env.DB_CODES, newCode, itemId, to, Date.now()); } catch {}
     if (entry.code) {
       try { await codeDelete(this.env.DB_CODES, entry.code); } catch {}
     }
-    return { ok: true, itemId, owned: fromRec.owned, active: fromRec.active };
+    return { ok: true, itemId, owned: shopOwnedView(fromRec.owned), active: fromRec.active };
   }
 
   async _shopRedeem(a) {
@@ -1896,23 +1994,38 @@ export class NymLedger {
     const prevOwner = String(found.owner || "").toLowerCase();
     if (prevOwner === user) {
       const ownRec = await this._getShop(user);
-      return { alreadyOwner: true, itemId, owned: ownRec.owned, active: ownRec.active, prevOwner };
+      return { alreadyOwner: true, itemId, owned: shopOwnedView(ownRec.owned), active: ownRec.active, prevOwner };
     }
+    let prevRec = null;
     if (prevOwner && /^[0-9a-f]{64}$/.test(prevOwner)) {
-      const prevRec = await this._getShop(prevOwner);
+      prevRec = await this._getShop(prevOwner);
       const held = prevRec.owned[itemId];
       if (!held || (held.code && held.code !== code)) {
         return { error: "This recovery code is no longer valid.", stale: true };
       }
-      delete prevRec.owned[itemId];
-      this._pruneActive(prevRec);
-      await this._putShop(prevOwner, prevRec);
     }
     const rrec = await this._getShop(user);
+    const piece = !!prevRec && prevRec.owned[itemId].fromBundle === SHOP_PACK_ID;
+    const ringCodes = this._writePackRings(rrec, itemId);
+    const prevKept = [];
+    if (prevRec) {
+      if (this._packPieceLeaving(prevRec, itemId)) {
+        const { moved, kept } = this._movePackRings(prevRec, rrec);
+        ringCodes.push(...moved);
+        prevKept.push(...kept);
+      }
+      delete prevRec.owned[itemId];
+      this._pruneActive(prevRec);
+    }
     rrec.owned[itemId] = { at: Date.now(), amountSats: 0, gift: false, code, redeemed: true };
-    await this._putShop(user, rrec);
+    if (piece) Object.assign(rrec.owned[itemId], { fromBundle: SHOP_PACK_ID, packRings: true });
+    this._pruneActive(rrec);
+    await this._putRingCodes(ringCodes, user);
+    await this._putRingCodes(prevKept, prevOwner);
+    if (prevRec) await this._putShopsTogether([{ pk: prevOwner, data: prevRec }, { pk: user, data: rrec }]);
+    else await this._putShop(user, rrec);
     try { await codePut(this.env.DB_CODES, code, itemId, user, found.createdAt || Date.now()); } catch {}
-    return { itemId, owned: rrec.owned, active: rrec.active, prevOwner };
+    return { itemId, owned: shopOwnedView(rrec.owned), active: rrec.active, prevOwner };
   }
 }
 

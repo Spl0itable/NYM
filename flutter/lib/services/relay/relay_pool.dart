@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../../core/constants/relays.dart';
+import '../../features/messages/bridge_block.dart';
 import '../../features/relays/relay_add.dart';
 import '../../features/relays/relay_block.dart';
 import '../nostr/event_provenance.dart';
@@ -853,6 +854,7 @@ class RelayPool implements PoolTransport {
             relayUrl != RelayConfig.appRelay) {
           return;
         }
+        if (isBridgeBlockedEvent(event)) return;
         // Gate before verification and dedup, so a wrong-relay copy can't claim the id.
         final geoGate = _geoOriginAllows;
         if (geoGate != null && !geoGate(event, relayUrl)) return;
@@ -893,12 +895,13 @@ class RelayPool implements PoolTransport {
     if (_disposed || sub == null || sub.isClosed) return;
     if (retiredSub?.call(sub) ?? false) return;
     if (!(liveSub?.call(sub) ?? true)) return;
-    if (_liveRetry.note(url, subId, reason, (ids) => _resendClosed(url, ids))) {
-      onLiveSubClosed?.call(relayClock());
-    }
+    final at = _liveRetry.note(
+        url, subId, reason, (ids, gap) => _resendClosed(url, ids, gap),
+        gap: LiveSubRetry.opensGap(_activeFilters[subId]));
+    if (at != null) onLiveSubClosed?.call(at);
   }
 
-  void _resendClosed(String url, Set<String> ids) {
+  void _resendClosed(String url, Set<String> ids, bool gap) {
     final conn = _connections[url];
     if (_disposed || conn == null || !conn.isConnected || !_isReadable(url)) {
       return;
@@ -911,7 +914,7 @@ class RelayPool implements PoolTransport {
       if (!(liveSub?.call(sub) ?? true)) continue;
       _subscribeOn(url, conn, id, filters);
     }
-    onLiveSubResent?.call();
+    if (gap) onLiveSubResent?.call();
   }
 
   void _dropIfRelayWideRejection(String relayUrl, String reason) {

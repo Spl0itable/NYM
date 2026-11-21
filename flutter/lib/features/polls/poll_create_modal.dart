@@ -101,32 +101,36 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
   Widget build(BuildContext context) {
     final c = context.nym;
 
-    final body = Stack(
-      children: [
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              margin: NymSheetScope.of(context)
-                  ? const EdgeInsets.fromLTRB(32, 12, 56, 20)
-                  : const EdgeInsets.fromLTRB(32, 32, 32, 24),
-              padding: const EdgeInsets.only(bottom: 14),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: c.glassBorder)),
-              ),
-              child: Text(
-                tr('CREATE POLL'),
-                style: TextStyle(
-                  color: c.primary,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.5,
+    final body = SingleChildScrollView(
+      key: const ValueKey('pollScroll'),
+      child: Stack(
+        children: [
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              NymSheetDragRegion(
+                inScroll: true,
+                child: Container(
+                  margin: NymSheetScope.of(context)
+                      ? const EdgeInsets.fromLTRB(32, 12, 56, 20)
+                      : const EdgeInsets.fromLTRB(32, 32, 32, 24),
+                  padding: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(
+                    border: Border(bottom: BorderSide(color: c.glassBorder)),
+                  ),
+                  child: Text(
+                    tr('CREATE POLL'),
+                    style: TextStyle(
+                      color: c.primary,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
                 ),
               ),
-            ),
-            Flexible(
-              child: SingleChildScrollView(
+              Padding(
                 padding: const EdgeInsets.fromLTRB(32, 0, 32, 0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -169,20 +173,20 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
                   ],
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
-              child: DialogActions(
-                children: [
-                  _cancelBtn(c),
-                  _createBtn(c),
-                ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+                child: DialogActions(
+                  children: [
+                    _cancelBtn(c),
+                    _createBtn(c),
+                  ],
+                ),
               ),
-            ),
-          ],
-        ),
-        Positioned(top: 14, right: 14, child: _closeButton(c)),
-      ],
+            ],
+          ),
+          Positioned(top: 14, right: 14, child: _closeButton(c)),
+        ],
+      ),
     );
     return NymDiscardGuard(
       isDirty: () => _dirty,
@@ -219,6 +223,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
                             spreadRadius: 1),
                       ],
               ),
+              clipBehavior: Clip.antiAlias,
               child: body,
             ),
           ),

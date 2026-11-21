@@ -16,10 +16,16 @@ import '../context_menu/profile_badges.dart';
 
 /// Typing-indicator row for a conversation; reads `AppState.typing` against a live clock so it self-expires.
 class TypingIndicatorRow extends ConsumerStatefulWidget {
-  const TypingIndicatorRow({super.key, this.storageKey});
+  const TypingIndicatorRow({super.key, this.storageKey, this.threadRoot});
+
+  static const double avatarSize = 18;
+  static const double flairSize = avatarSize;
+  static const double _flairGap = 5;
 
   /// Conversation to watch; null uses the active view's key.
   final String? storageKey;
+
+  final String? threadRoot;
 
   @override
   ConsumerState<TypingIndicatorRow> createState() => _TypingIndicatorRowState();
@@ -52,11 +58,14 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
   }
 
   List<String> _activeTypers(AppState app) {
-    final prefix = '${widget.storageKey ?? app.view.storageKey}|';
+    final storageKey = widget.storageKey ?? app.view.storageKey;
+    final prefix = '$storageKey|';
     final now = DateTime.now().millisecondsSinceEpoch;
     final out = <String>[];
     app.typing.forEach((k, expiry) {
-      if (k.startsWith(prefix) && expiry > now) {
+      if (k.startsWith(prefix) &&
+          expiry > now &&
+          typingShownIn(app, k, storageKey, widget.threadRoot)) {
         final pk = k.substring(prefix.length);
         if (!app.isPersonHidden(pk)) out.add(pk);
       }
@@ -110,7 +119,12 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
         final cosmetics = cosmeticsOf(pk);
         final flairs = cosmetics.flairIds.where((id) => id.isNotEmpty).length;
         dims.add(PlaceholderDimensions(
-            size: Size(flairs * 18.0 + (cosmetics.supporter ? 42 : 0), 14),
+            size: Size(
+                flairs *
+                        (TypingIndicatorRow.flairSize +
+                            TypingIndicatorRow._flairGap) +
+                    (cosmetics.supporter ? 42 : 0),
+                TypingIndicatorRow.avatarSize),
             alignment: PlaceholderAlignment.middle));
         if (isVerified) {
           dims.add(const PlaceholderDimensions(
@@ -144,7 +158,7 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
           alignment: PlaceholderAlignment.middle,
           child: CosmeticNymBadges(
             cosmetics: cosmeticsOf(pk),
-            flairSize: 14,
+            flairSize: TypingIndicatorRow.flairSize,
             supporterHeight: 14,
           ),
         ),
@@ -200,21 +214,23 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
             // Fixed-width Stack so overlapping avatars collapse like the CSS negative margin; a Row would reserve full widths.
             if (visible.isNotEmpty) ...[
               SizedBox(
-                width: 18 + (visible.length - 1) * 12.0,
-                height: 18,
+                width: TypingIndicatorRow.avatarSize +
+                    (visible.length - 1) * 12.0,
+                height: TypingIndicatorRow.avatarSize,
                 child: Stack(
                   children: [
                     for (var i = 0; i < visible.length; i++)
                       Positioned(
                         left: i * 12.0,
                         child: SizedBox(
-                          width: 18,
-                          height: 18,
+                          width: TypingIndicatorRow.avatarSize,
+                          height: TypingIndicatorRow.avatarSize,
                           child: NymAvatar(
                             seed: visible[i],
-                            size: 18,
+                            size: TypingIndicatorRow.avatarSize,
                             imageUrl: app.users[visible[i]]?.profile?.picture,
                             ring: c.avatarRing,
+                            ringId: cosmeticsOf(visible[i]).ringId,
                           ),
                         ),
                       ),
@@ -329,37 +345,35 @@ class _TypingDotsState extends State<_TypingDots>
     }
     if (!_ctrl.isAnimating) _ctrl.repeat();
     return RepaintBoundary(
-        child: AnimatedBuilder(
-      animation: _ctrl,
-      builder: (context, _) {
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (var i = 0; i < 3; i++) ...[
-              if (i > 0)
-                const SizedBox(width: 3),
-              Builder(builder: (_) {
-                final phase = (_ctrl.value - i * 0.125) % 1.0;
-                final b = _bounce(phase < 0 ? phase + 1 : phase);
-                return Transform.translate(
-                  offset: Offset(0, -3 * b),
-                  child: Opacity(
-                    opacity: 0.3 + 0.7 * b,
-                    child: Container(
-                      width: 5,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: widget.color,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-                );
-              }),
-            ],
-          ],
-        );
-      },
-    ));
+      child: CustomPaint(
+        size: const Size(21, 5),
+        painter: _TypingDotsPainter(_ctrl, widget.color, _bounce),
+      ),
+    );
   }
+}
+
+class _TypingDotsPainter extends CustomPainter {
+  _TypingDotsPainter(this.clock, this.color, this.bounce)
+      : super(repaint: clock);
+
+  final Animation<double> clock;
+  final Color color;
+  final double Function(double t) bounce;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint();
+    for (var i = 0; i < 3; i++) {
+      final phase = (clock.value - i * 0.125) % 1.0;
+      final b = bounce(phase < 0 ? phase + 1 : phase);
+      final alpha = Color.getAlphaFromOpacity(0.3 + 0.7 * b);
+      paint.color = color.withValues(alpha: color.a * alpha / 255);
+      canvas.drawCircle(Offset(i * 8 + 2.5, 2.5 - 3 * b), 2.5, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_TypingDotsPainter old) =>
+      old.clock != clock || old.color != color;
 }

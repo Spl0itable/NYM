@@ -840,10 +840,13 @@ Object? _slowmodeInputs(AppState s, String groupId) {
 class _GtSlowmodeBarState extends ConsumerState<GtSlowmodeBar> {
   Timer? _t;
 
-  @override
-  void initState() {
-    super.initState();
-    _t = Timer.periodic(const Duration(seconds: 1), (_) {
+  void _tick(bool pending) {
+    if (!pending) {
+      _t?.cancel();
+      _t = null;
+      return;
+    }
+    _t ??= Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
   }
@@ -858,15 +861,22 @@ class _GtSlowmodeBarState extends ConsumerState<GtSlowmodeBar> {
   Widget build(BuildContext context) {
     ref.watch(groupToolsRevisionProvider);
     final view = ref.watch(currentViewProvider);
-    if (view.kind != ViewKind.group) return const SizedBox.shrink();
+    if (view.kind != ViewKind.group) {
+      _tick(false);
+      return const SizedBox.shrink();
+    }
     ref.watch(appStateProvider.select((s) => _slowmodeInputs(s, view.id)));
     final app = ref.read(appStateProvider);
     final svc = ref.read(groupToolsProvider);
     final g = ref.read(appStateProvider.notifier).groupById(view.id);
     final interval = g == null ? 0 : GroupTools.normalizeSlowmode(g.slowmode);
-    if (interval == 0) return const SizedBox.shrink();
+    if (interval == 0) {
+      _tick(false);
+      return const SizedBox.shrink();
+    }
     final exempt = GroupTools.slowmodeExempt(svc.role(view.id, app.selfPubkey));
     final wait = exempt ? 0 : svc.slowmodeWait(view.id);
+    _tick(wait > 0 && TickerMode.valuesOf(context).enabled);
     final label = tr('Slowmode: one message every {interval}', {
       'interval': gtSlowmodeLabel(interval),
     });

@@ -117,10 +117,12 @@ class _UserListItemState extends ConsumerState<UserListItem> {
                         ),
                       ),
                     ),
-                    CosmeticNymBadges(
-                      cosmetics: userCosmeticsFromUser(user),
-                      flairSize: 13,
-                      supporterHeight: 13,
+                    Consumer(
+                      builder: (context, ref, _) => CosmeticNymBadges(
+                        cosmetics: ref.watch(userCosmeticsProvider(user.pubkey)),
+                        flairSize: 13,
+                        supporterHeight: 13,
+                      ),
                     ),
                     if (isDev || isBot) ...[
                       const SizedBox(width: 4),
@@ -180,11 +182,16 @@ class _AvatarWithStatus extends StatelessWidget {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        NymAvatar(
-            seed: seed,
-            size: kSidebarIcon,
-            imageUrl: imageUrl,
-            ring: c.avatarRing),
+        Consumer(
+          builder: (context, ref, _) => NymAvatar(
+              seed: seed,
+              size: kSidebarIcon,
+              imageUrl: imageUrl,
+              ring: c.avatarRing,
+              ringId: ref.watch(
+                  userCosmeticsProvider(seed).select((x) => x.ringId)),
+              ringFill: flattenOver(c.bgSecondary, c.bg)),
+        ),
         if (status != UserStatus.hidden)
           Positioned(
             right: -1,

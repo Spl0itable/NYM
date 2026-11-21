@@ -315,7 +315,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                   entries: unit,
                   settings: settings,
                   onReactionPicker: (msg) =>
-                      showReactionPicker(context, ref, msg),
+                      showReactionPicker(this.context, ref, msg),
                 );
                 final last = unit.last.message;
                 if (!hasStatus(last)) {

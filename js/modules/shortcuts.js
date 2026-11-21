@@ -167,7 +167,7 @@
         const el = lastOwnMessage();
         if (!el || typeof n._msgActionContext !== 'function' || typeof n.startEditMessage !== 'function') return false;
         const x = n._msgActionContext(el);
-        if (!x.messageId || !x.content || !x.self) return false;
+        if (!x.messageId || !x.content || !x.self || (x.facts && x.facts.anonLane)) return false;
         n.startEditMessage({ messageId: x.messageId, content: x.content, pubkey: x.pubkey });
         return !!n.pendingEdit;
     }

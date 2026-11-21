@@ -431,12 +431,14 @@ Object.assign(NYM.prototype, {
             reportMessageCheckbox.addEventListener('change', () => this._syncReportModalState());
         }
         modal.style.display = 'flex';
+        modal.classList.add('active');
         this._syncReportModalState();
     },
 
     closeReportModal() {
         const modal = document.getElementById('reportModal');
         modal.style.display = 'none';
+        modal.classList.remove('active');
         this._reportTarget = null;
 
         document.getElementById('reportType').value = 'nudity';
@@ -623,6 +625,7 @@ Object.assign(NYM.prototype, {
             const fallback = this.generateAvatarSvg(pubkey);
             ctxAvatarImg.src = ctxMask ? fallback : this.getAvatarUrl(pubkey);
             ctxAvatarImg.onerror = function () { this.onerror = null; this.src = fallback; };
+            this._setRingClass(ctxAvatarImg, ctxMask ? '' : this._ringPeek(pubkey));
         }
         if (ctxAvatarNym) {
             ctxAvatarNym.innerHTML = ctxMask
@@ -803,7 +806,8 @@ Object.assign(NYM.prototype, {
         reactOption.style.display = messageId ? 'block' : 'none';
 
         const editOption = document.getElementById('ctxEditMessage');
-        if (pubkey === this.pubkey && messageId && content) {
+        const laneOff = !!(messageId && typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(messageId));
+        if (pubkey === this.pubkey && messageId && content && !laneOff) {
             editOption.style.display = 'block';
         } else {
             editOption.style.display = 'none';
@@ -811,7 +815,7 @@ Object.assign(NYM.prototype, {
 
         // Own messages, or a mod/owner deleting another member's message in the current group.
         const deleteOption = document.getElementById('ctxDeleteMessage');
-        let canDeleteOwn = pubkey === this.pubkey && messageId;
+        let canDeleteOwn = pubkey === this.pubkey && messageId && !laneOff;
         let canModDelete = false;
         if (!canDeleteOwn && messageId && this.inPMMode && this.currentGroup && pubkey !== this.pubkey) {
             const grp = this.groupConversations.get(this.currentGroup);
@@ -1963,7 +1967,7 @@ Object.assign(NYM.prototype, {
         const contentH = textarea.scrollHeight;
         textarea.style.minHeight = prevMin;
         const expand = (contentH - padV) > lh * 1.5;
-        this._composerRowBase = Math.max(parseFloat(cs.minHeight) || 0, Math.ceil(lh)) + padV + borderV;
+        this._composerRowBase = Math.max(parseFloat(cs.minHeight) || 0, lh) + padV + borderV;
         if (container) container.classList.toggle('composer-popout', expand);
         textarea.style.height = '';
         this._refreshComposerOffsets();
@@ -1999,7 +2003,7 @@ Object.assign(NYM.prototype, {
         const base = this._composerRowBase || 64;
         wrapper.style.setProperty('--composer-row-base', base + 'px');
         const expanded = !!(container && container.classList.contains('composer-popout'));
-        const overhang = expanded ? Math.max(0, input.offsetHeight - base) : 0;
+        const overhang = expanded ? Math.max(0, input.getBoundingClientRect().height - base) : 0;
         wrapper.style.setProperty('--popout-overhang', overhang + 'px');
         // The toolbar/attachment stack sits between the field and the chips, so `bottom:100%` anchors must clear it.
         const gap = container && container.classList.contains('composer-pill') ? -1 : 8;
@@ -2123,7 +2127,7 @@ Object.assign(NYM.prototype, {
         span.setAttribute('contenteditable', 'false');
         span.dataset.mention = rawText;
         const img = document.createElement('img');
-        img.className = 'avatar-message';
+        img.className = 'avatar-message' + this._ringPeek(pubkey);
         img.src = this.getAvatarUrl(pubkey);
         img.setAttribute('data-avatar-pubkey', this._safePubkey(pubkey) || '');
         img.alt = '';

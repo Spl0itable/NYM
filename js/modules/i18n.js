@@ -117,6 +117,7 @@ Object.assign(NYM.prototype, {
     },
 
     _i18nSaveCache(lang) {
+        this._i18nRev = (this._i18nRev || 0) + 1;
         const timers = this._i18nSaveTimers || (this._i18nSaveTimers = {});
         if (timers[lang]) clearTimeout(timers[lang]);
         timers[lang] = setTimeout(() => {

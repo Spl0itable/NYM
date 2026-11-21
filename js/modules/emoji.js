@@ -1142,6 +1142,7 @@ Object.assign(NYM.prototype, {
     },
 
     _emojiBlockChanged() {
+        this._emojiBlockRev = (this._emojiBlockRev || 0) + 1;
         this._emojiBlockSt = null;
         this._emojiBlockCodes = null;
         this._emojiPickerDirty = true;

@@ -515,11 +515,21 @@ Object.assign(NYM.prototype, {
         return updated;
     },
 
+    _rowChangeAtBottom() {
+        if (!this.settings || !this.settings.autoscroll || this.userScrolledUp) return false;
+        if (this.virtualScroll && this.virtualScroll.suppressAutoScroll) return false;
+        if (this._rowAtBottomMemo !== undefined) return this._rowAtBottomMemo;
+        const container = document.getElementById('messagesScroller');
+        const at = !!container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
+        this._rowAtBottomMemo = at;
+        queueMicrotask(() => { this._rowAtBottomMemo = undefined; });
+        return at;
+    },
+
     _updateMessageReactionsEl(messageId, messageEl) {
         if (!messageEl) return false;
 
-        const container = document.getElementById('messagesScroller');
-        const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
+        const wasAtBottom = this._rowChangeAtBottom();
 
         // Defensive: drop any reactions-row nested inside the hover buttons so it can't shadow the real row.
         messageEl.querySelectorAll('.msg-hover-buttons .reactions-row, .reaction-btn .reactions-row')

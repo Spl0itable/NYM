@@ -24,8 +24,8 @@
         if (tools) out.push(x.saved ? 'unsave' : 'save');
         if (tools && x.keepOffered) out.push(x.kept ? 'unkeep' : 'keep');
         if (!x.self && x.id && x.author && !x.anonLane) out.push('zap');
-        if (x.self && x.id && x.content) out.push('edit');
-        if (x.id && (x.self || x.modDelete)) out.push('delete');
+        if (x.self && x.id && x.content && !x.anonLane) out.push('edit');
+        if (x.id && !x.anonLane && (x.self || x.modDelete)) out.push('delete');
         if (x.edited && x.id) out.push('editHistory');
         if (x.hexId) out.push('eventDetails');
         if (!x.self && x.author) out.push('report');

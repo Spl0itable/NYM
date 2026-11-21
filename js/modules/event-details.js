@@ -125,7 +125,7 @@
             this._storageApiRequest('event-get', { ids: [eventId] }, false)
                 .then((res) => {
                     const ev = res && Array.isArray(res.events) ? res.events[0] : null;
-                    if (!ev || ev.id !== eventId) {
+                    if (!ev || ev.id !== eventId || (typeof this._bridgeBlocked === 'function' && this._bridgeBlocked(ev))) {
                         this._archivedEventMisses.set(eventId, Date.now());
                         return;
                     }

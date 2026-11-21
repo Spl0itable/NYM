@@ -1516,10 +1516,13 @@ Object.assign(NYM.prototype, {
         if (!relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
         if (relay.subscriptions) {
+            const presence = this._presenceSubId && relay.subscriptions.has(this._presenceSubId) ? this._presenceSubId : null;
             relay.subscriptions.forEach(subId => {
+                if (subId === presence) return;
                 this._safeWsSend(relay.ws, JSON.stringify(["CLOSE", subId]), { critical: true });
             });
             relay.subscriptions.clear();
+            if (presence) relay.subscriptions.add(presence);
         } else {
             relay.subscriptions = new Set();
         }
@@ -1584,9 +1587,9 @@ Object.assign(NYM.prototype, {
         const req = this._presenceReq();
         if (!req) return;
         if (!this._presenceSentWs) this._presenceSentWs = new WeakMap();
-        if (this._presenceSentWs.get(relay.ws) === req[1]) return;
-        this._presenceSentWs.set(relay.ws, req[1]);
         if (!relay.subscriptions) relay.subscriptions = new Set();
+        if (this._presenceSentWs.get(relay.ws) === req[1] && relay.subscriptions.has(req[1])) return;
+        this._presenceSentWs.set(relay.ws, req[1]);
         relay.subscriptions.add(req[1]);
         this._safeWsSend(relay.ws, JSON.stringify(req), { critical: true });
     },
@@ -2990,9 +2993,10 @@ Object.assign(NYM.prototype, {
     _liveSubClosed(subId, reason, relayUrl) {
         if (typeof subId !== 'string' || !subId || !this._liveSubRetryable(reason)) return;
         const parent = subId.split('~')[0];
+        const typing = !!(parent && this._channelTypingSubs && [...this._channelTypingSubs.values()].includes(parent));
         let target;
         if (this.useRelayProxy) {
-            if (parent && this._channelTypingSubs && [...this._channelTypingSubs.values()].includes(parent)) target = 'pool-typing';
+            if (typing) target = 'pool-typing';
             else if (parent && parent === this._lastEphemeralSubId) target = 'pool-eph';
             else if (!parent || parent !== this._lastPoolSubId) return;
             else target = 'pool';
@@ -3002,16 +3006,25 @@ Object.assign(NYM.prototype, {
             relay.subscriptions.delete(subId);
             target = relayUrl;
         }
+        const full = this.useRelayProxy || subId !== this._presenceSubId;
+        const gap = subId !== this._presenceSubId && !typing;
         if (!this._liveSubRetry) this._liveSubRetry = new Map();
         const now = Date.now();
         const prev = this._liveSubRetry.get(target);
-        if (prev && prev.timer) return;
+        if (prev && prev.timer) {
+            if (full) prev.full = true;
+            if (gap && !prev.gap) {
+                prev.gap = true;
+                this._noteLiveGap(prev.at);
+            }
+            return;
+        }
         const n = prev && now - prev.at < 120000 ? prev.n + 1 : 0;
         const slow = /rate-?limit|too many|slow down|concurrent/i.test(reason);
         const delay = Math.min((slow ? 10000 : 1000) * Math.pow(2, n), 120000);
-        const entry = { at: now, n, timer: null };
+        const entry = { at: now, n, timer: null, full, gap };
         this._liveSubRetry.set(target, entry);
-        if (target !== 'pool-typing') this._noteLiveGap(now);
+        if (gap) this._noteLiveGap(now);
         entry.timer = setTimeout(() => {
             entry.timer = null;
             entry.at = Date.now();
@@ -3034,9 +3047,17 @@ Object.assign(NYM.prototype, {
             }
             const relay = this.relayPool instanceof Map ? this.relayPool.get(target) : null;
             if (this.useRelayProxy || !relay || !relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
-            this.closeSubscriptionsForRelay(target);
-            this.subscribeToSingleRelay(target);
-            this._catchUpLiveGap();
+            const rebuild = entry.full;
+            const catchUp = entry.gap;
+            entry.full = false;
+            entry.gap = false;
+            if (rebuild) {
+                this.closeSubscriptionsForRelay(target);
+                this.subscribeToSingleRelay(target);
+            } else {
+                this._sendPresenceSubToRelay(relay);
+            }
+            if (catchUp) this._catchUpLiveGap();
         }, delay);
     },
 
@@ -6575,6 +6596,7 @@ Object.assign(NYM.prototype, {
         if (msg[0] === 'EVENT') {
             const ev = msg[2];
             if (this._quietHit(ev)) return;
+            if (typeof this._bridgeBlocked === 'function' && this._bridgeBlocked(ev)) return;
             const source = (typeof msg[3] === 'string' && msg[3].startsWith('wss://'))
                 ? msg[3]
                 : ((typeof relayUrl === 'string' && relayUrl.startsWith('wss://')) ? relayUrl : null);

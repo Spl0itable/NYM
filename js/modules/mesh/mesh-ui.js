@@ -145,6 +145,7 @@
             const D = window.NymMeshExtras.CARRIER_DIRECTION;
             const event = window.NymMeshExtras.carrierEvent(carrier);
             if (!event || typeof event.id !== 'string' || typeof event.sig !== 'string') return;
+            if (typeof this._bridgeBlocked === 'function' && this._bridgeBlocked(event)) return;
             if (typeof this._encryptedBlobDrop === 'function' && this._encryptedBlobDrop(event)) return;
             let ok = false;
             try { ok = await this._verifyRelayEventAsync(event); } catch (_) { ok = false; }
@@ -483,6 +484,7 @@
             if (!this._meshPageOpen) {
                 this._meshSavedActive = Array.from(document.querySelectorAll('#sidebar .channel-item.active, #sidebar .pm-item.active'));
                 this._meshSavedActive.forEach((el) => el.classList.remove('active'));
+                this._meshSidebarRewindow();
             }
             this._meshPageOpen = true;
             main.classList.add('mesh-mode');
@@ -504,8 +506,15 @@
             document.body.classList.remove('mesh-page-open');
             (this._meshSavedActive || []).forEach((el) => { if (el.isConnected) el.classList.add('active'); });
             this._meshSavedActive = null;
+            this._meshSidebarRewindow();
             this._renderMeshStatusRow();
             if (!this._navigating) setTimeout(() => this._meshRecordLeave(), 0);
+        },
+
+        _meshSidebarRewindow() {
+            if (typeof this.updateViewMoreButton !== 'function') return;
+            this.updateViewMoreButton('channelList');
+            this.updateViewMoreButton('pmList');
         },
 
         _meshRecordLeave() {

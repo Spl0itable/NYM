@@ -920,6 +920,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       pubkey: kNymbotPubkey,
       typing: on,
       expiresAtMs: DateTime.now().millisecondsSinceEpoch + 30000,
+      everywhere: true,
     );
   }
 

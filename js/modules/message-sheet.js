@@ -138,8 +138,8 @@
                     return async () => {
                         if (x.self) {
                             if (!(await window.showAppConfirm('Are you sure you want to delete this message? This will send a deletion request to relays.', { danger: true, okLabel: 'Delete' }))) return;
-                            this.publishDeletionEvent(x.messageId, this.inPMMode ? 1059 : this.channelWire(this.currentGeohash).kind).then(() => {
-                                this.displaySystemMessage('Deletion request sent to relays');
+                            this.publishDeletionEvent(x.messageId, this.inPMMode ? 1059 : this.channelWire(this.currentGeohash).kind).then((sent) => {
+                                if (sent !== false) this.displaySystemMessage('Deletion request sent to relays');
                             });
                             return;
                         }

@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -50,12 +52,17 @@ class MessageListScroller {
 
   double Function()? _newestAlignment;
 
+  double Function()? _shown;
+
   void bind(ItemScrollController controller, Map<String, int> indexById,
-      {int newest = 0, double Function()? newestAlignment}) {
+      {int newest = 0,
+      double Function()? newestAlignment,
+      double Function()? shown}) {
     _controller = controller;
     _indexById = indexById;
     _newest = newest;
     _newestAlignment = newestAlignment;
+    _shown = shown;
   }
 
   void rememberAnchor(String messageId, double alignment) {
@@ -98,6 +105,7 @@ class MessageListScroller {
     final controller = _controller;
     if (controller == null || !controller.isAttached) return Future.value();
     if (reader) _readerJumps++;
+    alignment *= _shown?.call() ?? 1;
     if (index < _newest) {
       index = _newest;
       alignment += _newestAlignment?.call() ?? 0;
@@ -170,8 +178,12 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     );
   }
 
+  final _TypingBand _band = _TypingBand();
+  late final _BandPositions _shown = _BandPositions(_positionsListener, _band);
+  bool _bandQueued = false;
+
   late final ChatNavListBinding _nav =
-      ChatNavListBinding(ref, _positionsListener, inset: _bottomInset)
+      ChatNavListBinding(ref, _shown, inset: _bottomInset)
         ..readerAway = (() => _reader.away);
   String? _navBreak;
 
@@ -184,6 +196,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
 
   /// Unit widgets reused verbatim when inputs are unchanged (by identity), so list rebuilds skip their subtrees.
   final Map<Key, _CachedUnitWidget> _unitWidgetCache = {};
+  final Map<String, bool> _mediaUnits = {};
 
   String? _unitCacheViewKey;
 
@@ -251,8 +264,50 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   @override
   void initState() {
     super.initState();
-    _positionsListener.itemPositions.addListener(_onPositionsChanged);
+    _shown.itemPositions.addListener(_onPositionsChanged);
+    _band.onMove = _bandMoved;
     FocusManager.instance.addEarlyKeyEventHandler(_onEarlyKey);
+  }
+
+  double get _shownHeight =>
+      math.max(0.0, _viewportHeight - _band.height).toDouble();
+
+  void _bandMoved(double delta) {
+    var moved = false;
+    for (final s in _scrollables) {
+      if (!s.mounted) continue;
+      final p = s.position;
+      if (!p.hasPixels || !p.hasContentDimensions) continue;
+      if (p.pixels - p.minScrollExtent <= 1) continue;
+      p.correctBy(delta);
+      _viewportOf(s)?.markNeedsLayout();
+      moved = true;
+    }
+    if (moved) _shown.drift(delta);
+    if (_bandQueued) return;
+    _bandQueued = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _bandQueued = false;
+      if (!mounted) return;
+      _nav.viewport = _shownHeight;
+      _shown.refresh();
+    });
+  }
+
+  static RenderViewportBase? _viewportOf(ScrollableState s) {
+    RenderViewportBase? found;
+    void visit(RenderObject r) {
+      if (found != null) return;
+      if (r is RenderViewportBase) {
+        found = r;
+        return;
+      }
+      r.visitChildren(visit);
+    }
+
+    final root = s.context.findRenderObject();
+    if (root != null) visit(root);
+    return found;
   }
 
   /// Ensures the id-to-index map used to save an anchor belongs to the anchor's view.
@@ -268,7 +323,9 @@ class _MessagesListState extends ConsumerState<MessagesList> {
 
   @override
   void dispose() {
-    _positionsListener.itemPositions.removeListener(_onPositionsChanged);
+    _shown.itemPositions.removeListener(_onPositionsChanged);
+    _band.onMove = null;
+    _shown.dispose();
     FocusManager.instance.removeEarlyKeyEventHandler(_onEarlyKey);
     _announcer.dispose();
     _nav.dispose();
@@ -286,7 +343,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         scroller.forgetAnchor();
         return;
       }
-      final positions = _positionsListener.itemPositions.value;
+      final positions = _shown.real;
       if (positions.isEmpty) return;
       // The item nearest the viewport bottom (leading edge in a reversed list) is what gets restored.
       ItemPosition? nearest;
@@ -381,7 +438,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       }
       return;
     }
-    final positions = _positionsListener.itemPositions.value;
+    final positions = _shown.real;
     ItemPosition? newest;
     final newestIndex = before?.offset ?? 0;
     for (final p in positions) {
@@ -415,7 +472,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       newestTo: built.offset,
       newestUnitTo: built.units.isEmpty ? null : _unitIdOf(built.units.last),
       stable: before != null &&
-          _holdsStill(before, built, _keeper.target, positions),
+          _holdsStill(before, built, _keeper.target, _shown.now),
     );
   }
 
@@ -583,7 +640,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
 
   /// Shows the FAB beyond 150px from the bottom; offset 0 rests index 0's edge 16px inside the viewport.
   void _onPositionsChanged() {
-    final positions = _positionsListener.itemPositions.value;
+    final positions = _shown.itemPositions.value;
     if (positions.isEmpty) return;
     _navTick();
     ItemPosition? newest;
@@ -600,7 +657,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     } else if (_viewportHeight <= 0) {
       shouldShow = false;
     } else {
-      final distanceFromBottom = 16 - newest.itemLeadingEdge * _viewportHeight;
+      final distanceFromBottom = 16 - newest.itemLeadingEdge * _shownHeight;
       shouldShow = distanceFromBottom > 150;
     }
     _scrollButton.value = shouldShow;
@@ -684,7 +741,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     }
     final m = _livePosition;
     if (m == null) return;
-    final step = m.viewportDimension * 0.875;
+    final step = (m.viewportDimension - _band.height) * 0.875;
     final target = (m.pixels + (k == LogicalKeyboardKey.pageUp ? step : -step))
         .clamp(m.minScrollExtent, m.maxScrollExtent)
         .toDouble();
@@ -764,6 +821,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     if (_unitCacheViewKey != view.storageKey) {
       _unitCacheViewKey = view.storageKey;
       _unitWidgetCache.clear();
+      _mediaUnits.clear();
     }
 
     // The history-edge notice is channel-only.
@@ -816,7 +874,10 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     final scroller = ref.read(messageListScrollerProvider(view.storageKey));
     scroller.bind(_itemScrollController, indexById,
         newest: built.offset,
-        newestAlignment: () => _bottomAlignment(built.offset));
+        newestAlignment: () => _bottomAlignment(built.offset),
+        shown: () =>
+            _viewportHeight > 0 ? _shownHeight / _viewportHeight : 1);
+    _shown.trailing = built.offset + units.length - (isChannel ? 0 : 1);
     _idByIndex = {for (final e in indexById.entries) e.value: e.key};
     _unitByIndex = built.unitByIndex;
     if (!_restoreDone) {
@@ -855,15 +916,24 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       },
       child: ColoredBox(
         color: containerColor,
-        child: Column(
+        child: _BandHost(
+          band: _band,
+          child: Column(
           children: [
             Expanded(
+              child: RepaintBoundary(
+              child: Stack(
+                key: _floatHost,
+                children: [
+                  Positioned.fill(
+                    child: _BandPin(
+                        band: _band,
               // LayoutBuilder captures the viewport height [_onPositionsChanged] needs.
               child: LayoutBuilder(builder: (context, constraints) {
                 _viewportHeight = constraints.maxHeight;
-                _nav.viewport = constraints.maxHeight;
+                _shown.full = constraints.maxHeight;
+                _nav.viewport = _shownHeight;
                 return Stack(
-                  key: _floatHost,
                   children: [
                     Positioned.fill(
                       child: ValueListenableBuilder<bool>(
@@ -876,7 +946,9 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                         child: FocusRebuildBoundary(
                         child: MessageSelection(
                         builder: (keepAlives) => ScrollablePositionedList.builder(
-                        addAutomaticKeepAlives: keepAlives,
+                        addAutomaticKeepAlives: false,
+                        addRepaintBoundaries: false,
+                        addSemanticIndexes: false,
                         itemScrollController: _itemScrollController,
                         scrollOffsetController: _offsetController,
                         itemPositionsListener: _positionsListener,
@@ -890,16 +962,26 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                         itemCount:
                             built.offset + units.length + (isChannel ? 1 : 0),
                         itemBuilder: (context, revIndex) {
+                          Widget item(Widget child, {bool media = false}) {
+                            final indexed = IndexedSemantics(
+                                index: revIndex, child: child);
+                            return keepAlives && media
+                                ? AutomaticKeepAlive(child: indexed)
+                                : indexed;
+                          }
                           if (revIndex < built.offset) {
-                            return const SizedBox.shrink();
+                            return item(const SizedBox.shrink());
                           }
                           final mouse = PointerInput.mouseOf(context);
                           if (revIndex == built.offset + units.length) {
-                            return MessageSelection.plain(
-                                mouse,
-                                _ChannelHistoryEdgeNotice(
-                                    textSize: settings.textSize.toDouble(),
-                                    partial: historyMissing));
+                            return item(_BandTop(
+                                band: _band,
+                                active: true,
+                                child: MessageSelection.plain(
+                                    mouse,
+                                    _ChannelHistoryEdgeNotice(
+                                        textSize: settings.textSize.toDouble(),
+                                        partial: historyMissing))));
                           }
                           final forward =
                               built.offset + units.length - 1 - revIndex;
@@ -938,50 +1020,47 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                               _navBreak != null &&
                               unit.entries.first.message.id == _navBreak;
                           final dayStart = built.dayStarts.contains(revIndex);
-                          final Widget body = navBreak || dayStart
-                              ? Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    if (dayStart)
-                                      MessageSelection.plain(
-                                          mouse,
-                                          DaySeparator(
-                                            createdAt:
-                                                built.atByIndex[revIndex]!,
-                                            useBubbles: settings.useBubbles,
-                                          )),
-                                    if (navBreak)
-                                      MessageSelection.plain(mouse,
-                                          ChatNavDivider(cover: _navDivider)),
-                                    child,
-                                  ],
-                                )
-                              : child;
+                          final Widget body = Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (dayStart)
+                                MessageSelection.plain(
+                                    mouse,
+                                    DaySeparator(
+                                      createdAt: built.atByIndex[revIndex]!,
+                                      useBubbles: settings.useBubbles,
+                                    )),
+                              if (navBreak)
+                                MessageSelection.plain(
+                                    mouse, ChatNavDivider(cover: _navDivider)),
+                              KeyedSubtree(
+                                  key: const ValueKey('unit'), child: child),
+                            ],
+                          );
                           // 3px list gap from the top edge; RepaintBoundary keeps each row's repaints from re-rasterizing the whole list.
-                          return RepaintBoundary(
-                            key: unitKey,
-                            child: Padding(
-                              padding: EdgeInsets.only(
-                                  top: (forward > 0 || isChannel) ? 3 : 0),
-                              child: AnchoredUnit(
-                                id: unitId,
-                                units: _anchors,
-                                child: body,
+                          return item(
+                            RepaintBoundary(
+                              key: unitKey,
+                              child: _BandTop(
+                                band: _band,
+                                active: !isChannel && forward == 0,
+                                top: (forward > 0 || isChannel) ? 3 : 0,
+                                child: AnchoredUnit(
+                                  id: unitId,
+                                  units: _anchors,
+                                  child: body,
+                                ),
                               ),
                             ),
+                            media: unit is _GroupUnit &&
+                                _mediaUnits.putIfAbsent(
+                                    unitId,
+                                    () => unit.entries
+                                        .any((e) => _holdsMedia(e.message))),
                           );
                         },
                       )),
                       ),
-                      ),
-                    ),
-                    Positioned(
-                      top: DayLabels.floatTopPx.toDouble(),
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: DayFloatLabel(controller: _dayFloat),
                       ),
                     ),
                     Positioned(
@@ -1009,9 +1088,23 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                   ],
                 );
               }),
+                    ),
+                  ),
+                  Positioned(
+                    top: DayLabels.floatTopPx.toDouble(),
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: DayFloatLabel(controller: _dayFloat),
+                    ),
+                  ),
+                ],
+              ),
+              ),
             ),
             const TypingIndicatorRow(),
           ],
+          ),
         ),
       ),
     ));
@@ -1057,6 +1150,9 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     }
     return false;
   }
+
+  static bool _holdsMedia(Message m) =>
+      m.hasLocalMedia || m.isFileOffer || m.content.contains('://');
 
   /// Polls are filtered out earlier, so they never merge.
   bool _groupsWith(Message prev, Message cur) =>
@@ -1414,4 +1510,250 @@ class _ListScrollBehavior extends ScrollBehavior {
       oldDelegate.mouse != mouse ||
       oldDelegate.light != light ||
       parent.shouldNotify(oldDelegate.parent);
+}
+
+class _TypingBand {
+  double height = 0;
+  double full = 0;
+  final Set<RenderObject> _tops = {};
+  void Function(double delta)? onMove;
+
+  void _move(double to) {
+    final delta = to - height;
+    if (delta == 0) return;
+    height = to;
+    for (final r in _tops) {
+      r.markNeedsLayout();
+    }
+    onMove?.call(delta);
+  }
+}
+
+class _BandPositions implements ItemPositionsListener {
+  _BandPositions(this._source, this._band) {
+    _source.itemPositions.addListener(_fromSource);
+  }
+
+  final ItemPositionsListener _source;
+  final _TypingBand _band;
+  final ValueNotifier<Iterable<ItemPosition>> _shown =
+      ValueNotifier(const <ItemPosition>[]);
+  double full = 0;
+  int trailing = -1;
+  double _drift = 0;
+
+  @override
+  ValueListenable<Iterable<ItemPosition>> get itemPositions => _shown;
+
+  Iterable<ItemPosition> get real => _map(_source.itemPositions.value, 0);
+
+  Iterable<ItemPosition> get now =>
+      _map(_source.itemPositions.value, _band.height);
+
+  void drift(double px) => _drift += px;
+
+  void refresh() => _shown.value = now;
+
+  void _fromSource() {
+    _drift = 0;
+    refresh();
+  }
+
+  Iterable<ItemPosition> _map(Iterable<ItemPosition> from, double band) {
+    final h = full;
+    final shown = h - band;
+    if ((band == 0 && _drift == 0) || h <= 0 || shown <= 0) return from;
+    return [
+      for (final p in from)
+        ItemPosition(
+          index: p.index,
+          itemLeadingEdge: (p.itemLeadingEdge * h - _drift) / shown,
+          itemTrailingEdge: (p.itemTrailingEdge * h -
+                  _drift -
+                  (p.index == trailing ? band : 0)) /
+              shown,
+        ),
+    ];
+  }
+
+  void dispose() {
+    _source.itemPositions.removeListener(_fromSource);
+    _shown.dispose();
+  }
+}
+
+class _BandHost extends SingleChildRenderObjectWidget {
+  const _BandHost({required this.band, super.child});
+
+  final _TypingBand band;
+
+  @override
+  _RenderBandHost createRenderObject(BuildContext context) =>
+      _RenderBandHost(band);
+}
+
+class _RenderBandHost extends RenderProxyBox {
+  _RenderBandHost(this._band);
+
+  final _TypingBand _band;
+
+  @override
+  bool get isRepaintBoundary => true;
+
+  @override
+  void performLayout() {
+    _band.full = constraints.maxHeight;
+    super.performLayout();
+  }
+}
+
+class _BandPin extends SingleChildRenderObjectWidget {
+  const _BandPin({required this.band, super.child});
+
+  final _TypingBand band;
+
+  @override
+  _RenderBandPin createRenderObject(BuildContext context) =>
+      _RenderBandPin(band);
+}
+
+class _RenderBandPin extends RenderShiftedBox {
+  _RenderBandPin(this._band) : super(null);
+
+  final _TypingBand _band;
+  final LayerHandle<ClipRectLayer> _clip = LayerHandle<ClipRectLayer>();
+
+  @override
+  Size computeDryLayout(covariant BoxConstraints constraints) =>
+      constraints.biggest;
+
+  @override
+  void performLayout() {
+    size = constraints.biggest;
+    final full = math.max(_band.full, size.height);
+    final band = full - size.height;
+    if (band != _band.height) {
+      invokeLayoutCallback<BoxConstraints>((_) => _band._move(band));
+    }
+    final c = child;
+    if (c == null) return;
+    c.layout(BoxConstraints.tightFor(width: size.width, height: full));
+    (c.parentData! as BoxParentData).offset = Offset(0, size.height - full);
+  }
+
+  @override
+  Rect? describeApproximatePaintClip(RenderObject child) => Offset.zero & size;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null) {
+      _clip.layer = null;
+      return;
+    }
+    _clip.layer = context.pushClipRect(
+        needsCompositing, offset, Offset.zero & size, super.paint,
+        oldLayer: _clip.layer);
+  }
+
+  @override
+  void dispose() {
+    _clip.layer = null;
+    super.dispose();
+  }
+}
+
+class _BandTop extends SingleChildRenderObjectWidget {
+  const _BandTop(
+      {required this.band, required this.active, this.top = 0, super.child});
+
+  final _TypingBand band;
+  final bool active;
+  final double top;
+
+  @override
+  _RenderBandTop createRenderObject(BuildContext context) =>
+      _RenderBandTop(band, active, top);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderBandTop renderObject) {
+    renderObject
+      ..active = active
+      ..top = top;
+  }
+}
+
+class _RenderBandTop extends RenderShiftedBox {
+  _RenderBandTop(this._band, this._active, this._top) : super(null);
+
+  final _TypingBand _band;
+  bool _active;
+  double _top;
+
+  double get _inset => _top + (_active ? _band.height : 0);
+
+  set active(bool value) {
+    if (value == _active) return;
+    _active = value;
+    if (attached) {
+      value ? _band._tops.add(this) : _band._tops.remove(this);
+    }
+    markNeedsLayout();
+  }
+
+  set top(double value) {
+    if (value == _top) return;
+    _top = value;
+    markNeedsLayout();
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    if (_active) _band._tops.add(this);
+  }
+
+  @override
+  void detach() {
+    _band._tops.remove(this);
+    super.detach();
+  }
+
+  @override
+  double computeMinIntrinsicWidth(double height) =>
+      child?.getMinIntrinsicWidth(math.max(0.0, height - _inset)) ?? 0;
+
+  @override
+  double computeMaxIntrinsicWidth(double height) =>
+      child?.getMaxIntrinsicWidth(math.max(0.0, height - _inset)) ?? 0;
+
+  @override
+  double computeMinIntrinsicHeight(double width) =>
+      _inset + (child?.getMinIntrinsicHeight(width) ?? 0);
+
+  @override
+  double computeMaxIntrinsicHeight(double width) =>
+      _inset + (child?.getMaxIntrinsicHeight(width) ?? 0);
+
+  @override
+  Size computeDryLayout(covariant BoxConstraints constraints) {
+    final inset = _inset;
+    final c = child;
+    if (c == null) return constraints.constrain(Size(0, inset));
+    final s = c.getDryLayout(constraints.deflate(EdgeInsets.only(top: inset)));
+    return constraints.constrain(Size(s.width, s.height + inset));
+  }
+
+  @override
+  void performLayout() {
+    final inset = _inset;
+    final c = child;
+    if (c == null) {
+      size = constraints.constrain(Size(0, inset));
+      return;
+    }
+    c.layout(constraints.deflate(EdgeInsets.only(top: inset)),
+        parentUsesSize: true);
+    (c.parentData! as BoxParentData).offset = Offset(0, inset);
+    size = constraints.constrain(Size(c.size.width, c.size.height + inset));
+  }
 }

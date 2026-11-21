@@ -25,6 +25,7 @@ import '../../features/mesh/mesh_controller.dart';
 import '../../features/messages/inline_network_image.dart';
 import '../../features/identity/nick_edit_modal.dart';
 import '../../features/shop/cosmetics.dart';
+import '../../features/shop/ring_ticker_gate.dart';
 import '../../features/toasts/toast_center.dart';
 import '../../features/zaps/zap_modal.dart';
 import '../../models/group.dart';
@@ -430,8 +431,20 @@ class ContextMenuPanel extends ConsumerWidget {
     final bannerRing = c.isLight
         ? const Color(0xF2FFFFFF)
         : const Color(0xF2141423);
+    final ringId = isBot ? null : cosmetics.ringId;
     final avatar = Container(
-      decoration: hasBanner
+      margin: ringId != null && hasBanner ? const EdgeInsets.all(1) : null,
+      padding: ringId == null || hasBanner ? null : const EdgeInsets.all(2),
+      decoration: ringId != null
+          ? (hasBanner
+              ? BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.fromBorderSide(
+                    BorderSide(color: bannerRing, width: 2),
+                  ),
+                )
+              : null)
+          : hasBanner
           ? BoxDecoration(
               shape: BoxShape.circle,
               border: Border.fromBorderSide(
@@ -452,7 +465,17 @@ class ContextMenuPanel extends ConsumerWidget {
       child: _ExpandableProfileImage(
         imageUrl: proxiedAvatarUrl(avatarUrl),
         onClose: onClose,
-        child: NymAvatar(seed: target.pubkey, size: 64, imageUrl: avatarUrl),
+        child: RingTickerGate(
+          underCallLayer: docked,
+          child: NymAvatar(
+            seed: target.pubkey,
+            size: 64,
+            imageUrl: avatarUrl,
+            ringId: ringId,
+            ringFeatured: true,
+            ringFill: flattenOver(c.glassBg, c.bg),
+          ),
+        ),
       ),
     );
 

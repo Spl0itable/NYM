@@ -9,6 +9,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../services/notification_service.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
+import '../calls/call_providers.dart';
+import '../calls/call_signaling.dart' show CallPhase;
 import '../chat_lock/chat_lock_providers.dart';
 import '../dm_polls/dm_polls.dart' show DmPolls, dmPollPreview;
 import '../group_tools/group_tools.dart' show GroupTools;
@@ -24,14 +26,30 @@ abstract class TonePlayer {
   Future<void> play(String name, Uint8List wav);
 }
 
+AudioContext toneAudioContext() => AudioContext(
+      android: const AudioContextAndroid(
+        audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+      ),
+    );
+
 /// Default [TonePlayer] feeding synthesized WAV bytes to `audioplayers`, created lazily.
 class AudioPlayersTonePlayer implements TonePlayer {
+  AudioPlayersTonePlayer({
+    AudioPlayer Function()? create,
+    bool Function()? inCall,
+  })  : _create = create ?? AudioPlayer.new,
+        _inCall = inCall ?? _noCall;
+
+  static bool _noCall() => false;
+
+  final AudioPlayer Function() _create;
+  final bool Function() _inCall;
   AudioPlayer? _player;
 
   AudioPlayer _ensure() {
     final existing = _player;
     if (existing != null) return existing;
-    final p = AudioPlayer()..setReleaseMode(ReleaseMode.stop);
+    final p = _create()..setReleaseMode(ReleaseMode.stop);
     _player = p;
     return p;
   }
@@ -43,7 +61,10 @@ class AudioPlayersTonePlayer implements TonePlayer {
       final player = _ensure();
       // Restart each time so rapid notifications retrigger the tone.
       await player.stop();
-      await player.play(BytesSource(wav, mimeType: 'audio/wav'));
+      await player.play(BytesSource(wav, mimeType: 'audio/wav'),
+          ctx: defaultTargetPlatform == TargetPlatform.android && !_inCall()
+              ? toneAudioContext()
+              : null);
     } catch (_) {
       // Best-effort; never throw from a sound.
     }
@@ -410,8 +431,15 @@ class NotificationsService {
   Future<void> _playWav(String name, Uint8List wav) async {
     if (kIsWeb) return;
     // Create the real player on the first audible tone.
-    final player = _player ??= AudioPlayersTonePlayer();
+    final player = _player ??= AudioPlayersTonePlayer(inCall: _inCall);
     await player.play(name, wav);
+  }
+
+  bool _inCall() {
+    if (!_ref.exists(callServiceProvider)) return false;
+    final calls = _ref.read(callServiceProvider);
+    final phase = calls.state.value.phase;
+    return calls.busy || (phase != CallPhase.idle && phase != CallPhase.ended);
   }
 }
 

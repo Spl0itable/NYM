@@ -7,45 +7,34 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/constants/event_kinds.dart';
 import '../../core/constants/relays.dart';
+import '../../features/messages/bridge_block.dart';
 import '../../features/relays/relay_add.dart';
 import '../../features/relays/relay_block.dart';
 import 'proxy_down_rule.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
+import '../../core/utils/revisioned_list.dart';
+import '../../core/utils/utf8_length.dart';
 import '../api/api_config.dart';
 import 'held_publishes.dart';
 import 'live_sub_retry.dart';
 import 'relay_connection.dart'
-    show WebSocketChannelFactory, defaultRelayChannelFactory, relayClock;
+    show
+        RelayConnection,
+        WebSocketChannelFactory,
+        abortPoolDial,
+        boundPoolDial,
+        poolDialTransport,
+        poolRelayChannelFactory,
+        relayClock;
 import 'relay_message.dart';
 import 'relay_pool.dart';
 import 'relay_stats.dart';
 
+export '../../core/utils/utf8_length.dart' show utf8ByteLength;
+
 /// One role-keyed shard: stable id, relay set and (for critical) DM relays, as `_shardRelaysByRole`.
 
-int utf8ByteLength(String s) {
-  var n = 0;
-  final len = s.length;
-  for (var i = 0; i < len; i++) {
-    final c = s.codeUnitAt(i);
-    if (c < 0x80) {
-      n += 1;
-    } else if (c < 0x800) {
-      n += 2;
-    } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < len) {
-      final d = s.codeUnitAt(i + 1);
-      if (d >= 0xDC00 && d <= 0xDFFF) {
-        n += 4;
-        i++;
-      } else {
-        n += 3;
-      }
-    } else {
-      n += 3;
-    }
-  }
-  return n;
-}
 
 class RelayShard {
   RelayShard({
@@ -438,6 +427,13 @@ int shardReconnectDelayMs(int step, double rand) {
   return (base * (0.7 + rand * 0.3)).floor();
 }
 
+class _DialTimeout implements Exception {
+  const _DialTimeout();
+
+  @override
+  String toString() => 'pool dial ran out of its budget';
+}
+
 /// One shard's `/api/relay-pool` socket; reconnect backoff min(3000*1.7^n, 60000) with 0.7–1.0 jitter.
 class _ShardSocket {
   _ShardSocket({
@@ -453,6 +449,8 @@ class _ShardSocket {
     this.onLinked,
     this.onFirstFrame,
     this.onFresh,
+    this.onLocalFail,
+    this.waking,
     this.reqFilter,
     this.confirmTimeout = const Duration(seconds: 12),
     DateTime Function()? now,
@@ -460,6 +458,8 @@ class _ShardSocket {
 
   static const Duration freshCheck = Duration(seconds: 3);
   static const Duration freshRetryWait = Duration(milliseconds: 1000);
+  static const Duration wakeWindow = Duration(seconds: 30);
+  static const Duration dialBudget = Duration(seconds: 6);
   static const int unackedMax = 200;
   static const Duration unackedTtl = Duration(seconds: 60);
 
@@ -483,10 +483,38 @@ class _ShardSocket {
 
   DateTime? _freshAt;
 
+  final bool Function()? waking;
+
+  bool get _waking => waking?.call() ?? false;
+
+  bool _slow = false;
+
+  final Set<WebSocketChannel> _unready = Set.identity();
+
+  final Map<WebSocketChannel, List<String>> _parked = Map.identity();
+
+  final Map<WebSocketChannel, Timer> _budgets = Map.identity();
+
+  final Set<WebSocketChannel> _linkedUp = Set.identity();
+
+  DateTime? get pendingSince {
+    if (_next != null) return _nextAt;
+    if (_open && !_frameSinceConnect) return openedAt;
+    return null;
+  }
+
+  bool owns(WebSocketChannel ch) =>
+      identical(ch, _channel) || identical(ch, _next);
+
   bool freshSince(Duration d) {
-    if (_next != null || _retryTimer != null) return true;
-    final at = _freshAt;
-    return at != null && _now().difference(at) < d;
+    final now = _now();
+    bool within(DateTime? at, Duration limit) =>
+        at != null && now.difference(at) < limit;
+    if (_next != null && within(_nextAt, freshCheck)) return true;
+    if ((_retryTimer != null || _heardSinceRefresh) && within(_refreshAt, d)) {
+      return true;
+    }
+    return within(_freshAt, d);
   }
 
   bool get _heardSinceFresh {
@@ -511,11 +539,15 @@ class _ShardSocket {
 
   final void Function(_ShardSocket sock)? onFresh;
 
+  final void Function(_ShardSocket sock)? onLocalFail;
+
   Object? _closeError;
 
   bool lastCloseFailed = false;
 
   bool lastCloseRateLimited = false;
+
+  bool rateLimited = false;
 
   bool linked = false;
 
@@ -542,9 +574,84 @@ class _ShardSocket {
     _lostAtOverride = lastLiveAt;
     _sub?.cancel();
     _sub = null;
+    _closeChannel(_channel);
+    _onDone();
+  }
+
+  WebSocketChannel _dial() {
+    final ch = channelFactory(Uri.parse(url));
+    _unready.add(ch);
+    final short = !_slow && _waking;
+    boundPoolDial(ch, short ? dialBudget : confirmTimeout);
+    if (short) _budgets[ch] = Timer(dialBudget, () => _dialTimedOut(ch));
+    final transport = poolDialTransport(ch);
+    if (transport != null) {
+      unawaited(transport.then((_) => _onTransport(ch), onError: (Object _) {}));
+    }
     try {
-      _channel?.sink.close();
+      unawaited(ch.ready.then((_) => _onReady(ch), onError: (Object _) {}));
     } catch (_) {}
+    return ch;
+  }
+
+  void _onTransport(WebSocketChannel ch) {
+    if (!_unready.contains(ch)) return;
+    _budgets.remove(ch)?.cancel();
+    _linkedUp.add(ch);
+  }
+
+  void _onReady(WebSocketChannel ch) {
+    _budgets.remove(ch)?.cancel();
+    _linkedUp.remove(ch);
+    if (!_unready.remove(ch)) return;
+    final parked = _parked.remove(ch);
+    for (final frame in parked ?? const <String>[]) {
+      try {
+        ch.sink.add(frame);
+      } catch (_) {}
+    }
+    if (!identical(_channel, ch) || !_open || linked) return;
+    linked = true;
+    onLinked?.call(this);
+  }
+
+  void _forget(WebSocketChannel? ch) {
+    if (ch == null) return;
+    _budgets.remove(ch)?.cancel();
+    _linkedUp.remove(ch);
+    _unready.remove(ch);
+    _parked.remove(ch);
+  }
+
+  void _closeChannel(WebSocketChannel? ch) {
+    if (ch == null) return;
+    _budgets.remove(ch)?.cancel();
+    _linkedUp.remove(ch);
+    _parked.remove(ch);
+    if (_unready.remove(ch)) abortPoolDial(ch);
+    try {
+      ch.sink.close();
+    } catch (_) {}
+  }
+
+  void _dialTimedOut(WebSocketChannel ch) {
+    _budgets.remove(ch);
+    if (!_unready.contains(ch) || !_waking) return;
+    _slow = true;
+    if (identical(ch, _next)) {
+      _dropNext();
+      _retryFresh();
+      onLocalFail?.call(this);
+      return;
+    }
+    if (!identical(ch, _channel) || !_open || _closedByUser) {
+      _closeChannel(ch);
+      return;
+    }
+    _sub?.cancel();
+    _sub = null;
+    _closeChannel(ch);
+    _closeError = const _DialTimeout();
     _onDone();
   }
 
@@ -583,7 +690,14 @@ class _ShardSocket {
   bool confirmed = false;
 
   /// Relays this shard's proxy reports as connected (from POOL:STATUS).
-  List<String> connectedRelays = const [];
+  static int connectedEpoch = 0;
+
+  List<String> _connectedRelays = const [];
+  List<String> get connectedRelays => _connectedRelays;
+  set connectedRelays(List<String> value) {
+    _connectedRelays = value;
+    connectedEpoch++;
+  }
 
   bool get isOpen => _open;
 
@@ -601,17 +715,11 @@ class _ShardSocket {
     probe = null;
     _lostAtOverride = null;
     _closeError = null;
+    _heardAt = null;
     try {
-      final ch = channelFactory(Uri.parse(url));
+      final ch = _dial();
       _channel = ch;
       linked = false;
-      try {
-        unawaited(ch.ready.then((_) {
-          if (!identical(_channel, ch) || !_open || linked) return;
-          linked = true;
-          onLinked?.call(this);
-        }, onError: (Object _) {}));
-      } catch (_) {}
       _sub = _listen(ch);
       // Treat listen as open and push RELAYS; backoff resets only on a real inbound frame.
       _open = true;
@@ -633,6 +741,8 @@ class _ShardSocket {
       );
 
   void _onChannelData(WebSocketChannel ch, dynamic data) {
+    if (_unready.contains(ch)) _onReady(ch);
+    if (identical(ch, _next) || identical(ch, _channel)) _slow = false;
     if (identical(ch, _next)) {
       _onNextData(data);
     } else if (identical(ch, _channel)) {
@@ -642,8 +752,15 @@ class _ShardSocket {
 
   void _onChannelDone(WebSocketChannel ch, Object? error) {
     if (identical(ch, _next)) {
+      final dialAt = _nextAt;
+      if (proxyCloseNamesRateLimit(error, reason: ch.closeReason)) {
+        if (_reconnectAttempt < 4) _reconnectAttempt = 4;
+        if (_nextFails < 5) _nextFails = 5;
+        rateLimited = true;
+      }
       _dropNext();
-      _retryFresh();
+      _retryFresh(since: dialAt);
+      if (proxyCloseIsLocal(error)) onLocalFail?.call(this);
     } else if (identical(ch, _channel)) {
       if (error != null) _closeError = error;
       _onDone();
@@ -692,7 +809,8 @@ class _ShardSocket {
     _dropNext(replay: false);
     final WebSocketChannel ch;
     try {
-      ch = channelFactory(Uri.parse(url));
+      ch = _dial();
+      if (retry) _parked[ch] = <String>[];
       _next = ch;
       _nextAt = _now();
       _nextSub = _listen(ch);
@@ -711,18 +829,45 @@ class _ShardSocket {
     _retryTimer = null;
   }
 
-  void _retryFresh() {
+  bool get _silent {
+    final h = _heardAt;
+    if (h == null) return true;
+    final opened = openedAt;
+    final at = _refreshAt;
+    final since =
+        at != null && (opened == null || at.isAfter(opened)) ? at : opened;
+    return since != null && h.isBefore(since);
+  }
+
+  bool retryFreshNow() {
+    if (_retryTimer == null || _next != null) return false;
+    if (_closedByUser || _held || !_open || !_silent) return false;
+    final at = openedAt;
+    if (at != null && _now().difference(at) < freshCheck) return false;
+    _cancelRetry();
+    if (!_dialNext(retry: true)) return false;
+    onFresh?.call(this);
+    return true;
+  }
+
+  void _retryFresh({DateTime? since}) {
     if (_closedByUser || _held || !_open || _heardSinceRefresh) return;
-    final quick = _nextFails == 0;
-    _nextFails++;
-    var delayMs = shardReconnectDelayMs(
-        quick ? -1 : _reconnectAttempt, rng.nextDouble());
-    if (!quick) _reconnectAttempt++;
+    final now = _now();
+    final int step;
+    var lead = 0;
+    if (_waking) {
+      step = _nextFails++ - 1;
+      lead = now.difference(since ?? now).inMilliseconds;
+    } else {
+      step = _nextFails++ == 0 ? -1 : _reconnectAttempt++;
+    }
+    var delayMs = shardReconnectDelayMs(step, rng.nextDouble()) - lead;
     final at = _refreshAt;
     if (at != null) {
-      delayMs = max(delayMs,
-          (freshRetryWait - _now().difference(at)).inMilliseconds);
+      delayMs = max(
+          delayMs, (freshRetryWait - now.difference(at)).inMilliseconds);
     }
+    if (delayMs < 0) delayMs = 0;
     _cancelRetry();
     _retryTimer = Timer(Duration(milliseconds: delayMs), () {
       _retryTimer = null;
@@ -738,7 +883,7 @@ class _ShardSocket {
     if (!_heardSinceFresh && (_frameSinceConnect || _nextSeen)) {
       final silent = !_nextSeen;
       recycle();
-      if (silent && identical(_channel, ch)) _retryFresh();
+      if (silent && identical(_channel, ch)) _retryFresh(since: openedAt);
       return;
     }
     if (!_nextSeen) {
@@ -782,9 +927,7 @@ class _ShardSocket {
     _cancelRetry();
     _freshAt = _now();
     unawaited(oldSub?.cancel());
-    try {
-      oldCh?.sink.close();
-    } catch (_) {}
+    _closeChannel(oldCh);
     if (!alive) onLost?.call(this, lastLiveAt);
     onLinked?.call(this);
   }
@@ -802,7 +945,8 @@ class _ShardSocket {
     _sub = _nextSub;
     _next = null;
     _nextSub = null;
-    openedAt = _nextAt ?? _now();
+    final dialAt = _nextAt ?? _now();
+    openedAt = dialAt;
     _nextAt = null;
     _open = true;
     _settled = false;
@@ -814,9 +958,8 @@ class _ShardSocket {
     _nextOnly.clear();
     _nextLate = false;
     _retryNext = false;
-    _nextFails = 0;
     _cancelRetry();
-    _freshAt = _now();
+    _freshAt = dialAt;
     final seen = _nextSeen;
     _nextSeen = false;
     _heardAt = null;
@@ -824,14 +967,16 @@ class _ShardSocket {
     _frameSinceConnect = seen;
     linked = seen;
     if (seen) {
+      _nextFails = 0;
+      rateLimited = false;
       onFirstFrame?.call(this);
     } else {
       _armConfirmTimer();
-      final wait = freshCheck - _now().difference(openedAt!);
-      if (wait > Duration.zero) {
-        _retryTimer = Timer(wait, () {
+      final wait = freshCheck - _now().difference(dialAt);
+      if (_waking || wait > Duration.zero) {
+        _retryTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
           _retryTimer = null;
-          _retryFresh();
+          _retryFresh(since: dialAt);
         });
       }
     }
@@ -851,11 +996,7 @@ class _ShardSocket {
     _retryNext = false;
     _nextRelays = const [];
     unawaited(sub?.cancel());
-    if (ch != null) {
-      try {
-        ch.sink.close();
-      } catch (_) {}
-    }
+    _closeChannel(ch);
     if (!replay) return;
     final pending = _nextOnly.values.toList();
     _nextOnly.clear();
@@ -891,11 +1032,14 @@ class _ShardSocket {
     _confirmTimer = Timer(confirmTimeout, () {
       _confirmTimer = null;
       if (_closedByUser || !_open || _frameSinceConnect) return;
+      final ch = _channel;
+      if (ch != null && _unready.contains(ch) && !_linkedUp.contains(ch)) {
+        _slow = true;
+        _closeError = const _DialTimeout();
+      }
       _sub?.cancel();
       _sub = null;
-      try {
-        _channel?.sink.close();
-      } catch (_) {}
+      _closeChannel(ch);
       _onDone();
     });
   }
@@ -915,6 +1059,8 @@ class _ShardSocket {
     if (msg is PoolOk) _unacked.remove(msg.id);
     // A real inbound frame proves the connection, so reset the backoff.
     _reconnectAttempt = 0;
+    _nextFails = 0;
+    rateLimited = false;
     final first = !_frameSinceConnect;
     _frameSinceConnect = true;
     _adopted = false;
@@ -961,8 +1107,12 @@ class _ShardSocket {
     lastCloseFailed = !_frameSinceConnect && !_closedByUser;
     lastCloseRateLimited =
         proxyCloseNamesRateLimit(_closeError, reason: _channel?.closeReason);
+    final timedOut = _closeError is _DialTimeout;
+    final local =
+        lastCloseFailed && (timedOut || proxyCloseIsLocal(_closeError));
     _closeError = null;
     if (lastCloseRateLimited && _reconnectAttempt < 4) _reconnectAttempt = 4;
+    if (lastCloseRateLimited) rateLimited = true;
     _cancelRetry();
     _cleanup();
     onClosed(this);
@@ -971,7 +1121,13 @@ class _ShardSocket {
     final adopted = _adopted;
     _adopted = false;
     if (_takeNext()) return;
-    _scheduleReconnect(quick: reconnectQuick(openMs) || adopted);
+    if (!_waking && _nextFails - 1 > _reconnectAttempt) {
+      _reconnectAttempt = _nextFails - 1;
+    }
+    _scheduleReconnect(
+        quick: !rateLimited &&
+            (reconnectQuick(openMs) || adopted || (timedOut && _waking)));
+    if (local) onLocalFail?.call(this);
   }
 
   void _cleanup() {
@@ -979,6 +1135,7 @@ class _ShardSocket {
     _confirmTimer = null;
     _sub?.cancel();
     _sub = null;
+    _forget(_channel);
     _channel = null;
   }
 
@@ -1021,6 +1178,9 @@ class _ShardSocket {
 
   void forgetFailures() {
     _reconnectAttempt = 0;
+    _nextFails = 0;
+    rateLimited = false;
+    _slow = false;
     failuresSinceFrame = 0;
     failureStreakStartedAt = null;
   }
@@ -1056,6 +1216,12 @@ class _ShardSocket {
       if (f == null) return frame.startsWith('["REQ"');
       out = f;
     }
+    final parked = _parked[ch];
+    if (parked != null) {
+      parked.add(out);
+      stats.bytesSent += utf8ByteLength(out);
+      return true;
+    }
     try {
       ch.sink.add(out);
       stats.bytesSent += utf8ByteLength(out);
@@ -1077,10 +1243,16 @@ class _ShardSocket {
     _confirmTimer = null;
     await _sub?.cancel();
     _sub = null;
-    try {
-      await _channel?.sink.close();
-    } catch (_) {}
+    final ch = _channel;
     _channel = null;
+    if (ch == null) return;
+    if (_unready.contains(ch)) {
+      _closeChannel(ch);
+      return;
+    }
+    try {
+      await ch.sink.close();
+    } catch (_) {}
   }
 }
 
@@ -1114,7 +1286,7 @@ class RelayPoolProxy implements PoolTransport {
         _permanentBlacklist = {...?permanentBlacklist},
         _blocked = RelayBlock.toSet(blockedRelays),
         _poolUrl = poolUrl ?? ApiConfig.relayPoolUrl(),
-        _channelFactory = channelFactory ?? defaultRelayChannelFactory,
+        _channelFactory = channelFactory ?? poolRelayChannelFactory,
         _rng = random ?? Random();
 
   static const int heldMax = 16;
@@ -1217,6 +1389,8 @@ class RelayPoolProxy implements PoolTransport {
   }
 
   void _stopLiveness() {
+    _scoutTimer?.cancel();
+    _scoutTimer = null;
     _healthTimer?.cancel();
     _healthTimer = null;
     _probeCheckTimer?.cancel();
@@ -1287,9 +1461,72 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
+  static const Duration scoutEvery = Duration(seconds: 1);
+
+  DateTime? _wokeAt;
+
+  Timer? _scoutTimer;
+
+  bool _scouted = false;
+
+  int _scoutNext = 0;
+
+  static const Duration dialBudget = _ShardSocket.dialBudget;
+
+  bool get _waking {
+    final at = _wokeAt;
+    return !oneTry &&
+        !RelayConnection.backgrounded &&
+        !RelayConnection.offline &&
+        at != null &&
+        _now().difference(at) < _ShardSocket.wakeWindow;
+  }
+
+  void _openWakeWindow() {
+    if (!oneTry && !RelayConnection.backgrounded) _wokeAt = _now();
+  }
+
+  @visibleForTesting
+  String? shardIdOf(WebSocketChannel ch) {
+    for (final sock in _sockets) {
+      if (sock.owns(ch)) return sock.shard.id;
+    }
+    return null;
+  }
+
+  bool get _scoutBlocked =>
+      _disposed || _livenessHeld || _unreachableFired || !_waking;
+
+  void _onShardLocalFail(_ShardSocket sock) {
+    if (_scoutTimer != null || _scoutBlocked) return;
+    _scouted = true;
+    _scoutTimer = Timer(scoutEvery, _scout);
+  }
+
+  void _scout() {
+    _scoutTimer = null;
+    if (!_scouted || _scoutBlocked) return;
+    final socks = _sockets.toList();
+    final n = socks.length;
+    for (var i = 0; i < n; i++) {
+      final sock = socks[(_scoutNext + i) % n];
+      if (sock.isHeld || sock.isOpen || sock.rateLimited) continue;
+      _scoutNext = (_scoutNext + i + 1) % n;
+      sock.retryNow();
+      return;
+    }
+    for (var i = 0; i < n; i++) {
+      final sock = socks[(_scoutNext + i) % n];
+      if (sock.rateLimited || !sock.retryFreshNow()) continue;
+      _scoutNext = (_scoutNext + i + 1) % n;
+      return;
+    }
+  }
+
   void wake({bool network = false}) {
     if (_disposed || _livenessHeld) return;
     final now = _now();
+    _openWakeWindow();
     for (final sock in _sockets.toList()) {
       sock.forgetFailures();
       final opened = sock.openedAt;
@@ -1401,7 +1638,7 @@ class RelayPoolProxy implements PoolTransport {
   /// True after [disconnectAll], so a late shard callback can't fire the trigger.
   bool _disposed = false;
 
-  final List<_ShardSocket> _sockets = [];
+  final _sockets = RevisionedList<_ShardSocket>();
 
   /// Active subscriptions and filters by subId, re-REQ'd on a reconnected shard.
   final Map<String, Subscription> _subscriptions = {};
@@ -1444,12 +1681,26 @@ class RelayPoolProxy implements PoolTransport {
   /// Deduped relay URLs reported connected across all shards.
   @override
   Set<String> get connectedRelayUrls {
+    final cached = _connectedUrls;
+    if (cached != null &&
+        _connectedUrlsEpoch == _ShardSocket.connectedEpoch &&
+        _connectedUrlsSockets == _sockets.revision) {
+      return cached;
+    }
     final s = <String>{};
     for (final sock in _sockets) {
       s.addAll(sock.connectedRelays);
     }
-    return s;
+    final out = Set<String>.unmodifiable(s);
+    _connectedUrls = out;
+    _connectedUrlsEpoch = _ShardSocket.connectedEpoch;
+    _connectedUrlsSockets = _sockets.revision;
+    return out;
   }
+
+  Set<String>? _connectedUrls;
+  int _connectedUrlsEpoch = -1;
+  int _connectedUrlsSockets = -1;
 
   int get openShardCount => _sockets.where((s) => s.isOpen).length;
 
@@ -1583,6 +1834,7 @@ class RelayPoolProxy implements PoolTransport {
   void connectAll() {
     _startSampler();
     _startHealthCheck();
+    _openWakeWindow();
     if (_sockets.isNotEmpty) {
       for (final s in _sockets) {
         s.connect();
@@ -1609,6 +1861,8 @@ class RelayPoolProxy implements PoolTransport {
         onClosed: _onShardClosed,
         onFirstFrame: _onShardFirstFrame,
         onFresh: _onShardFresh,
+        onLocalFail: _onShardLocalFail,
+        waking: () => _waking,
         onLost: _onShardLost,
         onLinked: (_) => _noteCount(),
         reqFilter: _addedFrame,
@@ -1856,6 +2110,8 @@ class RelayPoolProxy implements PoolTransport {
         onClosed: _onShardClosed,
         onFirstFrame: _onShardFirstFrame,
         onFresh: _onShardFresh,
+        onLocalFail: _onShardLocalFail,
+        waking: () => _waking,
         onLost: _onShardLost,
         onLinked: (_) => _noteCount(),
         reqFilter: _addedFrame,
@@ -1981,7 +2237,25 @@ class RelayPoolProxy implements PoolTransport {
     retryDownShards();
   }
 
-  void _onShardFirstFrame(_ShardSocket sock) => downRule.success();
+  void _onShardFirstFrame(_ShardSocket sock) {
+    downRule.success();
+    if (!_scouted) return;
+    _scouted = false;
+    _scoutTimer?.cancel();
+    _scoutTimer = null;
+    if (_disposed || _livenessHeld) return;
+    final from = sock.openedAt;
+    for (final s in _sockets.toList()) {
+      if (identical(s, sock) || s.rateLimited) continue;
+      final pending = s.pendingSince;
+      if (from != null && pending != null && !pending.isBefore(from)) continue;
+      if (s.isOpen) {
+        s.retryFreshNow();
+      } else {
+        s.retryNow();
+      }
+    }
+  }
 
   void _onShardClosed(_ShardSocket sock) {
     _noteCount();
@@ -2033,13 +2307,13 @@ class RelayPoolProxy implements PoolTransport {
     if (_disposed || sub == null || sub.isClosed) return;
     if (retiredSub?.call(sub) ?? false) return;
     if (!(liveSub?.call(sub) ?? true)) return;
-    if (_liveRetry.note(
-        shardId, subId, reason, (ids) => _resendClosed(shardId, ids))) {
-      onShardLost?.call(_now());
-    }
+    final at = _liveRetry.note(
+        shardId, subId, reason, (ids, gap) => _resendClosed(shardId, ids, gap),
+        gap: LiveSubRetry.opensGap(_activeFilters[subId]));
+    if (at != null) onShardLost?.call(at);
   }
 
-  void _resendClosed(String shardId, Set<String> ids) {
+  void _resendClosed(String shardId, Set<String> ids, bool gap) {
     if (_disposed) return;
     var sent = false;
     var wanted = false;
@@ -2055,7 +2329,7 @@ class RelayPoolProxy implements PoolTransport {
         if (sock.shard.id == shardId && sock.send(frame)) sent = true;
       }
     }
-    if (sent || !wanted) onShardReconnected?.call();
+    if (gap && (sent || !wanted)) onShardReconnected?.call();
   }
 
   /// Maps worker split-child ids (`<parent>~c<n>`, for REQs over 10 filters) to the parent, or events are dropped.
@@ -2088,6 +2362,7 @@ class RelayPoolProxy implements PoolTransport {
             sourceRelay != RelayConfig.appRelay) {
           return;
         }
+        if (isBridgeBlockedEvent(event)) return;
         // Gate before the cross-shard dedup, for the same reason.
         final geoGate = _geoOriginAllows;
         if (geoGate != null && !geoGate(event, sourceRelay)) return;

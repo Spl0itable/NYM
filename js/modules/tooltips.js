@@ -38,7 +38,8 @@
 
     function iconOnly(el) {
         if (!(el.textContent || '').replace(/[\s\u200b]+/g, '')) return true;
-        var text = (el.innerText != null ? el.innerText : el.textContent || '').replace(/[\s\u200b]+/g, '');
+        var shown = el.innerText;
+        var text = (shown != null ? shown : el.textContent || '').replace(/[\s\u200b]+/g, '');
         if (!text) return true;
         if (/^[0-9+·•]+$/.test(text) && el.querySelector('svg, img, .icon, i')) return true;
         return text.length <= 2 && !/[A-Za-z0-9]/.test(text);
@@ -59,24 +60,33 @@
         return '';
     }
 
-    function adopt(el) {
-        if (!el || el.nodeType !== 1 || el.hasAttribute('data-no-tip') || el.closest('.nym-tooltip')) return;
+    function decide(el) {
+        if (!el || el.nodeType !== 1 || el.hasAttribute('data-no-tip') || el.closest('.nym-tooltip')) return null;
         var explicit = el.getAttribute('data-tip');
         var title = el.getAttribute('title');
-        if (!explicit && !title && !el.getAttribute('aria-label')) {
-            var fb = fallbackName(el);
-            if (fb) el.setAttribute('aria-label', fb);
-        }
+        var d = { explicit: explicit, title: title, fb: '', describe: false, icon: false };
+        if (!explicit && !title && !el.getAttribute('aria-label')) d.fb = fallbackName(el);
         if (explicit) {
-            if (title != null) el.removeAttribute('title');
-            if (!el.getAttribute('aria-description')) el.setAttribute('aria-description', ui(explicit));
+            d.describe = !el.getAttribute('aria-description');
+            return d;
+        }
+        d.icon = iconOnly(el);
+        return d;
+    }
+
+    function apply(el, d) {
+        if (!d) return;
+        if (d.fb) el.setAttribute('aria-label', d.fb);
+        if (d.explicit) {
+            if (d.title != null) el.removeAttribute('title');
+            if (d.describe) el.setAttribute('aria-description', ui(d.explicit));
             return;
         }
-        if (!iconOnly(el)) return;
-        if (title) {
-            el.setAttribute('aria-label', title);
+        if (!d.icon) return;
+        if (d.title) {
+            el.setAttribute('aria-label', d.title);
             el.removeAttribute('title');
-        } else if (title != null) {
+        } else if (d.title != null) {
             el.removeAttribute('title');
         }
         if (el.getAttribute('aria-label')) {
@@ -84,11 +94,55 @@
         }
     }
 
-    function scan(root) {
+    function adopt(el) {
+        apply(el, decide(el));
+    }
+
+    function controls(root, out, seen) {
         if (!root || root.nodeType !== 1) return;
-        if (root.matches && root.matches(CONTROL)) adopt(root);
+        var add = function (el) {
+            if (seen) { if (seen.has(el)) return; seen.add(el); }
+            out.push(el);
+        };
+        if (root.matches && root.matches(CONTROL)) add(root);
         var list = root.querySelectorAll ? root.querySelectorAll(CONTROL) : [];
-        for (var i = 0; i < list.length; i++) adopt(list[i]);
+        for (var i = 0; i < list.length; i++) add(list[i]);
+    }
+
+    function adoptAll(els, skip) {
+        var decided = [];
+        for (var i = 0; i < els.length; i++) decided.push(skip && skip(els[i]) ? null : decide(els[i]));
+        for (var j = 0; j < els.length; j++) if (decided[j]) apply(els[j], decided[j]);
+    }
+
+    function scan(root) {
+        var els = [];
+        controls(root, els, null);
+        adoptAll(els, null);
+    }
+
+    var adopted = typeof WeakSet === 'function' ? new WeakSet() : null;
+    var pending = [];
+    var flushQueued = false;
+
+    function flush() {
+        flushQueued = false;
+        var roots = pending;
+        pending = [];
+        var els = [];
+        var seen = typeof Set === 'function' ? new Set() : null;
+        for (var i = 0; i < roots.length; i++) if (roots[i].isConnected !== false) controls(roots[i], els, seen);
+        adoptAll(els, function (el) { return adopted && adopted.has(el) && el.getAttribute('title') == null; });
+        if (adopted) for (var j = 0; j < els.length; j++) adopted.add(els[j]);
+    }
+
+    function queue(root) {
+        if (!root || root.nodeType !== 1) return;
+        pending.push(root);
+        if (flushQueued) return;
+        flushQueued = true;
+        if (typeof requestAnimationFrame === 'function' && !document.hidden) requestAnimationFrame(flush);
+        else setTimeout(flush, 0);
     }
 
     function boot() {
@@ -98,7 +152,7 @@
             for (var i = 0; i < records.length; i++) {
                 var r = records[i];
                 if (r.type === 'childList') {
-                    for (var j = 0; j < r.addedNodes.length; j++) scan(r.addedNodes[j]);
+                    for (var j = 0; j < r.addedNodes.length; j++) queue(r.addedNodes[j]);
                 } else if (r.attributeName === 'title' && r.target.getAttribute('title') != null) {
                     var el = r.target.closest ? r.target.closest(CONTROL) : null;
                     if (el === r.target) adopt(el);

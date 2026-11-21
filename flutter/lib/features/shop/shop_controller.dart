@@ -233,6 +233,21 @@ class ShopController extends StateNotifier<ShopState> {
     _announceToggle(flairId, deactivated: isActive);
   }
 
+  Future<void> toggleRing(String ringId) async {
+    if (!state.owns(ringId) || ShopCatalog.byId(ringId)?.type != 'avatar-ring') {
+      return;
+    }
+    final active = state.active;
+    final deactivated = active.ring == ringId;
+    state = state.copyWith(
+      active: deactivated
+          ? active.copyWith(clearRing: true)
+          : active.copyWith(ring: ringId),
+    );
+    await _persist();
+    _announceToggle(ringId, deactivated: deactivated);
+  }
+
   /// Multiple cosmetics may be active.
   Future<void> toggleCosmetic(String cosmeticId) async {
     if (!state.owns(cosmeticId)) return;
@@ -549,8 +564,10 @@ class ShopController extends StateNotifier<ShopState> {
     if (activeJson is Map) {
       final a = activeJson.cast<String, dynamic>();
       final flairArr = (a['flair'] as List?)?.cast<String>() ?? const [];
+      final ring = a['ring'];
       active = ActiveItems(
         style: a['style']?.toString(),
+        ring: ring is String && ring.isNotEmpty ? ring : null,
         // Keep only the last flair.
         flair: flairArr.isNotEmpty ? [flairArr.last] : const [],
         cosmetics: (a['cosmetics'] as List?)?.cast<String>() ?? const [],
@@ -602,6 +619,7 @@ class ShopController extends StateNotifier<ShopState> {
       'style': a.style,
       'flair': a.flair,
       'cosmetics': a.cosmetics,
+      'ring': a.ring != null && state.owns(a.ring!) ? a.ring : null,
       // Supporter only counts when owned.
       'supporter': state.owns('supporter-badge') && a.supporter,
     };
@@ -841,6 +859,7 @@ class ShopController extends StateNotifier<ShopState> {
       'nickname-flair' => 'Nickname flair',
       'supporter' => 'Supporter badge',
       'cosmetic' => 'Cosmetic',
+      'avatar-ring' => 'Avatar ring',
       _ => 'Shop item',
     };
     var label = '$kind: ${item.name}';
@@ -954,6 +973,12 @@ class OtherUsersShopController
   /// Never fetch our own status; the owner reads its record via [ShopController.loadFromServer].
   String? selfPubkey;
 
+  bool Function(String pubkey)? ownOtherKey;
+
+  bool _ownOther(String pk) => ownOtherKey?.call(pk) ?? false;
+
+  bool lookupBarred(String pubkey) => _ownOther(pubkey.toLowerCase());
+
   final Set<String> _queue = <String>{};
   final Set<String> _inFlight = <String>{};
   final Set<String> _forceFresh = <String>{};
@@ -983,14 +1008,17 @@ class OtherUsersShopController
       return;
     }
     if (_inFlight.contains(pk)) return;
-    _queue.add(pk);
+    if (!_queue.contains(pk)) {
+      if (_ownOther(pk)) return;
+      _queue.add(pk);
+    }
     _timer ??= Timer(_debounce, _flush);
   }
 
   /// Drops [pubkey]'s entry and refetches so changes show before the cache expires.
   void invalidate(String pubkey) {
     final pk = pubkey.toLowerCase();
-    if (pk == selfPubkey || !_hex64.hasMatch(pk)) return;
+    if (pk == selfPubkey || !_hex64.hasMatch(pk) || _ownOther(pk)) return;
     _fetchedAt.remove(pk);
     _inFlight.remove(pk);
     _forceFresh.add(pk);
@@ -1004,7 +1032,10 @@ class OtherUsersShopController
 
   Future<void> _flush() async {
     _timer = null;
-    final pubkeys = _queue.toList();
+    final pubkeys = [
+      for (final pk in _queue)
+        if (!_ownOther(pk)) pk,
+    ];
     _queue.clear();
     if (pubkeys.isEmpty) return;
     for (final pk in pubkeys) {
@@ -1068,6 +1099,7 @@ class OtherUsersShopController
     if (cache is Map) {
       cache.forEach((pk, entry) {
         if (entry is! Map || entry['items'] is! Map) return;
+        if (!(entry['items'] as Map).containsKey('ring')) return;
         final ts = (entry['ts'] as num?)?.toInt() ?? 0;
         if (now - ts >= _cacheMaxAgeMs || ts - now > 60000) return;
         rows.add(MapEntry(pk.toString().toLowerCase(),
@@ -1140,6 +1172,7 @@ class OtherUsersShopController
         'cosmetics': items.cosmetics,
         'supporter': items.supporter,
         'editions': items.editions,
+        'ring': items.ring,
       },
       'ts': DateTime.now().millisecondsSinceEpoch,
       'updatedAt': updatedAt,

@@ -308,6 +308,7 @@ class PmLogic {
       pubkey: rumor['pubkey'] as String?,
       ttlSec: ttl > 0 ? ttl : 0,
       activity: UploadActivity.decode(rumor['tags'])?.activity,
+      threadRoot: TypingThread.rootOf(rumor['tags'], channel: false),
     );
   }
 
@@ -378,7 +379,8 @@ class TypingInfo {
       this.groupId,
       this.pubkey,
       this.ttlSec = 0,
-      this.activity});
+      this.activity,
+      this.threadRoot});
 
   /// 'start' | 'stop'.
   final String status;
@@ -388,6 +390,8 @@ class TypingInfo {
   final int ttlSec;
 
   final String? activity;
+
+  final String? threadRoot;
 
   bool get isStart => status == 'start';
 }

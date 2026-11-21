@@ -41,18 +41,17 @@ class ChannelEntry {
   final String geohash;
 
   /// The validated geohash this channel is, or ''; uses the same test as [channelWire].
-  String get geohashKey {
-    if (geohash.isNotEmpty && isValidGeohash(geohash)) return geohash;
-    return isValidGeohash(channel) ? channel : '';
-  }
+  late final String geohashKey = geohash.isNotEmpty && isValidGeohash(geohash)
+      ? geohash
+      : (isValidGeohash(channel) ? channel : '');
 
   bool get isGeohash => geohashKey.isNotEmpty;
 
   /// Message storage key, always `#`-prefixed.
-  String get storageKey => '#${isGeohash ? geohashKey : channel}';
+  late final String storageKey = '#${isGeohash ? geohashKey : channel}';
 
   /// Lookup key in the `channels` map (geohash or name, lowercase).
-  String get key => (isGeohash ? geohashKey : channel).toLowerCase();
+  late final String key = (isGeohash ? geohashKey : channel).toLowerCase();
 
   Map<String, dynamic> toJson() =>
       {'key': key, 'channel': channel, 'geohash': geohash};

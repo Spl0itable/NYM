@@ -1845,6 +1845,137 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Ruby">
                 }
 
             ],
+            rings: [
+                {
+                    id: 'ring-satoshi',
+                    name: 'Satoshi',
+                    description: 'Milled orange-gold coin edge with a ₿ medal at the top',
+                    price: 21420,
+                    type: 'avatar-ring',
+                    tier: 'legendary'
+                },
+                {
+                    id: 'ring-glitch',
+                    name: 'Glitch',
+                    description: 'Red and cyan rings split off a green core',
+                    price: 10101,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-aurora',
+                    name: 'Aurora',
+                    description: 'Cyan, blue and magenta sweep with an inner glow',
+                    price: 2424,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-neon',
+                    name: 'Neon',
+                    description: 'A magenta neon tube with a hot core and one break',
+                    price: 1984,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-ghost',
+                    name: 'Ghost',
+                    description: 'A pale wisp that thins and fades as it goes round',
+                    price: 666,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-matrix',
+                    name: 'Matrix',
+                    description: 'Green code segments that stream around the ring',
+                    price: 1337,
+                    type: 'avatar-ring',
+                    tier: 'legendary'
+                },
+                {
+                    id: 'ring-fire',
+                    name: 'Fire',
+                    description: 'Flames that rise up the ring and burn hottest at the top',
+                    price: 911,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-ice',
+                    name: 'Ice',
+                    description: 'Frosted blue band set with white frost crystals',
+                    price: 777,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-ocean',
+                    name: 'Ocean',
+                    description: 'Sky-blue surf rolling over deep water',
+                    price: 1500,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-sakura',
+                    name: 'Sakura',
+                    description: 'A cherry-blossom ring of five notched petals',
+                    price: 3000,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-galaxy',
+                    name: 'Galaxy',
+                    description: 'Violet nebula sweep with star dust and a bright star',
+                    price: 4444,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-toxic',
+                    name: 'Toxic',
+                    description: 'Lime hazard tape with a radioactive glow',
+                    price: 1300,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-midas',
+                    name: 'Midas',
+                    description: 'A polished double band of gold',
+                    price: 8888,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-vaporwave',
+                    name: 'Vaporwave',
+                    description: 'Pink and cyan halves cut like a retro sunset',
+                    price: 1995,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-blood',
+                    name: 'Blood',
+                    description: 'Glossy red that pools at the bottom and drips',
+                    price: 1313,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-royal',
+                    name: 'Royal',
+                    description: 'Purple velvet set with gold studs and a crown',
+                    price: 6000,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-circuit',
+                    name: 'Circuit',
+                    description: 'A teal trace with solder pads and vias',
+                    price: 2048,
+                    type: 'avatar-ring'
+                },
+                {
+                    id: 'ring-prism',
+                    name: 'Prism',
+                    description: 'A glass band that throws one spectral flare',
+                    price: 11111,
+                    type: 'avatar-ring',
+                    tier: 'legendary'
+                }
+            ],
             special: [
                 {
                     id: 'supporter-badge',
@@ -2121,7 +2252,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Legendary Vault">
                 {
                     id: 'bundle-everything',
                     name: 'Everything Pack',
-                    description: 'Every message style, flair and special item in one go — the ultimate discount. (Excludes limited numbered editions.)',
+                    description: 'Every message style, flair, avatar ring and special item in one go — the ultimate discount. (Excludes limited numbered editions.)',
                     price: 149999,
                     type: 'bundle',
                     // Components filled in below from the full catalog.
@@ -2144,6 +2275,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Everything Pack">
         const _everythingIds = [
             ...this.shopItems.styles,
             ...this.shopItems.flair,
+            ...this.shopItems.rings,
             ...this.shopItems.special
         ].filter(it => !it.maxSupply).map(it => it.id);
         const _everything = this.shopItems.bundles.find(b => b.id === 'bundle-everything');
@@ -4728,8 +4860,8 @@ function initWallpaperUI() {
     }
 }
 
-const NYMCHAT_VERSION = 'v3.75.545';
-const NYMCHAT_BUILD = 1045;
+const NYMCHAT_VERSION = 'v3.76.545';
+const NYMCHAT_BUILD = 1062;
 
 function nymUiArgs(template, args) {
     if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);
@@ -5147,7 +5279,7 @@ async function checkSavedConnection() {
 
             nym._loadGroupConversations();
             nym._loadEphemeralKeys();
-            if (typeof nym._sfLoad === 'function') nym._sfLoad(); if (typeof nym._giReady === 'function') nym._giReady();
+            if (typeof nym._sfLoad === 'function') nym._sfLoad(); if (typeof nym._shLoad === 'function') nym._shLoad(); if (typeof nym._giReady === 'function') nym._giReady();
             nym._loadBotAnonState();
             nym._loadLastPMSyncTime();
             nym._refreshPmSupportBadges();
@@ -5330,7 +5462,7 @@ async function initializeNym() {
 
         nym._loadGroupConversations();
         nym._loadEphemeralKeys();
-        if (typeof nym._sfLoad === 'function') nym._sfLoad(); if (typeof nym._giReady === 'function') nym._giReady();
+        if (typeof nym._sfLoad === 'function') nym._sfLoad(); if (typeof nym._shLoad === 'function') nym._shLoad(); if (typeof nym._giReady === 'function') nym._giReady();
         nym._loadBotAnonState();
         nym._loadLastPMSyncTime();
         nym._refreshPmSupportBadges();
@@ -6321,7 +6453,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
     // Restore groups and ephemeral keys before relay history arrives.
     nym._loadGroupConversations();
     nym._loadEphemeralKeys();
-    if (typeof nym._sfLoad === 'function') nym._sfLoad(); if (typeof nym._giReady === 'function') nym._giReady();
+    if (typeof nym._sfLoad === 'function') nym._sfLoad(); if (typeof nym._shLoad === 'function') nym._shLoad(); if (typeof nym._giReady === 'function') nym._giReady();
     nym._loadBotAnonState();
     nym._loadLastPMSyncTime();
     nym._refreshPmSupportBadges();
@@ -7808,61 +7940,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             nym.publishStatusVisibility();
         }
     }, 2000);
-
-    // Wrap the search functions to expand collapsed lists while searching.
-    const originalHandleChannelSearch = nym.handleChannelSearch;
-    nym.handleChannelSearch = function (searchTerm) {
-        const channelList = document.getElementById('channelList');
-        const wasCollapsed = channelList.classList.contains('list-collapsed');
-
-        if (wasCollapsed && searchTerm.length > 0) {
-            channelList.classList.remove('list-collapsed');
-            channelList.classList.add('list-expanded');
-        }
-
-        originalHandleChannelSearch.call(this, searchTerm);
-
-        if (wasCollapsed && searchTerm.length === 0) {
-            channelList.classList.add('list-collapsed');
-            channelList.classList.remove('list-expanded');
-        }
-    };
-
-    const originalFilterPMs = nym.filterPMs;
-    nym.filterPMs = function (searchTerm) {
-        const pmList = document.getElementById('pmList');
-        const wasCollapsed = pmList.classList.contains('list-collapsed');
-
-        if (wasCollapsed && searchTerm.length > 0) {
-            pmList.classList.remove('list-collapsed');
-            pmList.classList.add('list-expanded');
-        }
-
-        originalFilterPMs.call(this, searchTerm);
-
-        if (wasCollapsed && searchTerm.length === 0) {
-            pmList.classList.add('list-collapsed');
-            pmList.classList.remove('list-expanded');
-        }
-    };
-
-    const originalFilterUsers = nym.filterUsers;
-    nym.filterUsers = function (searchTerm) {
-        const userList = document.getElementById('userListContent');
-        const wasCollapsed = userList.classList.contains('list-collapsed');
-
-        if (wasCollapsed && searchTerm.length > 0) {
-            userList.classList.remove('list-collapsed');
-            userList.classList.add('list-expanded');
-        }
-
-        originalFilterUsers.call(this, searchTerm);
-
-        if (wasCollapsed && searchTerm.length === 0) {
-            userList.classList.add('list-collapsed');
-            userList.classList.remove('list-expanded');
-        }
-    };
 
     nym._setManagedInterval('messageCleanup', () => {
         nym._trimClosedLists();

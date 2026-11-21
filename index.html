@@ -81,8 +81,10 @@
     <link rel="stylesheet" href="css/styles-columns.css">
     <link rel="stylesheet" href="css/no-inline.css">
     <link rel="preload" href="css/styles-features.css" as="style" data-defer-style>
+    <link rel="preload" href="css/styles-shop-rings.css" as="style" data-defer-style>
     <noscript>
         <link rel="stylesheet" href="css/styles-features.css">
+        <link rel="stylesheet" href="css/styles-shop-rings.css">
     </noscript>
 </head>
 
@@ -120,8 +122,8 @@
         <img id="ctxBannerImg" class="context-menu-banner nm-hidden" src="" alt="" decoding="async" loading="lazy"
             data-action="expandImageFromSrcStop">
         <div class="context-menu-avatar-header" id="ctxAvatarHeader">
-            <img id="ctxAvatarImg" class="avatar-context nm-pointer" src="" alt="Avatar" decoding="async"
-                data-action="expandImageFromSrcStop">
+            <span class="shop-ring-host"><img id="ctxAvatarImg" class="avatar-context nm-pointer" src="" alt="Avatar" decoding="async"
+                data-action="expandImageFromSrcStop"></span>
             <div class="context-menu-avatar-nym" id="ctxAvatarNym"></div>
             <div class="ctx-status-row" id="ctxStatusRow"></div>
             <div class="ctx-full-pubkey" id="ctxFullPubkey" title="Click to switch between npub and hex"></div>
@@ -602,7 +604,7 @@
                 </div>
                 <div id="channelSearchResults"></div>
                 <div class="channel-list" id="channelList">
-                    <div class="channel-item active" data-channel="nymchat" data-geohash="nymchat" role="button" tabindex="0">
+                    <div class="channel-item list-item active" data-channel="nymchat" data-geohash="nymchat" role="button" tabindex="0">
                         <span class="channel-name">#nymchat<span class="channel-sub"><span class="loc-city">Not a geohash</span></span></span>
                         <div class="channel-badges">
                             <span class="unread-badge nm-hidden">0</span>
@@ -614,6 +616,7 @@
                     <div class="sidebar-skeleton ssk-channel ssk-w4" aria-hidden="true"><span class="sk-bar"></span></div>
                     <div class="sidebar-skeleton ssk-channel ssk-w2" aria-hidden="true"><span class="sk-bar"></span></div>
                 </div>
+                <div class="ps-more-row sb-more-row" data-more-for="channelList" hidden><button type="button" class="view-more-btn sb-more" hidden></button><button type="button" class="view-more-btn sb-less" hidden></button></div>
                 <div class="ps-stream" id="publicStream" hidden>
                     <div class="ps-new-wrap"><button type="button" class="ps-new" hidden></button></div>
                     <ul class="ps-list" aria-label="Public stream, newest first, read only"></ul>
@@ -664,6 +667,7 @@
                     <div class="sidebar-skeleton ssk-pm ssk-w3" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
                     <div class="sidebar-skeleton ssk-pm ssk-w1" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
                 </div>
+                <div class="ps-more-row sb-more-row" data-more-for="pmList" hidden><button type="button" class="view-more-btn sb-more" hidden></button><button type="button" class="view-more-btn sb-less" hidden></button></div>
             </div>
 
             <div class="user-list" id="userList" data-section="nyms">
@@ -699,6 +703,7 @@
                     <div class="sidebar-skeleton ssk-nym ssk-w2" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
                     <div class="sidebar-skeleton ssk-nym ssk-w3" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
                 </div>
+                <div class="ps-more-row sb-more-row" data-more-for="userListContent" hidden><button type="button" class="view-more-btn sb-more" hidden></button><button type="button" class="view-more-btn sb-less" hidden></button></div>
             </div>
             <div class="sidebar-footer" id="sidebarFooter" role="group" aria-label="Connection status and sidebar tools">
                 <div class="sidebar-footer-status">
@@ -993,6 +998,9 @@
                             <button class="format-tool translate-input-btn" id="translateInputBtn" type="button" aria-label="Translate text" aria-haspopup="listbox" aria-controls="translateInputDropdown" aria-expanded="false" data-tip="">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg>
                             </button>
+                            <button class="format-tool send-later-tool" id="formatSendLaterBtn" type="button" data-action="formatSendLater" aria-label="Send later" aria-haspopup="dialog" data-tip="">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>
+                            </button>
                             <span class="format-tool-sep" aria-hidden="true"></span>
                         </div>
                     </div>
@@ -1101,9 +1109,9 @@
             <div class="shop-tabs">
                 <button class="shop-tab active" data-action="switchShopTab" data-shop-tab="styles">Message Styles</button>
                 <button class="shop-tab" data-action="switchShopTab" data-shop-tab="flair">Nickname Flair</button>
+                <button class="shop-tab" data-action="switchShopTab" data-shop-tab="rings">Avatar Rings</button>
                 <button class="shop-tab" data-action="switchShopTab" data-shop-tab="special">Special Items</button>
                 <button class="shop-tab" data-action="switchShopTab" data-shop-tab="limited">Limited &amp; Bundles</button>
-                <button class="shop-tab" data-action="switchShopTab" data-shop-tab="credits">Nymbot Credits</button>
                 <button class="shop-tab" data-action="switchShopTab" data-shop-tab="inventory">My Items</button>
             </div>
 
@@ -2140,6 +2148,14 @@
                         <div class="form-hint" id="keepCallHistoryHint">Keep a list of your recent calls. It syncs encrypted to your other devices signed in with this identity, and each identity has its own list. Turning this off deletes the list on every device.</div>
                     </div>
 
+                    <div class="form-group" id="rememberSearchesGroup">
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="rememberSearchesLabel">Remember searches</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="rememberSearchesToggle" data-setting-key="rememberSearches" aria-labelledby="rememberSearchesLabel" aria-describedby="rememberSearchesHint" data-on-change="onRememberSearchesChange" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="rememberSearchesHint">Keep a list of your recent searches on this device so they can be suggested again. The list stays on this device, is separate for each identity, and is never sent anywhere. Turning this off clears it.</div>
+                    </div>
+
                     <div class="form-group">
                         <label class="setting-toggle-row">
                             <span class="form-label" id="screenSecurityLabel">Screen Security</span>
@@ -2290,7 +2306,7 @@
                             <option value="groups">Only group chats</option>
                             <option value="disabled">Disabled completely</option>
                         </select>
-                        <div class="form-hint">Choose where senders can see when you've read their messages (✓✓). "Enabled everywhere" includes PMs, group chats, and public channels.
+                        <div class="form-hint">Choose where senders can see when you've read their messages (✓✓ in PMs, your avatar in group chats and public channels). "Enabled everywhere" includes PMs, group chats, and public channels.
                         </div>
                         <div id="readReceiptsHardcoreHint" class="form-hint nm-hidden nm-h-59">Hardcore mode sends no read or delivery receipts.</div>
                     </div>
@@ -3091,6 +3107,7 @@
     <script defer src="js/modules/relay-block.js"></script>
     <script defer src="js/modules/relay-add.js"></script>
     <script defer src="js/modules/d1-cursor.js"></script>
+    <script defer src="js/modules/bridge-block.js"></script>
     <script defer src="js/modules/encrypted-blob.js"></script>
     <script defer src="js/modules/bitchat-verify.js"></script>
     <script defer src="js/modules/relays.js"></script>
@@ -3193,6 +3210,9 @@
     <script defer src="js/modules/chat-lock-ui.js"></script>
     <script defer src="js/modules/unified-search.js"></script>
     <script defer src="js/modules/unified-search-ui.js"></script>
+    <script defer src="js/modules/search-history.js"></script>
+    <script defer src="js/modules/search-history-ui.js"></script>
+    <script defer src="js/modules/sidebar-more.js"></script>
     <script defer src="js/modules/public-stream.js"></script>
     <script defer src="js/modules/public-stream-ui.js"></script>
     <script defer src="js/modules/sidebar-folders.js"></script>

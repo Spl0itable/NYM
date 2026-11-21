@@ -1859,8 +1859,7 @@ Object.assign(NYM.prototype, {
     _updateMessageZapsEl(messageId, messageEl) {
         if (!messageEl) return false;
 
-        const container = document.getElementById('messagesScroller');
-        const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
+        const wasAtBottom = typeof this._rowChangeAtBottom === 'function' ? this._rowChangeAtBottom() : false;
 
         const messageZaps = this.zaps.get(messageId);
 

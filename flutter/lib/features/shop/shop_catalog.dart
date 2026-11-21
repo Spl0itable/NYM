@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'avatar_ring_specs.dart';
 import 'shop_models.dart';
 
 /// The full shop catalog; ids, prices, tiers and SVG icons match the PWA 1:1.
@@ -304,6 +305,19 @@ class ShopCatalog {
     ),
   ];
 
+  static final List<ShopItem> rings = [
+    for (final r in kAvatarRings)
+      ShopItem(
+        id: r.id,
+        name: r.name,
+        description: r.description,
+        price: r.price,
+        type: 'avatar-ring',
+        tier: r.legendary ? 'legendary' : null,
+        icon: '',
+      ),
+  ];
+
   static const List<ShopItem> special = [
     ShopItem(
       id: 'supporter-badge',
@@ -456,8 +470,8 @@ class ShopCatalog {
       id: 'bundle-everything',
       name: 'Everything Pack',
       description:
-          'Every message style, flair and special item in one go — the ultimate '
-          'discount. (Excludes limited numbered editions.)',
+          'Every message style, flair, avatar ring and special item in one go — '
+          'the ultimate discount. (Excludes limited numbered editions.)',
       price: 149999,
       type: 'bundle',
       bundle: [],
@@ -468,6 +482,7 @@ class ShopCatalog {
   static final List<ShopItem> all = [
     ...styles,
     ...flair,
+    ...rings,
     ...special,
     ...limited,
     ...bundles,
@@ -491,6 +506,7 @@ class ShopCatalog {
   static final List<String> _everythingComponents = [
     ...styles,
     ...flair,
+    ...rings,
     ...special,
   ].where((it) => it.maxSupply == null).map((it) => it.id).toList();
 

@@ -485,12 +485,26 @@
             this._sfHeadLabel(el, f.name, el._sfUnread);
         },
 
-        _sfRenderSoon(full) {
+        _sfRenderSoon(full, now) {
             if (full) this._sfFull = true;
-            if (this._sfRaf) return;
+            if (this._sfRaf) {
+                if ((full || now) && this._sfDelay) {
+                    clearTimeout(this._sfDelay);
+                    this._sfDelay = null;
+                    this._sfFrame();
+                }
+                return;
+            }
             this._sfRaf = true;
+            const wait = full || now ? 0 : (this._sfDrawnAt || 0) + 700 - Date.now();
+            if (wait > 0) this._sfDelay = setTimeout(() => { this._sfDelay = null; this._sfFrame(); }, wait);
+            else this._sfFrame();
+        },
+
+        _sfFrame() {
             const run = () => {
                 this._sfRaf = false;
+                this._sfDrawnAt = Date.now();
                 const all = this._sfFull;
                 const dirty = this._sfDirty;
                 this._sfFull = false;
@@ -557,14 +571,16 @@
                 const btn = el.querySelector('.sb-folder-toggle');
                 if (btn) btn.setAttribute('aria-expanded', closed ? 'false' : 'true');
                 const chev = el.querySelector('.sb-folder-collapse');
-                if (chev) chev.title = this._sf(closed ? S.expand : S.collapse);
+                const tip = this._sf(closed ? S.expand : S.collapse);
+                if (chev && chev.getAttribute('title') !== tip && chev.getAttribute('aria-label') !== tip) chev.title = tip;
                 const badge = el.querySelector('.sb-folder-badge');
                 const u = el._sfUnread || { n: 0, label: '' };
                 if (badge) {
                     const show = closed && u.n > 0;
+                    const display = show ? 'inline-block' : 'none';
                     if (badge.textContent !== u.label) badge.textContent = u.label;
-                    badge.hidden = !show;
-                    badge.style.display = show ? 'inline-block' : 'none';
+                    if (badge.hidden !== !show) badge.hidden = !show;
+                    if (badge.style.display !== display) badge.style.display = display;
                 }
             }
         },
@@ -579,7 +595,7 @@
             if (!lists.length) return;
             this._sfMo = new MutationObserver((recs) => this._sfOnMutations(recs));
             for (const l of lists) {
-                this._sfMo.observe(l, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'src', 'title', 'aria-label', 'data-last-message-time'] });
+                this._sfMo.observe(l, { subtree: true, childList: true, characterData: true, attributes: true, attributeOldValue: true, attributeFilter: ['class', 'style', 'src', 'title', 'aria-label', 'data-last-message-time'] });
             }
         },
 
@@ -588,24 +604,28 @@
             if (!map || !map.size) return;
             const dirty = this._sfDirty || new Set();
             let any = false;
+            let now = false;
             const note = (node) => {
                 const el = node && (node.nodeType === 1 ? node : node.parentElement);
                 const row = el && el.closest ? el.closest('.channel-item, .pm-item') : null;
-                if (!row) return;
+                if (!row) return null;
                 const r = this._pinKeyForItem(row);
-                if (r && map.has(r)) { dirty.add(r); any = true; }
+                if (r && map.has(r)) { dirty.add(r); any = true; return row; }
+                return null;
             };
+            const kept = (v) => { const set = String(v || '').split(/\s+/); return KEEP_CLASSES.filter((k) => set.indexOf(k) >= 0).join(' '); };
             for (const m of recs) {
                 if (m.type === 'childList' && (m.target.id === 'channelList' || m.target.id === 'pmList')) {
                     m.addedNodes.forEach(note);
                     m.removedNodes.forEach(note);
                 } else {
-                    note(m.target);
+                    const row = note(m.target);
+                    if (row && row === m.target && m.type === 'attributes' && m.attributeName === 'class' && kept(m.oldValue) !== kept(row.className)) now = true;
                 }
             }
             if (any) {
                 this._sfDirty = dirty;
-                this._sfRenderSoon(false);
+                this._sfRenderSoon(false, now);
             }
         },
 

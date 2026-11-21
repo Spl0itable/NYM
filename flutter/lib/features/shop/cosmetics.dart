@@ -25,6 +25,7 @@ class UserCosmetics {
     this.supporter = false,
     this.cosmetics = const [],
     this.genesisEdition,
+    this.ringId,
   });
 
   /// Active message-style id (e.g. `style-satoshi`), or null.
@@ -45,8 +46,14 @@ class UserCosmetics {
   /// Genesis edition stamped on the `flair-genesis` badge, if known.
   final int? genesisEdition;
 
+  final String? ringId;
+
   bool get isEmpty =>
-      styleId == null && flairIds.isEmpty && !supporter && cosmetics.isEmpty;
+      styleId == null &&
+      flairIds.isEmpty &&
+      !supporter &&
+      cosmetics.isEmpty &&
+      ringId == null;
   bool get isNotEmpty => !isEmpty;
 
   /// Redacted privacy cosmetic: blanks content and author after a delay.
@@ -61,11 +68,12 @@ class UserCosmetics {
           other.styleId == styleId &&
           other.supporter == supporter &&
           other.genesisEdition == genesisEdition &&
+          other.ringId == ringId &&
           listEquals(other.flairIds, flairIds) &&
           listEquals(other.cosmetics, cosmetics);
 
   @override
-  int get hashCode => Object.hash(styleId, supporter, genesisEdition,
+  int get hashCode => Object.hash(styleId, supporter, genesisEdition, ringId,
       Object.hashAll(flairIds), Object.hashAll(cosmetics));
 }
 
@@ -75,10 +83,29 @@ UserCosmetics resolveCosmetics(WidgetRef ref, String pubkey) {
   if (selfPubkey != null && pubkey == selfPubkey) {
     return _selfCosmetics(ref.read(shopControllerProvider).active);
   }
-  final fromD1 = ref.read(otherUsersShopProvider)[pubkey.toLowerCase()];
-  if (fromD1 != null) return userCosmeticsFromStatus(fromD1);
+  final key = pubkey.toLowerCase();
+  final fromD1 = ref.read(otherUsersShopProvider)[key];
+  if (fromD1 != null) {
+    return _ringGate(userCosmeticsFromStatus(fromD1), key,
+        ref.read(otherUsersShopProvider.notifier));
+  }
   final user = ref.read(usersProvider)[pubkey];
   return userCosmeticsFromUser(user);
+}
+
+UserCosmetics _ringGate(
+    UserCosmetics c, String key, OtherUsersShopController other) {
+  if (c.ringId == null) return c;
+  if (key != NostrController.nymbotPubkey && !other.lookupBarred(key)) {
+    return c;
+  }
+  return UserCosmetics(
+    styleId: c.styleId,
+    flairIds: c.flairIds,
+    supporter: c.supporter,
+    cosmetics: c.cosmetics,
+    genesisEdition: c.genesisEdition,
+  );
 }
 
 /// Self cosmetics from the live shop state, including cosmetics and Genesis edition.
@@ -90,8 +117,12 @@ UserCosmetics _selfCosmetics(ActiveItems active) {
     supporter: active.supporter,
     cosmetics: active.cosmetics,
     genesisEdition: active.editions['flair-genesis'],
+    ringId: shopRingIdOrNull(active.ring),
   );
 }
+
+String? shopRingIdOrNull(String? id) =>
+    id != null && ShopCatalog.byId(id)?.type == 'avatar-ring' ? id : null;
 
 /// Cosmetics from a [User]'s presence fields.
 UserCosmetics userCosmeticsFromUser(User? user) {
@@ -118,6 +149,7 @@ UserCosmetics userCosmeticsFromStatus(ShopStatusActive a) {
     supporter: a.supporter,
     cosmetics: a.cosmetics,
     genesisEdition: a.editions['flair-genesis'],
+    ringId: shopRingIdOrNull(a.ring),
   );
 }
 
@@ -130,12 +162,34 @@ final userCosmeticsProvider =
   }
   final key = pubkey.toLowerCase();
   final fromD1 = ref.watch(otherUsersShopProvider)[key];
-  if (fromD1 != null) return userCosmeticsFromStatus(fromD1);
+  if (fromD1 != null) {
+    return _ringGate(userCosmeticsFromStatus(fromD1), key,
+        ref.read(otherUsersShopProvider.notifier));
+  }
   // Unknown to D1: queue a lookup and use presence fields meanwhile.
   final other = ref.read(otherUsersShopProvider.notifier);
   scheduleMicrotask(() => other.queue(key));
   final user = ref.watch(usersProvider)[pubkey];
   return userCosmeticsFromUser(user);
+});
+
+final ringPeekProvider = Provider.family<String?, String>((ref, pubkey) {
+  final selfPubkey = ref.watch(nostrControllerProvider).identity?.pubkey;
+  if (selfPubkey != null && pubkey == selfPubkey) {
+    return shopRingIdOrNull(
+        ref.watch(shopControllerProvider.select((s) => s.active.ring)));
+  }
+  final key = pubkey.toLowerCase();
+  final ring = shopRingIdOrNull(
+      ref.watch(otherUsersShopProvider.select((m) => m[key]?.ring)));
+  if (ring == null ||
+      key == NostrController.nymbotPubkey ||
+      ref.read(otherUsersShopProvider.notifier).lookupBarred(key) ||
+      ref.watch(appStateProvider
+          .select((s) => s.personMaskLabel(pubkey).isNotEmpty))) {
+    return null;
+  }
+  return ring;
 });
 
 /// Flair and supporter badges following a nym; renders nothing without either.

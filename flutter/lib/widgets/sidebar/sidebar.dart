@@ -69,7 +69,9 @@ import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
 import 'sidebar_rows.dart';
 import 'public_stream_rows.dart';
+import 'sidebar_list_pager.dart';
 import '../../features/sidebar/public_stream.dart';
+import '../../features/sidebar/sidebar_more.dart';
 import '../../features/sidebar/sidebar_layout.dart';
 import 'sidebar_skeleton.dart';
 import '../common/list_empty_note.dart';
@@ -133,6 +135,7 @@ class Sidebar extends ConsumerStatefulWidget {
 
 class _SidebarState extends ConsumerState<Sidebar> {
   Timer? _rowClock;
+  Timer? _nymClock;
 
   final Set<_SectionId> _collapsed = {};
 
@@ -158,16 +161,16 @@ class _SidebarState extends ConsumerState<Sidebar> {
   String _pmTerm = '';
   String _nymTerm = '';
 
-  // Collapsed lists cap at 20 rows; channels and PMs expand fully.
-  bool _channelExpanded = false;
-  bool _pmExpanded = false;
+  final GlobalKey _pmHead = GlobalKey();
+  final GlobalKey _nymHead = GlobalKey();
 
-  // Nyms expand in 500-row steps; null means collapsed.
-  int? _nymExpandedCap;
-
-  static const int _collapsedCap = 20;
-
-  static const int _expandedStep = 500;
+  final Map<_SectionId, ({FocusNode more, FocusNode less})> _sbFocus = {
+    for (final s in _SectionId.values)
+      s: (
+        more: FocusNode(debugLabel: '${s.id}-more'),
+        less: FocusNode(debugLabel: '${s.id}-less'),
+      ),
+  };
 
   bool _loaded = false;
 
@@ -209,17 +212,39 @@ class _SidebarState extends ConsumerState<Sidebar> {
     _rowClock = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted) ref.read(rowClockProvider.notifier).state++;
     });
+    ref.listenManual(sidebarNymRowsProvider, (_, _) => _armNymClock(),
+        fireImmediately: true);
     // Persisted collapse and order are restored in didChangeDependencies, where ref.read is valid.
+  }
+
+  void _armNymClock() {
+    _nymClock?.cancel();
+    _nymClock = null;
+    final at = nymsListNextChangeAt(ref);
+    if (at <= 0) return;
+    final wait = at - DateTime.now().millisecondsSinceEpoch;
+    _nymClock = Timer(Duration(milliseconds: wait < 1000 ? 1000 : wait), () {
+      _nymClock = null;
+      if (!mounted) return;
+      ref.read(nymsListClockProvider.notifier).state++;
+      ref.read(sidebarNymRowsProvider);
+      _armNymClock();
+    });
   }
 
   @override
   void dispose() {
     _skelTimer?.cancel();
     _rowClock?.cancel();
+    _nymClock?.cancel();
     _scroll.dispose();
     _psPill.dispose();
     _psMoreFocus.dispose();
     _psLessFocus.dispose();
+    for (final f in _sbFocus.values) {
+      f.more.dispose();
+      f.less.dispose();
+    }
     super.dispose();
   }
 
@@ -319,7 +344,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
   void _psToHead() {
     final ctx = _psHead.currentContext;
-    if (ctx != null) Scrollable.ensureVisible(ctx);
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart);
+    }
   }
 
   void _psShowNew() {
@@ -342,8 +370,41 @@ class _SidebarState extends ConsumerState<Sidebar> {
       pager.release = true;
       _psToHead();
       if (refocus) _psMoreFocus.requestFocus();
+    } else if (_psMoreFocus.hasFocus) {
+      _handOffFocus(_psMoreFocus, _psLessFocus);
     }
     _psTick();
+  }
+
+  void _handOffFocus(FocusNode more, FocusNode less) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (more.context?.mounted ?? false) return;
+      if (less.context?.mounted ?? false) less.requestFocus();
+    });
+  }
+
+  GlobalKey _sbHead(_SectionId s) => switch (s) {
+        _SectionId.channels => _psHead,
+        _SectionId.pms => _pmHead,
+        _SectionId.nyms => _nymHead,
+      };
+
+  void _sbMore(_SectionId s, PsButton b) {
+    ref.read(sidebarListPagerProvider).set(s.id, b.next);
+    final f = _sbFocus[s]!;
+    if (b.kind == 'less') {
+      final refocus = f.less.hasFocus;
+      final ctx = _sbHead(s).currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx,
+            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart);
+      }
+      if (refocus) f.more.requestFocus();
+    } else if (f.more.hasFocus) {
+      _handOffFocus(f.more, f.less);
+    }
+    ref.read(sidebarListTickProvider.notifier).state++;
   }
 
   void _psOpen(String key, String id) {
@@ -499,6 +560,37 @@ class _SidebarState extends ConsumerState<Sidebar> {
     );
   }
 
+  final Map<String, (List<PsButton>, int, Widget)> _moreMemo = {};
+
+  Widget? _moreRowFor(String prefix, List<PsButton> buttons, FocusNode more,
+      FocusNode less, int i18n, void Function(PsButton) onTap) {
+    if (buttons.isEmpty) {
+      _moreMemo.remove(prefix);
+      return null;
+    }
+    final hit = _moreMemo[prefix];
+    if (hit != null && hit.$2 == i18n && listEquals(hit.$1, buttons)) {
+      return hit.$3;
+    }
+    final row = _MoreRow(
+      key: ValueKey('$prefix-more-row'),
+      prefix: prefix,
+      buttons: buttons,
+      moreFocus: more,
+      lessFocus: less,
+      onTap: onTap,
+    );
+    _moreMemo[prefix] = (buttons, i18n, row);
+    return row;
+  }
+
+  Widget _withMore(Widget rows, Widget? more) => SliverMainAxisGroup(
+        slivers: [
+          rows,
+          SliverToBoxAdapter(child: more ?? const SizedBox.shrink()),
+        ],
+      );
+
   Widget _rowsSliver({
     List<Widget> leading = const [],
     required List<Key> keys,
@@ -626,59 +718,69 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
     final controller = ref.read(nostrControllerProvider);
 
-    ({List<T> rows, int more}) capped<T>(
-      List<T> all,
+    ({List<SidebarRow<T>> rows, SbWindow win}) windowed<T>(
+      WidgetRef ref,
+      _SectionId s,
+      List<SidebarRow<T>> all,
       String term,
-      bool Function(T) matches,
-      bool expanded,
+      bool Function(SidebarRow<T>) matches,
+      bool Function(SidebarRow<T>) sticky,
     ) {
+      final pager = ref.watch(sidebarListPagerProvider);
+      ref.watch(sidebarListTickProvider);
+      final searching = term.isNotEmpty;
       final filtered =
-          term.isEmpty ? all : all.where(matches).toList(growable: false);
-      if (term.isNotEmpty || expanded || filtered.length <= _collapsedCap) {
-        return (rows: filtered, more: 0);
-      }
-      return (
-        rows: filtered.sublist(0, _collapsedCap),
-        more: filtered.length - _collapsedCap,
-      );
+          searching ? all.where(matches).toList(growable: false) : all;
+      final keep = searching
+          ? const <int>[]
+          : [
+              for (final (i, row) in filtered.indexed)
+                if (sticky(row)) i,
+            ];
+      final win = sbWindow(filtered.length, pager.shown(s.id), keep,
+          searching: searching);
+      if (!searching) pager.set(s.id, win.shown);
+      return (rows: sbVisibleRows(filtered, win, keep), win: win);
     }
+
+    Widget? moreRow(_SectionId s, SbWindow win) => _moreRowFor(
+          s.id,
+          win.buttons,
+          _sbFocus[s]!.more,
+          _sbFocus[s]!.less,
+          i18n,
+          (b) => _sbMore(s, b),
+        );
 
     Widget channelRows(BuildContext context, WidgetRef ref) {
       final data = ref.watch(sidebarChannelRowsProvider);
       final all = data.rows;
       final term = _channelTerm.toLowerCase();
-      final r = capped<SidebarRow<ChannelEntry>>(
+      final r = windowed<ChannelEntry>(
+        ref,
+        _SectionId.channels,
         all,
         term,
         (row) => (row.item.isGeohash ? row.item.geohashKey : row.item.channel)
             .toLowerCase()
             .contains(term),
-        _channelExpanded,
+        (row) {
+          final s = row.sig as SidebarChannelSig;
+          return s.active || s.unread > 0;
+        },
       );
       final showChannelSkel = !_skelTimedOut && !data.flag;
       final keys = <Key>[
         for (final row in r.rows) ValueKey('sidebar-channel-${row.item.key}'),
       ];
       _trimMemo(_channelMemo, keys);
-      return _rowsSliver(
+      return _withMore(_rowsSliver(
         keys: keys,
         rowAt: (i) => _channelRow(r.rows[i], textSize, i18n, select),
         trailing: [
           if (showChannelSkel)
             for (final f in const [0.70, 0.42, 0.50, 0.58])
               SidebarSkeletonRow.channel(barWidthFactor: f),
-          if (r.more > 0)
-            _ViewMoreButton(
-              more: r.more,
-              onTap: () => setState(() => _channelExpanded = true),
-            )
-          else if (term.isEmpty &&
-              _channelExpanded &&
-              all.length > _collapsedCap)
-            _ViewMoreButton(
-              more: 0,
-              onTap: () => setState(() => _channelExpanded = false),
-            ),
           if (term.trim().isNotEmpty &&
               !all.any((row) => row.item.key == term.trim()))
             _SearchCreatePrompt(
@@ -695,7 +797,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
               },
             ),
         ],
-      );
+      ), moreRow(_SectionId.channels, r.win));
     }
 
     Widget streamRows(BuildContext context, WidgetRef ref) {
@@ -720,40 +822,36 @@ class _SidebarState extends ConsumerState<Sidebar> {
       _trimMemo(_streamMemo, ids);
       return PublicStreamProbe(
         onLayout: _psOnLayout,
-        sliver: SliverSemantics(
-          key: const ValueKey('ps-list'),
-          container: true,
-          explicitChildNodes: true,
-          label: tr('Public stream, newest first, read only'),
-          sliver: SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            sliver: _rowsSliver(
-              keys: ids,
-              rowAt: (i) =>
-                  _streamRow(page.rows[i], view.texts[i], hide, textSize, i18n),
-              trailing: [
-                if (page.buttons.isNotEmpty)
-                  _PsMoreRow(
-                    key: const ValueKey('ps-more-row'),
-                    buttons: page.buttons,
-                    moreFocus: _psMoreFocus,
-                    lessFocus: _psLessFocus,
-                    onTap: _psMore,
-                  ),
-                if (page.rows.isEmpty)
-                  Padding(
-                    key: const ValueKey('ps-note'),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
-                    child: Text(
-                      tr('No public messages in the last 24 hours.'),
-                      style: TextStyle(fontSize: NymType.sm, color: c.textDim),
-                    ),
-                  ),
-              ],
+        sliver: _withMore(
+            SliverSemantics(
+              key: const ValueKey('ps-list'),
+              container: true,
+              explicitChildNodes: true,
+              label: tr('Public stream, newest first, read only'),
+              sliver: SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                sliver: _rowsSliver(
+                  keys: ids,
+                  rowAt: (i) => _streamRow(
+                      page.rows[i], view.texts[i], hide, textSize, i18n),
+                  trailing: [
+                    if (page.rows.isEmpty)
+                      Padding(
+                        key: const ValueKey('ps-note'),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        child: Text(
+                          tr('No public messages in the last 24 hours.'),
+                          style:
+                              TextStyle(fontSize: NymType.sm, color: c.textDim),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ),
+            _moreRowFor('ps', page.buttons, _psMoreFocus, _psLessFocus, i18n,
+                _psMore)),
       );
     }
 
@@ -762,7 +860,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
       final term = _pmTerm.toLowerCase();
       final users = term.isEmpty ? null : ref.watch(usersProvider);
       final app = term.isEmpty ? null : ref.watch(appStateProvider);
-      final r = capped<SidebarRow<SidebarPmEntry>>(
+      final r = windowed<SidebarPmEntry>(
+        ref,
+        _SectionId.pms,
         all,
         term,
         (row) {
@@ -779,12 +879,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
           }
           return rendered.toLowerCase().contains(term);
         },
-        _pmExpanded,
+        (row) => row.item.active || row.item.unread > 0,
       );
       final showPmSkel = !_skelTimedOut && all.isEmpty;
       final keys = [for (final row in r.rows) _pmKey(row.item)];
       _trimMemo(_pmMemo, keys);
-      return _rowsSliver(
+      return _withMore(_rowsSliver(
         leading: [
           if (showPmSkel)
             for (final f in const [0.58, 0.70, 0.42])
@@ -806,47 +906,26 @@ class _SidebarState extends ConsumerState<Sidebar> {
         ],
         keys: keys,
         rowAt: (i) => _pmRow(r.rows[i], textSize, i18n, selfPubkey, select),
-        trailing: [
-          if (r.more > 0)
-            _ViewMoreButton(
-              more: r.more,
-              onTap: () => setState(() => _pmExpanded = true),
-            )
-          else if (term.isEmpty && _pmExpanded && all.length > _collapsedCap)
-            _ViewMoreButton(
-              more: 0,
-              onTap: () => setState(() => _pmExpanded = false),
-            ),
-        ],
-      );
+      ), moreRow(_SectionId.pms, r.win));
     }
 
     Widget nymRows(BuildContext context, WidgetRef ref) {
       final onlineUsers = ref.watch(sidebarNymRowsProvider).rows;
       final term = _nymTerm.toLowerCase();
-      final filtered = term.isEmpty
-          ? onlineUsers
-          : onlineUsers
-              .where((r) =>
-                  stripPubkeySuffix(r.item.nym).toLowerCase().contains(term))
-              .toList(growable: false);
-      final total = filtered.length;
-      final int renderCap;
-      if (term.isNotEmpty) {
-        renderCap = total;
-      } else if (_nymExpandedCap != null) {
-        renderCap = total < _nymExpandedCap! ? total : _nymExpandedCap!;
-      } else {
-        renderCap = total < _collapsedCap ? total : _collapsedCap;
-      }
-      final nymRows =
-          renderCap < total ? filtered.sublist(0, renderCap) : filtered;
-      final remaining = total - renderCap;
+      final r = windowed<User>(
+        ref,
+        _SectionId.nyms,
+        onlineUsers,
+        term,
+        (row) => stripPubkeySuffix(row.item.nym).toLowerCase().contains(term),
+        (_) => false,
+      );
+      final nymRows = r.rows;
       final keys = <Key>[
         for (final row in nymRows) ValueKey('sidebar-nym-${row.item.pubkey}'),
       ];
       _trimMemo(_nymMemo, keys);
-      return _rowsSliver(
+      return _withMore(_rowsSliver(
         leading: [
           if (!_skelTimedOut && onlineUsers.isEmpty)
             for (final f in const [0.70, 0.42, 0.50, 0.58, 0.70])
@@ -861,27 +940,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
         ],
         keys: keys,
         rowAt: (i) => _nymRow(nymRows[i], textSize, i18n),
-        trailing: [
-          if (term.isEmpty && total > _collapsedCap)
-            if (_nymExpandedCap == null)
-              _ViewMoreButton(
-                more: total - _collapsedCap,
-                onTap: () => setState(() => _nymExpandedCap = _expandedStep),
-              )
-            else if (remaining > 0)
-              _ViewMoreButton(
-                more: remaining < _expandedStep ? remaining : _expandedStep,
-                stepMore: true,
-                onTap: () => setState(
-                    () => _nymExpandedCap = _nymExpandedCap! + _expandedStep),
-              )
-            else
-              _ViewMoreButton(
-                more: 0,
-                onTap: () => setState(() => _nymExpandedCap = null),
-              ),
-        ],
-      );
+      ), moreRow(_SectionId.nyms, r.win));
     }
 
     Widget sectionFor(_SectionId s) {
@@ -931,6 +990,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
             id: const ValueKey('section-pms'),
             sectionKey: TutorialTargets.keyFor(TutorialTarget.pmList),
             title: tr('Private Messages'),
+            headerKey: _pmHead,
             open: !_collapsed.contains(s),
             searching: _pmSearch,
             reorderMode: _reorderMode,
@@ -982,6 +1042,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
             id: const ValueKey('section-nyms'),
             sectionKey: TutorialTargets.keyFor(TutorialTarget.userList),
             title: '',
+            headerKey: _nymHead,
             titleText: _SidebarLive(
               builder: (context, ref) => _NavTitleText(
                 tr('Nyms ({count} online)', {
@@ -1127,9 +1188,6 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
   Widget _footer(BuildContext context) {
     final c = context.nym;
-    final connectedRelays = ref.watch(
-      appStateProvider.select((s) => s.connectedRelays),
-    );
     final proxyMode = ref.watch(
       appStateProvider.select((s) => s.proxyMode),
     );
@@ -1159,9 +1217,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 ? Row(
                     children: [
                       Flexible(
-                        child: _ConnectionStatusIndicator(
-                          connectedCount: connectedRelays,
-                          proxyMode: proxyMode,
+                        child: _SidebarLive(
+                          builder: (context, ref) => _ConnectionStatusIndicator(
+                            connectedCount: ref.watch(
+                                relayStatusProvider.select((s) => s.connected)),
+                            proxyMode: proxyMode,
+                          ),
                         ),
                       ),
                       const SizedBox(width: NymSpace.s1),
@@ -1175,9 +1236,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _ConnectionStatusIndicator(
-                        connectedCount: connectedRelays,
-                        proxyMode: proxyMode,
+                      _SidebarLive(
+                        builder: (context, ref) => _ConnectionStatusIndicator(
+                          connectedCount: ref.watch(
+                              relayStatusProvider.select((s) => s.connected)),
+                          proxyMode: proxyMode,
+                        ),
                       ),
                       _MeshStatusIndicator(onItemSelected: widget.onItemSelected),
                     ],
@@ -2807,15 +2871,17 @@ class _GroupListItem extends ConsumerWidget {
   }
 }
 
-class _PsMoreRow extends StatelessWidget {
-  const _PsMoreRow({
+class _MoreRow extends StatelessWidget {
+  const _MoreRow({
     super.key,
+    required this.prefix,
     required this.buttons,
     required this.moreFocus,
     required this.lessFocus,
     required this.onTap,
   });
 
+  final String prefix;
   final List<PsButton> buttons;
   final FocusNode moreFocus;
   final FocusNode lessFocus;
@@ -2846,7 +2912,7 @@ class _PsMoreRow extends StatelessWidget {
       widths.add(tp.width.ceilToDouble() + 27);
       tp.dispose();
       cells.add(KeyedSubtree(
-        key: ValueKey(less ? 'ps-less' : 'ps-more'),
+        key: ValueKey(less ? '$prefix-less' : '$prefix-more'),
         child: _ViewMoreButton(
           more: more,
           stepMore: b.kind == 'show',
@@ -2911,6 +2977,7 @@ class _ViewMoreButton extends StatefulWidget {
   static TextStyle styleFor(Color color) => TextStyle(
         color: color,
         fontSize: 11,
+        height: 1.2,
         letterSpacing: 1,
         fontWeight: FontWeight.w500,
       );
@@ -2921,6 +2988,52 @@ class _ViewMoreButton extends StatefulWidget {
 
 class _ViewMoreButtonState extends State<_ViewMoreButton> {
   bool _hover = false;
+  bool _focus = false;
+  bool _ring = false;
+
+  bool _ringFor(bool focused, FocusHighlightMode mode) =>
+      focused && mode == FocusHighlightMode.traditional;
+
+  @override
+  void initState() {
+    super.initState();
+    _track(widget.focusNode?.hasFocus ?? false);
+    _ring = _ringFor(_focus, FocusManager.instance.highlightMode);
+  }
+
+  @override
+  void didUpdateWidget(_ViewMoreButton old) {
+    super.didUpdateWidget(old);
+    if (old.focusNode != widget.focusNode) {
+      _onFocus(widget.focusNode?.hasFocus ?? false);
+    }
+  }
+
+  void _track(bool focused) {
+    if (focused == _focus) return;
+    _focus = focused;
+    if (focused) {
+      FocusManager.instance.addHighlightModeListener(_onMode);
+    } else {
+      FocusManager.instance.removeHighlightModeListener(_onMode);
+    }
+  }
+
+  void _onFocus(bool focused) {
+    _track(focused);
+    _onMode(FocusManager.instance.highlightMode);
+  }
+
+  void _onMode(FocusHighlightMode mode) {
+    final ring = _ringFor(_focus, mode);
+    if (ring != _ring && mounted) setState(() => _ring = ring);
+  }
+
+  @override
+  void dispose() {
+    FocusManager.instance.removeHighlightModeListener(_onMode);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2936,22 +3049,35 @@ class _ViewMoreButtonState extends State<_ViewMoreButton> {
         child: InkWell(
           onTap: widget.onTap,
           focusNode: widget.focusNode,
+          onFocusChange: _onFocus,
           borderRadius: NymRadius.rxs,
-          child: Container(
-            width: double.infinity,
-            constraints: min == null ? null : BoxConstraints(minHeight: min),
-            alignment: min == null ? null : Alignment.center,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              borderRadius: NymRadius.rxs,
-              color: _hover ? c.primaryA(0.08) : null,
-              border:
-                  Border.all(color: _hover ? c.primaryA(0.3) : c.glassBorder),
-            ),
-            child: Text(
-              label,
-              textAlign: TextAlign.center,
-              style: _ViewMoreButton.styleFor(_hover ? c.text : c.textDim),
+          child: DecoratedBox(
+            position: DecorationPosition.foreground,
+            decoration: _ring
+                ? BoxDecoration(
+                    borderRadius: NymRadius.rxs,
+                    border: Border.all(
+                      color: c.secondary,
+                      width: NymFocusable.ringWidth,
+                    ),
+                  )
+                : const BoxDecoration(),
+            child: Container(
+              width: double.infinity,
+              constraints: min == null ? null : BoxConstraints(minHeight: min),
+              alignment: min == null ? null : Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                borderRadius: NymRadius.rxs,
+                color: _hover ? c.primaryA(0.08) : null,
+                border: Border.all(
+                    color: _hover ? c.primaryA(0.3) : c.glassBorder),
+              ),
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: _ViewMoreButton.styleFor(_hover ? c.text : c.textDim),
+              ),
             ),
           ),
         ),

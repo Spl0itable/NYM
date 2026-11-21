@@ -676,8 +676,8 @@ window.nymHaptic = function (kind) {
             if (isOwn) {
                 window.showAppConfirm('Are you sure you want to delete this message? This will send a deletion request to relays.', { danger: true, okLabel: 'Delete' }).then(function (ok) {
                     if (!ok) return;
-                    n.publishDeletionEvent(d.messageId, n.inPMMode ? 1059 : n.channelWire(n.currentGeohash).kind).then(function () {
-                        n.displaySystemMessage('Deletion request sent to relays');
+                    n.publishDeletionEvent(d.messageId, n.inPMMode ? 1059 : n.channelWire(n.currentGeohash).kind).then(function (sent) {
+                        if (sent !== false) n.displaySystemMessage('Deletion request sent to relays');
                     });
                 });
             } else if (n.inPMMode && n.currentGroup) {
@@ -740,6 +740,7 @@ window.nymHaptic = function (kind) {
         'purchaseItem':               function (_e, t) { nym().purchaseItem(t.dataset.itemId); },
         'activateMessageStyle':       function (_e, t) { nym().activateMessageStyle(t.dataset.itemId); },
         'activateFlair':              function (_e, t) { nym().activateFlair(t.dataset.itemId); },
+        'activateAvatarRing':         function (_e, t) { nym().activateAvatarRing(t.dataset.itemId); },
         'activateCosmetic':           function (_e, t) { nym().activateCosmetic(t.dataset.itemId); },
         'activateSupporter':          function () { nym().activateSupporter(); },
         'promptTransferShopItem':     function (_e, t) { nym().promptTransferShopItem(t.dataset.itemId); },

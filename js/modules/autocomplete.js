@@ -386,6 +386,7 @@ Object.assign(NYM.prototype, {
 
             const strong = item.querySelector('strong');
             const flairHtml = this.getFlairForUser(user.pubkey) || '';
+            this._setRingClass(img, this._ringPeek(user.pubkey));
             const isDev = this.isVerifiedDeveloper(user.pubkey);
             const isBot = this.isVerifiedBot(user.pubkey);
             const friendHtml = this.getFriendBadgeHtml(user.pubkey) || '';

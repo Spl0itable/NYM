@@ -11,6 +11,7 @@ import 'package:sqflite_sqlcipher/sqflite.dart';
 import '../../core/constants/history_window.dart';
 import '../../core/crypto/keys.dart' as keys;
 import '../../features/accounts/account_logic.dart';
+import '../../features/messages/bridge_block.dart';
 import '../../features/messages/encrypted_blob.dart';
 import '../../models/message.dart';
 import '../../models/user.dart';
@@ -51,6 +52,7 @@ class CacheStore {
   static const String metaPoolShardLastSeen = 'poolShardLastSeen';
   static const String metaEventTimeCeilings = 'eventTimeCeilings';
   static const String metaPqKeys = 'pqKeys';
+  static const String metaBridgeCachePurged = 'bridgeCachePurged';
 
   /// Past-verified event ids, restored at boot to skip signature checks; ids are content-bound, so this is safe.
   static const String metaVerifiedEventIds = 'verifiedEventIds';
@@ -289,9 +291,10 @@ class CacheStore {
   // Channel messages
 
   static List<Message> _withoutBlobs(
-      List<Message> messages, Set<String> blobIds) {
+      List<Message> messages, Set<String> blobIds, bool bridgeDone) {
     bool drop(Message m) =>
         isDroppedChannelContent(m.content) ||
+        (!bridgeDone && isBridgeBlockedAuthor(m.author)) ||
         (m.threadRoot != null && blobIds.contains(m.threadRoot));
     if (!messages.any(drop)) return messages;
     return [
@@ -395,11 +398,13 @@ class CacheStore {
           if (m.id.isNotEmpty && isDroppedChannelContent(m.content)) m.id,
     };
     if (onBlob != null) blobIds.forEach(onBlob);
+    final bridgeDone =
+        (await loadMetaMap(metaBridgeCachePurged)).isNotEmpty;
     // Drop aged-out history on load; rows that empty out are deleted.
     final drop = <String>[];
     final purged = <String>[];
     all.updateAll((key, msgs) {
-      final clean = _withoutBlobs(msgs, blobIds);
+      final clean = _withoutBlobs(msgs, blobIds, bridgeDone);
       if (!identical(clean, msgs)) purged.add(key);
       final kept = _withinChannelWindow(clean);
       if (kept.isEmpty) drop.add(key);
@@ -412,6 +417,9 @@ class CacheStore {
     for (final key in purged) {
       final kept = all[key];
       if (kept != null) await saveChannelMessages(key, kept);
+    }
+    if (!bridgeDone) {
+      await saveMetaMap(metaBridgeCachePurged, const {'done': 1});
     }
     return all;
   }
@@ -812,6 +820,50 @@ class CacheStore {
     final ids = decoded['ids'];
     if (ids is! List) return <String>{};
     return ids.whereType<String>().toSet();
+  }
+
+  int _deltaSeq = 0;
+
+  Future<void> appendMetaSetDelta(String key, List<String> ids) async {
+    if (key.isEmpty || ids.isEmpty) return;
+    final stamp = DateTime.now().microsecondsSinceEpoch.toString().padLeft(17, '0');
+    final seq = (_deltaSeq++ % 1000).toString().padLeft(3, '0');
+    await _database.insert(
+      'meta',
+      {
+        'key': '$key+$stamp$seq',
+        'json': jsonEncode({'ids': ids}),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<String>> loadMetaSetDeltas(String key) async {
+    if (key.isEmpty) return const <String>[];
+    final rows = await _database.query(
+      'meta',
+      columns: ['json'],
+      where: 'key LIKE ?',
+      whereArgs: ['$key+%'],
+      orderBy: 'key',
+    );
+    final out = <String>[];
+    for (final row in rows) {
+      final json = row['json'] as String?;
+      if (json == null || json.isEmpty) continue;
+      try {
+        final decoded = jsonDecode(json);
+        if (decoded is! Map) continue;
+        final ids = decoded['ids'];
+        if (ids is List) out.addAll(ids.whereType<String>());
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  Future<void> clearMetaSetDeltas(String key) async {
+    if (key.isEmpty) return;
+    await _database.delete('meta', where: 'key LIKE ?', whereArgs: ['$key+%']);
   }
 
   /// Persists a meta map as `{map: {...}}`; an empty map deletes it.

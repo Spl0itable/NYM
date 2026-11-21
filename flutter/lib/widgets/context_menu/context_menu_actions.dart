@@ -134,7 +134,7 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
   final showRemoveAdmin = other && t.iAmOwner && t.targetIsAdmin;
   final showTransfer = other && t.iAmOwner;
 
-  final canDeleteOwn = t.isSelf && hasMessage;
+  final canDeleteOwn = t.isSelf && hasMessage && !t.anonLane;
   final canModDelete = !canDeleteOwn && hasMessage && canModDeleteMessage(t);
 
   // Mention is not self-gated in the PWA, so it shows on your own messages too.
@@ -152,7 +152,7 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
     if (hasContent && t.translatable) CtxAction.translate,
     if (!t.isSelf) CtxAction.friend,
     if (!t.isSelf && !showKickOrBan) CtxAction.report,
-    if (t.isSelf && hasMessage && hasContent) CtxAction.edit,
+    if (t.isSelf && hasMessage && hasContent && !t.anonLane) CtxAction.edit,
     if (canDeleteOwn || (canModDelete && !showKickOrBan)) CtxAction.delete,
     if (showAddMod) CtxAction.makeMod,
     if (showRemoveMod) CtxAction.revokeMod,

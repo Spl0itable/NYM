@@ -14,6 +14,8 @@ import 'package:flutter/services.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_label.dart';
 import '../calls/call_history_providers.dart';
+import '../search/search_history.dart';
+import '../search/search_history_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
@@ -1772,14 +1774,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         _GroupSpec(
           text: tr(
               'Read Receipts {options} Choose where senders can see when '
-              "you've read their messages (✓✓). \"Enabled everywhere\" "
-              'includes PMs, group chats, and public channels.',
+              "you've read their messages (✓✓ in PMs, your avatar in group "
+              'chats and public channels). "Enabled everywhere" includes PMs, '
+              'group chats, and public channels.',
               {'options': _optText(scopeItems)}),
           child: FormGroup(
             label: tr('Read Receipts'),
             hint: tr("Choose where senders can see when you've read their "
-                'messages (✓✓). "Enabled everywhere" includes PMs, group '
-                'chats, and public channels.'),
+                'messages (✓✓ in PMs, your avatar in group chats and public '
+                'channels). "Enabled everywhere" includes PMs, group chats, '
+                'and public channels.'),
             amberHint: keypairValue == 'hardcore'
                 ? tr('Hardcore mode sends no read or delivery receipts.')
                 : null,
@@ -3150,6 +3154,17 @@ extension _ChatLockSettings on _SettingsScreenState {
           return ref.read(callHistoryProvider.notifier).keep;
         }(),
         onChanged: _keepCallHistoryAsking ? null : _onKeepCallHistoryFlip,
+      ),
+      _toggleSpec(
+        key: 'rememberSearches',
+        label: tr(kSearchHistoryStrings['settingLabel']!),
+        hint: tr(kSearchHistoryStrings['settingHint']!),
+        value: () {
+          ref.watch(searchHistoryProvider);
+          return ref.read(searchHistoryProvider.notifier).remember;
+        }(),
+        onChanged: (v) => unawaited(
+            ref.read(searchHistoryProvider.notifier).setRemember(v)),
       ),
       _toggleSpec(
         key: 'screenSecurity',

@@ -22,6 +22,8 @@
         scheduleMaxRelays: 16,
         scheduleNoteMax: 16000,
         scheduleTextMax: 8000,
+        scheduleQuoteMax: 1000,
+        scheduleQuoteAuthorMax: 100,
         scheduleAttempts: 4,
         scheduleRetrySec: 60,
         scheduleKeepDoneSec: 7 * 24 * 60 * 60,
@@ -63,11 +65,15 @@
         offlineBlocked: "Send later needs the internet. You're offline.",
         signerBlocked: 'Send later in PMs and groups needs your key on this device.',
         serverBlocked: "Send later isn't available without the Nymchat server.",
+        hardcoreBlocked: "Send later isn't available in hardcore mode. Every message uses a new key, so a held message could not be changed or cancelled.",
         past: 'Pick a time in the future.',
         soon: 'Pick a time at least a minute from now.',
         far: 'You can schedule up to 30 days ahead.',
         full: 'You have too many scheduled messages. Cancel one first.',
         tooBig: 'This message is too large to schedule.',
+        gone: 'This scheduled message had already changed. The list was refreshed.',
+        alreadySent: 'It was already sent. The list was refreshed.',
+        sendingNow: 'It is being sent right now. The list was refreshed.',
         pending: 'Scheduled',
         sending: 'Sending',
         sent: 'Sent',
@@ -79,11 +85,22 @@
         sendNow: 'Send now',
         editTime: 'Edit time',
         cancel: 'Cancel',
+        stopRetrying: 'Stop retrying',
+        depositedDetail: 'It reached Nymchat already. Retrying the relays.',
+        sendNowRetry: "Couldn't reach Nymchat to send it now. Tap Send now again.",
+        sendNowHeld: "Couldn't send it now. It is held again and goes out at {time}.",
+        sendNowLost: "Couldn't send it or hold it again. The text was copied so you can paste it.",
+        sendNowComposer: "Couldn't send it or hold it again. It is back in the composer.",
+        sendNowFailed: "Couldn't send it or hold it again.",
+        noText: "This message can't be opened on this device yet, so it can't be sent now.",
+        groupGone: 'This group is no longer available.',
     });
 
     const STATUSES = ['pending', 'sending', 'sent', 'failed', 'cancelled'];
     const RX_HEX64 = /^[0-9a-f]{64}$/;
+    const RX_EVENT_ID = /^[0-9a-f]{64}$/i;
     const RX_GROUP = /^[0-9a-f]{16,64}$/;
+    const RX_TOKEN = /^[0-9a-f]{32}$/;
     const isChannelName = (s) => G.NymChannelName.isChannelName(s);
 
     function num(v) {
@@ -675,8 +692,8 @@
 
     function scheduleErrorText(code, t) {
         const tr = (s) => (typeof t === 'function' ? t(s) : s);
-        const map = { past: STRINGS.past, soon: STRINGS.soon, far: STRINGS.far, full: STRINGS.full, big: STRINGS.tooBig };
-        return map[code] ? tr(map[code]) : '';
+        const map = { past: STRINGS.past, soon: STRINGS.soon, far: STRINGS.far, full: STRINGS.full, big: STRINGS.tooBig, gone: STRINGS.gone, sent: STRINGS.alreadySent, sending: STRINGS.sendingNow };
+        return Object.prototype.hasOwnProperty.call(map, code) ? tr(map[code]) : '';
     }
 
     function localParts(ms, offsetMin) {
@@ -752,9 +769,26 @@
         return null;
     }
 
-    function scheduleNoteJson(text, chat) {
+    function scheduleNoteExtras(o) {
+        const x = o && typeof o === 'object' ? o : {};
+        const threadRoot = typeof x.threadRoot === 'string' && RX_EVENT_ID.test(x.threadRoot) ? x.threadRoot : '';
+        const quoteSource = typeof x.quoteSource === 'string' && RX_EVENT_ID.test(x.quoteSource) ? x.quoteSource : '';
+        const q = x.quote && typeof x.quote === 'object' ? x.quote : null;
+        const qText = q ? (typeof q.text === 'string' ? q.text : (typeof q.fullText === 'string' ? q.fullText : null)) : null;
+        const quote = q && typeof q.author === 'string' && q.author && qText !== null
+            ? { author: q.author.slice(0, LIMITS.scheduleQuoteAuthorMax), text: qText.slice(0, LIMITS.scheduleQuoteMax) }
+            : null;
+        return { threadRoot, quote, quoteSource };
+    }
+
+    function scheduleNoteJson(text, chat, extras) {
         const c = chat || {};
-        return JSON.stringify({ v: 1, text: String(text || '').slice(0, LIMITS.scheduleTextMax), chat: { t: String(c.t || ''), k: String(c.k || '') } });
+        const o = { v: 1, text: String(text || '').slice(0, LIMITS.scheduleTextMax), chat: { t: String(c.t || ''), k: String(c.k || '') } };
+        const x = scheduleNoteExtras(extras);
+        if (x.threadRoot) o.threadRoot = x.threadRoot;
+        if (x.quote) o.quote = x.quote;
+        if (x.quoteSource) o.quoteSource = x.quoteSource;
+        return JSON.stringify(o);
     }
 
     function scheduleNoteParse(json) {
@@ -762,8 +796,65 @@
             const o = JSON.parse(json);
             if (!o || o.v !== 1 || typeof o.text !== 'string') return null;
             const c = o.chat && typeof o.chat === 'object' ? o.chat : {};
-            return { text: o.text, chat: { t: String(c.t || ''), k: String(c.k || '') } };
+            return Object.assign({ text: o.text, chat: { t: String(c.t || ''), k: String(c.k || '') } }, scheduleNoteExtras(o));
         } catch (_) { return null; }
+    }
+
+    function scheduleReplay(items, journal) {
+        const out = (Array.isArray(items) ? items : []).filter((x) => x && typeof x.id === 'string' && x.id).map((x) => Object.assign({}, x));
+        for (const e of (Array.isArray(journal) ? journal : [])) {
+            if (!e) continue;
+            if (e.t === 'drop') {
+                for (let i = out.length - 1; i >= 0; i--) if (out[i].id === e.id) out.splice(i, 1);
+            } else if (e.t === 'add' && e.item && typeof e.item.id === 'string' && e.item.id) {
+                if (!out.some((x) => x.id === e.item.id)) out.push(Object.assign({}, e.item));
+            }
+        }
+        out.sort((a, b) => (num(a.at) - num(b.at)) || cmpStr(a.id, b.id));
+        return out;
+    }
+
+    function scheduleTakenElsewhere(item, items) {
+        const it = item || {};
+        const key = scheduleChatKey(it.chat);
+        const text = typeof it.text === 'string' ? it.text : '';
+        for (const x of (Array.isArray(items) ? items : [])) {
+            if (!x || typeof x.id !== 'string') continue;
+            if (x.id === it.id) {
+                if (x.status === 'sent' || x.status === 'sending') return true;
+                continue;
+            }
+            if ((x.status === 'pending' || x.status === 'sending') && text && x.text === text && key && scheduleChatKey(x.chat) === key) return true;
+        }
+        return false;
+    }
+
+    function scheduleOpenStatus(status) {
+        return status === 'pending' || status === 'failed';
+    }
+
+    function scheduleHoldTaking(prev, next) {
+        const out = (Array.isArray(next) ? next : []).filter((x) => x && typeof x.id === 'string' && x.id).map((x) => {
+            const y = Object.assign({}, x);
+            delete y.sendToken;
+            return y;
+        });
+        for (const p of (Array.isArray(prev) ? prev : [])) {
+            if (!p || typeof p.id !== 'string' || !p.id || !RX_TOKEN.test(String(p.sendToken || '')) || !scheduleOpenStatus(p.status)) continue;
+            const hit = out.find((x) => x.id === p.id);
+            if (!hit) out.push(Object.assign({}, p));
+            else if (scheduleOpenStatus(hit.status) && hit.error !== 'deposited') hit.sendToken = p.sendToken;
+        }
+        out.sort((a, b) => (num(a.at) - num(b.at)) || cmpStr(a.id, b.id));
+        return out;
+    }
+
+    function scheduleItemActions(item) {
+        const it = item || {};
+        if (!scheduleOpenStatus(it.status)) return [];
+        if (it.status === 'pending' && it.error === 'deposited') return ['stop'];
+        if (RX_TOKEN.test(String(it.sendToken || ''))) return ['now', 'cancel'];
+        return ['edit', 'now', 'cancel'];
     }
 
     function scheduleChatKey(chat) {
@@ -837,6 +928,7 @@
     function scheduleBlockReason(ctx) {
         const c = ctx || {};
         if (c.meshOnly) return STRINGS.meshBlocked;
+        if (c.hardcore) return STRINGS.hardcoreBlocked;
         if (!c.server) return STRINGS.serverBlocked;
         if (!c.online) return STRINGS.offlineBlocked;
         if ((c.kind === 'dm' || c.kind === 'group') && !c.localKey) return STRINGS.signerBlocked;
@@ -924,7 +1016,7 @@
         pinKey, pinParse, pinKeyForChat, pinSection, emptyPins, normalizePins, pinList, isPinned, pinAdd, pinRemove,
         pinMove, pinReorderWithin, mergePins, pinImportLegacy, pinChannels, pinSort, trimPinnedPayload, pinRowBytes,
         scheduleCheck, scheduleErrorText, schedulePresets, scheduleInputValue, scheduleParseInput, wrapTime,
-        scheduleRelays, scheduleSizeError, scheduleNoteJson, scheduleNoteParse, scheduleChatKey, scheduleChatOf,
+        scheduleRelays, scheduleSizeError, scheduleNoteJson, scheduleNoteParse, scheduleReplay, scheduleTakenElsewhere, scheduleHoldTaking, scheduleItemActions, scheduleChatKey, scheduleChatOf,
         scheduleNormalize, scheduleForChat, scheduleOpenCount, scheduleStatusText, scheduleItemStatus, scheduleRefreshWaitMs, scheduleNewFailures, scheduleBlockReason, scheduleId, groupSubjectTags,
         PIN_GESTURE, pinGestureIdle, pinGestureLocks, pinGestureStep, pinAutoScroll,
     };

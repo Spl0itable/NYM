@@ -1360,7 +1360,9 @@ Object.assign(NYM.prototype, {
                 } else if (pubkey) {
                     const avatarSrc = this._notifRowAvatar(n, pubkey);
                     const safePk = this._safePubkey(pubkey);
-                    avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
+                    const stranger = n && n.channelInfo && n.channelInfo.type === 'group-invite';
+                    const ringCls = stranger || typeof this._ringPeek !== 'function' ? '' : this._ringPeek(pubkey);
+                    avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message${ringCls}"${stranger ? ' data-ring="off"' : ''} data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
                     const baseNym = this.resolveDisplayNym(pubkey, shownTitle(n.senderNym || ''));
                     const suffix = this.getPubkeySuffix(pubkey);
                     const flairHtml = this.getFlairForUser(pubkey);

@@ -136,3 +136,46 @@ class UploadActivity {
     return shared != null ? _many[shared]! : '{n} people are typing';
   }
 }
+
+class TypingThread {
+  TypingThread._();
+
+  static const String everywhere = '';
+
+  static final RegExp _eventId =
+      RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
+
+  static String? rootOf(Object? tags, {required bool channel}) {
+    if (tags is! List) return null;
+    for (final t in tags) {
+      if (t is! List || t.length < 2) continue;
+      final id = t[1];
+      if (channel) {
+        if (t[0] == 'e' && t.length > 3 && t[3] == 'root') {
+          return id is String && _eventId.hasMatch(id) ? id : null;
+        }
+      } else if (t[0] == 'nymthread' && id is String && id.isNotEmpty) {
+        return id;
+      }
+    }
+    return null;
+  }
+
+  static List<List<String>> marker(String status, String? threadRoot,
+      {required bool channel}) {
+    if (status != 'start' || threadRoot == null || threadRoot.isEmpty) {
+      return const [];
+    }
+    return [
+      channel ? ['e', threadRoot, '', 'root'] : ['nymthread', threadRoot],
+    ];
+  }
+
+  static bool shownIn(String? typist, String? view,
+      {required bool threadsOn, required bool rootLocal}) {
+    if (typist == everywhere) return true;
+    final at = view == null || view.isEmpty ? null : view;
+    if (typist == at) return true;
+    return at == null && (!threadsOn || !rootLocal);
+  }
+}

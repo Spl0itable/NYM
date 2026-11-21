@@ -60,6 +60,8 @@ Object.assign(NYM.prototype, {
             const sk = NT.generateSecretKey();
             const pk = NT.getPublicKey(sk);
             ek.self = { current: { sk, pk }, prev: [] };
+            this._invalidateEphPkCache();
+            if (typeof this._scheduleEphemeralSubRefresh === 'function') this._scheduleEphemeralSubRefresh();
         }
         return ek.self.current;
     },
@@ -139,43 +141,6 @@ Object.assign(NYM.prototype, {
     _getAllSelfEphemeralPubkeys() {
         const anon = new Set(typeof this.botAnonPubkeys === 'function' ? (this.botAnonPubkeys() || []) : []);
         return this._getAllKnownEphemeralPubkeys().filter((pk) => !anon.has(pk));
-    },
-
-    _tryDecryptWithEphemeralKeys(event) {
-        const NT = window.NostrTools;
-
-        const pTag = (event.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
-        if (pTag) {
-            const sk = this._lookupEphemeralSk(pTag[1]);
-            if (sk) {
-                try {
-                    const ckWrap = NT.nip44.getConversationKey(sk, event.pubkey);
-                    const sealJson = NT.nip44.decrypt(event.content, ckWrap);
-                    const seal = JSON.parse(sealJson);
-                    const ckSeal = NT.nip44.getConversationKey(sk, seal.pubkey);
-                    const rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
-                    const rumor = JSON.parse(rumorJson);
-                    return { seal, rumor };
-                } catch (_) { }
-            }
-        }
-
-        for (const [, ek] of this.groupEphemeralKeys) {
-            if (!ek.self) continue;
-            const keysToTry = [ek.self.current, ...ek.self.prev];
-            for (const key of keysToTry) {
-                try {
-                    const ckWrap = NT.nip44.getConversationKey(key.sk, event.pubkey);
-                    const sealJson = NT.nip44.decrypt(event.content, ckWrap);
-                    const seal = JSON.parse(sealJson);
-                    const ckSeal = NT.nip44.getConversationKey(key.sk, seal.pubkey);
-                    const rumorJson = NT.nip44.decrypt(seal.content, ckSeal);
-                    const rumor = JSON.parse(rumorJson);
-                    return { seal, rumor };
-                } catch (_) { }
-            }
-        }
-        return null;
     },
 
     // Ordered ephemeral secret keys to try when unwrapping (p-tag match first).
@@ -2804,11 +2769,8 @@ Object.assign(NYM.prototype, {
         try { this._handleGroupHistoryShare(pending.rumor, groupId, pending.senderPubkey); } catch (_) { }
     },
 
-    // True when a local privkey, NIP-07 nip44 + signEvent, or a connected NIP-46 signer is available.
     _canSendGiftWraps() {
-        return !!this.privkey
-            || !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent)
-            || (this.nostrLoginMethod === 'nip46' && !!(_nip46State && _nip46State.connected));
+        return !!this.privkey || !!this._signerOps();
     },
 
     _recordGiftWrapId(sharedId, wrappedId) {
@@ -2831,7 +2793,6 @@ Object.assign(NYM.prototype, {
         return !!rumor && (rumor.kind === 14 || rumor.kind === 7);
     },
 
-    // Self-addressed D1 copy so group chats restore on other devices; local-key path only.
     async _archiveGroupRumorSelf(rumor, expirationTs) {
         try {
             if (!this._isArchivableGroupRumor(rumor)) return;
@@ -2845,31 +2806,8 @@ Object.assign(NYM.prototype, {
                         ? window.NymCrypto.pq2Nip59Wrap(rumor, this.privkey, this.pubkey, selfKemPk, expirationTs)
                         : window.NymCrypto.pqNip59Wrap(rumor, this.privkey, this.pubkey, selfKemPk, expirationTs))
                     : this.nip59WrapEvent(rumor, this.privkey, this.pubkey, expirationTs);
-            } else {
-                // Extension / NIP-46: seal via the signer, wrap with a local ephemeral.
-                const useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
-                const useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
-                if (!useExt && !useN46) return;
-                const NT = window.NostrTools;
-                const r = { ...rumor };
-                r.id = NT.getEventHash(r);
-                const rumorJson = JSON.stringify(r);
-                const sealContent = useExt
-                    ? await window.nostr.nip44.encrypt(this.pubkey, rumorJson)
-                    : await _nip46Encrypt(this.pubkey, rumorJson);
-                const sealUnsigned = { kind: 13, content: sealContent, created_at: this.randomNow(), tags: [] };
-                const seal = useExt
-                    ? await window.nostr.signEvent(sealUnsigned)
-                    : await _nip46SignEvent(sealUnsigned);
-                const ephSk = NT.generateSecretKey();
-                const selfKemPk = (typeof this.pqSelfKeyFor === 'function' && this.pqSelfUsesPq2())
-                    ? this.pqSelfKeyFor() : null;
-                const wrapContent = selfKemPk
-                    ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, this.pubkey, selfKemPk)
-                    : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, this.pubkey));
-                const wrapUnsigned = { kind: 1059, content: wrapContent, created_at: this.randomNow(), tags: [['p', this.pubkey]] };
-                if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
-                wrap = NT.finalizeEvent(wrapUnsigned, ephSk);
+            } else if (this._signerOps()) {
+                wrap = await this.signerWrapAsync(rumor, this.pubkey, this.pqSelfKeyFor(), this.pqSelfUsesPq2(), expirationTs);
             }
             if (wrap) this._archivePMEvent(wrap);
         } catch (_) { }
@@ -2904,122 +2842,61 @@ Object.assign(NYM.prototype, {
             members = [opts.newMember].concat(members.filter(pk => pk !== opts.newMember));
         }
 
-        // Offload each wrap to the crypto worker pool so large groups don't block the UI thread.
-        if (this.privkey) {
-            const sharedId = this.getNymMessageId(rumor);
-            // Each member gets an independent wrap, so mixed PQ/classical groups need no negotiation.
-            let pqCount = 0;
-            let rootCount = 0;
-            const wrapLocal = async (pubkey) => {
-                // One member's failed wrap must not reject the Promise.all for everyone else.
-                try {
-                    const encryptTo = (groupId && !opts.forceRealPk && !(opts.newMember && pubkey === opts.newMember)) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
-                    // Classical ECDH to the rotating ephemeral pubkey, KEM leg to the long-lived ML-KEM identity key.
-                    const memberKemPk = this._pqWrapKeyFor(pubkey);
-                    const wrapped = memberKemPk
-                        ? await this.pqWrapForPeerAsync(this._pqWrapUsesPq2(pubkey), rumor,
-                            claimSk || this.privkey, encryptTo, memberKemPk, expirationTs)
-                        : await this.nip59WrapEventAsync(rumor, claimSk || this.privkey, encryptTo, expirationTs);
-                    if (memberKemPk) {
-                        pqCount++;
-                        if (this.pqPeerIsRootSeeded(pubkey)) rootCount++;
-                    }
-                    const tier = tierFor(pubkey);
-                    if (opts.queuedDom && typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(wrapped.id, opts.queuedDom);
-                    if (opts.receipt && typeof this._noteReceiptWrap === 'function') this._noteReceiptWrap(wrapped.id);
-                    this.sendDMToRelays(['EVENT', wrapped], { tier });
-                    this._recordGiftWrapId(sharedId, wrapped.id);
-                    if (depositToD1) this._depositPMEvent(wrapped, tier);
-                    if (this.activeCosmetics?.has('cosmetic-redacted')) {
-                        setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059, opts.claim); }, 600000);
-                    }
-                } catch (e) {
-                    console.warn('[GiftWrap] Local wrap failed for', pubkey, e);
-                }
-            };
-
-            const queue = members.slice();
-            const workers = new Array(Math.min(8, queue.length)).fill(0).map(async () => {
-                while (queue.length) await wrapLocal(queue.shift());
-            });
-            await Promise.all(workers);
-            // Per-message coverage so the badge can say "quantum-resistant to 8 of 10 members".
-            if (groupId && sharedId) {
-                this._recordGroupPqCoverage(sharedId, pqCount, members.length, rootCount);
-            }
-            return;
-        }
-
-        const useExtension = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
-        const useNip46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
-        if (!useExtension && !useNip46) return;
-
-        const NT = window.NostrTools;
-        const rumorWithId = { ...rumor };
-        rumorWithId.id = NT.getEventHash(rumorWithId);
-        const rumorJson = JSON.stringify(rumorWithId);
+        const senderSk = claimSk || this.privkey;
+        const signer = senderSk ? null : this._signerOps();
+        if (!senderSk && !signer) return 0;
         const sharedId = this.getNymMessageId(rumor);
-
+        const selfPk = (opts.claim && opts.claim.pubkey) || this.pubkey;
+        let pqCount = 0;
+        let rootCount = 0;
+        let toOthers = 0;
         const wrapOne = async (pubkey) => {
             try {
                 const encryptTo = (groupId && !opts.forceRealPk && !(opts.newMember && pubkey === opts.newMember)) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
-
-                const sealContent = useExtension
-                    ? await window.nostr.nip44.encrypt(encryptTo, rumorJson)
-                    : await _nip46Encrypt(encryptTo, rumorJson);
-                const sealUnsigned = {
-                    kind: 13, content: sealContent, created_at: this.randomNow(), tags: []
-                };
-                const seal = useExtension
-                    ? await window.nostr.signEvent(sealUnsigned)
-                    : await _nip46SignEvent(sealUnsigned);
-
-                // Through a signer only the wrap can be hybridized; the KEM leg uses the member's identity key.
                 const memberKemPk = this._pqWrapKeyFor(pubkey);
-                const ephSk = NT.generateSecretKey();
-                // Use the format the member announced; a `pk2`-only peer cannot open a combined wrap.
-                const wrapContent = memberKemPk
-                    ? (this._pqWrapUsesPq2(pubkey)
-                        ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, encryptTo, memberKemPk)
-                        : window.NymCrypto.pqEncrypt(JSON.stringify(seal), ephSk, encryptTo, memberKemPk))
-                    : NT.nip44.encrypt(JSON.stringify(seal), NT.nip44.getConversationKey(ephSk, encryptTo));
-                const wrapUnsigned = {
-                    kind: 1059,
-                    content: wrapContent,
-                    created_at: this.randomNow(),
-                    tags: [['p', encryptTo]]
-                };
-                if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
-
-                const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
+                const usePq2 = memberKemPk ? this._pqWrapUsesPq2(pubkey) : false;
+                const wrapped = senderSk
+                    ? (memberKemPk
+                        ? await this.pqWrapForPeerAsync(usePq2, rumor, senderSk, encryptTo, memberKemPk, expirationTs)
+                        : await this.nip59WrapEventAsync(rumor, senderSk, encryptTo, expirationTs))
+                    : await this.signerWrapAsync(rumor, encryptTo, memberKemPk, usePq2, expirationTs);
+                if (memberKemPk) {
+                    pqCount++;
+                    if (this.pqPeerIsRootSeeded(pubkey)) rootCount++;
+                }
                 const tier = tierFor(pubkey);
+                if (opts.queuedDom && typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(wrapped.id, opts.queuedDom);
+                if (opts.receipt && typeof this._noteReceiptWrap === 'function') this._noteReceiptWrap(wrapped.id);
                 this.sendDMToRelays(['EVENT', wrapped], { tier });
+                if (pubkey !== selfPk) toOthers++;
                 this._recordGiftWrapId(sharedId, wrapped.id);
                 if (depositToD1) this._depositPMEvent(wrapped, tier);
-
                 if (this.activeCosmetics?.has('cosmetic-redacted')) {
                     setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059, opts.claim); }, 600000);
                 }
             } catch (e) {
-                console.warn('[GiftWrap] Remote wrap failed for', pubkey, e);
+                console.warn('[GiftWrap] Wrap failed for', pubkey, e);
             }
         };
 
-        const limit = useNip46 ? 4 : 8;
+        const limit = signer && signer.kind === 'nip46' ? 4 : 8;
         const queue = members.slice();
         const workers = new Array(Math.min(limit, queue.length)).fill(0).map(async () => {
-            while (queue.length) {
-                const pk = queue.shift();
-                await wrapOne(pk);
-            }
+            while (queue.length) await wrapOne(queue.shift());
         });
         await Promise.all(workers);
+        if (groupId && sharedId) {
+            this._recordGroupPqCoverage(sharedId, pqCount, members.length, rootCount);
+        }
+        return toOthers;
     },
 
     async sendGroupMessage(content, groupId, options = {}) {
         if (!content || !content.trim()) return false;
         if (!this._canSendGiftWraps()) {
-            this.displaySystemMessage('Group messages require a logged-in account');
+            if (this._signerLogin() && this.nostrLoginMethod === 'nip46') this.displaySystemMessage(this.uiText("Your remote signer isn't connected, so this group message can't be signed. Reconnect it and try again."));
+            else if (this._signerLogin()) this.displaySystemMessage(this.uiText("Your browser extension isn't available, so this group message can't be signed. Turn it on or unlock it and try again."));
+            else this.displaySystemMessage('Group messages require a logged-in account');
             return false;
         }
         const claim = options.claim || (typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null);
@@ -3122,14 +2999,17 @@ Object.assign(NYM.prototype, {
 
         this.persistPMMessages(groupConvKey);
 
+        let reached = 0;
         try {
-            await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { queuedDom: nymMessageId, claim });
+            reached = await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { queuedDom: nymMessageId, claim });
         } finally {
-            this._groupSendingSettle(groupConvKey, msg);
+            if (!reached && (group.members || []).some((pk) => pk && pk !== me.pubkey)) this._groupSendingFail(groupConvKey, msg);
+            else this._groupSendingSettle(groupConvKey, msg);
         }
-        this._noteKeyGiven(groupId, group.members, nextEph.pk);
+        const failed = msg.deliveryStatus === 'failed';
+        if (!failed) this._noteKeyGiven(groupId, group.members, nextEph.pk);
         // Post-quantum only if every member got a PQ wrap; one classical copy exposes the plaintext.
-        const coverage = this.pqGroupCoverageFor(nymMessageId);
+        const coverage = failed ? null : this.pqGroupCoverageFor(nymMessageId);
         if (coverage) {
             msg.pqEncrypted = coverage.total > 0 && coverage.pq === coverage.total;
             msg.pqRoot = msg.pqEncrypted && coverage.root === coverage.total && this.pqHasRoot();
@@ -3143,6 +3023,7 @@ Object.assign(NYM.prototype, {
 
         // Coalesced so rapid sends don't churn or drop refreshes.
         this._scheduleEphemeralSubRefresh();
+        if (failed) return false;
 
         this.recordOwnActivity('send', claim);
 
@@ -3156,6 +3037,26 @@ Object.assign(NYM.prototype, {
         const mark = el && el.querySelector('.delivery-status.sending');
         if (mark) mark.remove();
         this.persistPMMessages(convKey);
+    },
+
+    _groupSendingFail(convKey, msg) {
+        if (msg.deliveryStatus !== 'sending') return;
+        msg.deliveryStatus = 'failed';
+        this._updateDeliveryStatusEl(msg.nymMessageId || msg.id, 'failed', msg.id);
+        this.persistPMMessages(convKey);
+    },
+
+    _groupRetryFailed(eventId) {
+        const groupId = this.currentGroup;
+        if (!groupId || !this.groupConversations.get(groupId)) return false;
+        const convKey = this.getGroupConversationKey(groupId);
+        const list = this.pmMessages.get(convKey);
+        const msg = Array.isArray(list) ? list.find((m) => m && m.id === eventId && m.isOwn && m.deliveryStatus === 'failed') : null;
+        if (!msg || msg.pubkey !== this.pubkey) return false;
+        this._groupSendingDrop(convKey, msg);
+        this.persistPMMessages(convKey);
+        this.sendGroupMessage(msg.content, groupId, { threadRoot: msg.threadRoot || null, fileOffer: msg.fileOffer || null });
+        return true;
     },
 
     _groupSendingDrop(convKey, msg) {
@@ -4352,7 +4253,7 @@ Object.assign(NYM.prototype, {
         const overflow = readersMap.size - MAX_VISIBLE;
         const avatarHtml = visible.map(([pk, name]) => {
             const sk = this._safePubkey(pk);
-            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" decoding="async" loading="lazy">`;
+            return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-reader-avatar${(typeof this._ringPeek === 'function' ? this._ringPeek(pk) : '')}" title="Read by ${this.escapeHtml(name)}" data-avatar-pubkey="${sk}" decoding="async" loading="lazy">`;
         }).join('');
         const overflowHtml = overflow > 0
             ? `<span class="group-reader-overflow">+${this.abbreviateNumber(overflow)}</span>`
@@ -4389,6 +4290,7 @@ Object.assign(NYM.prototype, {
             }
             const src = this.getAvatarUrl(pk);
             if (img.getAttribute('src') !== src) img.src = src;
+            if (typeof this._setRingClass === 'function') this._setRingClass(img, this._ringPeek(pk));
             const title = `Read by ${name}`;
             if (img.title !== title) img.title = title;
             const ref = prev ? prev.nextSibling : el.firstChild;
@@ -5201,12 +5103,14 @@ Object.assign(NYM.prototype, {
         if (prevChannelKey && typeof this.closeChannelSubscription === 'function') {
             this.closeChannelSubscription(prevChannelKey);
         }
+        const sameGroup = !!(this.inPMMode && this.currentGroup === groupId);
         this.inPMMode = true;
         this.currentPM = null;
         this.currentGroup = groupId;
         this.currentChannel = null;
         this.currentGeohash = null;
         this.userScrolledUp = false;
+        if (this.pendingQuote && !sameGroup) this.clearQuoteReply();
         if (this.pendingEdit) this.cancelEditMessage();
 
         if (window.innerWidth <= 1024) {
@@ -5223,6 +5127,8 @@ Object.assign(NYM.prototype, {
         document.querySelectorAll('.pm-item').forEach(i => {
             i.classList.toggle('active', i.dataset.groupId === groupId);
         });
+        this.updateViewMoreButton('channelList');
+        this.updateViewMoreButton('pmList');
 
         const groupConvKey = this.getGroupConversationKey(groupId);
         this.clearUnreadCount(groupConvKey);
@@ -5465,6 +5371,7 @@ Object.assign(NYM.prototype, {
             const avatarSrc = mask ? this._maskedAvatar(pk) : this.getAvatarUrl(pk);
             const avatarKey = mask ? '' : ` data-avatar-pubkey="${safePk}"`;
             const flairHtml = mask ? '' : (this.getFlairForUser(pk) || '');
+            const memberRing = mask ? '' : (typeof this._ringPeek === 'function' ? this._ringPeek(pk) : '');
             const labels = [];
             if (pk === ownerPk) labels.push('owner');
             else if (admins.includes(pk)) labels.push('admin');
@@ -5474,7 +5381,7 @@ Object.assign(NYM.prototype, {
                 ? `<span class="group-info-label">${labels.join(', ')}</span>`
                 : '';
             const invitedHtml = typeof this._gnBadge === 'function' ? this._gnBadge(groupId, pk, baseNym) : '';
-            return `<div class="group-info-member" data-pubkey="${safePk}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message"${avatarKey} alt="" decoding="async" loading="lazy"><span class="group-info-nym">${window.NymSuffix.sqHtml(baseNym, suffix)}${flairHtml}</span>${labelHtml}${invitedHtml}</div>`;
+            return `<div class="group-info-member" data-pubkey="${safePk}"><img src="${this.escapeHtml(avatarSrc)}" class="avatar-message${memberRing}"${avatarKey} alt="" decoding="async" loading="lazy"><span class="group-info-nym">${window.NymSuffix.sqHtml(baseNym, suffix)}${flairHtml}</span>${labelHtml}${invitedHtml}</div>`;
         };
         const membersHtml = sorted.map(memberRow).join('');
         const acceptedCount = typeof this._gnAccepted === 'function' ? this._gnAccepted(groupId, sorted).length : sorted.length;

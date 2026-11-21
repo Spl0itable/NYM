@@ -1394,7 +1394,7 @@ Object.assign(NYM.prototype, {
         }
         const peer = this.activeCall.members.find(pk => pk !== this.pubkey);
         if (fetch && peer && typeof this.ensureListProfiles === 'function') this.ensureListProfiles(null, [peer], () => this._refreshCallTitle({ noFetch: true }));
-        const avatar = `<img src="${this.escapeHtml(this.getAvatarUrl(peer))}" class="avatar-message call-title-avatar" data-avatar-pubkey="${this._safePubkey(peer)}" alt="" decoding="async" loading="lazy">`;
+        const avatar = `<img src="${this.escapeHtml(this.getAvatarUrl(peer))}" class="avatar-message call-title-avatar${this._callMask(peer) ? '' : (typeof this._ringPeek === 'function' ? this._ringPeek(peer) : '')}" data-avatar-pubkey="${this._safePubkey(peer)}" alt="" decoding="async" loading="lazy">`;
         return `${prefix}<span class="call-title-id">${avatar}<span class="call-title-nym">${this._callNymHtml(peer)}</span></span>`;
     },
 
@@ -1499,9 +1499,11 @@ Object.assign(NYM.prototype, {
         if (mask) {
             delete av.dataset.avatarPubkey;
             av.src = typeof this._maskedAvatar === 'function' ? this._maskedAvatar(pubkey) : '';
+            if (typeof this._setRingClass === 'function') this._setRingClass(av, '');
         } else {
             if (pubkey) av.dataset.avatarPubkey = this._safePubkey(pubkey);
             av.src = this.getAvatarUrl(pubkey);
+            if (typeof this._setRingClass === 'function') this._setRingClass(av, isLocal || !pubkey ? '' : this._ringPeek(pubkey));
         }
         const nameEl = tile.querySelector('.call-tile-name');
         nameEl.innerHTML = isLocal ? 'You' : (mask ? this.escapeHtml(mask) : this._callNymHtml(pubkey));
@@ -2580,7 +2582,7 @@ Object.assign(NYM.prototype, {
             item.dataset.action = 'selectCallMention';
             item.dataset.pubkey = u.pk;
             const img = document.createElement('img');
-            img.className = 'avatar-message';
+            img.className = 'avatar-message' + (typeof this._ringPeek === 'function' ? this._ringPeek(u.pk) : '');
             img.alt = '';
             img.loading = 'lazy';
             img.src = this.getAvatarUrl(u.pk);

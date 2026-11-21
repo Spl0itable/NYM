@@ -2,7 +2,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../core/theme/nym_a11y.dart';
+import '../../core/theme/nym_colors.dart';
 import '../../features/messages/inline_network_image.dart';
+import '../../features/shop/avatar_ring.dart';
 import '../../models/user.dart';
 import '../../services/api/api_client.dart';
 import '../../services/mesh/mesh_avatar_registry.dart';
@@ -42,6 +45,10 @@ class NymAvatar extends StatefulWidget {
     this.localOnly = false,
     this.backdrop,
     this.ring,
+    this.ringId,
+    this.ringFeatured = false,
+    this.ringFill,
+    this.ringClass,
     this.placeholder,
     this.fallback,
   });
@@ -58,6 +65,14 @@ class NymAvatar extends StatefulWidget {
   final Color? backdrop;
 
   final Color? ring;
+
+  final String? ringId;
+
+  final bool ringFeatured;
+
+  final Color? ringFill;
+
+  final AvatarRingClass? ringClass;
 
   final Widget? placeholder;
 
@@ -80,22 +95,79 @@ class _NymAvatarState extends State<NymAvatar> {
     }
   }
 
+  static const _bandKey = ValueKey<String>('nymAvatarBand');
+  static const _photoKey = ValueKey<String>('nymAvatarPhoto');
+  static const _featureKey = ValueKey<String>('nymAvatarFeature');
+
   @override
   Widget build(BuildContext context) {
+    final s = widget.size;
+    final visual = AvatarRingVisual.byId(widget.ringId);
     final ring = widget.ring;
-    final avatar = _avatar(context);
-    if (ring == null) return avatar;
-    return DecoratedBox(
-      position: DecorationPosition.foreground,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: ring, width: 1.5),
+    Widget? band;
+    Widget? feature;
+    var inset = 0.0;
+    if (visual != null) {
+      final forced = widget.ringClass;
+      final featured = forced == null &&
+          widget.ringFeatured &&
+          avatarRingClassFor(s) != AvatarRingClass.tiny;
+      final ringClass = forced ?? avatarRingClassFor(s, featured: featured);
+      inset = avatarRingInset(s, ringClass: ringClass);
+      final nym = Theme.of(context).extension<NymColors>();
+      final isLight = nym?.isLight ?? false;
+      final hc = context.highContrast;
+      band = CustomPaint(
+        painter: AvatarRingPainter.cached(
+          visual: visual,
+          ringClass: ringClass,
+          isLight: isLight,
+          highContrast: hc,
+          fill: widget.ringFill ?? nym?.bg ?? const Color(0xFF0A0A0F),
+        ),
+      );
+      if (featured && (visual.hero != null || visual.motion != null)) {
+        feature = AvatarRingFeature(
+          visual: visual,
+          size: s,
+          isLight: isLight,
+          highContrast: hc,
+        );
+      }
+    }
+    final inner = s - 2 * inset;
+    return SizedBox(
+      width: s,
+      height: s,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          if (band != null) Positioned.fill(key: _bandKey, child: band),
+          Positioned(
+            key: _photoKey,
+            left: inset,
+            top: inset,
+            width: inner,
+            height: inner,
+            child: DecoratedBox(
+              position: DecorationPosition.foreground,
+              decoration: visual == null && ring != null
+                  ? BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: ring, width: 1.5),
+                    )
+                  : const BoxDecoration(),
+              child: _avatar(context, inner),
+            ),
+          ),
+          if (feature != null) Positioned.fill(key: _featureKey, child: feature),
+        ],
       ),
-      child: avatar,
     );
   }
 
-  Widget _avatar(BuildContext context) {
+  Widget _avatar(BuildContext context, double side) {
+    final decode = widget.size;
     // A mesh-transferred avatar wins so Bluetooth-only peers still show their real picture.
     return ValueListenableBuilder<int>(
       valueListenable: MeshAvatarRegistry.instance.revision,
@@ -105,27 +177,27 @@ class _NymAvatarState extends State<NymAvatar> {
           return _round(
             Image.memory(
               meshBytes,
-              width: widget.size,
-              height: widget.size,
+              width: side,
+              height: side,
               fit: BoxFit.cover,
               gaplessPlayback: true,
               // Decode at the avatar size, not the transferred photo's intrinsic size.
-              cacheWidth: (widget.size *
+              cacheWidth: (decode *
                       MediaQuery.devicePixelRatioOf(context) *
                       1.5)
                   .ceil(),
-              errorBuilder: (_, _, _) => widget.fallback ?? _identicon(context),
+              errorBuilder: (_, _, _) => widget.fallback ?? _identicon(context, side),
             ),
           );
         }
-        return _buildNetwork(context);
+        return _buildNetwork(context, side, decode);
       },
     );
   }
 
-  Widget _buildNetwork(BuildContext context) {
+  Widget _buildNetwork(BuildContext context, double side, double decode) {
     final proxied = proxiedAvatarUrl(widget.imageUrl);
-    final fallback = widget.fallback ?? _identicon(context);
+    final fallback = widget.fallback ?? _identicon(context, side);
     if (proxied == null) return fallback;
     if (widget.localOnly) {
       return FutureBuilder<Uint8List?>(
@@ -136,11 +208,11 @@ class _NymAvatarState extends State<NymAvatar> {
           return _round(
             Image.memory(
               bytes,
-              width: widget.size,
-              height: widget.size,
+              width: side,
+              height: side,
               fit: BoxFit.cover,
               gaplessPlayback: true,
-              cacheWidth: (widget.size *
+              cacheWidth: (decode *
                       MediaQuery.devicePixelRatioOf(context) *
                       1.5)
                   .ceil(),
@@ -152,12 +224,13 @@ class _NymAvatarState extends State<NymAvatar> {
     }
     return _round(
       SizedBox(
-        width: widget.size,
-        height: widget.size,
+        width: side,
+        height: side,
         child: InlineNetworkImage(
           url: proxied,
-          width: widget.size,
-          height: widget.size,
+          width: side,
+          height: side,
+          decodeSize: decode,
           fit: BoxFit.cover,
           // Identicon while loading and after every source (proxy and raw) fails.
           placeholder: widget.placeholder ?? fallback,
@@ -177,10 +250,10 @@ class _NymAvatarState extends State<NymAvatar> {
   }
 
   /// Identicon ported from the PWA `generateAvatarSvg` so it matches byte-for-byte per seed.
-  Widget _identicon(BuildContext context) {
+  Widget _identicon(BuildContext context, double side) {
     return ClipOval(
       child: CustomPaint(
-        size: Size(widget.size, widget.size),
+        size: Size(side, side),
         painter: _IdenticonPainter(widget.seed),
       ),
     );

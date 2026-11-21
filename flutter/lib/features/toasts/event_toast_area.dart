@@ -1,3 +1,4 @@
+import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 final ValueNotifier<Rect?> eventToastRegion = ValueNotifier<Rect?>(null);
@@ -45,10 +46,39 @@ class _EventToastAreaReporterState extends State<EventToastAreaReporter> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      _schedule();
-      return widget.child;
-    });
+  Widget build(BuildContext context) =>
+      _AreaProbe(onPlaced: _schedule, child: widget.child);
+}
+
+class _AreaProbe extends SingleChildRenderObjectWidget {
+  const _AreaProbe({required this.onPlaced, super.child});
+
+  final VoidCallback onPlaced;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderAreaProbe(onPlaced);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderAreaProbe renderObject) {
+    renderObject.onPlaced = onPlaced;
+  }
+}
+
+class _RenderAreaProbe extends RenderProxyBox {
+  _RenderAreaProbe(this.onPlaced);
+
+  VoidCallback onPlaced;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    onPlaced();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    super.paint(context, offset);
+    onPlaced();
   }
 }

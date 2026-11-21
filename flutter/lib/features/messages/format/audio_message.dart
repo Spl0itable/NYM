@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/nym_colors.dart';
 import '../../i18n/i18n.dart';
 import '../../../core/utils/safe_url.dart';
+import 'audio_playback.dart';
 import 'media_source.dart';
 import 'message_content.dart' show proxiedMedia;
+import 'playback_keeper.dart';
 
 const double _kAudioRadius = 12;
 
@@ -20,6 +22,7 @@ class AudioMessage extends StatefulWidget {
     required this.url,
     this.fileName = '',
     this.maxWidth = _kAudioMaxWidth,
+    this.playbackScope,
   });
 
   final String url;
@@ -28,46 +31,93 @@ class AudioMessage extends StatefulWidget {
 
   final double maxWidth;
 
+  final String? playbackScope;
+
   @override
   State<AudioMessage> createState() => _AudioMessageState();
 }
 
 class _AudioMessageState extends State<AudioMessage> {
-  AudioPlayer? _player;
-  Duration _position = Duration.zero;
-  Duration _duration = Duration.zero;
-  bool _playing = false;
+  AudioPlayback? _session;
   bool _loading = false;
   bool _failed = false;
-  String? _source;
+
+  Duration get _position => _session?.position ?? Duration.zero;
+
+  Duration get _duration => _session?.duration ?? Duration.zero;
+
+  bool get _playing => _session?.playing ?? false;
+
+  String? get _source => _session?.source;
+
+  String? _keyOf(AudioMessage w) {
+    final scope = w.playbackScope;
+    if (scope == null) return null;
+    return PlaybackKeeper.keyFor(scope, w.url);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _bind(_keyOf(widget));
+  }
+
+  @override
+  void didUpdateWidget(AudioMessage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final old = _keyOf(oldWidget);
+    final key = _keyOf(widget);
+    if (old == key && oldWidget.url == widget.url) return;
+    _unbind(old);
+    _failed = false;
+    _bind(key);
+  }
 
   @override
   void dispose() {
-    _player?.dispose();
+    _unbind(_keyOf(widget));
     super.dispose();
   }
 
-  Future<void> _ensurePlayer() async {
-    if (_player != null) return;
-    final p = AudioPlayer();
-    _player = p;
-    p.onDurationChanged.listen((d) {
-      if (mounted) setState(() => _duration = d);
-    });
-    p.onPositionChanged.listen((d) {
-      if (mounted) setState(() => _position = d);
-    });
-    p.onPlayerStateChanged.listen((s) {
-      if (mounted) setState(() => _playing = s == PlayerState.playing);
-    });
-    p.onPlayerComplete.listen((_) {
-      if (mounted) {
-        setState(() {
-          _playing = false;
-          _position = Duration.zero;
-        });
-      }
-    });
+  void _bind(String? key) {
+    AudioPlayback.keeper.watch(key, _onStarted);
+    final s = AudioPlayback.keeper.join(key, this);
+    if (s != null) _attach(s);
+  }
+
+  void _unbind(String? key) {
+    AudioPlayback.keeper.unwatch(key, _onStarted);
+    final s = _session;
+    _session = null;
+    if (s == null) return;
+    s.removeListener(_onSession);
+    AudioPlayback.keeper.leave(s, this);
+  }
+
+  void _attach(AudioPlayback s) {
+    if (identical(_session, s)) return;
+    s.addListener(_onSession);
+    _session = s;
+  }
+
+  void _onStarted() {
+    if (!mounted || _session != null) return;
+    final s = AudioPlayback.keeper.join(_keyOf(widget), this);
+    if (s != null) setState(() => _attach(s));
+  }
+
+  void _onSession() {
+    if (mounted) setState(() {});
+  }
+
+  AudioPlayback _ensureSession() {
+    final existing = _session;
+    if (existing != null) return existing;
+    final key = _keyOf(widget);
+    final s = AudioPlayback.keeper
+        .start(key, this, () => AudioPlayback(key, AudioPlayer()));
+    _attach(s);
+    return s;
   }
 
   Future<void> _toggle() async {
@@ -75,21 +125,24 @@ class _AudioMessageState extends State<AudioMessage> {
       _open();
       return;
     }
-    await _ensurePlayer();
-    final p = _player!;
-    if (_playing) {
+    final s = _ensureSession();
+    final p = s.player;
+    if (s.playing) {
       await p.pause();
       return;
     }
     setState(() => _loading = true);
     try {
-      if (_position > Duration.zero && _position < _duration) {
+      final source = s.source;
+      if (s.position > Duration.zero && s.position < s.duration) {
         await p.resume();
-      } else if (_source != null) {
-        await p.play(UrlSource(_source!));
+      } else if (source != null) {
+        await p.play(UrlSource(source));
       } else {
-        _source = await openMediaSource([widget.url], (u) => _tryPlay(p, u));
-        if (_source == null && mounted) setState(() => _failed = true);
+        final opened =
+            await openMediaSource([widget.url], (u) => _tryPlay(p, u));
+        s.source = opened;
+        if (opened == null && mounted) setState(() => _failed = true);
       }
     } catch (_) {
       // Keep the download route working rather than leaving a dead bar.
@@ -109,12 +162,13 @@ class _AudioMessageState extends State<AudioMessage> {
   }
 
   Future<void> _seek(double fraction) async {
-    if (_duration <= Duration.zero) return;
-    await _ensurePlayer();
+    final s = _session;
+    if (s == null || s.duration <= Duration.zero) return;
     final target =
-        Duration(milliseconds: (_duration.inMilliseconds * fraction).round());
-    await _player!.seek(target);
-    if (mounted) setState(() => _position = target);
+        Duration(milliseconds: (s.duration.inMilliseconds * fraction).round());
+    await s.player.seek(target);
+    s.position = target;
+    if (mounted) setState(() {});
   }
 
   void _open() {

@@ -69,20 +69,61 @@ class _Inputs {
   int get hashCode => Object.hash(Object.hashAll(head), Object.hashAll(rows));
 }
 
-final _channelInputsProvider = Provider<_Inputs>((ref) {
-  final s = ref.watch(appStateProvider);
-  final rows = <Object?>[];
-  for (final ch in s.channels) {
-    final key = ch.key;
-    final storageKey = ch.storageKey;
-    rows
-      ..add(ch)
-      ..add(s.blockedChannels.contains(key))
-      ..add(s.hiddenChannels.contains(key))
-      ..add(s.channelLastActivity[storageKey])
-      ..add(s.unreadCounts[storageKey]);
+class _ChannelInputsMemo {
+  List<Object?> head = const [];
+  List<Object?> rows = const [];
+  int rev = 0;
+
+  bool same(AppState s) {
+    if (head.length != s.pinnedChannels.length ||
+        rows.length != s.channels.length * 5) {
+      return false;
+    }
+    var i = 0;
+    for (final p in s.pinnedChannels) {
+      if (head[i++] != p) return false;
+    }
+    i = 0;
+    for (final ch in s.channels) {
+      final key = ch.key;
+      final storageKey = ch.storageKey;
+      if (!identical(rows[i], ch) ||
+          rows[i + 1] != s.blockedChannels.contains(key) ||
+          rows[i + 2] != s.hiddenChannels.contains(key) ||
+          rows[i + 3] != s.channelLastActivity[storageKey] ||
+          rows[i + 4] != s.unreadCounts[storageKey]) {
+        return false;
+      }
+      i += 5;
+    }
+    return true;
   }
-  return _Inputs([...s.pinnedChannels], rows);
+
+  int update(AppState s) {
+    if (same(s)) return rev;
+    final next = <Object?>[];
+    for (final ch in s.channels) {
+      final key = ch.key;
+      final storageKey = ch.storageKey;
+      next
+        ..add(ch)
+        ..add(s.blockedChannels.contains(key))
+        ..add(s.hiddenChannels.contains(key))
+        ..add(s.channelLastActivity[storageKey])
+        ..add(s.unreadCounts[storageKey]);
+    }
+    head = [...s.pinnedChannels];
+    rows = next;
+    return ++rev;
+  }
+}
+
+final _channelInputsMemoProvider =
+    Provider<_ChannelInputsMemo>((ref) => _ChannelInputsMemo());
+
+final _channelInputsProvider = Provider<int>((ref) {
+  final s = ref.watch(appStateProvider);
+  return ref.read(_channelInputsMemoProvider).update(s);
 });
 
 String _shownMembers(AppState s, Group g, Map<String, User> users) => [
@@ -264,7 +305,12 @@ final sidebarPmRowsProvider = Provider<SidebarRows<SidebarPmEntry>>((ref) {
   return SidebarRows(rows);
 });
 
+final nymsListClockProvider = StateProvider<int>((ref) => 0);
+
+int nymsListNextChangeAt(WidgetRef ref) => ref.read(_nymOrderProvider).nextChange;
+
 final sidebarNymRowsProvider = Provider<SidebarRows<User>>((ref) {
+  ref.watch(nymsListClockProvider);
   final pmOnly =
       ref.watch(settingsProvider.select((s) => s.groupChatPMOnlyMode));
   final nymsList = ref.watch(nymsListUsersProvider);
@@ -329,6 +375,7 @@ class NymListOrder {
 
   List<User> users = const [];
   List<SidebarRow<User>> rows = const [];
+  int nextChange = 0;
 
   int _find(_NymSlot slot) {
     var lo = 0;
@@ -351,7 +398,12 @@ class NymListOrder {
     var kept = 0;
     var last = 0;
     var resequence = false;
+    var soonest = 0;
     for (final u in next) {
+      final ends = u.lastSeen + kActiveThresholdMs;
+      if (u.lastSeen > 0 && ends > now && (soonest == 0 || ends < soonest)) {
+        soonest = ends;
+      }
       final nym = u.nym;
       final rank = _nymRank(u, now);
       final slot = _slots[u.pubkey];
@@ -419,6 +471,7 @@ class NymListOrder {
         }
       }
     }
+    nextChange = soonest;
     users = [for (final s in _order) s.user];
     rows = [
       for (final s in _order) _rowFor(s, isBot),
