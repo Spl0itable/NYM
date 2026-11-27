@@ -115,8 +115,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     // Prefer the live `selfNym` (updated from the saved profile) over the derived ephemeral nym.
     final selfNym = ref.read(appStateProvider).selfNym;
     final nym = selfNym.isNotEmpty ? selfNym : (id?.nym ?? '');
-    // Split only the trailing 4-hex suffix, so a name containing '#' survives.
-    _originalNick = splitNymSuffix(nym).base;
+    _originalNick = normalizeNym(splitNymSuffix(nym).base, pubkey: _owner);
     _nick = TextEditingController(text: _originalNick);
 
     // Pre-fill bio and lightning so saving can't silently blank them.
@@ -297,7 +296,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         Align(
           alignment: Alignment.centerRight,
           child: Text(
-            '${_nick.text.length}/20',
+            '${nymGraphemes(_nick.text)}/20',
             style: TextStyle(color: c.textDim, fontSize: 11),
           ),
         ),
@@ -1135,7 +1134,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               tr('Sign out of {nym} and disconnect from Nymchat?', {
                 'nym': self == null
                     ? tr('this identity')
-                    : getNymFromPubkey(self.nym, self.pubkey)
+                    : isolateNymLabel(getNymFromPubkey(self.nym, self.pubkey))
               }),
               accountKeyText(AccountLogic.methodFromStorage(
                   ref.read(keyValueStoreProvider).getString)),
@@ -1304,11 +1303,11 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   }
 
   Future<void> _save() async {
-    final newNick = _nick.text.trim();
+    final newNick = normalizeNym(_nick.text, pubkey: _owner);
     final nickChanged = newNick.isNotEmpty && newNick != _originalNick;
 
     // Reserved nicknames require proving the developer nsec first.
-    if (nickChanged && isReservedNick(newNick)) {
+    if (nickChanged && isReservedNick(newNick, pubkey: _owner)) {
       final verified = await DevNsecModal.open(context);
       if (!mounted) return;
       if (verified == null) {
@@ -1329,7 +1328,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     bool ok = false;
     try {
       ok = await ref.read(nostrControllerProvider).saveProfile(
-            name: includeName ? _nick.text.trim() : null,
+            name: includeName ? normalizeNym(_nick.text, pubkey: _owner) : null,
             about: bio,
             // Always hosted URLs, never a local file.
             picture: _currentAvatarUrl,

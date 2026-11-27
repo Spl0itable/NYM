@@ -701,8 +701,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const at = this.activeThread;
             const same = entry.type === 'pm' && (this._anonThreadClosing === entry.pubkey
                 || !!(at && at.ctx && at.ctx.pubkey === entry.pubkey && typeof this._threadAnonLane === 'function' && this._threadAnonLane(at)));
+            const focused = this._cvActive ? (this._cvColumns || []).find(c => c.id === this._cvFocusedId) : null;
+            const elsewhere = !!focused && typeof this._cvColKey === 'function' && this._cvColKey(this._cvNormaliseDesc(entry)) !== focused.key;
             const go = () => {
-                if (typeof this.closeThreadView === 'function') this.closeThreadView({ nav: false });
+                if (!elsewhere && typeof this.closeThreadView === 'function') this.closeThreadView({ nav: false });
                 if (entry.type === 'channel') {
                     this.switchChannel(entry.channel, entry.geohash);
                 } else if (entry.type === 'pm') {
@@ -1058,20 +1060,22 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (!list) return;
         const M = this._sbModel();
         const rows = this._sbPainted(Array.from(list.querySelectorAll('.list-item')).filter((el) => this._sbRowShown(el)));
-        const keep = [];
-        rows.forEach((el, i) => { if (el.classList.contains('active') || el.classList.contains('has-unread')) keep.push(i); });
         const searching = this._sbSearching(list);
         const shown = this._sbShown(listId);
-        const win = M ? M.window(rows.length, shown, keep, { searching }) : { shown, visible: rows.length, hidden: 0, buttons: [] };
+        const win = M ? M.window(rows.length, shown, { searching }) : { shown, visible: rows.length, hidden: 0, buttons: [] };
         if (!searching) this._sbStore(listId, win.shown);
-        const hide = new Set(M ? M.hiddenRows(rows.length, shown, keep, { searching }) : []);
-        const cut = new Set();
-        rows.forEach((el, i) => { if (hide.has(i)) cut.add(el); });
+        const cut = new Set(rows.slice(win.visible));
+        const a = document.activeElement;
+        const lost = !!a && (cut.has(a) || (typeof a.closest === 'function' && cut.has(a.closest('.list-item'))));
         list.querySelectorAll('.list-overflow').forEach((el) => { if (!cut.has(el)) el.classList.remove('list-overflow'); });
         cut.forEach((el) => { if (!el.classList.contains('list-overflow')) el.classList.add('list-overflow'); });
         const collapsed = cut.size > 0;
         if (list.classList.contains('list-collapsed') !== collapsed) list.classList.toggle('list-collapsed', collapsed);
         this._sbMoreRow(listId, win);
+        if (!lost) return;
+        const row = this._sbRowEl(listId);
+        const go = row ? row.querySelector('.sb-more') : null;
+        if (go && !go.hidden && typeof go.focus === 'function') go.focus({ preventScroll: true });
     },
 
     _sbHeadVar() {
@@ -1198,6 +1202,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         this.channels.delete(key);
+        this._noteChannelsChanged();
         if (this.unreadCounts) this._setUnreadCount(geohash ? `#${geohash}` : channel, 0);
 
         if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
@@ -2288,6 +2293,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             list.appendChild(item);
 
             this.channels.set(key, { channel, geohash });
+            this._noteChannelsChanged();
             // Seed the badge from the live count, since rows are often built after counts are painted.
             const unreadKey = geohash ? `#${geohash}` : channel;
             const standingUnread = (this.unreadCounts && this.unreadCounts.get(unreadKey)) || 0;
@@ -2338,6 +2344,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const wasJoined = this.userJoinedChannels.has(key);
 
         this.channels.delete(key);
+        this._noteChannelsChanged();
 
         this.userJoinedChannels.delete(key);
 
@@ -2745,7 +2752,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const unread = shown > 0;
         if (item.classList.contains('has-unread') === unread) return;
         item.classList.toggle('has-unread', unread);
-        this._sbSoon(channel.startsWith('pm-') || channel.startsWith('group-') ? 'pmList' : 'channelList');
+        if (!channel.startsWith('pm-') && !channel.startsWith('group-')) this._sbSoon('channelList');
     },
 
     _sbSoon(listId) {
@@ -2784,75 +2791,93 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }, SORT_THROTTLE_MS - elapsed);
     },
 
+    _noteChannelsChanged() {
+        this._channelsRev = (this._channelsRev || 0) + 1;
+    },
+
+    _channelJoinRanks() {
+        const joined = this.userJoinedChannels || new Set();
+        const channels = this.channels || new Map();
+        const rev = this._channelsRev || 0;
+        const cached = this._joinRanks;
+        if (cached && cached.rev === rev && cached.size === channels.size
+            && cached.joined === joined && cached.keys.length === joined.size) {
+            let i = 0;
+            let same = true;
+            for (const key of joined) {
+                if (key !== cached.keys[i++]) { same = false; break; }
+            }
+            if (same) return cached.map;
+        }
+        const keys = [...joined];
+        const map = new Map();
+        for (const key of keys) map.set(key, map.size);
+        for (const key of channels.keys()) if (!map.has(key)) map.set(key, map.size);
+        this._joinRanks = { rev, size: channels.size, joined, keys, map };
+        return map;
+    },
+
     sortChannelsByActivity() {
         const channelList = document.getElementById('channelList');
         const channels = Array.from(channelList.querySelectorAll('.channel-item'));
-        const before = channels.slice();
 
         const scrollTop = channelList.scrollTop;
 
-        channels.sort((a, b) => {
-            const aIsDefault = (a.dataset.geohash || a.dataset.channel) === 'nymchat';
-            const bIsDefault = (b.dataset.geohash || b.dataset.channel) === 'nymchat';
-
-            if (aIsDefault) return -1;
-            if (bIsDefault) return 1;
-
-            const pinAt = (el) => (typeof this._pinChannelIndex === 'function'
-                ? this._pinChannelIndex(el) : (el.classList.contains('pinned') ? 0 : -1));
-            const aPin = pinAt(a);
-            const bPin = pinAt(b);
-            if (aPin >= 0 && bPin >= 0 && aPin !== bPin) return aPin - bPin;
-            if (aPin >= 0 && bPin < 0) return -1;
-            if (aPin < 0 && bPin >= 0) return 1;
-
-            const aIsActive = a.classList.contains('active');
-            const bIsActive = b.classList.contains('active');
-
-            if (aIsActive && !bIsActive) return -1;
-            if (!aIsActive && bIsActive) return 1;
-
-            const aIsGeo = !!a.dataset.geohash && a.dataset.geohash !== '' && this.isValidGeohash(a.dataset.geohash);
-            const bIsGeo = !!b.dataset.geohash && b.dataset.geohash !== '' && this.isValidGeohash(b.dataset.geohash);
-
-            if (this.settings.sortByProximity && this.userLocation) {
-                if (aIsGeo && bIsGeo) {
-                    try {
-                        const coordsA = this.decodeGeohash(a.dataset.geohash);
-                        const coordsB = this.decodeGeohash(b.dataset.geohash);
-
-                        const distA = this.calculateDistance(
-                            this.userLocation.lat, this.userLocation.lng,
-                            coordsA.lat, coordsA.lng
-                        );
-                        const distB = this.calculateDistance(
-                            this.userLocation.lat, this.userLocation.lng,
-                            coordsB.lat, coordsB.lng
-                        );
-
-                        return distA - distB;
-                    } catch (e) {
-                    }
+        const ranks = this._channelJoinRanks();
+        const proximity = !!(this.settings.sortByProximity && this.userLocation);
+        const pinAt = typeof this._pinChannelIndex === 'function'
+            ? (el) => this._pinChannelIndex(el) : (el) => (el.classList.contains('pinned') ? 0 : -1);
+        const rows = channels.map((el) => {
+            const geohash = el.dataset.geohash;
+            const key = geohash || el.dataset.channel;
+            const activityKey = geohash ? `#${geohash}` : el.dataset.channel;
+            let distance = null;
+            if (proximity && geohash && this.isValidGeohash(geohash)) {
+                try {
+                    const coords = this.decodeGeohash(geohash);
+                    distance = this.calculateDistance(
+                        this.userLocation.lat, this.userLocation.lng,
+                        coords.lat, coords.lng
+                    );
+                } catch (e) {
                 }
             }
-
-            // Sort by most recent activity so live channels rise regardless of stale cached unread counts.
-            const aChannel = a.dataset.geohash ? `#${a.dataset.geohash}` : a.dataset.channel;
-            const bChannel = b.dataset.geohash ? `#${b.dataset.geohash}` : b.dataset.channel;
-
-            const aActivity = this.channelLastActivity.get(aChannel) || 0;
-            const bActivity = this.channelLastActivity.get(bChannel) || 0;
-
-            if (aActivity !== bActivity) return bActivity - aActivity;
-
-            const aUnread = this.unreadCounts.get(aChannel) || 0;
-            const bUnread = this.unreadCounts.get(bChannel) || 0;
-            return bUnread - aUnread;
+            const rank = ranks.get(key);
+            return {
+                el,
+                isDefault: key === 'nymchat',
+                pin: pinAt(el),
+                active: el.classList.contains('active'),
+                distance,
+                activity: this.channelLastActivity.get(activityKey) || 0,
+                unread: this.unreadCounts.get(activityKey) || 0,
+                rank: rank === undefined ? ranks.size : rank,
+            };
         });
 
-        if (channels.some((channel, i) => channel !== before[i])) {
+        rows.sort((a, b) => {
+            if (a.isDefault) return -1;
+            if (b.isDefault) return 1;
+
+            if (a.pin >= 0 && b.pin >= 0 && a.pin !== b.pin) return a.pin - b.pin;
+            if (a.pin >= 0 && b.pin < 0) return -1;
+            if (a.pin < 0 && b.pin >= 0) return 1;
+
+            if (a.active && !b.active) return -1;
+            if (!a.active && b.active) return 1;
+
+            if (a.distance !== null && b.distance !== null) return a.distance - b.distance;
+
+            // Sort by most recent activity so live channels rise regardless of stale cached unread counts.
+            if (a.activity !== b.activity) return b.activity - a.activity;
+            if (a.unread !== b.unread) return b.unread - a.unread;
+            return a.rank - b.rank;
+        });
+        const sorted = rows.map((r) => r.el);
+
+        if (sorted.some((channel, i) => channel !== channels[i])) {
             let at = channelList.firstElementChild;
-            for (const channel of channels) {
+            for (const channel of sorted) {
                 if (channel === at) { at = at.nextElementSibling; continue; }
                 channelList.insertBefore(channel, at);
             }

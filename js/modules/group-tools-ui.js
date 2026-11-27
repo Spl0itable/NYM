@@ -68,6 +68,11 @@
             return String(raw || 'nym').replace(/(#[0-9a-f]{4})+$/i, '') + '#' + this.getPubkeySuffix(pk);
         },
 
+        _gtNymIsolated(pk) {
+            const raw = pk === this.pubkey ? this.nym : this.getNymFromPubkey(pk);
+            return this.nymIsolatedLabel(String(raw || 'nym').replace(/(#[0-9a-f]{4})+$/i, ''), pk);
+        },
+
         _gtSurface() {
             if (this.inPMMode && this.currentGroup) return 'group';
             if (this.inPMMode && this.currentPM) return 'dm';
@@ -277,7 +282,7 @@
             if (!this.users.has(joinerPubkey) && typeof this.fetchProfileDirect === 'function') await this.fetchProfileDirect(joinerPubkey);
             if (this._gtMask(joinerPubkey)) return;
             const title = this._gx('Join request in {group}', { group: (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) });
-            const body = this._gx('{nym} wants to join. Open the group menu to approve or decline.', { nym: this.getNymFromPubkey(joinerPubkey) });
+            const body = this._gx('{nym} wants to join. Open the group menu to approve or decline.', { nym: this._gtNymIsolated(joinerPubkey) });
             this.showNotification(title, body, { type: 'group', groupId, id: this.getGroupConversationKey(groupId), pubkey: joinerPubkey, eventId: window.NymNotifyView.joinRequestId(groupId, joinerPubkey, ts), stableId: true }, Date.now());
         },
 
@@ -932,19 +937,21 @@
 
         _gtRefreshLocationCard(message) {
             const ids = [message.nymMessageId, message.id].filter((x) => typeof x === 'string' && x);
-            let el = null;
+            let els = [];
             for (const id of ids) {
-                el = document.querySelector(`[data-message-id="${id.replace(/["\\]/g, '\\$&')}"] .gt-loc`);
-                if (el) break;
+                els = [...document.querySelectorAll(`[data-message-id="${id.replace(/["\\]/g, '\\$&')}"] .gt-loc`)];
+                if (els.length) break;
             }
-            if (!el) return;
+            if (!els.length) return;
             const loc = T().parseLocation(message.content);
             if (!loc) return;
-            const tmp = document.createElement('div');
-            tmp.innerHTML = this._gtLocationCardHtml(loc, message);
-            const fresh = tmp.firstElementChild;
-            el.replaceWith(fresh);
-            this._gtDrawMaps(fresh.parentNode);
+            for (const el of els) {
+                const tmp = document.createElement('div');
+                tmp.innerHTML = this._gtLocationCardHtml(loc, message);
+                const fresh = tmp.firstElementChild;
+                el.replaceWith(fresh);
+                this._gtDrawMaps(fresh.parentNode);
+            }
         },
 
         _gtCurrentChat() {
@@ -1281,7 +1288,7 @@
             if (!this._canSendGiftWraps()) { this._gtNotice(this._gx('Pick a nym or log in to join this call.')); return; }
             if (this.activeCall || this.incomingCall) { this._gtNotice(this._gx('Already in a call')); return; }
             if (!this.users.has(link.host) && typeof this.fetchProfileDirect === 'function') { try { await this.fetchProfileDirect(link.host); } catch (_) { } }
-            const host = this._gtNymTag(link.host);
+            const host = this._gtNymIsolated(link.host);
             const msg = link.kind === 'video'
                 ? this._gx('Join the video call "{name}" hosted by {host}? The host admits you. Your camera and microphone are used once you join.', { name: link.name, host })
                 : this._gx('Join the voice call "{name}" hosted by {host}? The host admits you. Your microphone is used once you join.', { name: link.name, host });
@@ -1341,7 +1348,7 @@
             }
             if (!this.users.has(sender) && typeof this.fetchProfileDirect === 'function') { try { await this.fetchProfileDirect(sender); } catch (_) { } }
             if (declineHidden()) return;
-            const who = this._gtNymTag(sender);
+            const who = this._gtNymIsolated(sender);
             this.showNotification(this._gx('Call link: {name}', { name: link.name }), this._gx('{nym} wants to join', { nym: who }), { type: 'call', pubkey: sender, eventId: window.NymNotifyView.knockId(link.id, sender, createdAt || nowSec()), stableId: true }, Date.now());
             const admit = await window.showAppConfirm(this._gx('{nym} wants to join your call link "{name}".', { nym: who, name: link.name }), { title: this._gx('Join request'), okLabel: this._gx('Admit'), cancelLabel: this._gx('Decline') });
             const recheck = T().checkCallLinkJoin(this._gtCallLinks(), data.linkId, data.secret, nowSec());

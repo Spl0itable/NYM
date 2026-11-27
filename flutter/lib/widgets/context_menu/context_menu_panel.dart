@@ -14,6 +14,7 @@ import '../../state/settings_provider.dart';
 import '../../core/crypto/key_format.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/utils/nick_parse.dart' show nickMentionText;
 import '../../core/utils/nym_utils.dart';
 import '../../features/autocomplete/pending_edit.dart';
 import '../../features/chat_tools/chat_tools_providers.dart';
@@ -49,7 +50,7 @@ import '../../core/theme/nym_a11y.dart';
 import '../../features/share/share_sheet.dart';
 import '../../features/shortcuts/escape_layers.dart';
 
-CtxTarget enrichCtxTarget(AppState s, CtxTarget target) {
+CtxTarget enrichCtxTarget(AppState s, CtxTarget target, {bool? reportable}) {
   final self = s.selfPubkey;
   final inGroup = s.view.kind == ViewKind.group;
   Group? group;
@@ -82,6 +83,7 @@ CtxTarget enrichCtxTarget(AppState s, CtxTarget target) {
     backToGroupId: target.backToGroupId,
     translatable: target.translatable,
     anonLane: target.anonLane,
+    reportable: reportable ?? target.reportable,
   );
 }
 
@@ -180,8 +182,11 @@ class ContextMenuPanel extends ConsumerWidget {
     );
   }
 
-  CtxTarget _enrichTarget(WidgetRef ref) =>
-      enrichCtxTarget(ref.read(appStateProvider), target);
+  CtxTarget _enrichTarget(WidgetRef ref) => enrichCtxTarget(
+      ref.read(appStateProvider), target,
+      reportable: ref
+          .read(nostrControllerProvider)
+          .reportTargetAllowed(target.pubkey, message: message));
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -691,7 +696,7 @@ class ContextMenuPanel extends ConsumerWidget {
     switch (a) {
       case CtxAction.mention:
         onClose();
-        hooks.requestMention(fullNym);
+        hooks.requestMention(nickMentionText(t.nym, t.pubkey).substring(1));
         break;
       case CtxAction.quote:
         onClose();
@@ -729,23 +734,25 @@ class ContextMenuPanel extends ConsumerWidget {
         await _zap(context, ref);
         break;
       case CtxAction.report:
+        if (!controller.reportTargetAllowed(t.pubkey, message: message)) break;
         final entry = controller.reportEntryBlocked(t.pubkey, t.messageId);
         if (entry.isNotEmpty) {
           controller.showReportRefusal(entry);
           break;
         }
+        final reportId = controller.reportMessageId(t.messageId);
         await openOverMenu(
           onClose,
           () => ReportModal.show(
             context,
             targetNym: fullNym,
-            hasMessage: t.messageId != null,
+            hasMessage: reportId != null,
             reportedChanges: controller.reportedRevision,
             messageNote: controller.reportMessageLockedNote(t.pubkey, t.messageId),
             alreadyReported: (reportMessage) {
               final k = ReportRecord.keyFor(
                   pubkey: t.pubkey,
-                  messageId: t.messageId,
+                  messageId: reportId,
                   includeMessage: reportMessage);
               return controller.isTargetReported(k)
                   ? controller.reportRefusal(k)
@@ -755,7 +762,7 @@ class ContextMenuPanel extends ConsumerWidget {
             onSubmit: (type, details, reportMessage) {
               controller.submitReport(
                 pubkey: t.pubkey,
-                messageId: reportMessage ? t.messageId : null,
+                messageId: reportMessage ? reportId : null,
                 type: type,
                 details: details,
               );
@@ -995,7 +1002,7 @@ class ContextMenuPanel extends ConsumerWidget {
     if (lnAddr == null || lnAddr.isEmpty) {
       // Tell the user the target cannot receive zaps rather than failing silently.
       showToast(tr('@{nym} cannot receive zaps (no lightning address set)',
-          {'nym': stripPubkeySuffix(target.nym)}));
+          {'nym': isolateNym(stripPubkeySuffix(target.nym))}));
       return;
     }
     if (!context.mounted) return;

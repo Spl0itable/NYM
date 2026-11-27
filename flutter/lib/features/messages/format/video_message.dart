@@ -5,6 +5,7 @@ import 'package:video_player/video_player.dart';
 
 import '../../../core/theme/nym_colors.dart';
 import '../../../core/theme/nym_metrics.dart';
+import '../../../core/theme/nym_theme_swap.dart';
 import '../../duo/duo_rail.dart';
 import '../../i18n/i18n.dart';
 import '../../../core/utils/safe_url.dart';
@@ -207,7 +208,7 @@ class _VideoMessageState extends State<VideoMessage> {
         duration: NymMotion.transition,
         curve: NymMotion.curve,
         child: AnimatedContainer(
-          duration: NymMotion.transition,
+          duration: NymThemeSwap.motion(context, NymMotion.transition),
           curve: NymMotion.curve,
           decoration: BoxDecoration(
             borderRadius: radius,

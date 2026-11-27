@@ -158,8 +158,11 @@ class IdentityService {
           final sk = bech32.decodeNsec(savedNsec);
           final pubkey = getPublicKeyHex(sk);
           final nym = (savedNick != null && savedNick.isNotEmpty)
-              ? savedNick
+              ? withOwnNymSuffix(savedNick, pubkey)
               : _nymGen.generate(pubkey, style: nickStyle);
+          if (nym != storedNick && savedNick != null && savedNick.isNotEmpty) {
+            await _kv.setString(StorageKeys.autoEphemeralNick, nym);
+          }
           return Identity(pubkey: pubkey, privkey: sk, nym: nym);
         } catch (_) {
           await _secure.remove(SecretKeys.sessionNsec);
@@ -171,12 +174,12 @@ class IdentityService {
     final pubkey = getPublicKeyHex(sk);
     generatedFreshKey = true;
     final nym = (!randomPerSession && savedNick != null && savedNick.isNotEmpty)
-        ? savedNick
+        ? withOwnNymSuffix(savedNick, pubkey)
         : _nymGen.generate(pubkey, style: nickStyle);
 
     if (!randomPerSession) {
       await _secretSet(SecretKeys.sessionNsec, bech32.encodeNsecBytes(sk));
-      if (savedNick == null || savedNick.isEmpty) {
+      if (nym != storedNick) {
         await _kv.setString(StorageKeys.autoEphemeralNick, nym);
       }
     }

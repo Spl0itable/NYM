@@ -5,7 +5,7 @@
     line-height: 0;
 }
 
-:is(.message-author .avatar-message, .me-message > .avatar-message, .user-item .avatar-user-list, .pm-item > .avatar-pm, .sb-frow > .avatar-pm, .nm-mention .avatar-message, .quote-author .avatar-message, .quote-preview-author .avatar-message, .input-mention .avatar-message, .typing-indicator-avatars img, .group-reader-avatar, .autocomplete-item .avatar-message, .notification-item-header > .avatar-message, .cv-col-icon .avatar-pm, img.sr-tiny, .shop-ring-sample-tiny).shop-ring {
+:is(.message-author .avatar-message, .me-message > .avatar-message, .nm-mention .avatar-message, .quote-author .avatar-message, .quote-preview-author .avatar-message, .input-mention .avatar-message, .typing-indicator-avatars img, .group-reader-avatar, .autocomplete-item .avatar-message, .notification-item-header > .avatar-message, .cv-col-icon .avatar-pm, img.sr-tiny, .shop-ring-sample-tiny).shop-ring {
     border: 0;
     border-radius: 50%;
     padding: var(--sr-w, 2px);
@@ -13,7 +13,7 @@
     box-shadow: none;
 }
 
-:is(.message-group-avatar img.avatar-bubble, .group-info-member .avatar-message, .pm-header-avatar .avatar-message, .cv-tab-icon .avatar-pm, .call-title-avatar, .call-mention-item .avatar-message, img.sr-row, .uh-avatar img, .shop-ring-sample-row).shop-ring {
+:is(.message-group-avatar img.avatar-bubble, .group-info-member .avatar-message, .pm-header-avatar .avatar-message, .cv-tab-icon .avatar-pm, .call-title-avatar, .call-mention-item .avatar-message, .user-item .avatar-user-list, .pm-item > .avatar-pm, .sb-frow > .avatar-pm, img.sr-row, .uh-avatar img, .shop-ring-sample-row).shop-ring {
     --sr-w: calc(var(--sr-s, 28px) * 0.09);
     --sr-g: calc(var(--sr-s, 28px) * 0.03);
     border: 0;
@@ -47,18 +47,6 @@ body.light-mode .has-banner .avatar-context.shop-ring {
 }
 
 .me-message > .avatar-message.shop-ring {
-    --sr-w: 2px;
-}
-
-.user-item .avatar-user-list.shop-ring {
-    --sr-w: 2px;
-}
-
-.pm-item > .avatar-pm.shop-ring {
-    --sr-w: 2px;
-}
-
-.sb-frow > .avatar-pm.shop-ring {
     --sr-w: 2px;
 }
 
@@ -124,6 +112,21 @@ img.sr-tiny.shop-ring {
 
 .call-mention-item .avatar-message.shop-ring {
     --sr-s: 22px;
+}
+
+.user-item .avatar-user-list.shop-ring {
+    --sr-s: 40px;
+    --sr-fill: rgb(from var(--bg-secondary) r g b);
+}
+
+.pm-item > .avatar-pm.shop-ring {
+    --sr-s: 40px;
+    --sr-fill: rgb(from var(--bg-secondary) r g b);
+}
+
+.sb-frow > .avatar-pm.shop-ring {
+    --sr-s: 40px;
+    --sr-fill: rgb(from var(--bg-secondary) r g b);
 }
 
 .uh-avatar img.shop-ring {
@@ -647,7 +650,7 @@ body.light-mode .shop-ring-prism {
 }
 
 @media (forced-colors: active) {
-    :is(.message-author .avatar-message, .me-message > .avatar-message, .user-item .avatar-user-list, .pm-item > .avatar-pm, .sb-frow > .avatar-pm, .nm-mention .avatar-message, .quote-author .avatar-message, .quote-preview-author .avatar-message, .input-mention .avatar-message, .typing-indicator-avatars img, .group-reader-avatar, .autocomplete-item .avatar-message, .notification-item-header > .avatar-message, .cv-col-icon .avatar-pm, img.sr-tiny, .shop-ring-sample-tiny).shop-ring, :is(.message-group-avatar img.avatar-bubble, .group-info-member .avatar-message, .pm-header-avatar .avatar-message, .cv-tab-icon .avatar-pm, .call-title-avatar, .call-mention-item .avatar-message, img.sr-row, .uh-avatar img, .shop-ring-sample-row).shop-ring, :is(.avatar-context, .call-tile-avatar, img.sr-profile, .shop-ring-sample-profile).shop-ring {
+    :is(.message-author .avatar-message, .me-message > .avatar-message, .nm-mention .avatar-message, .quote-author .avatar-message, .quote-preview-author .avatar-message, .input-mention .avatar-message, .typing-indicator-avatars img, .group-reader-avatar, .autocomplete-item .avatar-message, .notification-item-header > .avatar-message, .cv-col-icon .avatar-pm, img.sr-tiny, .shop-ring-sample-tiny).shop-ring, :is(.message-group-avatar img.avatar-bubble, .group-info-member .avatar-message, .pm-header-avatar .avatar-message, .cv-tab-icon .avatar-pm, .call-title-avatar, .call-mention-item .avatar-message, .user-item .avatar-user-list, .pm-item > .avatar-pm, .sb-frow > .avatar-pm, img.sr-row, .uh-avatar img, .shop-ring-sample-row).shop-ring, :is(.avatar-context, .call-tile-avatar, img.sr-profile, .shop-ring-sample-profile).shop-ring {
         border: 1.5px solid CanvasText;
         padding: 0;
         background: none;

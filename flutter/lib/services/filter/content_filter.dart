@@ -1,6 +1,7 @@
+import '../../core/utils/nick_parse.dart';
+
 final RegExp _suffixRe = RegExp(r'#[0-9a-f]{4}$', caseSensitive: false);
 final RegExp _suffixCaptureRe = RegExp(r'#([0-9a-f]{4})$', caseSensitive: false);
-final RegExp _quoteHeadRe = RegExp(r'^>\s*@([^:\n]+):');
 final RegExp _inviteJoinRe = RegExp(r'join\s+#([a-z0-9]+)', caseSensitive: false);
 
 class ContentFilterCtx {
@@ -122,8 +123,9 @@ abstract final class ContentFilter {
   static List<String> quoteAuthors(String text) {
     final out = <String>[];
     for (final line in text.split('\n')) {
-      final m = _quoteHeadRe.firstMatch(line);
-      if (m != null) out.add(m.group(1)!.trim());
+      if (!line.startsWith('>')) continue;
+      final h = parseQuoteHead(line);
+      if (h != null) out.add(h.label.trim());
     }
     return out;
   }
@@ -197,9 +199,9 @@ abstract final class ContentFilter {
     var skipping = false;
     var removed = false;
     for (final line in text.split('\n')) {
-      final m = _quoteHeadRe.firstMatch(line);
-      if (m != null) {
-        skipping = quoteBlocked(c, m.group(1)!.trim(), quoted);
+      final h = line.startsWith('>') ? parseQuoteHead(line) : null;
+      if (h != null) {
+        skipping = quoteBlocked(c, h.label.trim(), quoted);
         if (skipping) {
           removed = true;
           continue;

@@ -3073,28 +3073,8 @@ Object.assign(NYM.prototype, {
 
     // Resolve a nym, nym#suffix, hex pubkey or npub to a hex pubkey.
     resolvePubkeyFromNym(nymInput) {
-        const asPubkey = this.normalizePubkeyInput(nymInput);
-        if (asPubkey) return asPubkey;
-        const hashIndex = nymInput.indexOf('#');
-        let searchNym = nymInput;
-        let searchSuffix = null;
-        if (hashIndex !== -1) {
-            searchNym = nymInput.substring(0, hashIndex);
-            searchSuffix = nymInput.substring(hashIndex + 1);
-        }
-        const matches = [];
-        this.users.forEach((user, pubkey) => {
-            const baseNym = this.stripPubkeySuffix(user.nym);
-            if (baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                if (!searchSuffix || pubkey.endsWith(searchSuffix)) matches.push(pubkey);
-            }
-        });
-        if (matches.length === 1) return matches[0];
-        if (matches.length > 1) {
-            this.displaySystemMessage(this.uiText(`Multiple users named @{searchNym} — use @name#xxxx to disambiguate`, { searchNym }));
-            return null;
-        }
-        return null;
+        const hit = this.lookupNymOrReport(nymInput);
+        return hit && hit.pubkey ? hit.pubkey : null;
     },
 
     async leaveGroup(groupId, opts = {}) {
@@ -5262,23 +5242,9 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const parts = args.trim().split(/\s+/);
-        const memberNyms = [];
-        const nameWords = [];
-        for (const part of parts) {
-            if (part.startsWith('@')) {
-                // @nym or @nym#suffix
-                memberNyms.push(part.slice(1));
-            } else if (this.isPubkeyInput(part)) {
-                // raw public key, hex or npub
-                memberNyms.push(this.normalizePubkeyInput(part));
-            } else if (part.includes('#') && !part.startsWith('#')) {
-                // nym#suffix without @ (e.g. anon_pulse#35b5)
-                memberNyms.push(part);
-            } else {
-                nameWords.push(part);
-            }
-        }
+        const parsed = window.NymNickParse.groupArgs(args);
+        const memberNyms = parsed.members.map((t) => this.normalizePubkeyInput(t) || t);
+        const nameWords = parsed.name ? [parsed.name] : [];
 
         if (memberNyms.length === 0) {
             this.displaySystemMessage('Usage: /group @user1 @user2 [GroupName]  — at least one user required (@user, user#xxxx, or pubkey)');
@@ -5287,9 +5253,11 @@ Object.assign(NYM.prototype, {
 
         const resolvedMembers = [];
         for (const memberNym of memberNyms) {
-            const pubkey = this.resolvePubkeyFromNym(memberNym);
+            const hit = this.lookupNymOrReport(memberNym);
+            if (hit && hit.ambiguous) return;
+            const pubkey = hit && hit.pubkey;
             if (!pubkey) {
-                this.displaySystemMessage(this.uiText(`User @{memberNym} not found. They need to be visible in the current channel first.`, { memberNym }));
+                this.displaySystemMessage(this.uiText(`User @{memberNym} not found. They need to be visible in the current channel first.`, { memberNym: memberNym.replace(/^@/, '') }));
                 return;
             }
             if (pubkey === this.pubkey) continue; // self is always included

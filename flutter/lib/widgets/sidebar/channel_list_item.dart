@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
@@ -354,28 +356,40 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
         ? 'Not a geohash'
         : (_place ?? _region ?? geohashLocationLabel(gh));
     if (text.isEmpty) return const SizedBox.shrink();
+    final size = widget.textSize - 3;
     final style = TextStyle(
       color: c.textDim,
-      fontSize: widget.textSize - 3,
-      height: kSidebarSubLine / (widget.textSize - 3),
+      fontSize: size,
+      height: math.max(kSidebarSubLine, size * 1.3) / size,
     );
-    // Only the city half ellipsizes, so a narrow row keeps the country.
     final splitIdx = _place != null ? text.lastIndexOf(', ') : -1;
     final Widget line;
     if (splitIdx > 0 && splitIdx < text.length - 2) {
-      line = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: Text(
-              text.substring(0, splitIdx),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: style,
-            ),
-          ),
-          Text(text.substring(splitIdx), maxLines: 1, style: style),
-        ],
+      line = _PlaceParts(
+        em: MediaQuery.textScalerOf(context).scale(style.fontSize!),
+        city: Text(
+          text.substring(0, splitIdx),
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
+          textWidthBasis: TextWidthBasis.longestLine,
+          style: style,
+        ),
+        country: Text(
+          text.substring(splitIdx),
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
+          textWidthBasis: TextWidthBasis.longestLine,
+          style: style,
+        ),
+        full: Text(
+          text,
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
+          style: style,
+        ),
       );
     } else {
       line = Text(
@@ -386,5 +400,181 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
       );
     }
     return Padding(padding: const EdgeInsets.only(top: 1), child: line);
+  }
+}
+
+class _PlaceParts extends MultiChildRenderObjectWidget {
+  _PlaceParts(
+      {required this.em,
+      required Widget city,
+      required Widget country,
+      required Widget full})
+      : super(children: <Widget>[city, country, full]);
+
+  final double em;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderPlaceParts(em, Directionality.of(context));
+
+  @override
+  void updateRenderObject(
+      BuildContext context, _RenderPlaceParts renderObject) {
+    renderObject
+      ..em = em
+      ..textDirection = Directionality.of(context);
+  }
+}
+
+class _PlacePartsParentData extends ContainerBoxParentData<RenderBox> {}
+
+class _RenderPlaceParts extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _PlacePartsParentData>,
+        RenderBoxContainerDefaultsMixin<RenderBox, _PlacePartsParentData> {
+  _RenderPlaceParts(this._em, this._textDirection);
+
+  double _em;
+  set em(double value) {
+    if (value == _em) return;
+    _em = value;
+    markNeedsLayout();
+  }
+
+  TextDirection _textDirection;
+  set textDirection(TextDirection value) {
+    if (value == _textDirection) return;
+    _textDirection = value;
+    markNeedsLayout();
+  }
+
+  RenderBox get _city => firstChild!;
+  RenderBox get _country => childAfter(_city)!;
+  RenderBox get _full => lastChild!;
+
+  bool _whole = false;
+
+  _PlacePartsParentData _pd(RenderBox child) =>
+      child.parentData! as _PlacePartsParentData;
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _PlacePartsParentData) {
+      child.parentData = _PlacePartsParentData();
+    }
+  }
+
+  ({bool whole, double city, double country}) _plan(double maxWidth) {
+    final city = _city.getMaxIntrinsicWidth(double.infinity);
+    final country = _country.getMaxIntrinsicWidth(double.infinity);
+    if (!maxWidth.isFinite) {
+      return (whole: false, city: city, country: country);
+    }
+    if (maxWidth < _em * 6 && city + country > maxWidth) {
+      return (whole: true, city: 0.0, country: 0.0);
+    }
+    final half = maxWidth / 2;
+    var keep = math.min(city, half);
+    if (city > half && country > half) {
+      if (city <= maxWidth - _em * 2.5) {
+        keep = city;
+      } else if (country <= maxWidth - _em * 3) {
+        keep = maxWidth - country;
+      }
+    }
+    if (keep + country <= maxWidth) {
+      return (
+        whole: false,
+        city: math.min(city, maxWidth - country),
+        country: country,
+      );
+    }
+    return (whole: false, city: keep, country: maxWidth - keep);
+  }
+
+  Size _measure(
+    BoxConstraints c,
+    Size Function(RenderBox child, BoxConstraints c) sizeOf, [
+    void Function(bool whole, Size city, Size country)? place,
+  ]) {
+    final plan = _plan(c.maxWidth);
+    const none = BoxConstraints.tightFor(width: 0, height: 0);
+    final city =
+        sizeOf(_city, plan.whole ? none : BoxConstraints(maxWidth: plan.city));
+    final country = sizeOf(
+        _country, plan.whole ? none : BoxConstraints(maxWidth: plan.country));
+    final full =
+        sizeOf(_full, plan.whole ? BoxConstraints(maxWidth: c.maxWidth) : none);
+    place?.call(plan.whole, city, country);
+    if (plan.whole) return c.constrain(full);
+    return c.constrain(Size(
+      city.width + country.width,
+      math.max(city.height, country.height),
+    ));
+  }
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) =>
+      _measure(constraints, (child, c) => child.getDryLayout(c));
+
+  @override
+  void performLayout() {
+    size = _measure(constraints, (child, c) {
+      child.layout(c, parentUsesSize: true);
+      return child.size;
+    }, (whole, city, country) {
+      _whole = whole;
+      final rtl = _textDirection == TextDirection.rtl;
+      _pd(_city).offset = Offset(rtl ? country.width : 0, 0);
+      _pd(_country).offset = Offset(rtl ? 0 : city.width, 0);
+      _pd(_full).offset = Offset.zero;
+    });
+  }
+
+  @override
+  double computeMinIntrinsicWidth(double height) =>
+      _city.getMinIntrinsicWidth(height);
+
+  @override
+  double computeMaxIntrinsicWidth(double height) =>
+      _full.getMaxIntrinsicWidth(height);
+
+  @override
+  double computeMinIntrinsicHeight(double width) => math.max(
+      _city.getMinIntrinsicHeight(width),
+      _country.getMinIntrinsicHeight(width));
+
+  @override
+  double computeMaxIntrinsicHeight(double width) => math.max(
+      _city.getMaxIntrinsicHeight(width),
+      _country.getMaxIntrinsicHeight(width));
+
+  @override
+  double? computeDistanceToActualBaseline(TextBaseline baseline) =>
+      (_whole ? _full : _city).getDistanceToActualBaseline(baseline);
+
+  bool _shows(RenderObject child) => _whole == (child == _full);
+
+  @override
+  bool paintsChild(RenderBox child) => _shows(child);
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    for (final child in getChildrenAsList()) {
+      if (_shows(child)) {
+        context.paintChild(child, offset + _pd(child).offset);
+      }
+    }
+  }
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      defaultHitTestChildren(result, position: position);
+
+  @override
+  void visitChildrenForSemantics(RenderObjectVisitor visitor) {
+    for (final child in getChildrenAsList()) {
+      if (_shows(child)) visitor(child);
+    }
   }
 }

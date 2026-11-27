@@ -15,13 +15,14 @@ import '../../core/crypto/key_format.dart' show normalizePrivkeyInput;
 import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
-import '../../core/utils/nym_utils.dart' show NymLengthFormatter;
+import '../../core/utils/nym_utils.dart'
+    show NymLengthFormatter, normalizeNym, nymGraphemes;
 import '../../services/platform/deep_links.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/brand_buttons.dart';
-import '../../widgets/common/nym_label.dart' show NymText;
+import '../../widgets/common/nym_label.dart' show NymText, isolateNymLabel;
 import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
 import '../search/unified_search_panel.dart' show nymSuffixStyle;
@@ -199,7 +200,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
 
   Future<void> _enter() async {
     if (_busy) return;
-    final nym = _nymCtl.text.trim();
+    final nym = normalizeNym(_nymCtl.text);
 
     // Reserved nicknames require the developer nsec first.
     if (nym.isNotEmpty && isReservedNick(nym)) {
@@ -343,7 +344,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         _loggingIn = false;
         _loginError = e is AccountAlreadySaved
             ? tr('This key is also saved as {nym}. Switch to it from '
-                'Manage Identities.', {'nym': e.nym})
+                'Manage Identities.', {'nym': isolateNymLabel(e.nym)})
             : tr('Invalid nsec key. Please check and try again.');
       });
       return;
@@ -875,7 +876,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     );
     if (!showCounter || maxLength == null) return field;
     // Warn at 80%, limit at 100%.
-    final len = controller.text.length;
+    final len = nym ? nymGraphemes(controller.text) : controller.text.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

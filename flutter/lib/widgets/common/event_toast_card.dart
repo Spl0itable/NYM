@@ -13,6 +13,7 @@ import '../../core/utils/nym_utils.dart' show capNymBase;
 import 'nym_label.dart'
     show
         NymFitLine,
+        isolatedNymSpans,
         keepNymBase,
         knownNymSuffix,
         mergeNymRanges,
@@ -45,8 +46,9 @@ TextSpan _titleSpan(String title, String sender, TextStyle style,
   final cut = at + m.group(1)!.length;
   final suffix = m.group(2)!;
   return TextSpan(style: style, children: [
-    TextSpan(text: title.substring(0, cut)),
-    TextSpan(text: suffix, style: nymSuffixStyle(style, contrast: contrast)),
+    if (at > 0) TextSpan(text: title.substring(0, at)),
+    ...isolatedNymSpans(title.substring(at, cut), suffix,
+        dim: nymSuffixStyle(style, contrast: contrast)),
     if (cut + suffix.length < title.length)
       TextSpan(text: title.substring(cut + suffix.length)),
   ]);
@@ -65,8 +67,7 @@ TextSpan _bodySpan(String body, String sender, TextStyle style, TextStyle dim) {
   }
   final rest = body.substring(sender.length);
   return TextSpan(style: style, children: [
-    TextSpan(text: m.group(1)!),
-    TextSpan(text: m.group(2)!, style: dim),
+    ...isolatedNymSpans(m.group(1)!, m.group(2)!, dim: dim),
     ...dimRangeSpans(rest, _bodyRanges(rest, sender), dim),
   ]);
 }

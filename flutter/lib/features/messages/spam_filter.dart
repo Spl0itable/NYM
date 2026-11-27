@@ -238,15 +238,12 @@ class SpamFilter {
     if (nym is! String) return false;
     final n = nym.trim();
     if (n.isEmpty || n.length < 8) return false;
-    return _looksLikeRandomToken(n);
+    return _looksLikeRandomNym(n);
   }
 
   static bool _looksLikeRandomToken(String token) {
     if (token.isEmpty || token.length < 8) return false;
     if (!_rxAlphaNum.hasMatch(token)) return false;
-
-    final hasUpper = _rxUpper.hasMatch(token);
-    final hasLower = _rxLower.hasMatch(token);
 
     final half = token.length ~/ 2;
     for (var unit = 3; unit <= half; unit++) {
@@ -255,6 +252,16 @@ class SpamFilter {
         if (head.split('').toSet().length >= 3) return true;
       }
     }
+
+    return _looksLikeRandomNym(token);
+  }
+
+  static bool _looksLikeRandomNym(String token) {
+    if (token.isEmpty || token.length < 8) return false;
+    if (!_rxAlphaNum.hasMatch(token)) return false;
+
+    final hasUpper = _rxUpper.hasMatch(token);
+    final hasLower = _rxLower.hasMatch(token);
 
     if (hasUpper && hasLower) {
       var interiorUpper = 0;

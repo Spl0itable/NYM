@@ -2357,6 +2357,13 @@ function scrollToBottom() {
         nym._scrollRAF = null;
     }
 
+    const container = document.getElementById('messagesContainer');
+    if (nym.activeThread && typeof nym._threadViewOccupies === 'function' && nym._threadViewOccupies(container)) {
+        scroller.scrollTop = 0;
+        nym._scheduleScrollToBottom(true);
+        return;
+    }
+
     if (nym.inPMMode) {
         const convKey = nym.currentGroup
             ? nym.getGroupConversationKey(nym.currentGroup)
@@ -4861,7 +4868,7 @@ function initWallpaperUI() {
 }
 
 const NYMCHAT_VERSION = 'v3.76.545';
-const NYMCHAT_BUILD = 1063;
+const NYMCHAT_BUILD = 1091;
 
 function nymUiArgs(template, args) {
     if (typeof nym !== 'undefined' && nym && typeof nym.uiText === 'function') return nym.uiText(template, args);
@@ -7278,8 +7285,10 @@ async function applyNostrSettings(s, opts) {
     }
 
     if (typeof s.lowDataMode === 'boolean') {
+        const changed = nym.settings.lowDataMode !== s.lowDataMode;
         nym.settings.lowDataMode = s.lowDataMode;
         lsSave('nym_low_data_mode', String(s.lowDataMode));
+        if (changed) nym.applyLowDataMode(s.lowDataMode);
     }
 
     // Only apply navigation side effects when the mode actually changes; settings sync is async.
@@ -7808,6 +7817,21 @@ async function signOut() {
     nym.cmdQuit();
 }
 
+function markScrollers(doc, restMs) {
+    const timers = new Map();
+    doc.addEventListener('scroll', (e) => {
+        const el = e.target;
+        if (!el || el.nodeType !== 1 || el === doc.body || el === doc.documentElement) return;
+        const t = timers.get(el);
+        if (t) clearTimeout(t);
+        if (!el.classList.contains('is-scrolling')) el.classList.add('is-scrolling');
+        timers.set(el, setTimeout(() => {
+            timers.delete(el);
+            el.classList.remove('is-scrolling');
+        }, restMs));
+    }, { passive: true, capture: true });
+}
+
 // Native-app "Open Wallet" compatibility.
 function installNativeWalletBridgeCompat(n) {
     if (!n || typeof n.openInWallet !== 'function') return;
@@ -7836,12 +7860,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     installNativeWalletBridgeCompat(nym);
     if (typeof nym.acctSetup === 'function') nym.acctSetup();
 
-    let _scrollHideTimer = null;
-    document.addEventListener('scroll', () => {
-        document.body.classList.add('is-scrolling');
-        clearTimeout(_scrollHideTimer);
-        _scrollHideTimer = setTimeout(() => document.body.classList.remove('is-scrolling'), 900);
-    }, { passive: true, capture: true });
+    markScrollers(document, 900);
 
     // Unlock the key vault before any identity-restore code reads secrets.
     try { await nym.unlockVaultAtBoot(); } catch (e) { /* proceed; secrets read as absent */ }
@@ -7993,8 +8012,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Reverse-column container: scrollTop is 0 at the bottom, negative scrolling up.
             const distanceFromBottom = Math.abs(messagesScroller.scrollTop);
             const distanceFromTop = (messagesScroller.scrollHeight - messagesScroller.clientHeight) - distanceFromBottom;
+            const threadOpen = !!(nym.activeThread && typeof nym._threadViewOccupies === 'function' && nym._threadViewOccupies(messagesContainer));
 
-            if (distanceFromTop <= 5) {
+            if (distanceFromTop <= 5 && !threadOpen) {
                 if (nym.inPMMode) {
                     const convKey = nym.currentGroup
                         ? nym.getGroupConversationKey(nym.currentGroup)
@@ -8029,7 +8049,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            const windowKey = !nym.inPMMode && !nym._cvActive ? (nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel) : null;
+            const windowKey = !threadOpen && !nym.inPMMode && !nym._cvActive ? (nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel) : null;
             const detached = !!(windowKey && typeof nym._chWinDetached === 'function' && nym._chWinDetached(windowKey));
             if (detached && distanceFromBottom < messagesScroller.clientHeight && !nym._channelLoadingNewer) {
                 nym._channelLoadingNewer = true;
@@ -8049,7 +8069,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            if (distanceFromBottom < 50 && !detached) {
+            if (distanceFromBottom < 50 && !detached && !threadOpen) {
                 if (nym.inPMMode) {
                     const collapseKey = nym.currentGroup
                         ? nym.getGroupConversationKey(nym.currentGroup)
@@ -8071,11 +8091,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            if (detached || distanceFromBottom > 150) {
-                scrollToBottomBtn.classList.add('visible');
-            } else {
-                scrollToBottomBtn.classList.remove('visible');
-            }
+            scrollToBottomBtn.classList.toggle('visible', detached || window.NymChatNav.bottomShown(distanceFromBottom, scrollToBottomBtn.classList.contains('visible')));
         };
         messagesScroller.addEventListener('scroll', () => {
             if (_scrollRafPending) return;

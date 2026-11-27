@@ -18,6 +18,8 @@ import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/channels/channel_context_menu.dart'
+    show channelRowMenuItems;
 import '../../features/channels/channel_share.dart';
 import '../../features/emoji/emoji_prefetch.dart';
 import '../../features/globe/geohash_explorer.dart';
@@ -68,6 +70,7 @@ import 'messages_list.dart';
 import '../common/nym_focusable.dart';
 import '../common/nym_tooltip.dart';
 import '../../core/theme/nym_a11y.dart';
+import '../../core/theme/nym_theme_swap.dart';
 
 /// Call-start hook; [peer] is the PM peer pubkey, or '' for a channel/group.
 typedef OnStartCall = void Function(String peer, {required bool video});
@@ -110,6 +113,11 @@ class ChatPane extends ConsumerWidget {
     // Close a thread from a different conversation on view change, so the shared composer can't mis-thread a send.
     ref.listen(appStateProvider.select((s) => s.view), (_, next) {
       final at = ref.read(activeThreadProvider);
+      if (useColumns) {
+        _swapColumnThread(ref, at, next,
+            ref.read(appStateProvider.notifier).columnHoldsGate ?? _anyColumn);
+        return;
+      }
       if (at != null && at.view != next) {
         ref.read(activeThreadProvider.notifier).state = null;
       }
@@ -179,6 +187,17 @@ class ChatPane extends ConsumerWidget {
       ),
     );
   }
+}
+
+bool _anyColumn(String storageKey) => true;
+
+void _swapColumnThread(WidgetRef ref, ActiveThread? at, ChatView next,
+    bool Function(String storageKey) holds) {
+  final swap =
+      columnThreadSwap(ref.read(columnThreadsProvider), at, next, holds);
+  if (swap == null) return;
+  ref.read(columnThreadsProvider.notifier).state = swap.parked;
+  ref.read(activeThreadProvider.notifier).state = swap.active;
 }
 
 Object chatHeaderSignature(AppState s, ChatView view) {
@@ -442,7 +461,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             id: 'more',
             label: tr('More'),
             svg: NymIcons.rowMenuOutline,
-            onTap: _moreOpener(view, const [])),
+            onTap: _moreOpener(view, const [], empty: empty)),
       ],
       child: Container(
       key: const ValueKey('chatHeader'),
@@ -508,8 +527,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                   _HeaderActionRow(lead: side, children: [
                     if (!rail) ...[
                       for (final a in shown) a.button,
+                      if (plan.more) _moreMenu(view, overflow, empty: empty),
                       _notificationsPill(),
-                      if (plan.more) _moreMenu(view, overflow),
                     ],
                   ])
                 else ...[
@@ -517,16 +536,16 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                       lead: side, children: [for (final a in shown) a.button]),
                   const _HeaderDivider(),
                   _HeaderActionRow(children: [
+                    _moreMenu(view, overflow, empty: empty),
                     if (drawer) ...[
-                      _notificationsPill(),
                       _HeaderPill(
                         svg: NymIcons.menu,
                         label: tr('Menu'),
                         onTap: widget.onOpenSidebar ?? () {},
                       ),
+                      _notificationsPill(),
                     ] else
                       _appIcons(),
-                    _moreMenu(view, overflow),
                   ]),
                 ],
                 SizedBox(width: phone ? NymSpace.s2 : NymSpace.s3),
@@ -871,7 +890,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           if (g != null)
             tr('{count} members',
                 {'count': _abbreviateCount(ref.read(appStateProvider.notifier).groupAccepted(g).length)}),
-          desc.isNotEmpty ? desc : tr('end-to-end encrypted'),
+          desc.isNotEmpty ? '\u2068$desc\u2069' : tr('end-to-end encrypted'),
         ].join(' · ');
     }
 
@@ -953,8 +972,24 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                               line: (count) {
                                 final online = tr('{count} online nyms',
                                     {'count': _abbreviateCount(count)});
-                                return subLine(
-                                    sub.isEmpty ? online : '$sub · $online');
+                                if (sub.isEmpty) return subLine(online);
+                                final rest = ' · \u2068$sub\u2069';
+                                return Semantics(
+                                  label: '$online$rest',
+                                  excludeSemantics: true,
+                                  child: LayoutBuilder(
+                                    builder: (context, box) => Row(
+                                      children: [
+                                        ConstrainedBox(
+                                          constraints: BoxConstraints(
+                                              maxWidth: box.maxWidth),
+                                          child: subLine(online),
+                                        ),
+                                        Flexible(child: subLine(rest)),
+                                      ],
+                                    ),
+                                  ),
+                                );
                               }),
                     ),
                   ],
@@ -995,29 +1030,72 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
 
   Widget _moreMenu(ChatView view,
       List<({String id, Widget button, String label, String svg, VoidCallback? onTap})>
-          overflow) {
-    final a = _moreArgs(view, overflow);
-    return _moreButton(a.items, a.head, groupId: a.groupId);
+          overflow,
+      {bool empty = false}) {
+    return _moreButton(
+        () => _moreArgs(view, overflow, empty: empty).items, _moreHead(view),
+        groupId: view.kind == ViewKind.group ? view.id : null);
   }
+
+  String _moreHead(ChatView view) => switch (view.kind) {
+        ViewKind.group => tr('Group'),
+        ViewKind.pm => tr('Private message'),
+        ViewKind.channel => tr('Channel'),
+      };
 
   VoidCallback _moreOpener(ChatView view,
       List<({String id, Widget button, String label, String svg, VoidCallback? onTap})>
-          overflow) {
-    final a = _moreArgs(view, overflow);
-    return () => _openMoreSheet(a.items, a.head,
-        mainMenuRows('desktop').overflow, _morePick(a.items), a.groupId);
+          overflow,
+      {bool empty = false}) {
+    return () {
+      final a = _moreArgs(view, overflow, empty: empty);
+      _openMoreSheet(a.items, a.head, mainMenuRows('desktop').overflow,
+          _morePick(a.items), a.groupId);
+    };
+  }
+
+  List<_MoreItem> _channelOptions(ChatView view) {
+    final app = ref.read(appStateProvider);
+    final entry = app.channels.firstWhere(
+      (c) => c.key == view.id,
+      orElse: () => ChannelEntry(channel: view.id),
+    );
+    final items = channelRowMenuItems(context, ref, entry,
+        at: _moreAnchor(),
+        root: Navigator.of(context, rootNavigator: true).context);
+    return [
+      for (var i = 0; i < items.length; i++)
+        (
+          id: 'chan-$i',
+          label: items[i].label,
+          svg: items[i].svg,
+          onTap: items[i].onSelected,
+          danger: items[i].danger,
+        ),
+    ];
   }
 
   ({
-    List<({String id, String label, String svg, VoidCallback? onTap})> items,
+    List<_MoreItem> items,
     String head,
     String? groupId
   }) _moreArgs(ChatView view,
       List<({String id, Widget button, String label, String svg, VoidCallback? onTap})>
-          overflow) {
-    final chatItems = <({String id, String label, String svg, VoidCallback? onTap})>[
+          overflow,
+      {bool empty = false}) {
+    final options = view.kind == ViewKind.channel && !empty
+        ? _channelOptions(view)
+        : const <_MoreItem>[];
+    final chatItems = <_MoreItem>[
       for (final a in overflow)
-        (id: 'chat-${a.id}', label: a.label, svg: a.svg, onTap: a.onTap),
+        if (!(options.isNotEmpty && a.id == 'favorite'))
+          (
+            id: 'chat-${a.id}',
+            label: a.label,
+            svg: a.svg,
+            onTap: a.onTap,
+            danger: false,
+          ),
     ];
     if (view.kind == ViewKind.channel) {
       final gh = _locationFor(ref.read(appStateProvider), view).geohash;
@@ -1027,17 +1105,14 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           label: tr('Open in explorer'),
           svg: NymIcons.globe,
           onTap: () => _openExplorerAt(gh),
+          danger: false,
         ));
       }
     }
-    final head = switch (view.kind) {
-      ViewKind.group => tr('Group'),
-      ViewKind.pm => tr('Private message'),
-      ViewKind.channel => tr('Channel'),
-    };
+    chatItems.addAll(options);
     return (
       items: chatItems,
-      head: head,
+      head: _moreHead(view),
       groupId: view.kind == ViewKind.group ? view.id : null
     );
   }
@@ -1299,15 +1374,26 @@ class _TitleRoom {
   }) {
     final key = '$scope:$layout';
     final fixed = _fixed[key];
+    final all = phone && kHeaderPhoneMore.contains(kind);
     final out = fixed == null
-        ? (moved: const <String>[], room: 0.0, more: false)
+        ? (
+            moved: all
+                ? [
+                    for (final id in kHeaderPriority[kind] ?? const <String>[])
+                      if (actions.contains(id)) id,
+                  ]
+                : const <String>[],
+            room: 0.0,
+            more: all,
+          )
         : headerOverflow(
             kind: kind,
             actions: actions,
             base: (width + fixed - extra - actions.length * step)
                 .roundToDouble(),
             step: step,
-            more: !phone);
+            more: !phone,
+            phone: phone);
     _laidKey = key;
     _laidWidth = width;
     _laidExtra = extra;
@@ -1335,7 +1421,8 @@ class _TitleRoom {
         actions: _laidActions,
         base: base,
         step: _laidStep,
-        more: !_laidPhone);
+        more: !_laidPhone,
+        phone: _laidPhone);
     return again.moved.join(',') != _laidMoved.join(',') ||
         (_laidPhone && again.more) != _laidMore;
   }
@@ -1493,7 +1580,7 @@ class _HeaderIconBoxState extends State<_HeaderIconBox> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: AnimatedContainer(
-        duration: NymMotion.transition,
+        duration: NymThemeSwap.motion(context, NymMotion.transition),
         curve: NymMotion.curve,
         width: _headerMetrics(context).box,
         height: _headerMetrics(context).box,
@@ -1630,7 +1717,24 @@ class _AvatarTile extends StatelessWidget {
   }
 }
 
+typedef _MoreItem = ({
+  String id,
+  String label,
+  String svg,
+  VoidCallback? onTap,
+  bool danger,
+});
+
 mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
+  List<_MoreItem> _moreShown = const [];
+  final GlobalKey _moreBox = GlobalKey();
+
+  Offset? _moreAnchor() {
+    final box = _moreBox.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+    return box.localToGlobal(box.size.bottomRight(Offset.zero));
+  }
+
   Widget _notificationsPill() {
     final unread =
         ref.watch(notificationHistoryProvider.select((s) => s.unread));
@@ -1684,9 +1788,7 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
     );
   }
 
-  void Function(String?) _morePick(
-          List<({String id, String label, String svg, VoidCallback? onTap})>
-              chatItems) =>
+  void Function(String?) _morePick(List<_MoreItem> chatItems) =>
       (id) {
         if (id == null) return;
         if (id == 'saved') {
@@ -1702,22 +1804,24 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
         }
       };
 
-  Widget _moreButton(
-      List<({String id, String label, String svg, VoidCallback? onTap})> chatItems,
-      String head,
+  Widget _moreButton(List<_MoreItem> Function() items, String head,
       {String? groupId}) {
     final c = context.nym;
     final menu = mainMenuRows('desktop');
     final missedCalls = ref.watch(callHistoryMissedProvider);
-    Widget row(String svg, String label, {Key? key, int badge = 0}) => Row(
+    Widget row(String svg, String label,
+            {Key? key, int badge = 0, bool danger = false}) =>
+        Row(
           key: key,
           children: [
-            NymSvgIcon(svg, size: 16, color: c.text),
+            NymSvgIcon(svg, size: 16, color: danger ? c.danger : c.text),
             const SizedBox(width: NymSpace.s3),
             Flexible(
               child: Text(label,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: c.text, fontSize: NymType.md)),
+                  style: TextStyle(
+                      color: danger ? c.danger : c.text,
+                      fontSize: NymType.md)),
             ),
             if (badge > 0) ...[
               const Spacer(),
@@ -1748,22 +1852,25 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
               style: TextStyle(
                   color: c.textDim, fontSize: 10, letterSpacing: 0.8)),
         );
-    final pick = _morePick(chatItems);
+    void sheet() {
+      final list = items();
+      _openMoreSheet(list, head, menu.overflow, _morePick(list), groupId);
+    }
 
     if (useNymActionSheet(context)) {
       return HitSlop(
         child: NymFocusable(
           key: const ValueKey('menu-more'),
-          onActivate: () => _openMoreSheet(chatItems, head, menu.overflow, pick, groupId),
+          onActivate: sheet,
           tooltip: tr('More'),
           excludeChildSemantics: true,
           radius: NymRadius.rsm,
           child: InkWell(
-            onTap: () => _openMoreSheet(chatItems, head, menu.overflow, pick, groupId),
+            onTap: sheet,
             canRequestFocus: false,
             excludeFromSemantics: true,
             borderRadius: NymRadius.rsm,
-            child: _HeaderIconBox(svg: NymIcons.rowMenuOutline),
+            child: _HeaderIconBox(key: _moreBox, svg: NymIcons.rowMenuOutline),
           ),
         ),
       );
@@ -1780,8 +1887,10 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
         borderRadius: NymRadius.rsm,
         side: BorderSide(color: c.glassBorder),
       ),
-      onSelected: pick,
-      itemBuilder: (context) => [
+      onSelected: (id) => _morePick(_moreShown)(id),
+      itemBuilder: (context) {
+        final chatItems = _moreShown = items();
+        return [
         if (chatItems.isNotEmpty) ...[
           heading(head),
           for (final it in chatItems)
@@ -1789,7 +1898,8 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
               value: it.id,
               enabled: it.onTap != null,
               height: 40,
-              child: row(it.svg, it.label, key: ValueKey('menu-${it.id}')),
+              child: row(it.svg, it.label,
+                  key: ValueKey('menu-${it.id}'), danger: it.danger),
             ),
           const PopupMenuDivider(height: 9),
           heading(tr('More')),
@@ -1806,15 +1916,16 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
               _ => row(NymIcons.info, tr('About'), key: ValueKey('menu-$id')),
             },
           ),
-      ],
-      child: _HeaderIconBox(svg: NymIcons.rowMenuOutline),
+        ];
+      },
+      child: _HeaderIconBox(key: _moreBox, svg: NymIcons.rowMenuOutline),
       ),
       ),
     );
   }
 
   Future<void> _openMoreSheet(
-    List<({String id, String label, String svg, VoidCallback? onTap})> chatItems,
+    List<_MoreItem> chatItems,
     String head,
     List<String> overflow,
     void Function(String? id) pick,
@@ -1829,6 +1940,7 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
               svg: it.svg,
               value: it.id,
               enabled: it.onTap != null,
+              danger: it.danger,
               key: ValueKey('menu-${it.id}'),
             ),
           const NymActionEntry<String>.divider(),
@@ -1951,6 +2063,7 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
             label: a.tooltip,
             svg: a.svg,
             onTap: a.disabled ? null : a.onTap,
+            danger: false,
           ),
     ];
     final actions = [
@@ -2072,24 +2185,25 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
                 if (phone)
                   _HeaderActionRow(lead: side, children: [
                     ...actions,
+                    if (plan.more)
+                      _moreButton(() => moved, tr('Bluetooth mesh')),
                     _notificationsPill(),
-                    if (plan.more) _moreButton(moved, tr('Bluetooth mesh')),
                   ])
                 else ...[
                   _HeaderActionRow(lead: side, children: actions),
                   const _HeaderDivider(),
                   _HeaderActionRow(children: [
+                    _moreButton(() => moved, tr('Bluetooth mesh')),
                     if (drawer) ...[
-                      _notificationsPill(),
                       _HeaderPill(
                         key: const ValueKey('meshMenu'),
                         svg: NymIcons.menu,
                         label: tr('Menu'),
                         onTap: widget.onOpenSidebar!,
                       ),
+                      _notificationsPill(),
                     ] else
                       _appIcons(tutorial: false),
-                    _moreButton(moved, tr('Bluetooth mesh')),
                   ]),
                 ],
                 SizedBox(width: phone ? NymSpace.s2 : NymSpace.s3),

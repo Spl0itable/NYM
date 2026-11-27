@@ -51,11 +51,13 @@ String accountLandingText(AccountIndex index, String id) {
   if (id != index.active) {
     return land == null
         ? ''
-        : tr('You will stay on {nym}.', {'nym': accountDisplayName(land)});
+        : tr('You will stay on {nym}.',
+            {'nym': isolateNymLabel(accountDisplayName(land))});
   }
   return land == null
       ? tr('You will return to the welcome screen.')
-      : tr('You will switch to {nym}.', {'nym': accountDisplayName(land)});
+      : tr('You will switch to {nym}.',
+          {'nym': isolateNymLabel(accountDisplayName(land))});
 }
 
 String accountKeyText(String method) => method == 'nip46' ||
@@ -67,7 +69,7 @@ String accountKeyText(String method) => method == 'nip46' ||
 String accountRemoveText(AccountEntry a, String landing) => [
       tr('Remove {nym} from this device? Its messages, settings and caches '
           'on this device are deleted.',
-          {'nym': accountDisplayName(a)}),
+          {'nym': isolateNymLabel(accountDisplayName(a))}),
       accountKeyText(a.method),
       landing,
     ].where((p) => p.isNotEmpty).join('\n\n');

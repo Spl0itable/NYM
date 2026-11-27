@@ -2,6 +2,7 @@
 
 import 'dart:collection';
 
+import '../../core/utils/nick_parse.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/user.dart';
 import '../i18n/i18n.dart';
@@ -111,8 +112,6 @@ class ResolvedTarget {
   final String nym;
 }
 
-final RegExp _hex64Re = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
-
 class NymIndex {
   Map<String, User>? _users;
   final Map<String, int> _seq = {};
@@ -121,7 +120,7 @@ class NymIndex {
   int _next = 0;
   int builds = 0;
 
-  static String keyFor(String nym) => stripPubkeySuffix(nym).toLowerCase();
+  static String keyFor(String nym, String pubkey) => nickKeyOf(nym, pubkey);
 
   bool _tracks(Map<String, User> users) =>
       identical(users, _users) && users.length == _seq.length;
@@ -135,7 +134,7 @@ class NymIndex {
     _next = 0;
     users.forEach((pubkey, user) {
       _seq[pubkey] = _next++;
-      final key = keyFor(user.nym);
+      final key = keyFor(user.nym, pubkey);
       _keyOf[pubkey] = key;
       (_byNym[key] ??= <String>[]).add(pubkey);
     });
@@ -170,7 +169,7 @@ class NymIndex {
     }
     if (!_seq.containsKey(pubkey)) {
       _seq[pubkey] = _next++;
-      _file(pubkey, keyFor(user.nym));
+      _file(pubkey, keyFor(user.nym, pubkey));
       return;
     }
     renamed(users, pubkey, user.nym);
@@ -184,15 +183,15 @@ class NymIndex {
 
   void renamed(Map<String, User> users, String pubkey, String nym) {
     if (!identical(users, _users) || !_seq.containsKey(pubkey)) return;
-    final key = keyFor(nym);
+    final key = keyFor(nym, pubkey);
     if (_keyOf[pubkey] == key) return;
     _unfile(pubkey);
     _file(pubkey, key);
   }
 
-  List<String> named(Map<String, User> users, String lowerNym) {
+  List<String> named(Map<String, User> users, String key) {
     if (!_tracks(users)) _build(users);
-    return _byNym[lowerNym] ?? const <String>[];
+    return _byNym[key] ?? const <String>[];
   }
 }
 
@@ -204,70 +203,85 @@ class UsersView extends UnmodifiableMapView<String, User> {
   Map<String, List<String>>? _byNym;
   int _indexed = -1;
 
-  List<String> pubkeysNamed(String lowerNym) {
+  List<String> pubkeysNamed(String key) {
     final shared = _index;
     final source = _source;
     if (shared != null && source != null) {
-      return shared.named(source, lowerNym);
+      return shared.named(source, key);
     }
     var index = _byNym;
     if (index == null || _indexed != length) {
       index = <String, List<String>>{};
       forEach((pubkey, user) {
-        (index![stripPubkeySuffix(user.nym).toLowerCase()] ??= <String>[])
-            .add(pubkey);
+        (index![nickKeyOf(user.nym, pubkey)] ??= <String>[]).add(pubkey);
       });
       _byNym = index;
       _indexed = length;
     }
-    return index[lowerNym] ?? const <String>[];
+    return index[key] ?? const <String>[];
   }
 }
+
+Iterable<NickUser> nickUsersOf(Map<String, User> users) sync* {
+  for (final e in users.entries) {
+    yield NickUser(e.key, e.value.nym);
+  }
+}
+
+Iterable<NickUser> _namedUsers(UsersView users, Iterable<String> keys) sync* {
+  final seen = <String>{};
+  for (final k in keys) {
+    for (final pk in users.pubkeysNamed(k)) {
+      if (!seen.add(pk)) continue;
+      if (users[pk] case final u?) yield NickUser(pk, u.nym);
+    }
+  }
+}
+
+NickHit? lookupMention(String name, String? suffix, Map<String, User> users) =>
+    resolveMentionIn(
+        name,
+        suffix,
+        users is UsersView
+            ? _namedUsers(users, [nickNameKey(name)])
+            : nickUsersOf(users));
+
+String mentionKnownKeys(String content, Map<String, User> users) {
+  if (!content.contains('@') || !content.contains('#')) return '';
+  final keys = <String>{};
+  nickMentions(content, known: (name, suffix) {
+    final ok = lookupMention(name, suffix, users)?.pubkey != null;
+    if (ok) keys.add('${nickNameKey(name)}#${suffix.toLowerCase()}');
+    return ok;
+  });
+  return (keys.toList()..sort()).join('\n');
+}
+
+NickKnown nickKnownIn(Map<String, User> users) =>
+    (name, suffix) => lookupMention(name, suffix, users)?.pubkey != null;
+
+NickHit? lookupTarget(String raw, Map<String, User> users) => resolveTargetIn(
+    raw,
+    users is UsersView
+        ? _namedUsers(users, nickTargetKeys(raw))
+        : nickUsersOf(users));
 
 ResolvedTarget? resolveTarget(String raw, Map<String, User> users) {
-  final input = raw.trim().replaceFirst(RegExp(r'^@'), '');
-  if (input.isEmpty) return null;
-
-  if (_hex64Re.hasMatch(input)) {
-    final pk = input.toLowerCase();
-    final u = users[pk];
-    return ResolvedTarget(pk, u?.nym ?? 'nym#${pk.substring(pk.length - 4)}');
-  }
-
-  final hashIndex = input.indexOf('#');
-  final searchNym = hashIndex == -1 ? input : input.substring(0, hashIndex);
-  final searchSuffix = hashIndex == -1 ? null : input.substring(hashIndex + 1);
-
-  if (users is UsersView) {
-    final want = searchNym.toLowerCase();
-    for (final pubkey in users.pubkeysNamed(want)) {
-      final user = users[pubkey];
-      if (user == null) continue;
-      final cleanNym = stripPubkeySuffix(user.nym);
-      if (cleanNym.toLowerCase() != want) continue;
-      if (searchSuffix != null && !pubkey.endsWith(searchSuffix)) continue;
-      return ResolvedTarget(pubkey, cleanNym);
-    }
-    return null;
-  }
-
-  final matches = <ResolvedTarget>[];
-  users.forEach((pubkey, user) {
-    final cleanNym = stripPubkeySuffix(user.nym);
-    if (cleanNym.toLowerCase() == searchNym.toLowerCase()) {
-      if (searchSuffix != null) {
-        if (pubkey.endsWith(searchSuffix)) {
-          matches.add(ResolvedTarget(pubkey, cleanNym));
-        }
-      } else {
-        matches.add(ResolvedTarget(pubkey, cleanNym));
-      }
-    }
-  });
-
-  if (matches.isEmpty) return null;
-  return matches.first;
+  final hit = lookupTarget(raw, users);
+  final pk = hit?.pubkey;
+  if (pk == null) return null;
+  if (hit!.nym.isNotEmpty) return ResolvedTarget(pk, hit.nym);
+  return ResolvedTarget(pk, users[pk]?.nym ?? 'nym#${pk.substring(pk.length - 4)}');
 }
+
+String ambiguousNymText(NickHit hit) => tr(
+    'Multiple users found with nym "{name}": {list}', {
+  'name': hit.name,
+  'list': [
+    for (final u in hit.ambiguous)
+      '\u2068${u.nym}\u2069#${getPubkeySuffix(u.pubkey)}'
+  ].join(', '),
+});
 
 class CommandDispatcher {
   CommandDispatcher({
@@ -465,13 +479,36 @@ class CommandDispatcher {
     }
   }
 
+  ResolvedTarget? _resolve(String args) {
+    final hit = lookupTarget(args, engine.users);
+    if (hit == null) return null;
+    if (hit.isAmbiguous) {
+      _ambiguous = true;
+      engine.systemMessage(ambiguousNymText(hit));
+      engine.systemMessage(
+          tr('Please specify using the #xxxx suffix or full pubkey'));
+      return null;
+    }
+    final pk = hit.pubkey!;
+    return ResolvedTarget(pk,
+        hit.nym.isNotEmpty ? hit.nym : (engine.users[pk]?.nym ?? 'nym'));
+  }
+
+  bool _ambiguous = false;
+
+  ResolvedTarget? _target(String args) {
+    _ambiguous = false;
+    return _resolve(args);
+  }
+
   void _pm(String args) {
     if (args.isEmpty) {
       engine
           .systemMessage(tr('Usage: /pm @nym, /pm nym#xxxx, or /pm [pubkey]'));
       return;
     }
-    final t = resolveTarget(args, engine.users);
+    final t = _target(args);
+    if (_ambiguous) return;
     if (t == null) {
       engine.systemMessage(tr('User {user} not found', {'user': args.trim()}));
       return;
@@ -491,7 +528,8 @@ class CommandDispatcher {
           tr('Usage: /zap @nym, /zap nym#xxxx, or /zap [pubkey]'));
       return;
     }
-    final t = resolveTarget(args, engine.users);
+    final t = _target(args);
+    if (_ambiguous) return;
     if (t == null) {
       engine.systemMessage(tr('User {user} not found', {'user': args.trim()}));
       return;
@@ -505,22 +543,23 @@ class CommandDispatcher {
   }
 
   void _group(String args) {
-    // Resolve every @token except self; a trailing non-@ tail is the optional name.
-    final tokens = args.trim().split(RegExp(r'\s+')).where((t) => t.isNotEmpty);
+    final parsed = groupArgsOf(args);
     final members = <String>[];
-    final nameParts = <String>[];
-    for (final tok in tokens) {
-      if (tok.startsWith('@') || _hex64Re.hasMatch(tok)) {
-        final t = resolveTarget(tok, engine.users);
-        if (t != null && t.pubkey != engine.selfPubkey) {
-          members.add(t.pubkey);
-        }
-      } else {
-        nameParts.add(tok);
+    for (final tok in parsed.members) {
+      final t = _target(tok);
+      if (_ambiguous) return;
+      if (t == null) {
+        engine.systemMessage(tr(
+            'User @{memberNym} not found. They need to be visible in the current channel first.',
+            {'memberNym': tok.replaceFirst(RegExp(r'^@'), '')}));
+        return;
+      }
+      if (t.pubkey != engine.selfPubkey && !members.contains(t.pubkey)) {
+        members.add(t.pubkey);
       }
     }
     if (hooks.createGroup != null) {
-      hooks.createGroup!(members, nameParts.join(' '));
+      hooks.createGroup!(members, parsed.name);
     }
   }
 
@@ -545,10 +584,10 @@ class CommandDispatcher {
       engine.systemMessage(rl.message!);
       return;
     }
-    final t = resolveTarget(args, engine.users);
-    // Full @nym#suffix mention when resolved, else the bare typed nym.
+    final t = _target(args);
+    if (_ambiguous) return;
     final mention = t != null
-        ? '@${stripPubkeySuffix(t.nym)}#${getPubkeySuffix(t.pubkey)}'
+        ? nickMentionText(t.nym, t.pubkey)
         : '@${args.trim().replaceFirst(RegExp(r'^@'), '')}';
     engine.sendToCurrentTarget(build(mention));
   }
@@ -559,7 +598,8 @@ class CommandDispatcher {
       engine.systemMessage(usage);
       return;
     }
-    final t = resolveTarget(args, engine.users);
+    final t = _target(args);
+    if (_ambiguous) return;
     if (t == null) {
       engine.systemMessage(tr(
           'User @{user} not found. Try @nym#xxxx or a hex pubkey.',

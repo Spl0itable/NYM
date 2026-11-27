@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../chat_nav/chat_nav.dart' show bottomShown;
 import '../day_separators/day_separator.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
@@ -53,7 +55,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   late final RowHold _hold = RowHold(units: _anchors, away: () => _reader.away);
   late final BottomFollow _follow = BottomFollow()..hold = _hold.delta;
 
-  /// Whether the scroll-to-bottom button shows (>150px up); in the reversed list `offset` is that distance.
+  /// Whether the scroll-to-bottom button shows; in the reversed list `offset` is the distance from the bottom.
   final ValueNotifier<bool> _showScrollButton = ValueNotifier(false);
 
   Timer? _runsTimer;
@@ -102,7 +104,8 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   }
 
   void _onScrolled() {
-    _showScrollButton.value = _scroll.hasClients && _scroll.offset > 150;
+    _showScrollButton.value =
+        _scroll.hasClients && bottomShown(_scroll.offset, _showScrollButton.value);
   }
 
   void _scrollToBottom() {
@@ -297,7 +300,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
               physics: KeepReadingPhysics(follow: _follow),
               // Dragging the list dismisses the keyboard.
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+              padding: NymDimens.chatListPadding(context),
               itemCount: units.length,
               itemBuilder: (context, revIndex) {
                 Widget unitAt() {
@@ -361,7 +364,6 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
               },
             ))),
           ),
-          // Shown >150px from the bottom.
           Positioned(
             right: 24,
             bottom: 16,
@@ -568,7 +570,7 @@ class _BotControlBar extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _tierSwitch(c),
+          _tierSwitch(context, c),
           SizedBox(width: gap),
           _CtrlButton(
             svg: _kSvgSparkle,
@@ -656,7 +658,7 @@ class _BotControlBar extends StatelessWidget {
   }
 
   /// Two-segment tier switch; Standard returns to auto-routing, Pro opens the model picker.
-  Widget _tierSwitch(NymColors c) {
+  Widget _tierSwitch(BuildContext context, NymColors c) {
     return Container(
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
@@ -667,19 +669,19 @@ class _BotControlBar extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _tierBtn(tr('Standard'), !isPro, onTapStandard, c),
+          _tierBtn(context, tr('Standard'), !isPro, onTapStandard, c),
           const SizedBox(width: 3),
-          _tierBtn(tr('Pro'), isPro, onTapModel, c),
+          _tierBtn(context, tr('Pro'), isPro, onTapModel, c),
         ],
       ),
     );
   }
 
-  Widget _tierBtn(String label, bool active, VoidCallback onTap, NymColors c) {
+  Widget _tierBtn(BuildContext context, String label, bool active, VoidCallback onTap, NymColors c) {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
+        duration: NymThemeSwap.motion(context, const Duration(milliseconds: 150)),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
         decoration: BoxDecoration(
           color:
@@ -832,7 +834,7 @@ class _CtrlButtonState extends State<_CtrlButton> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
+          duration: NymThemeSwap.motion(context, const Duration(milliseconds: 150)),
           padding: EdgeInsets.symmetric(
               horizontal: widget.compact ? 10 : 12, vertical: 6),
           decoration: BoxDecoration(

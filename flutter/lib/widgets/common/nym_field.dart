@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/theme/nym_theme_swap.dart';
 
 class NymField {
   NymField._();
@@ -42,7 +43,8 @@ class NymField {
     bool alignLabelWithHint = false,
     double? minHeight,
   }) {
-    OutlineInputBorder side(Color color) => OutlineInputBorder(
+    OutlineInputBorder side(Color color) => NymFieldBorder(
+          look: c,
           borderRadius: radius,
           borderSide: BorderSide(color: color),
         );
@@ -92,6 +94,41 @@ class NymField {
       disabledBorder: InputBorder.none,
     );
   }
+}
+
+class NymFieldBorder extends OutlineInputBorder {
+  const NymFieldBorder({
+    required this.look,
+    super.borderSide,
+    super.borderRadius,
+    super.gapPadding,
+  });
+
+  final NymColors look;
+
+  bool _swapped(ShapeBorder? other) =>
+      other is NymFieldBorder && !NymThemeSwap.sameLook(other.look, look);
+
+  @override
+  NymFieldBorder copyWith({
+    BorderSide? borderSide,
+    BorderRadius? borderRadius,
+    double? gapPadding,
+  }) =>
+      NymFieldBorder(
+        look: look,
+        borderSide: borderSide ?? this.borderSide,
+        borderRadius: borderRadius ?? this.borderRadius,
+        gapPadding: gapPadding ?? this.gapPadding,
+      );
+
+  @override
+  ShapeBorder? lerpFrom(ShapeBorder? a, double t) =>
+      _swapped(a) ? this : super.lerpFrom(a, t);
+
+  @override
+  ShapeBorder? lerpTo(ShapeBorder? b, double t) =>
+      _swapped(b) ? b : super.lerpTo(b, t);
 }
 
 class NymFieldBox extends StatefulWidget {

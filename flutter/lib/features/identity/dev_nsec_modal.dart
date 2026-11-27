@@ -5,6 +5,7 @@ import '../../widgets/common/dialog_button.dart';
 import '../../core/crypto/key_format.dart' show normalizePrivkeyInput;
 import '../../core/crypto/keys.dart';
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/nym_utils.dart';
 import '../i18n/i18n.dart';
 import 'modal_chrome.dart';
 
@@ -12,13 +13,10 @@ import 'modal_chrome.dart';
 const String kVerifiedDeveloperPubkey =
     'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df';
 
-/// A nick is reserved when its lowercased base, `#suffix` stripped, is in this set.
 const Set<String> kReservedNicks = {'luxas', 'nymbot'};
 
-bool isReservedNick(String nick) {
-  final base = nick.toLowerCase().replaceFirst(RegExp(r'#.*$'), '').trim();
-  return kReservedNicks.contains(base);
-}
+bool isReservedNick(String nick, {String? pubkey}) =>
+    nymReservedOf(normalizeNym(nick, pubkey: pubkey)).isNotEmpty;
 
 class DevNsecResult {
   const DevNsecResult({required this.nsec, required this.pubkey});

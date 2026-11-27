@@ -379,6 +379,7 @@ Object.assign(NYM.prototype, {
     try {
       this.privkey = null; this.pubkey = null; this._chStore = null;
       this._vaultKey = null; this._vaultMem = null; this._botAuthCache = null;
+      this._reactionClaims = null; this._groupReactionClaims = null;
     } catch (e) {}
     // The sweep below takes the stored PQ root; this drops the decoded copy that rebuilds every ML-KEM key.
     try { if (typeof this.pqRootWipe === 'function') this.pqRootWipe(); } catch (e) {}

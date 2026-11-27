@@ -77,6 +77,7 @@ import '../models/poll.dart';
 import '../models/user.dart';
 import '../services/filter/filter_packs.dart';
 import '../services/attest/attest_service.dart';
+import '../services/nostr/channel_expiry.dart';
 import '../services/nostr/event_mapper.dart';
 import 'settings_provider.dart';
 
@@ -1351,11 +1352,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
   int nymRecountWalks = 0;
 
   void _noteNym(String pubkey, String? before, String after, {Message? skip}) {
+    nymIndex.renamed(state.users, pubkey, after);
     if (stripPubkeySuffix(before ?? '').toLowerCase() ==
         stripPubkeySuffix(after).toLowerCase()) {
       return;
     }
-    nymIndex.renamed(state.users, pubkey, after);
     _visibilityChanged();
     final s = state;
     if (pubkey.isEmpty || pubkey == s.selfPubkey) return;
@@ -1760,6 +1761,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// The open thread, wired by the UI; unwired reads as no thread open.
   ActiveThread? Function()? openThreadGate;
 
+  bool Function(String storageKey)? columnHoldsGate;
+
   /// True when a new message for [storageKey] is already seen (active view, or columns gate passes).
   bool _isConversationSeen(String storageKey) {
     final gate = columnsReadGate;
@@ -1974,6 +1977,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _heldReactionIds.clear();
     _heldScopedReactions.clear();
     _channelMessageReaders.clear();
+    _ownReactionKeys.clear();
+    _closedPolls.clear();
     _readIdsByReader.clear();
     _pendingPmReceipts.clear();
     _processedPollVoteIds.clear();
@@ -2017,6 +2022,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _heldReactionIds.clear();
     _heldScopedReactions.clear();
     _channelMessageReaders.clear();
+    _ownReactionKeys.clear();
+    _closedPolls.clear();
     _readIdsByReader.clear();
     _pendingPmReceipts.clear();
     _processedPollVoteIds.clear();
@@ -2724,6 +2731,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         validatedPowBits(e.tags, e.id) < appPowFilterBits) {
       return;
     }
+    if (isNymbotImpostor(e.tagValue('n'), e.pubkey)) return;
     final senderBlocked = e.pubkey != state.selfPubkey &&
         state.blockedUsers.contains(e.pubkey);
     final clientGates = state.clientGatesActive;
@@ -2941,14 +2949,20 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
   }
 
-  /// Kind-0 name fallback chain name → username → display_name, capped at 20 chars.
   static String? _kind0DisplayName(UserProfile p) {
     for (final v in [p.name, p.username, p.displayName]) {
-      if (v != null && v.isNotEmpty) {
+      if (v != null && normalizeNym(v).isNotEmpty) {
         return capNym(v);
       }
     }
     return null;
+  }
+
+  String? _kind0NameFor(UserProfile p, String pubkey) {
+    final n = _kind0DisplayName(p);
+    return n != null && pubkey == state.selfPubkey
+        ? withOwnNymSuffix(n, pubkey)
+        : n;
   }
 
   final Set<String> _placeholderAuthors = <String>{};
@@ -3042,8 +3056,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   void noteTaggedName(String pubkey, String? nym, int ts) {
     if (pubkey.isEmpty || _blankNym(nym)) return;
-    final clean = stripPubkeySuffix(nym!.trim());
-    if (clean.isEmpty) return;
+    if (normalizeNym(nym!, pubkey: pubkey).isEmpty) return;
+    final clean = receivedNymBase(nym, pubkey);
     final placeholder = isPlaceholderNym(clean);
     if (placeholder && !isPlaceholderNym(state.kind0Name(pubkey))) return;
     if (!_nameWins(pubkey, ts, placeholder: placeholder)) return;
@@ -3067,7 +3081,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final mapped = EventMapper.profile(e);
     if (mapped == null) return;
     final p = pinVerifiedBotMedia(e.pubkey, mapped);
-    final resolvedName = _kind0DisplayName(p);
+    final resolvedName = _kind0NameFor(p, e.pubkey);
     final existing = state.users[e.pubkey];
     var changed = false;
     if (existing != null) {
@@ -3122,7 +3136,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     String? selfNym;
     if (e.pubkey == state.selfPubkey) {
       final stored = state.users[e.pubkey]?.profile;
-      final name = stored == null ? null : _kind0DisplayName(stored);
+      final name = stored == null ? null : _kind0NameFor(stored, e.pubkey);
       if (name != null) {
         final resolved = getNymFromPubkey(name, e.pubkey);
         if (resolved != state.selfNym) selfNym = resolved;
@@ -3139,6 +3153,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   void _ingestReaction(NostrEvent e) {
     if (state.blockedUsers.contains(e.pubkey)) return;
+    if (eventExpired(e)) return;
 
     // A present `k` tag must name a supported kind, or the reaction belongs to another app.
     final kTag = e.tagValue('k');
@@ -3391,6 +3406,35 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _recomputeReactionTally(newId);
   }
 
+  final Map<String, String> _ownReactionKeys = {};
+
+  void holdOwnReactionKey(String messageId, String emoji, String? pubkey) {
+    final key = '$messageId $emoji';
+    if (_ownReactionKeys[key] == pubkey) return;
+    if (pubkey == null) {
+      _ownReactionKeys.remove(key);
+    } else {
+      _ownReactionKeys[key] = pubkey;
+    }
+    _refreshReactionTally(messageId);
+  }
+
+  void releaseOwnReactionKeys() {
+    if (_ownReactionKeys.isEmpty) return;
+    final ids = {
+      for (final k in _ownReactionKeys.keys) k.substring(0, k.indexOf(' '))
+    };
+    _ownReactionKeys.clear();
+    ids.forEach(_refreshReactionTally);
+  }
+
+  void _refreshReactionTally(String messageId) {
+    if (!_reactors.containsKey(messageId)) return;
+    _recomputeReactionTally(messageId);
+    final conv = _convKeyByAnyId[messageId];
+    _usersKept(() => conv == null ? _scheduleEmit() : _scheduleEmitFor(conv));
+  }
+
   void _recomputeReactionTally(String messageId) {
     final byEmoji = _reactors[messageId];
     if (byEmoji == null || byEmoji.isEmpty) {
@@ -3407,7 +3451,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
       tally.add(MessageReaction(
         emoji: emoji,
         count: count,
-        userReacted: reactors.containsKey(state.selfPubkey),
+        userReacted: reactors.containsKey(state.selfPubkey) ||
+            reactors.containsKey(_ownReactionKeys['$messageId $emoji']),
       ));
     });
     if (tally.isEmpty) {
@@ -3522,6 +3567,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Registers a local poll so the UI updates immediately.
   void upsertPoll(Poll poll) {
     state.polls[poll.id] = poll;
+    _scheduleEmit();
+  }
+
+  final Set<String> _closedPolls = <String>{};
+
+  bool isPollClosed(String pollId) => _closedPolls.contains(pollId);
+
+  void markPollClosed(String pollId) {
+    if (!state.polls.containsKey(pollId) || !_closedPolls.add(pollId)) return;
     _scheduleEmit();
   }
 
@@ -4843,7 +4897,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final beforePic = existingUser?.profile?.picture;
     final u = _userFor(
       pubkey,
-      () => User(pubkey: pubkey, nym: nym ?? getNymFromPubkey('nym', pubkey)),
+      () => User(pubkey: pubkey, nym: getNymFromPubkey(nym ?? 'nym', pubkey)),
     );
     u.status = status;
     final placeholder = isPlaceholderNym(nym);
@@ -5742,6 +5796,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void ingestDeletionEvent(NostrEvent e) {
     final requester = e.pubkey;
     if (requester.isEmpty) return;
+    if (eventExpired(e)) return;
     var deleted = false;
     for (final t in e.tagsNamed('e')) {
       if (t.length < 2 || t[1].isEmpty) continue;
@@ -5996,6 +6051,32 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _indexedChannelCount = state.channels.length;
   }
 
+  void _orderChannelsBy(List<ChannelEntry> joined) {
+    final index = _channelIndex();
+    final taken = Set<ChannelEntry>.identity();
+    final out = <ChannelEntry>[];
+    void take(ChannelEntry? c) {
+      if (c != null && taken.add(c)) out.add(c);
+    }
+
+    take(index[kDefaultChannel]);
+    for (final c in joined) {
+      take(index[c.key]);
+    }
+    for (final c in state.channels) {
+      take(c);
+    }
+    final list = state.channels;
+    var same = out.length == list.length;
+    for (var i = 0; same && i < out.length; i++) {
+      same = identical(out[i], list[i]);
+    }
+    if (same) return;
+    list
+      ..clear()
+      ..addAll(out);
+  }
+
   final Set<String> _discoveredChannels = <String>{};
 
   void noteChannelJoined(String key) =>
@@ -6141,6 +6222,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
           _addChannelEntry(c);
         }
       }
+      if (replace) _orderChannelsBy(joinedChannels);
     }
     if (blocked != null) {
       for (final k in state.blockedChannels) {
@@ -6371,7 +6453,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       touched.add(pubkey);
       final existing = state.users[pubkey];
       // Same name chain and cap as live kind-0 ingest.
-      final resolvedName = _kind0DisplayName(p);
+      final resolvedName = _kind0NameFor(p, pubkey);
       if (existing != null) {
         if (existing.profile == null ||
             p.kind0Ts >= existing.profile!.kind0Ts ||
@@ -6406,7 +6488,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     String? selfNym;
     if (state.selfPubkey.isNotEmpty) {
       final stored = state.users[state.selfPubkey]?.profile;
-      final name = stored == null ? null : _kind0DisplayName(stored);
+      final name =
+          stored == null ? null : _kind0NameFor(stored, state.selfPubkey);
       if (name != null) {
         final resolved = getNymFromPubkey(name, state.selfPubkey);
         if (resolved != state.selfNym) selfNym = resolved;
@@ -6503,7 +6586,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     });
 
     // Add the most recently active unlisted channels, up to the discovery limit.
-    final candidates = <({String key, int ts})>[];
+    final candidates = <({String key, int ts, int at})>[];
     activity.forEach((rawKey, buckets) {
       final key = rawKey.toLowerCase();
       if (key.isEmpty || key == kDefaultChannel) return;
@@ -6517,10 +6600,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
       final tsMs = state.channelLastActivity['#$key'] ??
           _approxLastFromBuckets(buckets, nowMs);
       if (tsMs <= 0) return;
-      candidates.add((key: key, ts: tsMs));
+      candidates.add((key: key, ts: tsMs, at: candidates.length));
     });
     if (candidates.isNotEmpty) {
-      candidates.sort((a, b) => b.ts.compareTo(a.ts));
+      candidates.sort(
+          (a, b) => a.ts != b.ts ? b.ts.compareTo(a.ts) : a.at - b.at);
       for (final c in candidates.take(_kDiscoverSidebarLimit)) {
         // Geohash discovery registers geohash channels; named discovery plain names.
         addChannel(c.key, geohash: geohash ? c.key : '');
@@ -7272,6 +7356,24 @@ class ActiveThread {
 }
 
 final activeThreadProvider = StateProvider<ActiveThread?>((ref) => null);
+
+final columnThreadsProvider = StateProvider<Map<String, ActiveThread>>((ref) {
+  ref.watch(settingsProvider.select((s) => (s.useColumns, s.threadsEnabled)));
+  return const {};
+});
+
+({Map<String, ActiveThread> parked, ActiveThread? active})? columnThreadSwap(
+    Map<String, ActiveThread> parked,
+    ActiveThread? at,
+    ChatView next,
+    bool Function(String storageKey) holds) {
+  if (at != null && at.view == next) return null;
+  final back = parked[next.storageKey];
+  if (at == null && back == null) return null;
+  final map = {...parked}..remove(next.storageKey);
+  if (at != null && holds(at.view.storageKey)) map[at.view.storageKey] = at;
+  return (parked: map, active: back != null && back.view == next ? back : null);
+}
 
 /// A thread root needs a real shared id and must not itself be a reply.
 bool threadEligibleRoot(Message m) {
@@ -8144,6 +8246,8 @@ class NotificationHistoryNotifier
   }
 
   void Function()? onThreadReadChanged;
+
+  int threadReadAt(String key, String root) => _threadReads['$key|$root'] ?? 0;
 
   Map<String, int> threadReadsForSync() =>
       tsMapNorm(_threadReads, SyncMergeCaps.threadLastRead);

@@ -83,6 +83,7 @@
                 hexId: HEX64.test(messageId),
                 bot: typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(pubkey),
                 anonLane: !!(messageId && typeof this._zapAnonLane === 'function' && this._zapAnonLane(messageId)),
+                noReport: typeof this._reportTargetOk === 'function' && !this._reportTargetOk(pubkey),
             };
             return {
                 msgEl, messageId, pubkey, baseNym, content, self, found, facts,

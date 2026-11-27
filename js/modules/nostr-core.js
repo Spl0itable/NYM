@@ -35,7 +35,7 @@ Object.assign(NYM.prototype, {
         const userMessage = content.replace(_getQuoteMentionPattern(qAuthor), '').trim();
         const strippedQText = qText.split('\n').filter(line => !line.startsWith('>')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
         const textLines = strippedQText.split('\n');
-        const quoteLine = `> @${qAuthor}: ${textLines[0]}` +
+        const quoteLine = `> @${window.NymNickParse.headerName(qAuthor)}: ${textLines[0]}` +
             (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
         return userMessage ? `${quoteLine}\n\n${userMessage}` : quoteLine;
     },
@@ -953,9 +953,6 @@ Object.assign(NYM.prototype, {
         if (!token || token.length < 8) return false;
         if (!/^[A-Za-z0-9]+$/.test(token)) return false;
 
-        const hasUpper = /[A-Z]/.test(token);
-        const hasLower = /[a-z]/.test(token);
-
         const half = Math.floor(token.length / 2);
         for (let unit = 3; unit <= half; unit++) {
             const head = token.substring(0, unit);
@@ -963,6 +960,16 @@ Object.assign(NYM.prototype, {
                 if (new Set(head).size >= 3) return true;
             }
         }
+
+        return this._looksLikeRandomNym(token);
+    },
+
+    _looksLikeRandomNym(token) {
+        if (!token || token.length < 8) return false;
+        if (!/^[A-Za-z0-9]+$/.test(token)) return false;
+
+        const hasUpper = /[A-Z]/.test(token);
+        const hasLower = /[a-z]/.test(token);
 
         if (hasUpper && hasLower) {
             let interiorUpper = 0;
@@ -1216,7 +1223,7 @@ Object.assign(NYM.prototype, {
         if (typeof nym !== 'string') return false;
         const n = nym.trim();
         if (!n || n.length < 8) return false;
-        return this._looksLikeRandomToken(n);
+        return this._looksLikeRandomNym(n);
     },
 
     handleMuteList(event) {
@@ -2789,13 +2796,16 @@ Object.assign(NYM.prototype, {
             }
             if (claim && !claim.sk && claim.pubkey !== this.pubkey) return;
             if (!claim && this._hardcoreRotating()) return;
+            const createdAt = Math.floor(Date.now() / 1000);
             const tags = [['e', messageId]];
             if (originalKind) {
                 tags.push(['k', String(originalKind)]);
             }
+            const heldAsPm = Array.from(this.pmMessages.values()).some((msgs) => msgs.some((m) => m && (m.id === messageId || m.nymMessageId === messageId)));
+            if (this._isChannelKind(originalKind) && !heldAsPm) tags.push(this._channelExpiryTag(createdAt));
             const event = {
                 kind: 5,
-                created_at: Math.floor(Date.now() / 1000),
+                created_at: createdAt,
                 tags: tags,
                 content: '',
                 pubkey: claim ? claim.pubkey : this.pubkey
@@ -2881,6 +2891,7 @@ Object.assign(NYM.prototype, {
     },
 
     handleDeletionEvent(event) {
+        if (this._eventExpired(event)) return;
         // NIP-09: only the original author may delete an event.
         const eTags = (event.tags || []).filter(t => Array.isArray(t) && t[0] === 'e' && t[1]);
         if (eTags.length === 0) return;
@@ -3519,6 +3530,24 @@ Object.assign(NYM.prototype, {
         return this.signEvent(event);
     },
 
+    CHANNEL_EVENT_TTL_SEC: 86400,
+
+    _isChannelKind(kind) {
+        const k = String(kind);
+        return k === '20000' || k === '23333';
+    },
+
+    _channelExpiryTag(createdAt) {
+        return ['expiration', String(createdAt + this.CHANNEL_EVENT_TTL_SEC)];
+    },
+
+    _eventExpired(event, nowSec) {
+        const tag = event && Array.isArray(event.tags) ? event.tags.find((t) => Array.isArray(t) && t[0] === 'expiration') : null;
+        if (!tag || typeof tag[1] !== 'string' || !/^\d+$/.test(tag[1])) return false;
+        const at = Number(tag[1]);
+        return !!at && at < (nowSec || Math.floor(Date.now() / 1000));
+    },
+
     _buildChannelEvent(sender, content, geohash, quoteData, threadRoot, opts) {
         const replayAt = opts && typeof opts.createdAt === 'number' && opts.createdAt > 0
             ? opts.createdAt : 0;
@@ -3658,7 +3687,7 @@ Object.assign(NYM.prototype, {
 
                     if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
                         const eventIdToDelete = signedEvent.id;
-                        setTimeout(() => this.publishDeletionEvent(eventIdToDelete, undefined, claim), 600000);
+                        setTimeout(() => this.publishDeletionEvent(eventIdToDelete, wire.kind, claim), 600000);
                     }
                 } catch (err) {
                     if (held) this._settleQueuedSend(tempId);

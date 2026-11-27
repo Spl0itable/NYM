@@ -28,6 +28,7 @@ import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/theme/nym_theme.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/channel.dart';
 import '../../models/settings.dart';
@@ -3539,7 +3540,7 @@ class _PreviewCard extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         child: AnimatedContainer(
-          duration: NymMotion.transition,
+          duration: NymThemeSwap.motion(context, NymMotion.transition),
           curve: NymMotion.curve,
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(

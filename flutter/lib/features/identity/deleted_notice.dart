@@ -2,7 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../../core/utils/nym_utils.dart';
 import '../i18n/i18n.dart';
-import '../../widgets/common/nym_label.dart' show composedNymRanges, isolateNym, nymRangeSpans, splitNymLabel;
+import '../../widgets/common/nym_label.dart' show composedNymRanges, hasNymBidiControl, isolateNymLabel, isolatedNymSpans, nymSentenceSpans, splitNymLabel;
 
 class DeletedNotice {
   DeletedNotice({required String nym, required String pubkey})
@@ -19,7 +19,8 @@ class DeletedNotice {
 
   String get text => nym.isEmpty
       ? tr('This identity was deleted from another device.')
-      : tr('{nym} was deleted from another device.', {'nym': label});
+      : tr('{nym} was deleted from another device.',
+          {'nym': isolateNymLabel(label)});
 }
 
 bool hasNymSuffix(String text) => composedNymRanges(text).isNotEmpty;
@@ -41,14 +42,11 @@ List<InlineSpan> dimRangeSpans(
 TextSpan dimNymLabel(String label, TextStyle dim) {
   final p = splitNymLabel(label);
   if (p.suffix.isEmpty) return TextSpan(text: label);
-  return TextSpan(children: [
-    TextSpan(text: isolateNym(p.base)),
-    TextSpan(text: p.suffix, style: dim),
-  ]);
+  return TextSpan(children: isolatedNymSpans(p.base, p.suffix, dim: dim));
 }
 
 TextSpan dimNymSuffixes(String text, TextStyle dim) {
   final ranges = composedNymRanges(text);
-  if (ranges.isEmpty) return TextSpan(text: text);
-  return TextSpan(children: nymRangeSpans(text, ranges, dim));
+  if (ranges.isEmpty && !hasNymBidiControl(text)) return TextSpan(text: text);
+  return TextSpan(children: nymSentenceSpans(text, ranges, dim));
 }

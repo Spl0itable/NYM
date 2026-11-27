@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../core/utils/safe_url.dart';
 import '../../models/channel.dart';
 import '../../features/channels/geohash_place_cache.dart';
@@ -2010,7 +2011,7 @@ class _ModalCloseButtonState extends State<_ModalCloseButton> {
                 height: kGeoTouch,
                 child: Center(
                   child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 250),
+                    duration: NymThemeSwap.motion(context, const Duration(milliseconds: 250)),
                     curve: const Cubic(0.4, 0, 0.2, 1),
                     width: 32,
                     height: 32,

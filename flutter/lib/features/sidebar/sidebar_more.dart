@@ -53,27 +53,7 @@ int _count(num? v, int fallback) {
   return n < 0 ? 0 : n;
 }
 
-Set<int> _keepSet(Iterable<num>? keep, int total) {
-  final out = <int>{};
-  if (keep == null) return out;
-  for (final raw in keep) {
-    if (!raw.isFinite || raw != raw.truncateToDouble()) continue;
-    final i = raw.toInt();
-    if (i >= 0 && i < total) out.add(i);
-  }
-  return out;
-}
-
-int _keptPast(Set<int> ks, int from) {
-  var n = 0;
-  for (final i in ks) {
-    if (i >= from) n++;
-  }
-  return n;
-}
-
-SbWindow sbWindow(num? total, num? shown, Iterable<num>? keep,
-    {bool searching = false}) {
+SbWindow sbWindow(num? total, num? shown, {bool searching = false}) {
   final n = _count(total, 0);
   final want = math.max(kSbFirst, _count(shown, kSbFirst));
   if (n <= kSbFirst) {
@@ -82,50 +62,18 @@ SbWindow sbWindow(num? total, num? shown, Iterable<num>? keep,
   if (searching) {
     return SbWindow(shown: want, visible: n, hidden: 0, buttons: const []);
   }
-  final ks = _keepSet(keep, n);
-  final visible = math.min(want, n) + _keptPast(ks, want);
+  final visible = math.min(want, n);
   final hidden = n - visible;
-  final buttons = <PsButton>[];
-  if (hidden > 0) {
-    final step = math.min(kSbStep, hidden);
-    var seen = 0;
-    var i = want;
-    while (seen < step) {
-      if (!ks.contains(i)) seen++;
-      i++;
-    }
-    buttons.add(PsButton(
-        want <= kSbFirst ? 'view' : 'show', step, math.max(i, want + kSbStep)));
-  }
-  if (want > kSbFirst && n - (kSbFirst + _keptPast(ks, kSbFirst)) > 0) {
-    buttons.add(const PsButton('less', 0, kSbFirst));
-  }
-  return SbWindow(shown: want, visible: visible, hidden: hidden, buttons: buttons);
+  return SbWindow(shown: want, visible: visible, hidden: hidden, buttons: [
+    if (hidden > 0)
+      PsButton(want <= kSbFirst ? 'view' : 'show', math.min(kSbStep, hidden),
+          want + kSbStep),
+    if (want > kSbFirst) const PsButton('less', 0, kSbFirst),
+  ]);
 }
 
-List<int> sbHiddenRows(num? total, num? shown, Iterable<num>? keep,
-    {bool searching = false}) {
-  final n = _count(total, 0);
-  final want = math.max(kSbFirst, _count(shown, kSbFirst));
-  if (n <= kSbFirst || searching) return const [];
-  final ks = _keepSet(keep, n);
-  return [
-    for (var i = want; i < n; i++)
-      if (!ks.contains(i)) i,
-  ];
-}
-
-List<T> sbVisibleRows<T>(List<T> rows, SbWindow win, Iterable<num>? keep) {
-  final n = rows.length;
-  if (win.hidden <= 0) return rows;
-  final cut = math.min(win.shown, n);
-  final ks = _keepSet(keep, n);
-  return [
-    ...rows.sublist(0, cut),
-    for (var i = cut; i < n; i++)
-      if (ks.contains(i)) rows[i],
-  ];
-}
+List<T> sbVisibleRows<T>(List<T> rows, SbWindow win) =>
+    win.visible < rows.length ? rows.sublist(0, win.visible) : rows;
 
 int? sbPress(SbWindow? win, String kind) {
   if (win == null) return null;

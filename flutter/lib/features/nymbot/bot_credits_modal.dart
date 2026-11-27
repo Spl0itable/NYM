@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../features/identity/modal_chrome.dart';
 import '../shop/shop_purchase_policy.dart';
 import '../../state/nostr_controller.dart';
@@ -349,7 +350,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
             _selectedPreset = null;
           }),
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
+            duration: NymThemeSwap.motion(context, const Duration(milliseconds: 150)),
             padding: const EdgeInsets.symmetric(vertical: 8),
             decoration: BoxDecoration(
               color: active

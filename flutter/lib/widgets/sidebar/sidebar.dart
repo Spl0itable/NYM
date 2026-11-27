@@ -82,6 +82,7 @@ import 'unread_pill.dart';
 import '../common/nym_field.dart';
 import '../common/nym_tooltip.dart';
 import '../../core/theme/nym_a11y.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../features/sidebar_folders/folders.dart';
 import '../../features/sidebar_folders/folders_providers.dart';
 import 'sidebar_folders_ui.dart';
@@ -164,11 +165,16 @@ class _SidebarState extends ConsumerState<Sidebar> {
   final GlobalKey _pmHead = GlobalKey();
   final GlobalKey _nymHead = GlobalKey();
 
-  final Map<_SectionId, ({FocusNode more, FocusNode less})> _sbFocus = {
+  final Map<_SectionId, ({FocusNode more, FocusNode less, FocusNode rows})>
+      _sbFocus = {
     for (final s in _SectionId.values)
       s: (
         more: FocusNode(debugLabel: '${s.id}-more'),
         less: FocusNode(debugLabel: '${s.id}-less'),
+        rows: FocusNode(
+            debugLabel: '${s.id}-rows',
+            canRequestFocus: false,
+            skipTraversal: true),
       ),
   };
 
@@ -244,6 +250,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
     for (final f in _sbFocus.values) {
       f.more.dispose();
       f.less.dispose();
+      f.rows.dispose();
     }
     super.dispose();
   }
@@ -407,15 +414,27 @@ class _SidebarState extends ConsumerState<Sidebar> {
     ref.read(sidebarListTickProvider.notifier).state++;
   }
 
+  void _sbKeepFocus(_SectionId s, List<Key> keys, Iterable<Key> past) {
+    Key? at;
+    FocusManager.instance.primaryFocus?.context?.visitAncestorElements((e) {
+      final k = e.widget.key;
+      if (k is! ValueKey<Key>) return true;
+      at = k.value;
+      return false;
+    });
+    if (at == null || keys.contains(at) || !past.contains(at)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final more = _sbFocus[s]!.more;
+      if (mounted && (more.context?.mounted ?? false)) more.requestFocus();
+    });
+  }
+
   void _psOpen(String key, String id) {
     Message? msg;
     for (final m in ref.read(appStateProvider).messages[key] ?? const <Message>[]) {
       if (m.id == id) msg = m;
     }
     if (msg == null) return;
-    if (ref.read(meshScreenOpenProvider)) {
-      ref.read(meshScreenOpenProvider.notifier).state = false;
-    }
     openSearchHit(ref.read, key, msg);
     widget.onItemSelected?.call();
   }
@@ -584,6 +603,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
     return row;
   }
 
+  Widget _rowsFocus(_SectionId s, Widget live) => Focus(
+      focusNode: _sbFocus[s]!.rows, includeSemantics: false, child: live);
+
   Widget _withMore(Widget rows, Widget? more) => SliverMainAxisGroup(
         slivers: [
           rows,
@@ -718,39 +740,41 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
     final controller = ref.read(nostrControllerProvider);
 
-    ({List<SidebarRow<T>> rows, SbWindow win}) windowed<T>(
+    ({List<SidebarRow<T>> rows, List<Key> keys, SbWindow win}) windowed<T>(
       WidgetRef ref,
       _SectionId s,
       List<SidebarRow<T>> all,
       String term,
       bool Function(SidebarRow<T>) matches,
-      bool Function(SidebarRow<T>) sticky,
+      Key Function(SidebarRow<T>) keyOf,
     ) {
       final pager = ref.watch(sidebarListPagerProvider);
       ref.watch(sidebarListTickProvider);
       final searching = term.isNotEmpty;
       final filtered =
           searching ? all.where(matches).toList(growable: false) : all;
-      final keep = searching
-          ? const <int>[]
-          : [
-              for (final (i, row) in filtered.indexed)
-                if (sticky(row)) i,
-            ];
-      final win = sbWindow(filtered.length, pager.shown(s.id), keep,
+      final win = sbWindow(filtered.length, pager.shown(s.id),
           searching: searching);
       if (!searching) pager.set(s.id, win.shown);
-      return (rows: sbVisibleRows(filtered, win, keep), win: win);
+      final rows = sbVisibleRows(filtered, win);
+      final keys = [for (final row in rows) keyOf(row)];
+      final f = _sbFocus[s]!;
+      if (f.rows.hasFocus && !f.more.hasFocus && !f.less.hasFocus) {
+        _sbKeepFocus(s, keys, filtered.skip(rows.length).map(keyOf));
+      }
+      return (rows: rows, keys: keys, win: win);
     }
 
-    Widget? moreRow(_SectionId s, SbWindow win) => _moreRowFor(
+    Widget sectionRows(_SectionId s, Widget rows, SbWindow win) => _withMore(
+        rows,
+        _moreRowFor(
           s.id,
           win.buttons,
           _sbFocus[s]!.more,
           _sbFocus[s]!.less,
           i18n,
           (b) => _sbMore(s, b),
-        );
+        ));
 
     Widget channelRows(BuildContext context, WidgetRef ref) {
       final data = ref.watch(sidebarChannelRowsProvider);
@@ -764,17 +788,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
         (row) => (row.item.isGeohash ? row.item.geohashKey : row.item.channel)
             .toLowerCase()
             .contains(term),
-        (row) {
-          final s = row.sig as SidebarChannelSig;
-          return s.active || s.unread > 0;
-        },
+        (row) => ValueKey('sidebar-channel-${row.item.key}'),
       );
       final showChannelSkel = !_skelTimedOut && !data.flag;
-      final keys = <Key>[
-        for (final row in r.rows) ValueKey('sidebar-channel-${row.item.key}'),
-      ];
+      final keys = r.keys;
       _trimMemo(_channelMemo, keys);
-      return _withMore(_rowsSliver(
+      return sectionRows(_SectionId.channels, _rowsSliver(
         keys: keys,
         rowAt: (i) => _channelRow(r.rows[i], textSize, i18n, select),
         trailing: [
@@ -797,7 +816,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
               },
             ),
         ],
-      ), moreRow(_SectionId.channels, r.win));
+      ), r.win);
     }
 
     Widget streamRows(BuildContext context, WidgetRef ref) {
@@ -879,12 +898,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
           }
           return rendered.toLowerCase().contains(term);
         },
-        (row) => row.item.active || row.item.unread > 0,
+        (row) => _pmKey(row.item),
       );
       final showPmSkel = !_skelTimedOut && all.isEmpty;
-      final keys = [for (final row in r.rows) _pmKey(row.item)];
+      final keys = r.keys;
       _trimMemo(_pmMemo, keys);
-      return _withMore(_rowsSliver(
+      return sectionRows(_SectionId.pms, _rowsSliver(
         leading: [
           if (showPmSkel)
             for (final f in const [0.58, 0.70, 0.42])
@@ -906,7 +925,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
         ],
         keys: keys,
         rowAt: (i) => _pmRow(r.rows[i], textSize, i18n, selfPubkey, select),
-      ), moreRow(_SectionId.pms, r.win));
+      ), r.win);
     }
 
     Widget nymRows(BuildContext context, WidgetRef ref) {
@@ -918,14 +937,12 @@ class _SidebarState extends ConsumerState<Sidebar> {
         onlineUsers,
         term,
         (row) => stripPubkeySuffix(row.item.nym).toLowerCase().contains(term),
-        (_) => false,
+        (row) => ValueKey('sidebar-nym-${row.item.pubkey}'),
       );
       final nymRows = r.rows;
-      final keys = <Key>[
-        for (final row in nymRows) ValueKey('sidebar-nym-${row.item.pubkey}'),
-      ];
+      final keys = r.keys;
       _trimMemo(_nymMemo, keys);
-      return _withMore(_rowsSliver(
+      return sectionRows(_SectionId.nyms, _rowsSliver(
         leading: [
           if (!_skelTimedOut && onlineUsers.isEmpty)
             for (final f in const [0.70, 0.42, 0.50, 0.58, 0.70])
@@ -940,7 +957,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
         ],
         keys: keys,
         rowAt: (i) => _nymRow(nymRows[i], textSize, i18n),
-      ), moreRow(_SectionId.nyms, r.win));
+      ), r.win);
     }
 
     Widget sectionFor(_SectionId s) {
@@ -983,7 +1000,8 @@ class _SidebarState extends ConsumerState<Sidebar> {
             ),
             searchHint: tr('Search channels...'),
             searchTooltip: tr('Search channels'),
-            body: _SidebarLive(builder: stream ? streamRows : channelRows),
+            body: _rowsFocus(_SectionId.channels,
+                _SidebarLive(builder: stream ? streamRows : channelRows)),
           );
         case _SectionId.pms:
           return _NavSection(
@@ -1033,7 +1051,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
             body: SliverMainAxisGroup(
               slivers: [
                 const SliverToBoxAdapter(child: GroupInvitesRow()),
-                _SidebarLive(builder: pmRows),
+                _rowsFocus(_SectionId.pms, _SidebarLive(builder: pmRows)),
               ],
             ),
           );
@@ -1068,7 +1086,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
             onLongPressTitle: _toggleReorderMode,
             searchHint: tr('Search nyms...'),
             searchTooltip: tr('Search nyms'),
-            body: _SidebarLive(builder: nymRows),
+            body: _rowsFocus(_SectionId.nyms, _SidebarLive(builder: nymRows)),
           );
       }
     }
@@ -2212,7 +2230,7 @@ class _PublicModeControlState extends State<_PublicModeControl> {
                 Expanded(
                   child: Builder(builder: (context) {
                     final on = m == widget.mode;
-                    final label = m == 'list' ? tr('Channel list') : tr('Stream');
+                    final label = m == 'list' ? tr('List') : tr('Stream');
                     return Semantics(
                       key: ValueKey('ps-mode-$m'),
                       inMutuallyExclusiveGroup: true,
@@ -2586,7 +2604,7 @@ class _MiniIconState extends State<_MiniIcon> {
           child: Center(
           child: TweenAnimationBuilder<Color?>(
             tween: ColorTween(end: target),
-            duration: const Duration(milliseconds: 200),
+            duration: NymThemeSwap.motion(context, const Duration(milliseconds: 200)),
             curve: Curves.ease,
             builder: (context, color, _) => NymSvgIcon(
               widget.svg,
@@ -2680,9 +2698,12 @@ class _GroupListItem extends ConsumerWidget {
   final bool reorder;
 
   void _leaveMenu(BuildContext context, WidgetRef ref, Offset at) {
+    final root = Navigator.of(context, rootNavigator: true).context;
+    final controller = ref.read(nostrControllerProvider);
     showSidebarQuickMenu(context, at, groupId: group.id, [
       ...chatNavSidebarItems(ref, 'group-${group.id}'),
-      ...folderSidebarItems(context, ref, 'group-${group.id}', at: at),
+      ...folderSidebarItems(context, ref, 'group-${group.id}',
+          at: at, root: root),
       ...chatLockSidebarItems(ref, 'group-${group.id}'),
       ...chatToolSidebarItems(context, 'group-${group.id}'),
       SidebarQuickMenuItem(
@@ -2691,15 +2712,15 @@ class _GroupListItem extends ConsumerWidget {
         danger: true,
         // Danger confirm before leaving.
         onSelected: () async {
-          if (!context.mounted) return;
+          if (!root.mounted) return;
           final ok = await showAppConfirm(
-            context,
+            root,
             tr('Leave and delete this group conversation?'),
             danger: true,
             okLabel: tr('Leave'),
           );
-          if (!ok || !context.mounted) return;
-          await ref.read(nostrControllerProvider).leaveGroup(group.id);
+          if (!ok || !root.mounted) return;
+          await controller.leaveGroup(group.id);
         },
       ),
     ]);

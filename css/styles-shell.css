@@ -704,15 +704,19 @@ body.a11y-targets .sidebar-newfolder-btn {
 }
 
 .channel-sub .loc-city {
-    flex: 0 1 auto;
+    flex: 1 0 50%;
     min-width: 0;
+    max-width: max-content;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .channel-sub .loc-country {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
@@ -1233,6 +1237,14 @@ body.a11y-targets .sidebar-newfolder-btn {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.pm-name-text {
+    white-space: pre;
+    unicode-bidi: isolate;
+}
+
+.group-name-text {
     white-space: nowrap;
 }
 
@@ -1373,6 +1385,21 @@ body.a11y-targets .sidebar-newfolder-btn {
     background: rgb(from var(--primary) r g b / 0.1);
     color: var(--primary);
     outline: none;
+}
+
+.header-more-item > svg {
+    flex: 0 0 auto;
+}
+
+.header-more-item.danger,
+.header-more-item.danger svg {
+    color: var(--danger);
+}
+
+.header-more-item.danger:hover,
+.header-more-item.danger:focus-visible {
+    background: rgba(255, 68, 68, 0.12);
+    color: var(--danger);
 }
 
 .sidebar-actions .notification-count-badge {
@@ -1979,7 +2006,7 @@ body.sidebar-reorder-mode .section-reorder-btn svg {
 
 @media (min-width: 1025px) {
     .sidebar {
-        width: var(--sidebar-w, 290px);
+        width: var(--sidebar-w, 400px);
         flex-shrink: 0;
     }
 
@@ -2030,6 +2057,11 @@ body.sidebar-reorder-mode .section-reorder-btn svg {
     --sb-gap: 8px;
     --sb-row-h: 36px;
     --sb-sub-lh: 16px;
+}
+
+.sidebar {
+    --sb-icon: 40px;
+    --sb-row-h: 54px;
 }
 
 @media (max-width: 1024px) {
@@ -2246,6 +2278,25 @@ header.chat-header .uh-mid {
     color: var(--text-dim);
 }
 
+.uh-sub.uh-sub-split {
+    display: flex;
+}
+
+.uh-sub-lead {
+    flex: 0 0 auto;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.uh-sub-rest {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: pre;
+}
+
 .uh-sub .uh-dot {
     display: inline-block;
     width: 7px;
@@ -2343,15 +2394,15 @@ header.chat-header .uh-actions > .uh-over {
 
 header.chat-header .header-more {
     flex: 0 0 auto;
-    margin-left: calc(var(--uh-gap) - var(--space-1));
+    padding-left: var(--space-2);
+    margin-left: var(--space-1);
+    border-left: 1px solid var(--glass-border);
 }
 
 header.chat-header .header-actions {
     flex: 0 0 auto;
     flex-direction: row;
-    padding-left: var(--space-2);
-    margin-left: var(--space-1);
-    border-left: 1px solid var(--glass-border);
+    margin-left: calc(var(--uh-gap) - var(--uh-side));
 }
 
 header.chat-header .header-actions-row {
@@ -2379,9 +2430,7 @@ header.chat-header .mobile-header-actions {
 
 @media (max-width: 1024px) {
     header.chat-header .mobile-header-actions {
-        padding-left: var(--space-2);
-        margin-left: var(--space-1);
-        border-left: 1px solid var(--glass-border);
+        margin-left: calc(var(--uh-gap) - var(--uh-side));
     }
 }
 
@@ -2402,24 +2451,28 @@ header.chat-header .mobile-header-actions {
 
     header.chat-header .header-more {
         display: none;
+        padding-left: 0;
+        margin-left: calc(var(--uh-gap) - 2px);
+        border-left: none;
     }
 
     header.chat-header.uh-more-on .header-more {
         display: block;
-        order: 5;
-        margin-left: calc(var(--uh-gap) - 2px);
+    }
+
+    header.chat-header.uh-acts-empty .header-more {
+        margin-left: 0;
     }
 
     header.chat-header .uh-actions.uh-empty {
         display: none;
     }
 
-    header.chat-header.uh-acts-empty .mobile-header-actions {
+    header.chat-header.uh-acts-empty:not(.uh-more-on) .mobile-header-actions {
         margin-left: 0;
     }
 
     header.chat-header .mobile-header-actions {
-        order: 4;
         padding-left: 0;
         margin-left: calc(var(--uh-gap) - 2px);
         border-left: none;

@@ -8,6 +8,7 @@ import 'dart:ui' show DartPluginRegistrant;
 import 'app.dart';
 import 'core/constants/storage_keys.dart';
 import 'core/theme/nym_theme.dart';
+import 'core/theme/nym_theme_swap.dart';
 import 'features/accounts/account_host.dart';
 import 'features/accounts/account_runtime.dart';
 import 'features/calls/call_platform.dart';
@@ -211,6 +212,9 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
       title: 'Nymchat',
       debugShowCheckedModeBanner: false,
       theme: buildNymThemeData(colors, a11y: ref.watch(nymA11yProvider)),
+      themeAnimationStyle: AnimationStyle.noAnimation,
+      builder: (context, child) =>
+          NymThemeSwap(colors: colors, child: child ?? const SizedBox.shrink()),
       home: VaultBootUnlock(
         onUnlocked: resumed
             ? (_) => setState(() => _wakeUnlocked = false)

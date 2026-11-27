@@ -220,11 +220,19 @@ class MainMenuRows {
 
 const List<String> kHeaderOverflow = ['saved', 'calls', 'about'];
 
+const String kHeaderLast = 'notifications';
+
 MainMenuRows mainMenuRows([String layout = 'mobile']) {
   final all = [...MainMenuItems.primary, ...MainMenuItems.secondary];
   if (layout == 'desktop') {
     return MainMenuRows(
-      [all.where((id) => !kHeaderOverflow.contains(id)).toList()],
+      [
+        [
+          ...all.where(
+              (id) => !kHeaderOverflow.contains(id) && id != kHeaderLast),
+          kHeaderLast,
+        ],
+      ],
       kHeaderOverflow,
     );
   }

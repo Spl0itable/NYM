@@ -593,7 +593,7 @@
                     </button>
                 </div>
                 <div class="ps-mode" role="radiogroup" aria-label="Public section view">
-                    <button type="button" class="ps-mode-opt" role="radio" data-action="setPublicMode" data-ps-mode="list" aria-checked="true" tabindex="0">Channel list</button>
+                    <button type="button" class="ps-mode-opt" role="radio" data-action="setPublicMode" data-ps-mode="list" aria-checked="true" tabindex="0">List</button>
                     <button type="button" class="ps-mode-opt" role="radio" data-action="setPublicMode" data-ps-mode="stream" aria-checked="false" tabindex="-1">Stream</button>
                 </div>
                 <div class="search-input-wrapper" id="channelSearchWrapper">
@@ -815,36 +815,6 @@
                     <button type="button" id="meshGhostBtn" data-action="meshToggleGhost" aria-label="Ghost Mode" aria-pressed="false" data-tip=""><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V10a7 7 0 0 1 14 0v11l-2.33-2-2.34 2L12 19l-2.33 2-2.34-2Z"></path><path d="M9.5 10.5h.01M14.5 10.5h.01"></path></svg></button>
                     <button type="button" id="meshAddBtn" data-action="meshAddPeer" aria-label="Add device" data-tip=""><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 7 13 17 8 22 8 2 13 7 3 17"></polyline><path d="M18 8v6M15 11h6"></path></svg></button>
                 </div>
-                <div class="header-actions" role="group" aria-label="Main menu">
-                    <div class="header-actions-row header-actions-primary">
-                        <button class="icon-btn header-icon-btn notifications-btn" data-menu-item="notifications" data-action="openNotificationsModal" aria-label="Notifications" data-tip="">
-                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path> <path d="M13.73 21a2 2 0 0 1-3.46 0"></path> </svg>
-                            <span class="notification-count-badge nm-hidden" id="notifBadgeDesktop">0</span>
-                        </button>
-                        <button class="icon-btn header-icon-btn" data-menu-item="shop" data-action="openShop" aria-label="Shop" data-tip="">
-                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"></path><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"></path><path d="M2 7h20"></path><path d="M22 7v3a2 2 0 0 1-2 2 2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12a2 2 0 0 1-2-2V7"></path></svg>
-                        </button>
-                        <button class="icon-btn header-icon-btn" data-menu-item="settings" data-action="showSettings" aria-label="Settings" data-tip="">
-                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                        </button>
-                    </div>
-                </div>
-                <div class="mobile-header-actions">
-                    <button class="mobile-notif-toggle" data-action="openNotificationsModal" aria-label="Notifications">
-                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-                            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-                        </svg>
-                        <span class="notification-count-badge nm-hidden" id="notifBadgeMobile">0</span>
-                    </button>
-                    <button class="mobile-menu-toggle" data-action="toggleSidebar" aria-label="Menu">
-                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="3" y1="6" x2="21" y2="6"></line>
-                            <line x1="3" y1="12" x2="21" y2="12"></line>
-                            <line x1="3" y1="18" x2="21" y2="18"></line>
-                        </svg>
-                    </button>
-                </div>
                 <div class="header-more">
                             <button class="icon-btn header-icon-btn" id="headerMoreBtn" data-action="toggleHeaderMore" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="headerMoreMenu" data-tip="">
                                 <svg data-menu-dots-icon="outline" width="18" height="18"></svg>
@@ -865,6 +835,36 @@
                                 </button>
                             </div>
                         </div>
+                <div class="header-actions" role="group" aria-label="Main menu">
+                    <div class="header-actions-row header-actions-primary">
+                        <button class="icon-btn header-icon-btn" data-menu-item="shop" data-action="openShop" aria-label="Shop" data-tip="">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"></path><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"></path><path d="M2 7h20"></path><path d="M22 7v3a2 2 0 0 1-2 2 2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12a2 2 0 0 1-2-2V7"></path></svg>
+                        </button>
+                        <button class="icon-btn header-icon-btn" data-menu-item="settings" data-action="showSettings" aria-label="Settings" data-tip="">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                        </button>
+                        <button class="icon-btn header-icon-btn notifications-btn" data-menu-item="notifications" data-action="openNotificationsModal" aria-label="Notifications" data-tip="">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path> <path d="M13.73 21a2 2 0 0 1-3.46 0"></path> </svg>
+                            <span class="notification-count-badge nm-hidden" id="notifBadgeDesktop">0</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="mobile-header-actions">
+                    <button class="mobile-menu-toggle" data-action="toggleSidebar" aria-label="Menu">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                            <line x1="3" y1="18" x2="21" y2="18"></line>
+                        </svg>
+                    </button>
+                    <button class="mobile-notif-toggle" data-action="openNotificationsModal" aria-label="Notifications">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                        </svg>
+                        <span class="notification-count-badge nm-hidden" id="notifBadgeMobile">0</span>
+                    </button>
+                </div>
             </header>
             <script src="js/modules/call-link-icon.js"></script>
             <script src="js/modules/menu-dots-icon.js"></script>
@@ -3099,6 +3099,7 @@
     <script defer src="js/modules/ai-consent.js"></script>
     <script defer src="js/modules/attest.js"></script>
     <script defer src="js/modules/filter-packs.js"></script>
+    <script defer src="js/modules/nick-parse.js"></script>
     <script defer src="js/modules/content-filter.js"></script>
     <script defer src="js/modules/emoji-block.js"></script>
     <script defer src="js/modules/report-record.js"></script>

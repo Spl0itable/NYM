@@ -9,53 +9,17 @@
         return Number.isFinite(n) ? Math.max(0, n) : fallback;
     }
 
-    function keepSet(keep, total) {
-        const out = new Set();
-        if (!Array.isArray(keep)) return out;
-        for (const raw of keep) {
-            const i = Number(raw);
-            if (Number.isInteger(i) && i >= 0 && i < total) out.add(i);
-        }
-        return out;
-    }
-
-    function keptPast(ks, from) {
-        let n = 0;
-        for (const i of ks) if (i >= from) n++;
-        return n;
-    }
-
-    function window(total, shown, keep, o) {
+    function window(total, shown, o) {
         const n = count(total, 0);
         const want = Math.max(FIRST, count(shown, FIRST));
         if (n <= FIRST) return { shown: FIRST, visible: n, hidden: 0, buttons: [] };
         if (o && o.searching === true) return { shown: want, visible: n, hidden: 0, buttons: [] };
-        const ks = keepSet(keep, n);
-        const visible = Math.min(want, n) + keptPast(ks, want);
+        const visible = Math.min(want, n);
         const hidden = n - visible;
         const buttons = [];
-        if (hidden > 0) {
-            const step = Math.min(STEP, hidden);
-            let seen = 0;
-            let i = want;
-            while (seen < step) {
-                if (!ks.has(i)) seen++;
-                i++;
-            }
-            buttons.push({ kind: want <= FIRST ? 'view' : 'show', n: step, next: Math.max(i, want + STEP) });
-        }
-        if (want > FIRST && n - (FIRST + keptPast(ks, FIRST)) > 0) buttons.push({ kind: 'less', n: 0, next: FIRST });
+        if (hidden > 0) buttons.push({ kind: want <= FIRST ? 'view' : 'show', n: Math.min(STEP, hidden), next: want + STEP });
+        if (want > FIRST) buttons.push({ kind: 'less', n: 0, next: FIRST });
         return { shown: want, visible, hidden, buttons };
-    }
-
-    function hiddenRows(total, shown, keep, o) {
-        const n = count(total, 0);
-        const want = Math.max(FIRST, count(shown, FIRST));
-        if (n <= FIRST || (o && o.searching === true)) return [];
-        const ks = keepSet(keep, n);
-        const out = [];
-        for (let i = want; i < n; i++) if (!ks.has(i)) out.push(i);
-        return out;
     }
 
     function press(win, kind) {
@@ -70,5 +34,5 @@
         return s > FIRST ? s : 0;
     }
 
-    G.NymSidebarMore = Object.freeze({ FIRST, STEP, window, hiddenRows, press, store });
+    G.NymSidebarMore = Object.freeze({ FIRST, STEP, window, press, store });
 })();

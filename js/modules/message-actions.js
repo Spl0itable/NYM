@@ -28,7 +28,7 @@
         if (x.id && !x.anonLane && (x.self || x.modDelete)) out.push('delete');
         if (x.edited && x.id) out.push('editHistory');
         if (x.hexId) out.push('eventDetails');
-        if (!x.self && x.author) out.push('report');
+        if (!x.self && x.author && !x.noReport) out.push('report');
         return out;
     }
 

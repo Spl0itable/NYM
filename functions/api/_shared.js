@@ -2698,7 +2698,8 @@ var AUTH_PAYLOAD_REQUIRED = {
   "voucher-issue": 1,
   "gift-create": 1,
   "panic-mark": 1,
-  "panic-clear": 1
+  "panic-clear": 1,
+  "report-details": 1
 };
 
 function verifyClientAuth(auth, expectedPubkey, binding) {
@@ -3427,6 +3428,35 @@ async function cacheRateTake(bucket, who, units, limit, windowMs) {
   return (await cacheRateTakeAll([{ bucket: bucket, who: who, units: units, limit: limit, windowMs: windowMs }])).ok;
 }
 
+function cacheRateKnownOver(bucket, who, units, limit, windowMs) {
+  if (!who) return false;
+  var known = rateKnown.get(RATE_CACHE_HOST + "/roll/" + encodeURIComponent(bucket) + "?k=" + encodeURIComponent(who));
+  var now = Date.now();
+  var span = windowMs > 0 ? windowMs : 60000;
+  var rec = known && known.until > now ? rateClone(known.rec) : rateEmpty();
+  rateTrim(rec, now, span);
+  return rateWaitMs(rec, Number(units) > 0 ? Number(units) : 0, Number(limit) || 0, now, span) > 0;
+}
+
+var EARLY_HOLD_CHARS_MAX = 16 * 1024 * 1024;
+var earlyHeld = 0;
+
+function earlyHoldTake(n) {
+  var size = Number(n) > 0 ? Number(n) : 0;
+  if (earlyHeld + size > EARLY_HOLD_CHARS_MAX) return false;
+  earlyHeld += size;
+  return true;
+}
+
+function earlyHoldGive(n) {
+  var size = Number(n) > 0 ? Number(n) : 0;
+  earlyHeld = Math.max(0, earlyHeld - size);
+}
+
+function earlyHoldStats() {
+  return { held: earlyHeld, max: EARLY_HOLD_CHARS_MAX };
+}
+
 function cacheRateStats() {
   return { keys: rateKnown.size, entries: rateKnownEntries, locks: rateLocks.size, writer: rateWriterId, errors: rateErrors, misses: rateMisses, failedOpen: rateOpen };
 }
@@ -3467,6 +3497,10 @@ export {
   ipv6NetKey,
   cacheRateTake,
   cacheRateTakeAll,
+  cacheRateKnownOver,
+  earlyHoldTake,
+  earlyHoldGive,
+  earlyHoldStats,
   cacheRateStats,
   cacheRateReset,
   CACHE_RATE_KEYS_MAX,

@@ -15,6 +15,7 @@ import '../../features/sync/set_stamps.dart' show ColStamps;
 import '../../features/sync/synced_stores.dart' show columnsLayoutRevisionProvider;
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/duo/duo_rail.dart';
 import '../../features/layout/layout_model.dart';
@@ -202,6 +203,8 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
   /// The PageView page on mobile; the last-focused column on desktop.
   int _focused = 0;
 
+  bool? _wasMobile;
+
   /// Key of the primary channel column; sidebar channel taps repurpose it in place while it lives.
   String? _primaryKey;
 
@@ -247,6 +250,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     // Distinguishes a reply the focused column shows (thread open) from one collapsed behind a reply count.
     notifier.openThreadGate =
         () => mounted ? ref.read(activeThreadProvider) : null;
+    notifier.columnHoldsGate = _holdsKey;
     _gateHost = notifier;
     EventToastCenter.instance.columnKeys = _eventToastColumnKeys;
   }
@@ -290,6 +294,9 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       host.columnsReadGate = null;
       host.openThreadGate = null;
     }
+    if (host != null && host.columnHoldsGate == _holdsKey) {
+      host.columnHoldsGate = null;
+    }
     _gateHost = null;
     if (EventToastCenter.instance.columnKeys == _eventToastColumnKeys) {
       EventToastCenter.instance.columnKeys = null;
@@ -316,6 +323,47 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       return false;
     }
     return _atBottomByKey[desc.storageKey] ?? true;
+  }
+
+  bool _holdsKey(String key) =>
+      mounted && _columns.any((d) => d.storageKey == key);
+
+  void _reconcileThreads() {
+    if (!mounted) return;
+    _dropThreads((k) => !_columns.any((d) => d.storageKey == k));
+    final swap = columnThreadSwap(
+        ref.read(columnThreadsProvider),
+        ref.read(activeThreadProvider),
+        ref.read(appStateProvider).view,
+        _holdsKey);
+    if (swap == null) return;
+    ref.read(columnThreadsProvider.notifier).state = swap.parked;
+    ref.read(activeThreadProvider.notifier).state = swap.active;
+  }
+
+  void _showFocusedPage() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_isMobile || !_pageController.hasClients) return;
+      if (_columns.isEmpty) return;
+      final want = _focused.clamp(0, _columns.length - 1);
+      if ((_pageController.page?.round() ?? 0) != want) {
+        _pageController.jumpToPage(want);
+      }
+    });
+  }
+
+  void _dropThreads(bool Function(String key) gone) {
+    final parked = ref.read(columnThreadsProvider);
+    if (parked.keys.any(gone)) {
+      ref.read(columnThreadsProvider.notifier).state = {
+        for (final e in parked.entries)
+          if (!gone(e.key)) e.key: e.value,
+      };
+    }
+    final at = ref.read(activeThreadProvider);
+    if (at != null && gone(at.view.storageKey)) {
+      ref.read(activeThreadProvider.notifier).state = null;
+    }
   }
 
   /// Accepts the storage key, the descriptor key, and a channel's bare lowercase name.
@@ -354,6 +402,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       _pickerOpen = false;
       _focused = 0;
     });
+    _dropThreads((_) => true);
     _primaryKey = null;
     _syncedInitialView = false;
     _atBottomByKey.clear();
@@ -402,6 +451,9 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     }
     _atBottomByKey
         .removeWhere((k, _) => !_columns.any((d) => d.storageKey == k));
+    _dropThreads((k) =>
+        !_columns.any((d) => d.storageKey == k) ||
+        added.any((d) => d.storageKey == k));
     for (final d in added) {
       _subscribeChannel(d);
     }
@@ -588,6 +640,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     final focusedDesc = (_focused >= 0 && _focused < _columns.length)
         ? _columns[_focused]
         : null;
+    _dropThreads((k) => k == desc.storageKey);
     setState(() {
       _columns.removeAt(idx);
       if (_columns.isEmpty) {
@@ -718,6 +771,10 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
           (d) => d.key == _primaryKey && d.kind == _ColumnKind.channel);
       if (primary >= 0) {
         final oldDesc = _columns[primary];
+        _dropThreads((k) =>
+            k == desc.storageKey ||
+            (k == oldDesc.storageKey &&
+                !_columns.any((d) => d != oldDesc && d.storageKey == k)));
         setState(() {
           _columns[primary] = desc;
           _focused = primary;
@@ -740,6 +797,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
         ref.read(settingsProvider).groupChatPMOnlyMode) {
       return;
     }
+    _dropThreads((k) => k == desc.storageKey);
     setState(() {
       _columns.add(desc);
       _focused = _columns.length - 1;
@@ -1344,12 +1402,18 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     if (!_syncedInitialView && _columns.isNotEmpty) {
       _syncedInitialView = true;
       _syncFocusedView();
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _reconcileThreads());
     }
+
+    final mobile = _isMobile;
+    if (mobile && _wasMobile != true) _showFocusedPage();
+    _wasMobile = mobile;
 
     return Container(
       key: const Key('columnsStrip'),
       color: Colors.transparent,
-      child: _isMobile
+      child: mobile
           ? _buildMobile(c, channels, pms, groups, pmOnly, transparentColumns)
           : _buildDesktop(c, channels, pms, groups, pmOnly, transparentColumns),
     );
@@ -1827,7 +1891,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     super.dispose();
   }
 
-  /// At-bottom at <120px and the scroll button at >150px; index 0's edge rests 10px inside the viewport.
+  /// At-bottom at <120px; index 0's edge rests 10px inside the viewport.
   void _onPositionsChanged() {
     final positions = _positions.itemPositions.value;
     if (positions.isEmpty) return;
@@ -1849,7 +1913,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       distanceFromBottom = 10 - newest.itemLeadingEdge * _viewportHeight;
     }
     final atBottom = distanceFromBottom < 120;
-    final showButton = distanceFromBottom > 150;
+    final showButton = bottomShown(distanceFromBottom, _showScrollButton.value);
     if (atBottom != _atBottom) widget.onAtBottomChanged?.call(atBottom);
     _atBottom = atBottom;
     _showScrollButton.value = showButton;
@@ -2146,16 +2210,20 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     _followArmed = false;
 
     // An open thread for this conversation swaps the list for the in-place ThreadView.
-    final activeThread = ref.watch(activeThreadProvider);
-    final threadOpen = activeThread != null &&
-        appThreadsEnabled &&
-        activeThread.view.storageKey == widget.desc.storageKey;
+    final focusedThread = ref.watch(activeThreadProvider);
+    final parkedThread = ref.watch(columnThreadsProvider
+        .select((m) => m[widget.desc.storageKey]));
+    final activeThread = focusedThread != null &&
+            focusedThread.view.storageKey == widget.desc.storageKey
+        ? focusedThread
+        : parkedThread;
+    final threadOpen = activeThread != null && appThreadsEnabled;
 
     final showFocus = widget.focused && !mobile;
     if (threadOpen || messages.isEmpty) _listBuilt = false;
 
     final body = AnimatedContainer(
-      duration: NymMotion.transition,
+      duration: NymThemeSwap.motion(context, NymMotion.transition),
       curve: NymMotion.curve,
       decoration: BoxDecoration(
         // The columns wallpaper clears only backgrounds; border, shadow and glass header remain.
@@ -2187,7 +2255,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                     key: ValueKey(activeThread),
                     thread: activeThread,
                     showTyping: false,
-                    columnsMode: true)
+                    columnsMode: true,
+                    onScreen: _isShown,
+                    screenChanges: widget.shown)
                 : ColoredBox(
               color: transparent
                   ? Colors.transparent
@@ -2347,7 +2417,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                               binding: _nav,
                               slot: 36,
                               bottom: show
-                                  ? _ScrollBottomButton(onTap: _scrollToBottom)
+                                  ? ColumnScrollBottomFab(onTap: _scrollToBottom)
                                   : null,
                             ),
                           ),
@@ -2757,7 +2827,7 @@ class _PagerState extends State<_Pager> {
                 // On pager hover every dot, including the active one, dims to 0.7 (CSS specificity).
                 for (var i = 0; i < widget.count; i++)
                   AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
+                    duration: NymThemeSwap.motion(context, const Duration(milliseconds: 150)),
                     curve: Curves.ease,
                     width: 7,
                     height: 7,
@@ -2817,7 +2887,7 @@ class _HoverCloseButtonState extends State<_HoverCloseButton> {
           padding: widget.padding,
           child: TweenAnimationBuilder<Color?>(
             tween: ColorTween(end: target),
-            duration: NymMotion.transition,
+            duration: NymThemeSwap.motion(context, NymMotion.transition),
             curve: NymMotion.curve,
             builder: (context, color, _) => NymSvgIcon(
               NymIcons.columnClose,
@@ -3354,15 +3424,15 @@ class _TabRow extends StatelessWidget {
 }
 
 /// Column scroll-to-bottom button; unlike the single-view one it has no light-mode override.
-class _ScrollBottomButton extends StatefulWidget {
-  const _ScrollBottomButton({required this.onTap});
+class ColumnScrollBottomFab extends StatefulWidget {
+  const ColumnScrollBottomFab({super.key, required this.onTap});
   final VoidCallback onTap;
 
   @override
-  State<_ScrollBottomButton> createState() => _ScrollBottomButtonState();
+  State<ColumnScrollBottomFab> createState() => _ColumnScrollBottomFabState();
 }
 
-class _ScrollBottomButtonState extends State<_ScrollBottomButton> {
+class _ColumnScrollBottomFabState extends State<ColumnScrollBottomFab> {
   bool _hover = false;
 
   @override

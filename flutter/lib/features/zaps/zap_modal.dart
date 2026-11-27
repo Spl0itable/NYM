@@ -20,7 +20,8 @@ import 'lnurl.dart';
 import 'zap_logic.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_field.dart';
-import '../../widgets/common/nym_label.dart' show NymText;
+import '../../core/utils/nym_utils.dart' show getPubkeySuffix, stripPubkeySuffix;
+import '../../widgets/common/nym_label.dart' show NymText, isolateNymParts;
 import '../../widgets/common/dialog_button.dart';
 
 /// Zap modal: amount and comment, LNURL-pay invoice with QR, then LUD-21 payment polling.
@@ -95,6 +96,10 @@ class _ZapModalState extends ConsumerState<ZapModal> {
 
   /// Lowercased bolt11s already counted, so the poll and a receipt echo can't both fire success.
   final Set<String> _settledInvoices = {};
+
+  String get _recipientLabel => isolateNymParts(
+      stripPubkeySuffix(widget.recipientNym),
+      getPubkeySuffix(widget.recipientPubkey));
 
   @override
   void dispose() {
@@ -337,9 +342,9 @@ class _ZapModalState extends ConsumerState<ZapModal> {
                 const SizedBox(height: 24),
                 NymText(
                   widget.messageId != null
-                      ? tr('Zapping @{nym}', {'nym': widget.recipientNym})
+                      ? tr('Zapping @{nym}', {'nym': _recipientLabel})
                       : tr("Zapping @{nym}'s profile",
-                          {'nym': widget.recipientNym}),
+                          {'nym': _recipientLabel}),
                   textAlign: TextAlign.center,
                   style: TextStyle(color: c.textDim, fontSize: 15),
                 ),

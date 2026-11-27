@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/theme/nym_theme_swap.dart';
 
 typedef NymSwitchPalette = ({
   Color track,
@@ -80,7 +81,7 @@ class NymSwitch extends StatelessWidget {
     final knob = context.largeTouchTargets ? 22.0 : 16.0;
     final gap = (size.height - knob) / 2;
     final reduce = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    final d = reduce ? Duration.zero : duration;
+    final d = reduce ? Duration.zero : NymThemeSwap.motion(context, duration);
     final radius = BorderRadius.circular(size.height / 2);
     final pill = SizedBox.fromSize(
       size: size,

@@ -236,7 +236,7 @@ Object.assign(NYM.prototype, {
         const { text: emojiShielded, emojis: savedEmojis } = this._shieldEmojis(text);
 
         // Even indices are non-mention text, odd indices are mentions.
-        const parts = emojiShielded.split(/(@[^\s@]+)/);
+        const parts = window.NymNickParse.splitMentions(emojiShielded);
 
         // Google Translate strips edge whitespace, so restore it per chunk.
         const translatable = [];

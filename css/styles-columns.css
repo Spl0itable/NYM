@@ -297,6 +297,12 @@ body.columns-wallpaper.columns-mode .cv-scroller {
     width: 100%;
 }
 
+body.columns-mode .cv-list > .thread-view-bar {
+    top: -10px;
+    background-color: var(--bg-secondary);
+    background-image: linear-gradient(rgb(from var(--primary) r g b / 0.05), rgb(from var(--primary) r g b / 0.05));
+}
+
 .cv-add-column {
     flex: 0 0 220px;
     width: 220px;
@@ -818,8 +824,18 @@ body.solid-ui .cv-column-header {
     }
 }
 
+:root {
+    --bubble-cap-narrow: min(calc(100% - 16px), calc(85 * 0.55em + 24px));
+}
+
+@media (max-width: 768px) {
+    :root {
+        --bubble-cap-narrow: min(90%, calc(85 * 0.55em + 24px));
+    }
+}
+
 body.columns-mode.chat-bubbles .cv-list .message-content {
-    max-width: min(calc(100% - 16px), calc(85 * 0.55em + 24px));
+    max-width: var(--bubble-cap-narrow);
 }
 
 @media (max-width: 1024px) {

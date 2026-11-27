@@ -40,7 +40,7 @@
     const RX_LINK_RUN = /[\p{L}\p{N}\p{M}.-]+/gu;
     const LINK_FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'py', 'ipynb', 'rb', 'php', 'kt', 'kts', 'swift', 'dart', 'go', 'cpp', 'hpp', 'cs', 'css', 'scss', 'sass', 'less', 'html', 'htm', 'xml', 'yml', 'yaml', 'toml', 'ini', 'cfg', 'conf', 'env', 'txt', 'csv', 'tsv', 'log', 'lock', 'sql', 'bash', 'zsh', 'bat', 'cmd', 'vue', 'svelte', 'lua', 'scala', 'exs', 'erl', 'hs', 'clj', 'gradle', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'tar', 'gz', 'tgz', 'exe', 'dll', 'dmg', 'apk', 'ipa', 'wasm', 'wav']);
     const RX_MD_LINK = /!?\[([^\[\]\n]*)\]\((?:&lt;((?:(?!&gt;)[^\s])+)&gt;|((?:[^\s()]|\([^\s()]*\))+))\)/g;
-    const RX_URL_CANDIDATE = /(<[^>]+>)|(https?:\/\/(?:(?!&(?:lt|gt|quot);)[^\s<>"\uFDD0-\uFDD5\u3001\u3002\u3008-\u3011\uFF01\uFF08\uFF09\uFF0C\uFF0E\uFF1A\uFF1B\uFF1F\u2018\u2019\u201C\u201D\u00AB\u00BB\u2026])+)(?!__)/g;
+    const RX_URL_CANDIDATE = /(<[^>]+>)|(https?:\/\/(?:(?!&(?:lt|gt|quot);)[^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9\u3001\u3002\u3008-\u3011\uFF01\uFF08\uFF09\uFF0C\uFF0E\uFF1A\uFF1B\uFF1F\u2018\u2019\u201C\u201D\u00AB\u00BB\u2026])+)(?!__)/g;
 
     function unescapeHtml(text) {
         return String(text).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
@@ -471,16 +471,27 @@
         return out + fn(text.slice(last));
     }
 
-    function maskSpoilers(text) {
+    const RX_SLOT_CHARS = /[\uFDD8\uFDD9]/g;
+    const noneKnown = () => false;
+
+    function outsideMentions(text, fn, known) {
+        const slots = [];
+        const held = placeMentions(text.replace(RX_SLOT_CHARS, ''), (m, raw) => { slots.push(raw); return `\uFDD8${slots.length - 1}\uFDD9`; }, known || noneKnown);
+        const out = fn(held);
+        return slots.length ? out.replace(/\uFDD8(\d+)\uFDD9/g, (m, i) => slots[Number(i)] === undefined ? m : slots[Number(i)]) : out;
+    }
+
+    function maskSpoilers(text, opts) {
         if (typeof text !== 'string' || text.indexOf('||') === -1) return text;
-        return mapOutsideCode(text, (part) => part.replace(RX_SPOILER, SPOILER_MASK));
+        const known = opts && opts.known;
+        return mapOutsideCode(text, (part) => outsideMentions(part, (p) => p.replace(RX_SPOILER, SPOILER_MASK), known));
     }
 
     function stripForPreview(text, opts) {
         if (typeof text !== 'string' || !text) return text;
         const locale = opts && opts.locale;
-        return mapOutsideCode(text, (part) => labelVerifyLinks(part)
-            .replace(RX_SPOILER, SPOILER_MASK)
+        const known = opts && opts.known;
+        return mapOutsideCode(text, (part) => outsideMentions(labelVerifyLinks(part), (p) => p.replace(RX_SPOILER, SPOILER_MASK), known)
             .replace(RX_TIMESTAMP_RAW, (m, sec, style) => tsValid(sec) ? formatTimestamp(sec, style || 'f', locale) : m)
             .replace(/(^|\n)-# (?=\S)/g, '$1'));
     }
@@ -567,8 +578,7 @@
             return content.indexOf('\n') === -1 ? content : content.replace(/\n/g, '<br>');
         }
 
-        let formatted = content;
-        formatted = formatted.replace(/@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi, '@$1#$2');
+        let formatted = content.indexOf('\uFDD8') === -1 && content.indexOf('\uFDD9') === -1 ? content : content.replace(RX_SLOT_CHARS, '');
 
         const escapeText = (str) => str
             .replace(/&(?![a-z]+;|#[0-9]+;|#x[0-9a-f]+;)/gi, '&amp;')
@@ -582,6 +592,17 @@
             formatted = formatted.slice(0, verifySpans[i].start) + `\uFDD6${i}\uFDD7` + formatted.slice(verifySpans[i].end);
         }
         const verifyRaw = (str) => verifyLinks.length ? str.replace(/\uFDD6(\d+)\uFDD7/g, (m, i) => verifyLinks[i] === undefined ? m : escapeText(verifyLinks[i])) : str;
+
+        const mentionSlots = [];
+        const mentionRaw = [];
+        const info = ctx.mentionInfo;
+        const known = info ? (name, sfx) => { const e = info[mentionKey(name, sfx)]; return !!(e && e.known); } : undefined;
+        formatted = placeMentions(formatted, (m, raw) => {
+            mentionSlots.push(renderMention(m, ctx));
+            mentionRaw.push(raw);
+            return `\uFDD8${mentionSlots.length - 1}\uFDD9`;
+        }, known);
+        const slotText = (str) => mentionRaw.length ? str.replace(/\uFDD8(\d+)\uFDD9/g, (m, i) => mentionRaw[Number(i)] === undefined ? m : escapeHtml(mentionRaw[Number(i)])) : str;
 
         formatted = escapeText(formatted);
 
@@ -641,7 +662,7 @@
         if (ctx.commonMark) {
             formatted = formatted.replace(RX_MD_LINK, (match, label, angled, plain) => {
                 const target = angled || plain;
-                if (/[\uFDD0-\uFDD5]/.test(target) || label.includes('\uFDD6')) return match;
+                if (/[\uFDD0-\uFDD5\uFDD8\uFDD9]/.test(target) || label.includes('\uFDD6')) return match;
                 const raw = unescapeHtml(target);
                 if (!/^https?:\/\/./i.test(raw) || !safeUrl(raw)) return label;
                 let inlineOnly = true;
@@ -650,14 +671,14 @@
                     return codePlaceholders[Number(i)];
                 });
                 if (!inlineOnly) return match;
-                const shown = unescapeHtml(labelHtml.replace(/<[^>]*>/g, ''));
+                const shown = unescapeHtml(slotText(labelHtml).replace(/<[^>]*>/g, ''));
                 const text = linkLabelDisguises(shown, raw) ? target : labelHtml;
                 const idx = codePlaceholders.length;
                 codePlaceholders.push(`<a href="${target}" target="_blank" rel="noopener">${text}</a>`);
                 return `\uFDD0${idx}\uFDD1`;
             });
-            formatted = formatted.replace(/\[(https?:\/\/[^\s\[\]<>"\uFDD0-\uFDD5]+)\](?!\()/g, '$1');
-            formatted = formatted.replace(/&lt;(https?:\/\/(?:(?!&(?:lt|gt);)[^\s<>"\uFDD0-\uFDD5])+)&gt;/g, '$1');
+            formatted = formatted.replace(/\[(https?:\/\/[^\s\[\]<>"\uFDD0-\uFDD5\uFDD8\uFDD9]+)\](?!\()/g, '$1');
+            formatted = formatted.replace(/&lt;(https?:\/\/(?:(?!&(?:lt|gt);)[^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9])+)&gt;/g, '$1');
         }
 
         formatted = applyBlocks(formatted, !!inQuote);
@@ -677,7 +698,7 @@
         // Audio uses its own placeholder so it stays out of image/video gallery grouping; .ogg/.webm stay video.
         const audioPlaceholders = [];
         formatted = formatted.replace(
-            /(https?:\/\/[^\s<>"\uFDD0-\uFDD5]+\.(mp3|m4a|aac|wav|flac|opus|oga)(\?[^\s<>"\uFDD0-\uFDD5]*)?)/gi,
+            /(https?:\/\/[^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9]+\.(mp3|m4a|aac|wav|flac|opus|oga)(\?[^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9]*)?)/gi,
             (match, url, ext) => {
                 const audioTypes = {
                     mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac',
@@ -705,7 +726,7 @@
         );
 
         formatted = formatted.replace(
-            /(https?:\/\/[^\s<>"\uFDD0-\uFDD5]+\.(mp4|webm|ogg|mov)(\?[^\s<>"\uFDD0-\uFDD5]*)?)/gi,
+            /(https?:\/\/[^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9]+\.(mp4|webm|ogg|mov)(\?[^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9]*)?)/gi,
             (match, url, ext) => {
                 const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
                 const type = mimeTypes[ext.toLowerCase()] || 'video/mp4';
@@ -721,7 +742,7 @@
         );
 
         formatted = formatted.replace(
-            /(https?:\/\/[^\s<>"\uFDD0-\uFDD5]+\.(jpg|jpeg|png|gif|webp)(\?[^\s<>"\uFDD0-\uFDD5]*)?)/gi,
+            /(https?:\/\/[^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9]+\.(jpg|jpeg|png|gif|webp)(\?[^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9]*)?)/gi,
             (match, url) => {
                 const proxiedUrl = proxied(url, ctx.proxyBase);
                 const fbAttr = buildFallbackAttr(url);
@@ -735,14 +756,14 @@
         );
 
         formatted = formatted.replace(
-            /https?:\/\/web\.nymchat\.app\/#([egc]):([^\s<>"\uFDD0-\uFDD5]+)/gi,
+            /https?:\/\/web\.nymchat\.app\/#([egc]):([^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9]+)/gi,
             (match, prefix, channelId) => {
                 return `<span class="channel-link" data-action="channelLink" data-channel-ref="${prefix}:${escapeHtml(channelId)}">${match}</span>`;
             }
         );
 
         formatted = formatted.replace(
-            /https?:\/\/[^\s<>"\uFDD0-\uFDD5]*#gjoin=([A-Za-z0-9_-]+)/g,
+            /https?:\/\/[^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9]*#gjoin=([A-Za-z0-9_-]+)/g,
             (match, token) => {
                 const invite = parseGroupInvite(token);
                 if (!invite) return match;
@@ -753,7 +774,7 @@
         );
 
         formatted = formatted.replace(
-            /https?:\/\/[^\s<>"\uFDD0-\uFDD5]*#call=([A-Za-z0-9_-]+)/g,
+            /https?:\/\/[^\s<>"\uFDD0-\uFDD5\uFDD8\uFDD9]*#call=([A-Za-z0-9_-]+)/g,
             (match, token) => {
                 const link = parseCallLinkToken(token);
                 if (!link) return match;
@@ -804,18 +825,10 @@
         formatted = formatted.replace(/\uFDD4(\d+)\uFDD5/g, (_m, idx) => audioPlaceholders[parseInt(idx, 10)]);
 
         formatted = formatted.replace(
-            new RegExp(`(<[^>]+>)|(?:(@[^@#\\n<>]*?(?<!\\s)#[0-9a-f]{4}\\b)|(@[^@\\s<>"][^@\\s<>"]*)|(^|\\s|${BLOCK_START_LB})(#[a-z0-9_-]+)(?=\\s|$|[.,!?]|${BLOCK_END_LA}))(?![^<]*>)`, 'gi'),
-            (match, tag, mentionWithSuffix, simpleMention, whitespace, channel) => {
+            new RegExp(`(<[^>]+>)|(?:(^|\\s|${BLOCK_START_LB})(#[a-z0-9_-]+)(?=\\s|$|[.,!?]|${BLOCK_END_LA}))(?![^<]*>)`, 'gi'),
+            (match, tag, whitespace, channel) => {
                 if (tag) return tag;
-                if (mentionWithSuffix) {
-                    const suffixIdx = mentionWithSuffix.search(/#[0-9a-f]{4}$/i);
-                    const namePart = mentionWithSuffix.substring(0, suffixIdx);
-                    const suffixPart = mentionWithSuffix.substring(suffixIdx);
-                    const base = G.NymSuffix.capBase(namePart.slice(1).replace(/&(amp|lt|gt|quot|#x27|#39);/g, (e, n) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#x27': "'", '#39': "'" }[n])));
-                    return `<span class="nm-mention">@${escapeHtml(base)}<span class="nym-suffix">${suffixPart}</span></span>`;
-                } else if (simpleMention) {
-                    return `<span class="nm-mention">${simpleMention}</span>`;
-                } else if (channel) {
+                if (channel) {
                     const channelName = channel.substring(1).trim().toLowerCase();
                     if (!channelName) return match;
                     const isGeohash = geohashValid(channelName);
@@ -867,25 +880,43 @@
         formatted = formatted.replace(/\n\[gc:([A-Za-z0-9+/=]+)\]/g, '<span class="game-token" aria-hidden="true">[gc:$1]</span>');
         formatted = formatted.replace(/\n/g, '<br>');
 
-        // Runs last so the emoji/shortcode passes don't touch the mention avatar/flair HTML.
-        if (ctx.mentionInfo) {
-            formatted = formatted.replace(
-                /(<span class="nm-mention">)(@[^<]*?<span class="nym-suffix">#([0-9a-f]{4})<\/span>)(<\/span>)/gi,
-                (m, open, body, sfx, close) => {
-                    const info = ctx.mentionInfo[sfx.toLowerCase()];
-                    if (!info) return m;
-                    return open + (info.avatar || '') + body + (info.flair || '') + close;
-                }
-            );
-        }
+        if (mentionSlots.length) formatted = formatted.replace(/\uFDD8(\d+)\uFDD9/g, (m, i) => mentionSlots[Number(i)] === undefined ? m : mentionSlots[Number(i)]);
 
         return formatted;
     }
 
-    function cleanQuoteAuthor(rawAuthor) {
-        let a = rawAuthor.replace(/<[^>]*>/g, '').replace(/&lt;/g, '').replace(/&gt;/g, '').trim();
-        a = a.replace(/^([^#]+)#([0-9a-f]{4})#\2$/i, '$1#$2');
-        return a;
+    function mentionKey(name, suffix) {
+        const NP = G.NymNickParse;
+        const n = NP ? NP.mentionName(name) : String(name || '').trim();
+        return n.toLowerCase() + (suffix ? '#' + String(suffix).toLowerCase() : '');
+    }
+
+    function placeMentions(text, put, known) {
+        const NP = G.NymNickParse;
+        if (!NP || text.indexOf('@') === -1) return text;
+        const ms = NP.mentions(text, known);
+        if (!ms.length) return text;
+        let out = '', at = 0;
+        for (const m of ms) {
+            out += text.slice(at, m.start) + put(m, text.slice(m.start, m.end));
+            at = m.end;
+        }
+        return out + text.slice(at);
+    }
+
+    function renderMention(m, ctx) {
+        const name = escapeHtml(m.name);
+        if (!m.suffix) return `<span class="nm-mention" data-nym="${name}">@<bdi>${name}</bdi></span>`;
+        const sfx = escapeHtml(m.suffix);
+        const info = ctx && ctx.mentionInfo ? ctx.mentionInfo[mentionKey(m.name, m.suffix)] : null;
+        return `<span class="nm-mention" data-nym="${name}" data-sfx="${sfx.toLowerCase()}">${(info && info.avatar) || ''}@<bdi>${name}</bdi><span class="nym-suffix">#${sfx}</span>${(info && info.flair) || ''}</span>`;
+    }
+
+    function quoteHead(line) {
+        const NP = G.NymNickParse;
+        if (NP) return NP.quoteHeader(line);
+        const m = /^@([^:]+):\s*(.*)/.exec(line);
+        return m ? { author: m[1].trim(), suffix: '', body: m[2] } : null;
     }
 
     function formatWithQuotes(content, ctx, depth) {
@@ -906,21 +937,19 @@
                 if (depth >= MAX_QUOTE_DEPTH) continue;
 
                 const firstLine = quoteLines[0];
-                const authorMatch = firstLine.match(/^@([^:]+):\s*(.*)/);
-                if (authorMatch) {
+                const head = quoteHead(firstLine);
+                if (head) {
                     const messageParts = [];
-                    if (authorMatch[2]) messageParts.push(authorMatch[2]);
+                    if (head.body) messageParts.push(head.body);
                     for (let j = 1; j < quoteLines.length; j++) messageParts.push(quoteLines[j]);
                     const quotedMessage = messageParts.join('\n');
 
-                    const cleanAuthor = cleanQuoteAuthor(authorMatch[1].trim());
-                    const suffixMatch = cleanAuthor.match(/^(.+)(#[0-9a-f]{4})$/i);
-                    const info = (ctx.quoteInfo && ctx.quoteInfo[cleanAuthor]) || null;
+                    const label = head.author + (head.suffix ? '#' + head.suffix : '');
+                    const info = (ctx.quoteInfo && ctx.quoteInfo[label]) || null;
                     const avatarHtml = (info && info.avatar) || '';
                     const flairHtml = (info && info.flair) || '';
-                    const displayAuthor = suffixMatch
-                        ? `${avatarHtml}${escapeHtml(G.NymSuffix.capBase(suffixMatch[1]))}<span class="nym-suffix">${escapeHtml(suffixMatch[2])}</span>${flairHtml}`
-                        : `${avatarHtml}${escapeHtml(G.NymSuffix.capBase(cleanAuthor))}${flairHtml}`;
+                    const shownBase = G.NymSuffix ? G.NymSuffix.capBase(head.author) : head.author;
+                    const displayAuthor = `${avatarHtml}<bdi>${escapeHtml(shownBase)}</bdi>${head.suffix ? `<span class="nym-suffix">#${escapeHtml(head.suffix)}</span>` : ''}${flairHtml}`;
 
                     html += `<blockquote><span class="quote-author">${displayAuthor}:</span> ${formatWithQuotes(quotedMessage, ctx, depth + 1)}</blockquote>`;
                 } else {
@@ -957,12 +986,12 @@
                     quoteLines.push(lines[i].substring(1).trim());
                     i++;
                 }
-                const m = quoteLines[0].match(/^@([^:]+):\s*(.*)/);
-                if (m) {
-                    const a = cleanQuoteAuthor(m[1].trim());
+                const head = quoteHead(quoteLines[0]);
+                if (head) {
+                    const a = head.author + (head.suffix ? '#' + head.suffix : '');
                     if (!seen.has(a)) { seen.add(a); out.push(a); }
                     const messageParts = [];
-                    if (m[2]) messageParts.push(m[2]);
+                    if (head.body) messageParts.push(head.body);
                     for (let j = 1; j < quoteLines.length; j++) messageParts.push(quoteLines[j]);
                     extractQuoteAuthors(messageParts.join('\n'), depth + 1, out, seen);
                 } else {
@@ -974,20 +1003,20 @@
     }
 
     function extractMentions(content) {
-        if (!content || content.indexOf('@') === -1) return [];
+        const NP = G.NymNickParse;
+        if (!NP || !content || content.indexOf('@') === -1) return [];
         const out = [];
         const seen = new Set();
-        const rx = /@[^@#\n]*?(?<!\s)#([0-9a-f]{4})\b/gi;
-        let m;
-        while ((m = rx.exec(content)) !== null) {
-            const sfx = m[1].toLowerCase();
-            if (!seen.has(sfx)) { seen.add(sfx); out.push(sfx); }
+        for (const m of NP.mentions(content)) {
+            if (!m.suffix) continue;
+            const k = mentionKey(m.name, m.suffix);
+            if (!seen.has(k)) { seen.add(k); out.push({ name: m.name, suffix: m.suffix }); }
         }
         return out;
     }
 
     G.NymFormat = {
-        format, formatWithQuotes, extractQuoteAuthors, extractMentions, safeUrl,
+        format, formatWithQuotes, extractQuoteAuthors, extractMentions, mentionKey, safeUrl,
         maskSpoilers, stripForPreview, formatTimestamp, parseTimestampInput, revealSpoiler, refreshTimestamps, refreshComposerTimestamps, refreshSpoilerLabels,
         SPOILER_MASK, SPOILER_LABEL
     };

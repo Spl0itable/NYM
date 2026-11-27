@@ -36,12 +36,23 @@ List<ChannelMenuAction> buildChannelMenuActions(
   WidgetRef ref,
   ChannelEntry entry, {
   Offset? at,
+  BuildContext? root,
+  List<SidebarQuickMenuItem> tools = const [],
 }) {
+  final menu = root ?? context;
   final controller = ref.read(nostrControllerProvider);
   final state = ref.read(appStateProvider);
   final key = entry.key;
   final isDefault = key == kDefaultChannel;
   final isHidden = state.hiddenChannels.contains(key);
+  final tail = <ChannelMenuAction>[
+    for (final p in tools)
+      ChannelMenuAction(
+          label: p.label, svg: p.svg, danger: p.danger, onSelected: p.onSelected),
+    for (final p in folderSidebarItems(context, ref, entry.storageKey,
+        at: at, root: root))
+      ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
+  ];
 
   if (isDefault) {
     return <ChannelMenuAction>[
@@ -54,15 +65,12 @@ List<ChannelMenuAction> buildChannelMenuActions(
           focusLanding: true,
         ),
       ),
-      for (final p in folderSidebarItems(context, ref, entry.storageKey, at: at))
-        ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
+      ...tail,
     ];
   }
 
   return <ChannelMenuAction>[
     for (final p in chatNavSidebarItems(ref, entry.storageKey))
-      ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
-    for (final p in folderSidebarItems(context, ref, entry.storageKey, at: at))
       ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
     for (final p in chatLockSidebarItems(ref, entry.storageKey))
       ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
@@ -79,24 +87,46 @@ List<ChannelMenuAction> buildChannelMenuActions(
         }
       },
     ),
+    ...tail,
     ChannelMenuAction(
       label: tr('Block channel'),
       svg: NymIcons.sidebarBlock,
       danger: true,
       onSelected: () async {
-        if (!context.mounted) return;
+        if (!menu.mounted) return;
         final ok = await showAppConfirm(
-          context,
+          menu,
           tr('Block channel #{name}? Messages to it will be dropped.',
               {'name': key}),
           danger: true,
           okLabel: tr('Block'),
         );
-        if (!ok || !context.mounted) return;
+        if (!ok || !menu.mounted) return;
         controller.blockChannel(key);
         showToast(tr('Blocked channel #{name}', {'name': key}));
       },
     ),
+  ];
+}
+
+List<SidebarQuickMenuItem> channelRowMenuItems(
+  BuildContext context,
+  WidgetRef ref,
+  ChannelEntry entry, {
+  Offset? at,
+  BuildContext? root,
+}) {
+  return [
+    for (final a in buildChannelMenuActions(context, ref, entry,
+        at: at,
+        root: root,
+        tools: chatToolSidebarItems(context, entry.storageKey)))
+      SidebarQuickMenuItem(
+        label: a.label,
+        svg: a.svg,
+        danger: a.danger,
+        onSelected: a.onSelected,
+      ),
   ];
 }
 
@@ -107,20 +137,10 @@ bool maybeShowChannelContextMenu(
   ChannelEntry entry,
   Offset globalPosition,
 ) {
-  final actions = buildChannelMenuActions(context, ref, entry, at: globalPosition);
-  if (actions.isEmpty) return false;
-  final items = [
-    for (final a in actions)
-      SidebarQuickMenuItem(
-        label: a.label,
-        svg: a.svg,
-        danger: a.danger,
-        onSelected: a.onSelected,
-      ),
-  ];
-  final at = items.indexWhere((i) => i.danger);
-  items.insertAll(at < 0 ? items.length : at,
-      chatToolSidebarItems(context, entry.storageKey));
+  final items = channelRowMenuItems(context, ref, entry,
+      at: globalPosition,
+      root: Navigator.of(context, rootNavigator: true).context);
+  if (items.isEmpty) return false;
   unawaited(showSidebarQuickMenu(context, globalPosition, items));
   return true;
 }

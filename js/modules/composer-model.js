@@ -96,11 +96,13 @@
     }
 
     const HEADER_OVERFLOW = Object.freeze(['saved', 'calls', 'about']);
+    const HEADER_LAST = 'notifications';
 
     function mainMenuRows(layout) {
         const all = MAIN_MENU.primary.concat(MAIN_MENU.secondary);
         if (layout === 'desktop') {
-            return { grid: [all.filter((id) => !HEADER_OVERFLOW.includes(id))], overflow: HEADER_OVERFLOW.slice() };
+            const icons = all.filter((id) => !HEADER_OVERFLOW.includes(id) && id !== HEADER_LAST);
+            return { grid: [icons.concat(HEADER_LAST)], overflow: HEADER_OVERFLOW.slice() };
         }
         return { grid: [all], overflow: [] };
     }

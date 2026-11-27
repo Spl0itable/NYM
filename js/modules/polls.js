@@ -21,6 +21,7 @@ Object.assign(NYM.prototype, {
         options.forEach((opt, i) => {
             tags.push(['poll_option', String(i), opt]);
         });
+        tags.push(this._channelExpiryTag(now));
 
         let event = {
             kind: 30078,
@@ -62,13 +63,19 @@ Object.assign(NYM.prototype, {
         }
 
         const now = Math.floor(Date.now() / 1000);
+        const pollExpiry = this._channelExpiryTag(poll.created_at || 0);
+        if (Number(pollExpiry[1]) < now) {
+            this._showChannelPollClosed(pollId);
+            return;
+        }
         const tags = [
             ['d', `nym-poll-vote-${pollId}`],
             ['t', 'nym-poll-vote'],
             ['e', pollId],
             ...this._nTags(this.pubkey, this.nym),
             ['g', poll.geohash],
-            ['response', String(optionIndex)]
+            ['response', String(optionIndex)],
+            pollExpiry
         ];
 
         let event = {
@@ -85,6 +92,19 @@ Object.assign(NYM.prototype, {
 
         poll.votes.set(this.pubkey, optionIndex);
         this.updatePollDisplay(pollId);
+    },
+
+    _showChannelPollClosed(pollId) {
+        this.displaySystemMessage(this.uiText('This poll is closed.'));
+        const container = document.querySelector(`.poll-container[data-poll-id="${pollId}"]`);
+        if (!container || container.classList.contains('poll-closed')) return;
+        container.classList.add('poll-closed');
+        const header = container.querySelector('.poll-header');
+        if (!header) return;
+        const tag = document.createElement('span');
+        tag.className = 'poll-closed-tag';
+        tag.textContent = this.uiText('Closed');
+        header.appendChild(tag);
     },
 
     _pollHidden(poll) {
@@ -120,13 +140,7 @@ Object.assign(NYM.prototype, {
     },
 
     handlePollEvent(event) {
-        const expirationTag = event.tags.find(t => t[0] === 'expiration');
-        if (expirationTag) {
-            const expiresAt = parseInt(expirationTag[1]);
-            if (expiresAt && expiresAt < Math.floor(Date.now() / 1000)) {
-                return;
-            }
-        }
+        if (this._eventExpired(event)) return;
 
         const questionTag = event.tags.find(t => t[0] === 'poll_question');
         const optionTags = event.tags.filter(t => t[0] === 'poll_option');
@@ -171,13 +185,7 @@ Object.assign(NYM.prototype, {
         if (this.processedPollVoteIds.has(event.id)) return;
         this.processedPollVoteIds.add(event.id);
 
-        const expirationTag = event.tags.find(t => t[0] === 'expiration');
-        if (expirationTag) {
-            const expiresAt = parseInt(expirationTag[1]);
-            if (expiresAt && expiresAt < Math.floor(Date.now() / 1000)) {
-                return;
-            }
-        }
+        if (this._eventExpired(event)) return;
 
         if (this.processedPollVoteIds.size > 3000) {
             const arr = Array.from(this.processedPollVoteIds);
@@ -334,7 +342,7 @@ Object.assign(NYM.prototype, {
             authorClickable.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                this.showContextMenu(e, displayAuthor, pubkey, `[Poll] ${question}`, pollId);
+                this.showContextMenu(e, `${baseNym}#${suffix}`, pubkey, `[Poll] ${question}`, pollId);
                 return false;
             });
         }

@@ -177,7 +177,7 @@ Object.assign(NYM.prototype, {
     _psEnv() {
         if (typeof document === 'undefined' || !document.body) return '';
         const de = document.documentElement;
-        return document.body.className + '|' + (de ? de.className + '|' + (de.getAttribute('data-theme') || '') + '|' + (de.getAttribute('style') || '') : '') + '|' + ((this.settings && this.settings.theme) || '');
+        return document.body.className.replace(/(^|\s)(is-scrolling|theme-swap)(?=\s|$)/g, '') + '|' + (de ? de.className + '|' + (de.getAttribute('data-theme') || '') + '|' + (de.getAttribute('style') || '') : '') + '|' + ((this.settings && this.settings.theme) || '');
     },
 
     _psClassesOf(m) {
@@ -332,7 +332,7 @@ Object.assign(NYM.prototype, {
             if (p[0] === 'e') {
                 const url = emo && emo.get(p[1]);
                 text += url ? `<img class="custom-emoji ps-emoji" src="${e(this._psProxied(url, true))}" alt=":${e(p[1])}:" decoding="async" loading="lazy" draggable="false">` : e(':' + p[1] + ':');
-            } else text += this.mentionSuffixHtml(window.NymSuffix.capMentions(p[1]));
+            } else text += this.mentionSuffixHtml(p[1]);
         }
         const fb = (url) => {
             const list = this.mediaFallbacks instanceof Map ? (this.mediaFallbacks.get(url) || []) : [];

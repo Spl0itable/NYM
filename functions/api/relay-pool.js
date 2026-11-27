@@ -1,12 +1,12 @@
 // Multiplexed relay pool: one client socket fans out to many relays, deduping frames by string extraction.
 
-import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake, sha256 } from './_shared.js';
+import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake, cacheRateKnownOver, earlyHoldTake, earlyHoldGive, sha256 } from './_shared.js';
 import { archiveChannelKey } from './_channel-key.js';
 import { isEncryptedBlobChannelEvent } from './_encrypted-blob.js';
 import { isBridgeBlockedEvent, isBridgeBlockedFrame } from './_bridge-block.js';
 import { isNymchatClient, clientOriginAllowed } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
-import { filterSet, frameHit, eventHit, noteReport, packHit } from './_filters.js';
+import { filterSet, frameHit, eventHit, noteReport, packHit, reportEventIds, reportIdsCheckable, reportTargetsArchived } from './_filters.js';
 import { spamEngine, ioReserve, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor, nymbotPubkeys, nymbotWhoHereReply } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
@@ -164,6 +164,11 @@ function verifiedEventJson(objJson, expectId) {
   return verifySignedEvent(ev) ? ev : null;
 }
 
+function eventExpired(ev, nowSec) {
+  if (!ev || !Array.isArray(ev.tags)) return false;
+  return ev.tags.some((t) => Array.isArray(t) && t[0] === 'expiration' && typeof t[1] === 'string' && /^\d+$/.test(t[1]) && Number(t[1]) <= nowSec);
+}
+
 function validatedPowBits(ev) {
   if (!ev || typeof ev.id !== 'string' || !Array.isArray(ev.tags)) return 0;
   const nonce = ev.tags.find((t) => Array.isArray(t) && t[0] === 'nonce');
@@ -311,11 +316,46 @@ function spamEngineJob(ev, kind, sig) {
 const POOL_CONNECTS_PER_IP_MIN = 120;
 const POOL_EVENTS_PER_IP_MIN = 1200;
 const POOL_IP_CHARGE_BATCH = 20;
+const POOL_RATE_CHECK_WAIT_MS = 5000;
+const POOL_EARLY_FRAMES_MAX = 1000;
+const POOL_EARLY_CHARS_MAX = 2 * 1024 * 1024;
+const RX_RELAYS_FRAME = /^\[\s*"RELAYS"/;
+const CONNECT_LIMIT_CODE = 1013;
+const CONNECT_LIMIT_REASON = 'rate-limited: too many connections';
+
+function connectLimiter(bucket) {
+  const inFlight = new Map();
+  return {
+    knownOver(ipKey) {
+      return !!ipKey && cacheRateKnownOver(bucket, ipKey, 1 + (inFlight.get(ipKey) || 0), POOL_CONNECTS_PER_IP_MIN, 60000);
+    },
+    allowed(ipKey) {
+      if (!ipKey) return Promise.resolve(true);
+      inFlight.set(ipKey, (inFlight.get(ipKey) || 0) + 1);
+      let timer = null;
+      const waited = new Promise((resolve) => { timer = setTimeout(() => resolve(true), POOL_RATE_CHECK_WAIT_MS); });
+      const checked = cacheRateTake(bucket, ipKey, 1, POOL_CONNECTS_PER_IP_MIN, 60000).catch(() => true);
+      return Promise.race([checked, waited]).finally(() => {
+        if (timer) clearTimeout(timer);
+        const left = (inFlight.get(ipKey) || 1) - 1;
+        if (left > 0) inFlight.set(ipKey, left);
+        else inFlight.delete(ipKey);
+      });
+    }
+  };
+}
+
+const poolConnects = connectLimiter('pool-connect');
+
+function eventBudget() {
+  return new TokenBucket(200, 120);
+}
 
 export {
   isPrivateRelayHost, POOL_MAX_UPSTREAMS, canonicalRelayUrl, TokenBucket, eventFrameCanonical,
   canonicalEventFrame, reframeRelayMessage, verifySignedEvent, verifiedEventJson, validatedPowBits,
-  archiveRateOk, archiveRateStats, clientIpKey, channelKeyFor, evTagReader, spamEngineJob
+  archiveRateOk, archiveRateStats, clientIpKey, channelKeyFor, evTagReader, spamEngineJob,
+  connectLimiter, CONNECT_LIMIT_CODE, CONNECT_LIMIT_REASON, eventBudget
 };
 
 export async function onRequest(context) {
@@ -329,7 +369,7 @@ export async function onRequest(context) {
     return new Response('Forbidden', { status: 403 });
   }
   const ipKey = clientIpKey(request);
-  if (ipKey && !(await cacheRateTake('pool-connect', ipKey, 1, POOL_CONNECTS_PER_IP_MIN, 60000))) {
+  if (poolConnects.knownOver(ipKey)) {
     return new Response('Too Many Requests', { status: 429 });
   }
 
@@ -339,7 +379,8 @@ export async function onRequest(context) {
   }
   const proxySecret = env && env.NYMCHAT_PROXY_SECRET ? env.NYMCHAT_PROXY_SECRET : null;
   const filterReserve = () => ioReserve(context);
-  let gate = await filterSet(env, filterReserve);
+  const gateLoad = filterSet(env, filterReserve);
+  let gate = null;
   const spam = spamEngine(env, context);
   let sockHeld = null;
   let sockHeldPubkey = '';
@@ -376,7 +417,7 @@ export async function onRequest(context) {
   const HELD_EARLY_MS = 20000;
   const MAX_PERMANENTLY_SKIPPED = 1000;
   const FORGED_FRAME_LIMIT = 10;
-  const eventBucket = new TokenBucket(200, 120);
+  const eventBucket = eventBudget();
   const reqBucket = new TokenBucket(200, 120);
   const relaysBucket = new TokenBucket(10, 10);
   const connectBucket = new TokenBucket(128, 64);
@@ -1068,16 +1109,37 @@ export async function onRequest(context) {
   }
 
   // Verify id hash and signature before persisting so forged events can't be archived.
-  function archiveRowFrom(buffered, nowSec) {
+  function archiveCheck(buffered) {
     const ev = verifiedEventJson(buffered.json, buffered.id);
-    if (!ev || ev.created_at > nowSec + ARCHIVE_FUTURE_SKEW_S) return null;
-    if (nymbotWhoHereReply(env, ev)) return null;
+    if (!ev || nymbotWhoHereReply(env, ev)) return null;
     const getTag = evTagReader(ev);
     const channel = archiveChannelOf(ev.kind, getTag);
     if (!channel || channel !== buffered.channel) return null;
     const json = JSON.stringify(ev);
     if (json.length > archiveJsonMax(ev.kind, getTag)) return null;
-    return { id: ev.id, channel, kind: ev.kind, pubkey: ev.pubkey, created_at: ev.created_at, json };
+    return { ev, row: { id: ev.id, channel, kind: ev.kind, pubkey: ev.pubkey, created_at: ev.created_at, json } };
+  }
+
+  function archiveRowFrom(buffered, nowSec) {
+    if (buffered.checked === undefined) buffered.checked = archiveCheck(buffered);
+    const c = buffered.checked;
+    if (!c || c.ev.created_at > nowSec + ARCHIVE_FUTURE_SKEW_S || eventExpired(c.ev, nowSec)) return null;
+    return c.row;
+  }
+
+  function archiveRowReady(b, nowSec) {
+    if (spam.isHidden(b.id) || archiveVetoed.has(b.id) || (b.pubkey && spam.isMuted(b.pubkey))) return null;
+    return archiveRowFrom(b, nowSec);
+  }
+
+  function reportTargetsKnown(ids) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const rest = new Set();
+    for (const id of ids) {
+      const b = archiveBuf.get(id);
+      if (!b || !archiveRowReady(b, nowSec)) rest.add(id);
+    }
+    return rest.size ? reportTargetsArchived(env, rest) : Promise.resolve(true);
   }
 
   // The id primary key drops duplicates; an occasional failed flush is backfilled by relays.
@@ -1094,8 +1156,7 @@ export async function onRequest(context) {
     for (let i = 0; i < buffered.length; i += ARCHIVE_BATCH) {
       const slice = [];
       for (const b of buffered.slice(i, i + ARCHIVE_BATCH)) {
-        if (spam.isHidden(b.id) || archiveVetoed.has(b.id) || (b.pubkey && spam.isMuted(b.pubkey))) continue;
-        const row = archiveRowFrom(b, nowSec);
+        const row = archiveRowReady(b, nowSec);
         if (row) slice.push(row);
       }
       if (slice.length === 0) continue;
@@ -1195,9 +1256,6 @@ export async function onRequest(context) {
     if (!token || token.length < 8) return false;
     if (!/^[A-Za-z0-9]+$/.test(token)) return false;
 
-    const hasUpper = /[A-Z]/.test(token);
-    const hasLower = /[a-z]/.test(token);
-
     const half = Math.floor(Math.min(token.length, REPEAT_SCAN_MAX) / 2);
     for (let unit = 3; unit <= half; unit++) {
       const head = token.substring(0, unit);
@@ -1205,6 +1263,16 @@ export async function onRequest(context) {
         if (new Set(head).size >= 3) return true;
       }
     }
+
+    return looksLikeRandomNym(token);
+  }
+
+  function looksLikeRandomNym(token) {
+    if (!token || token.length < 8) return false;
+    if (!/^[A-Za-z0-9]+$/.test(token)) return false;
+
+    const hasUpper = /[A-Z]/.test(token);
+    const hasLower = /[a-z]/.test(token);
 
     if (hasUpper && hasLower) {
       let interiorUpper = 0;
@@ -1352,7 +1420,7 @@ export async function onRequest(context) {
     if (typeof nym !== 'string') return false;
     const n = nym.trim();
     if (!n || n.length < 8) return false;
-    return looksLikeRandomToken(n);
+    return looksLikeRandomNym(n);
   }
 
   // FNV-1a 32-bit
@@ -1865,7 +1933,7 @@ export async function onRequest(context) {
         schedulePoolStatus();
       });
 
-      ws.addEventListener('message', (event) => {
+      const fromUpstream = (event) => {
         try { spam.tick(); } catch {}
         let raw = event.data;
         if (typeof raw !== 'string' || raw.length < 10 || raw.length > UPSTREAM_FRAME_MAX) return;
@@ -2044,6 +2112,11 @@ export async function onRequest(context) {
           }
           sendToClient(JSON.stringify(['CLOSED', parentSubId, reason, relayUrl]));
         }
+      };
+
+      ws.addEventListener('message', (event) => {
+        if (filtersReady) fromUpstream(event);
+        else if (serverOpen) holdEarlyFrame(fromUpstream, event, false);
       });
 
       ws.addEventListener('close', () => {
@@ -2125,6 +2198,18 @@ export async function onRequest(context) {
         ? ['OK', ev.id, false, 'blocked: not accepted']
         : ['OK', ev.id, true, '']));
     }
+    return true;
+  }
+
+  function reportWaits(ev, forward) {
+    const ids = reportEventIds(ev);
+    if (!ids) return false;
+    const checked = reportIdsCheckable(ids) && verifySignedEvent(ev) ? reportTargetsKnown(ids) : Promise.resolve(false);
+    runArchive(checked.then((known) => {
+      if (!serverOpen) return;
+      if (known) forward();
+      else if (typeof ev.id === 'string') sendToClient(JSON.stringify(['OK', ev.id, true, '']));
+    }).catch(() => null));
     return true;
   }
 
@@ -2326,7 +2411,7 @@ export async function onRequest(context) {
     }
   }
 
-  server.addEventListener('message', (event) => {
+  function handleClientFrame(event) {
     try {
       if (typeof event.data !== 'string' || event.data.length > CLIENT_FRAME_MAX) return;
       let msg = JSON.parse(event.data);
@@ -2371,13 +2456,16 @@ export async function onRequest(context) {
             if (outboundBadgeRefused(msg[1])) return;
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
             if (archiveEnabled) { archiveOutgoingEvent(msg[1]); archiveOutgoingEmoji(msg[1]); }
-            if (isAppRelayOnlyEvent(msg[1])) { sendAppRelayOnly(rawMsg); return; }
-            if (!anyUpstreamOpen()) { holdEarly(rawMsg, evtKind); return; }
-            sendToUpstreams(rawMsg, (url) => {
-              if (evtKind < 0) return true;
-              const blocked = kindBlacklist.get(url);
-              return !(blocked && blocked.has(evtKind));
-            });
+            const sendEvent = () => {
+              if (isAppRelayOnlyEvent(msg[1])) { sendAppRelayOnly(rawMsg); return; }
+              if (!anyUpstreamOpen()) { holdEarly(rawMsg, evtKind); return; }
+              sendToUpstreams(rawMsg, (url) => {
+                if (evtKind < 0) return true;
+                const blocked = kindBlacklist.get(url);
+                return !(blocked && blocked.has(evtKind));
+              });
+            };
+            if (!reportWaits(msg[1], sendEvent)) sendEvent();
           } else if (msgType === 'GEO_EVENT') {
             const geoEvt = msg[1];
             if (!geoEvt || typeof geoEvt !== 'object') return;
@@ -2388,42 +2476,45 @@ export async function onRequest(context) {
             if (outboundBadgeRefused(geoEvt)) return;
             const evtKind = geoEvt && typeof geoEvt.kind === 'number' ? geoEvt.kind : -1;
             if (archiveEnabled) archiveOutgoingEvent(geoEvt);
-            if (isAppRelayOnlyEvent(geoEvt)) { sendAppRelayOnly(JSON.stringify(['EVENT', geoEvt])); return; }
-            const isBlockedFor = (url) => {
-              if (evtKind < 0) return false;
-              const blocked = kindBlacklist.get(url);
-              return !!(blocked && blocked.has(evtKind));
-            };
-            const geoMsg = JSON.stringify(['EVENT', geoEvt]);
-            const geoUrls = canonicalRelayList(msg[2], MAX_UPSTREAMS);
-            const geoSet = new Set(geoUrls);
-            const sentGeo = new Set();
-            WRITE_ONLY_RELAYS.forEach((url) => {
-              const info = upstreams.get(url);
-              if (!info || info.status !== 'connected' || !info.ws || info.ws.readyState !== WebSocket.OPEN) return;
-              if (isBlockedFor(url)) return;
-              try { info.ws.send(geoMsg); sentGeo.add(url); } catch {}
-            });
-            upstreams.forEach((info, url) => {
-              if (WRITE_ONLY_RELAYS.has(url)) return;
-              if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
+            const sendGeo = () => {
+              if (isAppRelayOnlyEvent(geoEvt)) { sendAppRelayOnly(JSON.stringify(['EVENT', geoEvt])); return; }
+              const isBlockedFor = (url) => {
+                if (evtKind < 0) return false;
+                const blocked = kindBlacklist.get(url);
+                return !!(blocked && blocked.has(evtKind));
+              };
+              const geoMsg = JSON.stringify(['EVENT', geoEvt]);
+              const geoUrls = canonicalRelayList(msg[2], MAX_UPSTREAMS);
+              const geoSet = new Set(geoUrls);
+              const sentGeo = new Set();
+              WRITE_ONLY_RELAYS.forEach((url) => {
+                const info = upstreams.get(url);
+                if (!info || info.status !== 'connected' || !info.ws || info.ws.readyState !== WebSocket.OPEN) return;
+                if (isBlockedFor(url)) return;
                 try { info.ws.send(geoMsg); sentGeo.add(url); } catch {}
+              });
+              upstreams.forEach((info, url) => {
+                if (WRITE_ONLY_RELAYS.has(url)) return;
+                if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
+                  try { info.ws.send(geoMsg); sentGeo.add(url); } catch {}
+                }
+              });
+              // Connections are driven by the sharded RELAYS config, so a worker never reaches outside its assigned set.
+              for (const url of geoUrls) {
+                if (sentGeo.has(url)) continue;
+                if (isBlockedFor(url)) continue;
+                const info = upstreams.get(url);
+                if (info && info.status === 'connecting') queuePendingGeo(url, geoMsg);
               }
-            });
-            // Connections are driven by the sharded RELAYS config, so a worker never reaches outside its assigned set.
-            for (const url of geoUrls) {
-              if (sentGeo.has(url)) continue;
-              if (isBlockedFor(url)) continue;
-              const info = upstreams.get(url);
-              if (info && info.status === 'connecting') queuePendingGeo(url, geoMsg);
-            }
-            upstreams.forEach((info, url) => {
-              if (WRITE_ONLY_RELAYS.has(url)) return;
-              if (sentGeo.has(url)) return;
-              if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
-                try { info.ws.send(geoMsg); } catch {}
-              }
-            });
+              upstreams.forEach((info, url) => {
+                if (WRITE_ONLY_RELAYS.has(url)) return;
+                if (sentGeo.has(url)) return;
+                if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
+                  try { info.ws.send(geoMsg); } catch {}
+                }
+              });
+            };
+            if (!reportWaits(geoEvt, sendGeo)) sendGeo();
           } else if (msgType === 'DM_EVENT') {
             const dmEvt = msg[1];
             if (!dmEvt || typeof dmEvt !== 'object') return;
@@ -2431,35 +2522,38 @@ export async function onRequest(context) {
             if (outboundBlobRefused(dmEvt)) return;
             if (outboundBridgeRefused(dmEvt)) return;
             if (heldOutbound(dmEvt)) return;
-            if (isAppRelayOnlyEvent(dmEvt)) { sendAppRelayOnly(JSON.stringify(['EVENT', dmEvt])); return; }
-            const evtKind = dmEvt && typeof dmEvt.kind === 'number' ? dmEvt.kind : -1;
-            const isBlockedFor = (url) => {
-              if (evtKind < 0) return false;
-              const blocked = kindBlacklist.get(url);
-              return !!(blocked && blocked.has(evtKind));
+            const sendDm = () => {
+              if (isAppRelayOnlyEvent(dmEvt)) { sendAppRelayOnly(JSON.stringify(['EVENT', dmEvt])); return; }
+              const evtKind = dmEvt && typeof dmEvt.kind === 'number' ? dmEvt.kind : -1;
+              const isBlockedFor = (url) => {
+                if (evtKind < 0) return false;
+                const blocked = kindBlacklist.get(url);
+                return !!(blocked && blocked.has(evtKind));
+              };
+              const dmMsg = JSON.stringify(['EVENT', dmEvt]);
+              if (!anyUpstreamOpen()) { holdEarly(dmMsg, evtKind); return; }
+              const dmSet = new Set(dmRelays);
+              WRITE_ONLY_RELAYS.forEach((url) => {
+                const info = upstreams.get(url);
+                if (!info || info.status !== 'connected' || !info.ws || info.ws.readyState !== WebSocket.OPEN) return;
+                if (isBlockedFor(url)) return;
+                try { info.ws.send(dmMsg); } catch {}
+              });
+              upstreams.forEach((info, url) => {
+                if (WRITE_ONLY_RELAYS.has(url)) return;
+                if (dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
+                  try { info.ws.send(dmMsg); } catch {}
+                }
+              });
+              upstreams.forEach((info, url) => {
+                if (WRITE_ONLY_RELAYS.has(url)) return;
+                if (dmSet.has(url)) return;
+                if (info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
+                  try { info.ws.send(dmMsg); } catch {}
+                }
+              });
             };
-            const dmMsg = JSON.stringify(['EVENT', dmEvt]);
-            if (!anyUpstreamOpen()) { holdEarly(dmMsg, evtKind); return; }
-            const dmSet = new Set(dmRelays);
-            WRITE_ONLY_RELAYS.forEach((url) => {
-              const info = upstreams.get(url);
-              if (!info || info.status !== 'connected' || !info.ws || info.ws.readyState !== WebSocket.OPEN) return;
-              if (isBlockedFor(url)) return;
-              try { info.ws.send(dmMsg); } catch {}
-            });
-            upstreams.forEach((info, url) => {
-              if (WRITE_ONLY_RELAYS.has(url)) return;
-              if (dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
-                try { info.ws.send(dmMsg); } catch {}
-              }
-            });
-            upstreams.forEach((info, url) => {
-              if (WRITE_ONLY_RELAYS.has(url)) return;
-              if (dmSet.has(url)) return;
-              if (info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
-                try { info.ws.send(dmMsg); } catch {}
-              }
-            });
+            if (!reportWaits(dmEvt, sendDm)) sendDm();
           } else if (msgType === 'REQ') {
             const subId = msg[1];
             if (typeof subId !== 'string' || !subId || subId.length > MAX_SUB_ID) return;
@@ -2503,7 +2597,79 @@ export async function onRequest(context) {
           }
     } catch {
     }
+  }
+
+  let admitted = false;
+  let filtersReady = false;
+  const earlyFrames = [];
+  let earlyChars = 0;
+
+  function dropEarly() {
+    earlyFrames.length = 0;
+    earlyHoldGive(earlyChars);
+    earlyChars = 0;
+  }
+
+  function refuseClient(code, reason) {
+    dropEarly();
+    if (!serverOpen) return;
+    try { server.close(code, reason); } catch {}
+    cleanupAll();
+  }
+
+  function holdEarlyFrame(handle, event, fromClient) {
+    const data = event.data;
+    if (typeof data !== 'string') return;
+    if (fromClient ? data.length > CLIENT_FRAME_MAX : (data.length < 10 || data.length > UPSTREAM_FRAME_MAX)) return;
+    if (earlyFrames.length >= POOL_EARLY_FRAMES_MAX || earlyChars + data.length > POOL_EARLY_CHARS_MAX) {
+      if (fromClient) refuseClient(1008, 'too many frames before the pool was ready');
+      return;
+    }
+    if (!earlyHoldTake(data.length)) {
+      if (fromClient) refuseClient(1013, 'pool busy, reconnect shortly');
+      return;
+    }
+    earlyFrames.push({ handle, event, size: data.length, relays: fromClient && RX_RELAYS_FRAME.test(data) });
+    earlyChars += data.length;
+  }
+
+  function runEarly(pick) {
+    const run = [];
+    const keep = [];
+    for (const f of earlyFrames.splice(0)) (pick(f) ? run : keep).push(f);
+    earlyFrames.push(...keep);
+    for (const f of run) {
+      earlyChars -= f.size;
+      earlyHoldGive(f.size);
+    }
+    for (const f of run) {
+      if (!serverOpen) break;
+      try { f.handle(f.event); } catch {}
+    }
+  }
+
+  server.addEventListener('message', (event) => {
+    if (filtersReady) { handleClientFrame(event); return; }
+    if (!serverOpen) return;
+    if (admitted && typeof event.data === 'string' && RX_RELAYS_FRAME.test(event.data)) { handleClientFrame(event); return; }
+    holdEarlyFrame(handleClientFrame, event, true);
   });
+
+  const opening = poolConnects.allowed(ipKey).then((ok) => {
+    if (!serverOpen) return;
+    if (!ok) { refuseClient(CONNECT_LIMIT_CODE, CONNECT_LIMIT_REASON); return; }
+    admitted = true;
+    runEarly((f) => f.relays);
+    return gateLoad.then((set) => {
+      if (!serverOpen) return;
+      if (!gate) gate = set;
+      filtersReady = true;
+      runEarly(() => true);
+    });
+  }).catch(() => { refuseClient(1011, 'pool unavailable'); });
+  if (context && typeof context.waitUntil === 'function') {
+    try { context.waitUntil(opening); } catch {}
+  }
 
   function cleanupAll() {
     serverOpen = false;
@@ -2531,6 +2697,7 @@ export async function onRequest(context) {
     pendingRelaysConfig = null;
     pendingGeoEvents.clear();
     heldEarly.length = 0;
+    dropEarly();
     pendingAppArchive.clear();
     activeSubscriptions.clear();
     subActivity.clear();

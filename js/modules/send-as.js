@@ -673,10 +673,10 @@
             let container = this._cvActive && typeof this._cvListForKey === 'function'
                 ? this._cvListForKey(storageKey)
                 : (this.currentGeohash === snap.geohash ? document.getElementById('messagesContainer') : null);
-            const at = this.activeThread;
-            if (at && this._threadContainer) {
-                if (snap.threadRoot && at.rootId === snap.threadRoot) container = this._threadContainer;
-                else if (container === this._threadContainer) container = null;
+            const open = typeof this._threadOpenFor === 'function' ? this._threadOpenFor(storageKey) : null;
+            if (open) {
+                if (snap.threadRoot && open.at.rootId === snap.threadRoot) container = open.container;
+                else if (container === open.container) container = null;
             }
             return container || null;
         },
@@ -1053,6 +1053,7 @@
             job.redactKey = null;
             if (!key || !job.signed) return;
             const id = job.signed.id;
+            const kind = job.signed.kind;
             const pubkey = job.sender.pubkey;
             const channel = job.snap.geohash;
             const cfg = job.cfg;
@@ -1064,7 +1065,10 @@
                 if (!this._sendAsSafe(acct.id) || !entry.key) { if (entry.key) entry.key.fill(0); return; }
                 let del = null;
                 try {
-                    del = T().finalizeEvent({ kind: 5, created_at: Math.floor(Date.now() / 1000), tags: [['e', id]], content: '', pubkey }, entry.key);
+                    const at = Math.floor(Date.now() / 1000);
+                    const tags = [['e', id]];
+                    if (this._isChannelKind(kind)) tags.push(['k', String(kind)], this._channelExpiryTag(at));
+                    del = T().finalizeEvent({ kind: 5, created_at: at, tags, content: '', pubkey }, entry.key);
                 } catch (_) { del = null; }
                 entry.key.fill(0);
                 entry.key = null;

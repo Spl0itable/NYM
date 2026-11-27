@@ -25,6 +25,7 @@ import {
 } from "./_pq.js";
 export { NymLedger } from "./_ledger.js";
 import { atRestSplit, atRestJoin } from "./_atrest.js";
+import { quoteHeader as nickQuoteHeader, mentions as nickMentions, resolveTarget as nickResolveTarget, tailOf as nickTailOf, baseOf as nickBaseOf } from "./_nick-parse.js";
 export { suppliedWraps, wrapsFor, wrapsToCache, scopeLabelInThread,
   botCachedWraps, fetchGiftWrapsByIds };
 import {
@@ -2776,7 +2777,7 @@ var NYMBOT_PM_PROMPT_HEAD = [
   "- Be casual and natural. Humor, sarcasm, and banter are welcome.",
   "- Match the user's energy. Don't lecture, moralize, or over-explain.",
   "- This is a paid private chat with an adult user — don't censor language or refuse adult topics.",
-  "- If asked to do something harmful (spam, harass, raid, exploit) or asked HOW to do it, don't help, don't explain how and don't give partial steps — decline and then roast them for asking: keep the roast short and aim it at the request, never a slur and never about anyone's race, ethnicity, religion, gender, sexuality, disability or other protected trait, never a threat, never anyone's personal details, and never name or @mention the person they wanted to go after. Don't provide workarounds or alternatives. The roast is only for requests to abuse the platform or other people: never roast someone who talks about hurting themselves; reply to them with care instead.",
+  "- If asked to do something harmful (spam, harass, raid, exploit) or asked HOW to do it, don't help, don't explain how and don't give partial steps — decline and then roast them for asking: keep the roast short and aim it at the request, never a slur and never about anyone's race, ethnicity, religion, gender, sexuality, disability or other protected trait, never a threat, never anyone's personal details, and never name or @mention the person they wanted to go after. Don't provide workarounds or alternatives. The roast is only for requests to abuse the platform or other people: never roast someone who talks about hurting themselves; reply to them with care instead, and never explain how they could hurt themselves.",
   "",
   "=== PRIVATE CONVERSATION MODE ===",
   "This is a 1:1 end-to-end encrypted NIP-17 chat with one user. No one else can read it. No channel context, no other participants.",
@@ -2856,7 +2857,7 @@ var NYMBOT_APP_PROMPT_HEAD = [
   "- Be casual and natural. Humor, sarcasm, and banter are welcome.",
   "- Match the user's energy. Don't lecture, moralize, or over-explain.",
   "- This is a paid private chat with an adult user — don't censor language or refuse adult topics.",
-  "- If asked to do something harmful (spam, harass, raid, exploit) or asked HOW to do it, don't help, don't explain how and don't give partial steps — decline and then roast them for asking: keep the roast short and aim it at the request, never a slur and never about anyone's race, ethnicity, religion, gender, sexuality, disability or other protected trait, never a threat, never anyone's personal details, and never name or @mention the person they wanted to go after. Don't provide workarounds or alternatives. The roast is only for requests to abuse the platform or other people: never roast someone who talks about hurting themselves; reply to them with care instead.",
+  "- If asked to do something harmful (spam, harass, raid, exploit) or asked HOW to do it, don't help, don't explain how and don't give partial steps — decline and then roast them for asking: keep the roast short and aim it at the request, never a slur and never about anyone's race, ethnicity, religion, gender, sexuality, disability or other protected trait, never a threat, never anyone's personal details, and never name or @mention the person they wanted to go after. Don't provide workarounds or alternatives. The roast is only for requests to abuse the platform or other people: never roast someone who talks about hurting themselves; reply to them with care instead, and never explain how they could hurt themselves.",
   "",
   "=== PRIVATE CONVERSATION MODE ===",
   "This is one private, end-to-end encrypted chat between you and one user, inside the Nymbot app. No one else can read it, and there are no other participants.",
@@ -3562,13 +3563,22 @@ function splitQuotedReply(raw) {
   var i = 0;
   while (i < lines.length && /^\s*>/.test(lines[i])) {
     var body = lines[i].replace(/^\s*>\s?/, "");
-    var am = /^@([^:]+):\s*/.exec(body);
-    if (am && !author) author = am[1].trim();
-    quoted.push(body.replace(/^@[^:]+:\s*/, ""));
+    var head = nickQuoteHeader(body);
+    if (head && !author) author = (head.author + (head.suffix ? "#" + head.suffix : "")).trim();
+    quoted.push(head ? head.body : body);
     i++;
   }
   while (i < lines.length && lines[i].trim() === "") i++;
   return { quoted: quoted.join("\n").trim(), reply: lines.slice(i).join("\n").trim(), author: author };
+}
+
+function botQuotedBy(split, botPubkey) {
+  var head = split && split.author ? /^([\s\S]*)#([0-9a-f]{4})$/i.exec(split.author) : null;
+  var tail = nickTailOf(botPubkey);
+  if (head && tail && BOT_THREAD_AUTHOR_RE.test(head[1].trim()) && head[2].toLowerCase() === tail) {
+    return "something you (Nymbot) said earlier in this conversation";
+  }
+  return split && split.author ? "something the user said earlier in this conversation" : "an earlier message in this conversation";
 }
 
 function errorRef() {
@@ -3690,9 +3700,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
 
   // Surface the quoted message as read-only context when the user added new text.
   if (!freshOnly && split.quoted && split.reply) {
-    var quotedBy = /nymbot/i.test(split.author)
-      ? "something you (Nymbot) said earlier in this conversation"
-      : (split.author ? "something the user said earlier in this conversation" : "an earlier message in this conversation");
+    var quotedBy = botQuotedBy(split, runOpts.botPubkey);
     messages.push({ role: "user", content: "--- QUOTED MESSAGE (read-only context — this is " + quotedBy + ", and the user's newest message below is a direct reply to it) ---\n" + sanitizeInput(split.quoted, BOT_PM_TEXT_MAX) + "\n--- END QUOTED MESSAGE ---\nUse the quoted text to understand what the user's reply is referring to." });
     messages.push({ role: "assistant", content: "Understood." });
   }
@@ -5131,6 +5139,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         effort: body.effort,
         // Free replies carry a fifth of the paid history, since context dominates cost.
         historyBudget: freeTurn ? BOT_FREE_HISTORY_BUDGET : 0,
+        botPubkey: botPubkey,
         free: freeTurn,
         // In private chats the search switch decides, unlike public channels.
         web: body.web === true && !freeTurn,
@@ -5724,8 +5733,9 @@ async function botThreadAddressed(context, body, command, botPubkey) {
   }
   var lead = own.map(function (l) { return l.trim(); }).filter(Boolean)[0] || "";
   if (lead.charAt(0) === "?") return true;
-  var quote = lines[0].replace(/^\s+/, "").match(/^>\s*@([^:]+):/);
-  if (quote) return BOT_THREAD_AUTHOR_RE.test(quote[1].trim());
+  var firstLine = lines[0].replace(/^\s+/, "");
+  var quote = firstLine.charAt(0) === ">" ? nickQuoteHeader(firstLine) : null;
+  if (quote) return BOT_THREAD_AUTHOR_RE.test((quote.author + (quote.suffix ? "#" + quote.suffix : "")).trim());
   var conversation = Array.isArray(body.conversation) ? body.conversation : [];
   if (conversation.length < MAX_CONVERSATION_HISTORY) {
     var head = conversation[0];
@@ -5911,7 +5921,7 @@ var NYMBOT_SYSTEM_PROMPT = [
   "2. NYMCHAT QUESTION — about the app, its features, settings, commands, channels, etc. Answer using ONLY the Nymchat documentation in this prompt.",
   "3. GENERAL KNOWLEDGE — asking for facts, definitions, explanations, history, etc. Answer it from general knowledge, in your usual voice. Do NOT connect it to Nymchat features.",
   "4. CHANNEL/CONVERSATION QUESTION — asking what's being discussed, what people are talking about, what happened in a channel, etc. You HAVE access to recent channel messages provided in the context. READ them carefully and give SPECIFIC answers: what topics were discussed, what people said, what opinions were shared, any arguments or agreements. NEVER say you can't access the messages or suggest the user check the channel themselves — the messages are RIGHT THERE in your context. NEVER give vague summaries like 'just chatting' or 'back-and-forth' — always cite specific content from the messages.",
-  "5. HARMFUL/ABUSIVE — asking how to spam, harass, raid, or abuse the platform or other users. Do NOT answer the question, do NOT explain how it could be done, do NOT give partial steps, do NOT suggest alternatives. Decline, then roast them for asking: keep the roast short and aim it at the request, never a slur and never about anyone's race, ethnicity, religion, gender, sexuality, disability or other protected trait, never a threat, never anyone's personal details, and never name or @mention the person they wanted to go after. Then stop. The roast is only for requests to abuse the platform or other people: never roast someone who talks about hurting themselves; reply to them with care instead.",
+  "5. HARMFUL/ABUSIVE — asking how to spam, harass, raid, or abuse the platform or other users. Do NOT answer the question, do NOT explain how it could be done, do NOT give partial steps, do NOT suggest alternatives. Decline, then roast them for asking: keep the roast short and aim it at the request, never a slur and never about anyone's race, ethnicity, religion, gender, sexuality, disability or other protected trait, never a threat, never anyone's personal details, and never name or @mention the person they wanted to go after. Then stop. The roast is only for requests to abuse the platform or other people: never roast someone who talks about hurting themselves; reply to them with care instead, and never explain how they could hurt themselves.",
   "- When in doubt between conversational and general knowledge, lean conversational. If they wanted a definition they'd use ?define.",
   "- When in doubt between Nymchat and general knowledge, treat it as general knowledge. NEVER assume a word refers to a Nymchat feature unless the user explicitly mentions the app.",
   "For Nymchat questions, give accurate answers with exact navigation steps but keep it concise.",
@@ -7042,7 +7052,13 @@ function stripWireEnvelope(text, isBot) {
     return l.charAt(0) !== ">";
   }).join("\n");
   if (isBot) {
-    out = out.replace(/^@\S+[ \t]+/, "").replace(/^[ \t]*\u26a1.*$/gm, "");
+    var lead = nickMentions(out)[0];
+    if (lead && lead.start === 0) {
+      var e = lead.end;
+      while (out.charAt(e) === " " || out.charAt(e) === "\t") e++;
+      if (e > lead.end) out = out.slice(e);
+    }
+    out = out.replace(/^[ \t]*\u26a1.*$/gm, "");
   }
   return out.replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -10177,6 +10193,22 @@ async function handleLast(args, channelMessages, context) {
   return lines.join("\n");
 }
 
+function botPlainName(name) {
+  var s = String(name == null ? "" : name).replace(/\r\n|[\r\n\u2028\u2029]/g, " ").trim();
+  if (/^[\p{L}\p{N}\p{M}][\p{L}\p{N}\p{M} ,.'\u2019-]*$/u.test(s) && !/^\d+\.\s/.test(s)) return s;
+  return "`" + s.replace(/`/g, "\u02cb") + "`";
+}
+
+function botPlainLabel(label) {
+  var m = /^([\s\S]*?)(#[0-9a-f]{4})$/i.exec(String(label == null ? "" : label));
+  return m && m[1] ? botPlainName(m[1]) + m[2] : botPlainName(label);
+}
+
+function botQuotedName(name) {
+  var shown = botPlainName(name);
+  return shown.charAt(0) === "`" ? shown : "\"" + shown + "\"";
+}
+
 async function handleSeen(nickname, channelMessages, context) {
   if (!nickname.trim()) {
     return "Usage: ?seen <nickname|@mention|pubkey>";
@@ -10185,19 +10217,20 @@ async function handleSeen(nickname, channelMessages, context) {
   // Prefer the D1 archive (full, spam-filtered) over the client's partial view.
   var d1Seen = await fetchChannelEventsFromD1(context, [20000, 23333], seenSince, 3000, null);
   if (d1Seen) channelMessages = eventsToChannelMsgs(dropSpamFirstMessages(d1Seen.filter(isHumanMessage)));
-  // Strip leading @ for mention support.
-  var raw = nickname.trim().replace(/^@/, "");
+  var asked = nickname.trim();
+  var raw = asked.replace(/^@/, "");
   // A pubkey is 64-char hex or npub bech32.
   var isPubkeyQuery = /^[0-9a-f]{64}$/i.test(raw) || /^npub1[0-9a-z]{58}/i.test(raw);
   var targetPubkey = isPubkeyQuery ? raw.toLowerCase() : null;
-  var target = isPubkeyQuery ? null : raw.toLowerCase().replace(/#.*$/, "");
 
   function matchesSeen(m) {
     if (targetPubkey) {
       return m.pubkey && m.pubkey.toLowerCase() === targetPubkey;
     }
-    var mNym = m.nym || "nym";
-    return mNym.toLowerCase().replace(/#.*$/, "").trim() === target;
+    var pk = botPersonKey(m);
+    if (!pk) return false;
+    var hit = nickResolveTarget(asked, [{ pubkey: pk, nym: m.nym || "nym" }]);
+    return !!(hit && hit.pubkey === pk);
   }
 
   var found = [];
@@ -10222,7 +10255,7 @@ async function handleSeen(nickname, channelMessages, context) {
       var eventPubkey = (events[j].pubkey || "").toLowerCase();
       var matchesEvent = targetPubkey
         ? eventPubkey === targetPubkey
-        : nym && nym.toLowerCase().replace(/#.*$/, "").trim() === target;
+        : !!nym && matchesSeen({ pubkey: eventPubkey, nym: nym });
       if (!matchesEvent || !botPersonKey(events[j])) continue;
       found.push({ pubkey: eventPubkey, nym: nym || raw, channel: extractGeohash(events[j]) || "", timestamp: eventTimeSec(events[j]) });
     }
@@ -10236,7 +10269,19 @@ async function handleSeen(nickname, channelMessages, context) {
   var people = Object.keys(latestBy).sort(function (a, b) { return latestBy[b] - latestBy[a]; }).slice(0, BOT_ABOUT_MAX);
   found = found.filter(function (x) { return people.indexOf(x.pubkey) !== -1; });
   if (!found.length) {
-    return "Haven't seen \"" + nickname.trim() + "\" in the last 24 hours.";
+    return "Haven't seen " + botQuotedName(nickname.trim()) + " in the last 24 hours.";
+  }
+  if (!targetPubkey && people.length > 1) {
+    var labels = people.map(function (pk) {
+      var latest = null;
+      for (var n = 0; n < found.length; n++) {
+        if (found[n].pubkey === pk && (!latest || found[n].timestamp > latest.timestamp)) latest = found[n];
+      }
+      var base = nickBaseOf({ nym: (latest && latest.nym) || "nym", pubkey: pk });
+      return botPlainName(base.trim()) + "#" + pk.slice(-4);
+    });
+    botNoteAbout(context, people);
+    return "Several people use " + botQuotedName(nickname.trim()) + " (last 24h): " + labels.join(", ") + ". Ask with ?seen name#xxxx for one of them.";
   }
   var channels = {};
   var foundNym = null;
@@ -10257,7 +10302,7 @@ async function handleSeen(nickname, channelMessages, context) {
   }
   botNoteAbout(context, people);
   var sorted = Object.entries(channels).sort(function(a, b) { return b[1].lastSeen - a[1].lastSeen; });
-  var lines = [foundNym + " seen in " + sorted.length + " channel" + (sorted.length !== 1 ? "s" : "") + " (last 24h):"];
+  var lines = [botPlainLabel(foundNym) + " seen in " + sorted.length + " channel" + (sorted.length !== 1 ? "s" : "") + " (last 24h):"];
   for (var k = 0; k < sorted.length; k++) {
     lines.push("• #" + sorted[k][0] + " — " + sorted[k][1].count + " msgs (last: " + timeAgo(sorted[k][1].lastSeen) + ")");
   }
@@ -10335,11 +10380,11 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
     if (!/#[0-9a-f]{4}$/i.test(displayNym)) {
       displayNym += "#" + info.pubkey.slice(-4);
     }
-    lines.push("• " + displayNym + " — " + info.msgCount + " msg" + (info.msgCount !== 1 ? "s" : "") + " (" + timeAgo(info.lastSeen) + ")");
+    lines.push("• " + botPlainLabel(displayNym) + " — " + info.msgCount + " msg" + (info.msgCount !== 1 ? "s" : "") + " (" + timeAgo(info.lastSeen) + ")");
     named.push(info.pubkey);
   }
   for (var q = 0; q < lurkLimit; q++) {
-    lines.push("• " + lurk.named[q].nym + " — here");
+    lines.push("• " + botPlainLabel(lurk.named[q].nym) + " — here");
     named.push(lurk.named[q].pk);
   }
   if (lurking) {
@@ -10355,6 +10400,10 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 }
 
 export {
+  splitQuotedReply,
+  botQuotedBy,
+  botThreadAddressed,
+  handleSeen,
   NYMBOT_COMPACT_PROMPT,
   BOT_ASK_FORCED_SYSTEM,
   buildNymbotPmSystemPrompt,

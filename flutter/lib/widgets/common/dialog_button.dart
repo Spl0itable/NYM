@@ -5,6 +5,7 @@ import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/theme/nym_theme.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import 'hit_slop.dart';
 import 'nym_focusable.dart';
 
@@ -201,7 +202,7 @@ class _DialogButtonState extends State<DialogButton> {
             onTap: widget.onTap,
             behavior: HitTestBehavior.opaque,
             child: AnimatedContainer(
-              duration: NymMotion.transition,
+              duration: NymThemeSwap.motion(context, NymMotion.transition),
               curve: NymMotion.curve,
               constraints: BoxConstraints(
                   minHeight: DialogButtonMetrics.heightOf(context)),

@@ -292,10 +292,10 @@ class _ToastCardState extends State<_ToastCard> {
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(11, 10, 4, 10),
-                  child: hasNymSuffix(t.text)
+                  child: hasNymSuffix(t.shown)
                       ? Text.rich(
                           dimNymSuffixes(
-                            trShown(t.text),
+                            trShown(t.shown),
                             nymSuffixStyle(
                                 TextStyle(color: fg, fontSize: 13, height: 1.4),
                                 contrast: context.highContrast),
@@ -304,7 +304,7 @@ class _ToastCardState extends State<_ToastCard> {
                               TextStyle(color: fg, fontSize: 13, height: 1.4),
                         )
                       : Text(
-                          trShown(t.text),
+                          trShown(t.shown),
                           style:
                               TextStyle(color: fg, fontSize: 13, height: 1.4),
                         ),

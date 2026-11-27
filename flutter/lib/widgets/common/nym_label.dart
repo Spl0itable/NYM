@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:intl/intl.dart' show Bidi;
 
 import '../../core/theme/nym_a11y.dart';
 import '../../core/utils/nym_utils.dart';
@@ -55,8 +54,117 @@ bool Function(String hex) knownNymSuffix(
   return (base: m.group(1)!, suffix: m.group(2)!);
 }
 
-String isolateNym(String base) =>
-    Bidi.hasAnyRtl(base) ? '\u2068$base\u2069' : base;
+final RegExp _nymBidiControls =
+    RegExp('[\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]');
+
+final RegExp _nymLineBreaks = RegExp('[\t\n\v\f\r\u0085\u2028\u2029]');
+
+String shownNymBase(String base) => base
+    .replaceAll(_nymBidiControls, '')
+    .replaceAll(_nymLineBreaks, ' ');
+
+String isolateNym(String base) => '\u2068${shownNymBase(base)}\u2069';
+
+String isolateNymSuffix(String suffix) =>
+    suffix.isEmpty ? '' : '\u2066$suffix\u2069';
+
+String isolateNymParts(String base, String suffix) =>
+    '${isolateNym(base)}${isolateNymSuffix(_hashed(suffix))}';
+
+String isolateNymLabel(String label) {
+  final p = splitNymLabel(label);
+  return isolateNymParts(p.base, p.suffix);
+}
+
+String balancedNymIsolates(String text) {
+  final out = StringBuffer();
+  var open = 0;
+  for (final c in text.codeUnits) {
+    if (c >= 0x2066 && c <= 0x2068) {
+      open++;
+    } else if (c == 0x2069) {
+      if (open == 0) continue;
+      open--;
+    }
+    out.writeCharCode(c);
+  }
+  for (var i = 0; i < open; i++) {
+    out.writeCharCode(0x2069);
+  }
+  return out.toString();
+}
+
+List<InlineSpan> nymSentenceSpans(
+    String text, List<List<int>> ranges, TextStyle dim) {
+  final n = text.length;
+  final dimAt = List<bool>.filled(n, false);
+  for (final r in ranges) {
+    if (r[0] < 0 || r[1] > n) continue;
+    for (var i = r[0]; i < r[1]; i++) {
+      dimAt[i] = true;
+    }
+  }
+  final pairEnd = <int, int>{};
+  final open = <int>[];
+  for (var i = 0; i < n; i++) {
+    final c = text.codeUnitAt(i);
+    if (c >= 0x2066 && c <= 0x2068) {
+      open.add(i);
+    } else if (c == 0x2069 && open.isNotEmpty) {
+      final a = open.removeLast();
+      if (open.isEmpty) pairEnd[a] = i + 1;
+    }
+  }
+  final parts = <InlineSpan>[];
+  void styled(int a, int b) {
+    var at = a;
+    while (at < b) {
+      var e = at + 1;
+      while (e < b && dimAt[e] == dimAt[at]) {
+        e++;
+      }
+      parts.add(TextSpan(
+          text: text.substring(at, e), style: dimAt[at] ? dim : null));
+      at = e;
+    }
+  }
+
+  var i = 0;
+  while (i < n) {
+    final end = pairEnd[i];
+    if (end != null) {
+      styled(i, end);
+      i = end;
+      continue;
+    }
+    var e = i + 1;
+    while (e < n && !pairEnd.containsKey(e) && dimAt[e] == dimAt[i]) {
+      e++;
+    }
+    final run = text.substring(i, e);
+    if (!dimAt[i] && _nymBidiControls.hasMatch(run)) {
+      parts.add(TextSpan(text: '\u2068${balancedNymIsolates(run)}\u2069'));
+    } else {
+      parts.add(TextSpan(text: run, style: dimAt[i] ? dim : null));
+    }
+    i = e;
+  }
+  return parts;
+}
+
+bool hasNymBidiControl(String text) => _nymBidiControls.hasMatch(text);
+
+List<InlineSpan> isolatedNymSpans(String base, String suffix,
+        {TextStyle? style, TextStyle? dim}) =>
+    [
+      TextSpan(
+          text: suffix.isEmpty ? isolateNym(base) : '${isolateNym(base)}\u2066',
+          style: style),
+      if (suffix.isNotEmpty) ...[
+        TextSpan(text: suffix, style: dim),
+        TextSpan(text: '\u2069', style: style),
+      ],
+    ];
 
 String _hashed(String suffix) =>
     suffix.isEmpty || suffix.startsWith('#') ? suffix : '#$suffix';
@@ -118,22 +226,20 @@ TextSpan nymTextSpan(BuildContext context, String text,
           ? composedNymRanges(text, known: knownNymSuffix(also: known))
           : const [],
       extra);
-  if (ranges.isEmpty) return TextSpan(text: text, style: style);
+  if (ranges.isEmpty && !hasNymBidiControl(text)) {
+    return TextSpan(text: text, style: style);
+  }
   return TextSpan(
       style: style,
-      children: nymRangeSpans(text, ranges, nymSuffixStyleOf(context, style)));
+      children:
+          nymSentenceSpans(text, ranges, nymSuffixStyleOf(context, style)));
 }
 
 List<InlineSpan> nymLabelSpans(
     BuildContext context, String base, String suffix, TextStyle style,
     {bool genesis = false}) {
-  final s = _hashed(suffix);
-  return [
-    TextSpan(text: isolateNym(base), style: style),
-    if (s.isNotEmpty)
-      TextSpan(
-          text: s, style: nymSuffixStyleOf(context, style, genesis: genesis)),
-  ];
+  return isolatedNymSpans(base, _hashed(suffix),
+      style: style, dim: nymSuffixStyleOf(context, style, genesis: genesis));
 }
 
 String keepNymBase(String base, int? keep) {
@@ -385,15 +491,18 @@ class NymLabel extends StatelessWidget {
 
   ({String base, String suffix}) get parts {
     final p = _parts;
-    if (p.suffix.isEmpty) return p;
-    return (base: capMentionBase(p.base), suffix: p.suffix);
+    if (p.suffix.isEmpty) return (base: shownNymBase(p.base), suffix: '');
+    return (base: shownNymBase(capMentionBase(p.base)), suffix: p.suffix);
   }
 
   ({String base, String suffix}) get _parts {
     if (suffix != null) return (base: nym, suffix: _hashed(suffix!));
     if (pubkey != null) {
+      final base = stripPubkeySuffix(nym);
       return (
-        base: stripPubkeySuffix(nym),
+        base: shownNymBase(base).trim().isEmpty && shownNymBase(nym).trim().isNotEmpty
+            ? capNymBase(nym)
+            : base,
         suffix: '#${getPubkeySuffix(pubkey!)}'
       );
     }
@@ -413,10 +522,8 @@ class NymLabel extends StatelessWidget {
     final dim = nymSuffixStyleOf(context, style, genesis: genesis);
     if (maxLines != 1) {
       return Text.rich(
-        TextSpan(style: style, children: [
-          TextSpan(text: isolateNym(p.base)),
-          TextSpan(text: p.suffix, style: dim),
-        ]),
+        TextSpan(
+            style: style, children: isolatedNymSpans(p.base, p.suffix, dim: dim)),
         maxLines: maxLines,
         overflow: maxLines == null ? null : TextOverflow.ellipsis,
         textAlign: textAlign,
@@ -425,10 +532,8 @@ class NymLabel extends StatelessWidget {
     return _NymLabelRow(
       label: '${p.base}${p.suffix}',
       full: Text.rich(
-        TextSpan(style: style, children: [
-          TextSpan(text: isolateNym(p.base)),
-          TextSpan(text: p.suffix, style: dim),
-        ]),
+        TextSpan(
+            style: style, children: isolatedNymSpans(p.base, p.suffix, dim: dim)),
         maxLines: 1,
         softWrap: false,
         overflow: TextOverflow.ellipsis,
@@ -443,7 +548,11 @@ class NymLabel extends StatelessWidget {
           maxLines: 1,
           softWrap: false,
           overflow: TextOverflow.clip),
-      suffix: Text(p.suffix, style: dim, maxLines: 1, softWrap: false),
+      suffix: Text(p.suffix,
+          style: dim,
+          maxLines: 1,
+          softWrap: false,
+          textDirection: TextDirection.ltr),
     );
   }
 }

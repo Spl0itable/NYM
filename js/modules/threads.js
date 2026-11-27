@@ -302,9 +302,7 @@ Object.assign(NYM.prototype, {
 
     // The `[gc:]` token stays; ?guess reads the live game out of it.
     _stripBotEnvelope(text) {
-        return String(text || '')
-            .replace(/^@[^\s]+[ \t]+/, '')
-            .replace(/^[ \t]*\u26a1.*$/gm, '');
+        return window.NymNickParse.stripEnvelope(String(text || ''));
     },
 
     // Same {author, text} shape as _extractQuoteChain; `exclude` drops the just-published message.
@@ -412,7 +410,7 @@ Object.assign(NYM.prototype, {
         this.activeThread = { rootId, ctx };
         this._threadContainer = container;
         this._renderThreadView(container);
-        this._setThreadComposerHint(true);
+        this._setThreadComposerHint();
         this._threadMarkOpenSeen();
         this._typingThrottleTime = 0;
         if (typeof this.renderTypingIndicator === 'function') this.renderTypingIndicator();
@@ -438,6 +436,7 @@ Object.assign(NYM.prototype, {
     _renderThreadView(container) {
         const at = this.activeThread;
         if (!at || !container) return;
+        this._threadHoldRows(container, at.ctx);
         container.innerHTML = '';
         // Invalidate the single-view DOM cache so leaving the thread re-renders the conversation.
         container.dataset.lastChannel = '';
@@ -500,12 +499,12 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _updateThreadDivider(count) {
-        const container = this._threadContainer;
+    _updateThreadDivider(count, where, open) {
+        const container = where || this._threadContainer;
         const text = container && container.querySelector('.thread-replies-divider .thread-divider-text');
         if (!text) return;
         if (typeof count !== 'number') {
-            const at = this.activeThread;
+            const at = open || this.activeThread;
             const root = at ? this._threadFindMessage(at.ctx, at.rootId) : null;
             count = root ? this._threadRepliesFor(root).length : 0;
         }
@@ -513,18 +512,8 @@ Object.assign(NYM.prototype, {
             : (count === 1 ? '1 reply' : `${this.abbreviateNumber(count)} replies`);
     },
 
-    _setThreadComposerHint(active) {
-        const input = document.getElementById('messageInput');
-        if (!input) return;
-        if (active) {
-            if (input.dataset.prevPlaceholder === undefined) {
-                input.dataset.prevPlaceholder = input.placeholder || '';
-            }
-            input.placeholder = 'Reply in thread...';
-        } else if (input.dataset.prevPlaceholder !== undefined) {
-            input.placeholder = input.dataset.prevPlaceholder;
-            delete input.dataset.prevPlaceholder;
-        }
+    _setThreadComposerHint() {
+        if (typeof this._syncComposerPlaceholder === 'function') this._syncComposerPlaceholder();
     },
 
     // Null outside a thread view or when it belongs to another conversation (never mis-thread a send).
@@ -534,7 +523,7 @@ Object.assign(NYM.prototype, {
         const ctx = at.ctx;
         if (this._cvActive) {
             const col = this._cvColumns && this._cvColumns.find(c => c.id === this._cvFocusedId);
-            return (col && col.key === ctx.storageKey) ? at.rootId : null;
+            return (col && col.key === ctx.storageKey && col.listEl === this._threadContainer) ? at.rootId : null;
         }
         if (ctx.type === 'group') return (this.inPMMode && this.currentGroup === ctx.groupId) ? at.rootId : null;
         if (ctx.type === 'pm') return (this.inPMMode && this.currentPM === ctx.pubkey) ? at.rootId : null;
@@ -544,7 +533,45 @@ Object.assign(NYM.prototype, {
 
     // Ordinary conversation messages must not render into an occupied container.
     _threadViewOccupies(container) {
-        return !!(this.activeThread && this._threadContainer && container === this._threadContainer);
+        if (this.activeThread && this._threadContainer && container === this._threadContainer) return true;
+        return !!(container && this._cvThreads && this._cvThreads.size && this._cvThreads.has(container));
+    },
+
+    _threadOpenFor(key) {
+        if (!key) return null;
+        const at = this.activeThread;
+        if (at && at.ctx && at.ctx.storageKey === key && this._threadContainer) return { at, container: this._threadContainer };
+        if (this._cvThreads && this._cvThreads.size) {
+            for (const [container, p] of this._cvThreads) {
+                if (p.ctx && p.ctx.storageKey === key) return { at: p, container };
+            }
+        }
+        return null;
+    },
+
+    _threadDropIn(list) {
+        if (!list) return;
+        if (this._cvThreads && this._cvThreads.delete(list)) list.classList.remove('thread-view-active');
+        if (this.activeThread && this._threadContainer === list) this._closeThreadViewOnSwitch();
+        this._threadDropHeldIn(list);
+    },
+
+    _threadDropHeldIn(list) {
+        const held = this._threadHeld;
+        if (held && held.container === list && !list.classList.contains('thread-view-active')) this._threadDropHeld();
+        this._threadDropTail(list);
+    },
+
+    _threadDropColumns() {
+        if (this._cvThreads) {
+            for (const list of this._cvThreads.keys()) {
+                list.classList.remove('thread-view-active');
+                this._threadDropHeldIn(list);
+            }
+            this._cvThreads.clear();
+        }
+        const tc = this._threadContainer;
+        if (this.activeThread && tc && tc.id !== 'messagesContainer') this._closeThreadViewOnSwitch();
     },
 
     _threadAnonLane(at) {
@@ -563,14 +590,270 @@ Object.assign(NYM.prototype, {
         this._threadQuietClose(this._threadAnonLane(at) ? at.ctx.pubkey : null, () => this._closeThreadViewNow(at, opts));
     },
 
+    _threadHeldSig() {
+        const size = (v) => (v && typeof v.size === 'number' ? v.size : 0);
+        return [this._cfVersion || 0, this._cfEditEpoch || 0, this._cnFilterEpoch || 0, size(this.deletedEventIds),
+            size(this.blockedUsers), size(this.blockedKeywords), size(this.friends), size(this.autoMutedPubkeys),
+            typeof this._clientGatesActive === 'function' && this._clientGatesActive() ? 1 : 0,
+            this.spamFilterEnabled === false ? 0 : 1, this.spamFilterAggressive === false ? 0 : 1,
+            typeof document !== 'undefined' && document.body && document.body.classList.contains('chat-bubbles') ? 1 : 0].join('|');
+    },
+
+    _threadHoldRows(container, ctx) {
+        const held = this._threadHeld;
+        if (held && held.container === container && container.classList.contains('thread-view-active')) return;
+        this._threadDropHeld();
+        this._threadAttachTail(this._threadTail, true);
+        const sc = container.parentElement;
+        if (!ctx || !sc || !container.firstChild || container.classList.contains('thread-view-active')) return;
+        const key = ctx.storageKey;
+        if (!key || container.dataset.virtualScrollKey !== key) return;
+        const isPM = container.dataset.virtualScrollIsPM === 'true';
+        if (!isPM !== !ctx.isPM) return;
+        const col = this._cvActive && typeof this._cvColumnForKey === 'function' ? this._cvColumnForKey(key) : null;
+        const hold = document.createElement('div');
+        hold.className = 'thread-held-rows';
+        hold.hidden = true;
+        hold.style.display = 'none';
+        const away = Math.abs(sc.scrollTop) >= 2;
+        this._threadHeld = {
+            container, hold, key, isPM, col,
+            lastChannel: container.dataset.lastChannel,
+            scrollTop: sc.scrollTop,
+            readerAway: !!sc._readerAway,
+            scrolledUp: !!this.userScrolledUp,
+            atBottom: col ? col._atBottom : undefined,
+            place: away && typeof this._readerPlace === 'function' ? this._readerPlace(container, sc) : null,
+            windowEnd: !isPM && this.channelWindowEnd ? this.channelWindowEnd.get(key) : undefined,
+            rawLast: this._threadRawLast(key, isPM),
+            sig: this._threadHeldSig()
+        };
+        const frag = document.createDocumentFragment();
+        while (container.firstChild) frag.appendChild(container.firstChild);
+        hold.appendChild(frag);
+        sc.insertBefore(hold, container.nextSibling);
+    },
+
+    _threadRawLast(key, isPM) {
+        const raw = (isPM ? this.pmMessages : this.messages);
+        const list = raw && typeof raw.get === 'function' ? raw.get(key) : null;
+        const m = Array.isArray(list) && list.length ? list[list.length - 1] : null;
+        return m ? m.id : null;
+    },
+
+    _threadOwnSince(held) {
+        const list = (held.isPM ? this.pmMessages : this.messages).get(held.key) || [];
+        let i = list.length - 1;
+        for (; i >= 0; i--) {
+            const m = list[i];
+            if (m && m.id === held.rawLast) break;
+            if (m && !m.threadRoot && (m.isOwn || (this.pubkey && m.pubkey === this.pubkey))) return true;
+        }
+        return false;
+    },
+
+    _threadDropTail(container) {
+        const tail = this._threadTail;
+        if (!tail || (container && tail.container !== container)) return;
+        this._threadTail = null;
+        if (tail.hold.parentNode) tail.hold.parentNode.removeChild(tail.hold);
+    },
+
+    _threadDropHeld() {
+        const held = this._threadHeld;
+        this._threadHeld = null;
+        if (held && held.hold.parentNode) held.hold.parentNode.removeChild(held.hold);
+        return held;
+    },
+
+    _threadRowIds(root) {
+        const ids = [];
+        for (const el of root.querySelectorAll('[data-message-id]')) {
+            if (el.classList.contains('poll-message')) continue;
+            if (el.parentElement && el.parentElement.closest('[data-message-id]')) continue;
+            ids.push(el.dataset.messageId);
+        }
+        return ids;
+    },
+
+    _threadHeldFit(held) {
+        const list = held.isPM ? this.getFilteredPMMessages(held.key) : this.getFilteredMessages(held.key);
+        const ids = this._threadRowIds(held.hold);
+        if (!ids.length || !Array.isArray(list)) return null;
+        const rowId = (m) => (m && m.isPM && m.nymMessageId) ? m.nymMessageId : (m && m.id);
+        let last = -1;
+        for (let i = list.length - 1; i >= 0; i--) {
+            if (rowId(list[i]) === ids[ids.length - 1]) { last = i; break; }
+        }
+        const start = last - ids.length + 1;
+        if (last < 0 || start < 0) return null;
+        for (let i = 0; i < ids.length; i++) {
+            if (rowId(list[start + i]) !== ids[i]) return null;
+        }
+        const end = !held.isPM && this.channelWindowEnd ? this.channelWindowEnd.get(held.key) : undefined;
+        if (end !== held.windowEnd || (end !== undefined && this._threadOwnSince(held))) return null;
+        return { list, start, last, trailing: end === undefined ? list.slice(last + 1) : [] };
+    },
+
+    _threadHeldCut(held, kids) {
+        if (this._cvActive || held.container.id !== 'messagesContainer' || typeof document === 'undefined' || document.hidden) return 0;
+        if (typeof this._frameOrTimer !== 'function') return 0;
+        const sel = '.message[data-message-id], .me-message[data-message-id], .group-notice[data-message-id]';
+        const rowsIn = (k) => (k.nodeType !== 1 ? 0 : (k.matches(sel) ? 1 : 0) + k.querySelectorAll(sel).length);
+        let cut = 0;
+        if (held.place) {
+            const id = held.place.id;
+            const at = kids.findIndex((k) => k.nodeType === 1 && (k.dataset.messageId === id || !!k.querySelector('[data-message-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]')));
+            if (at < 0) return 0;
+            cut = Math.max(0, at - 2);
+        } else if (Math.abs(held.scrollTop) < 2) {
+            const want = this._threadViewRows(held.isPM);
+            let rows = 0;
+            cut = kids.length;
+            while (cut > 0 && rows < want) rows += rowsIn(kids[--cut]);
+            if (rows < want) return 0;
+        } else {
+            return 0;
+        }
+        while (cut > 0 && kids[cut - 1].nodeType === 1 && kids[cut - 1].matches('.cn-divider, .day-separator')) cut--;
+        let first = cut;
+        while (first < kids.length && !rowsIn(kids[first])) first++;
+        return first < kids.length && cut > 0 && kids.slice(0, cut).some((k) => rowsIn(k) > 0) ? cut : 0;
+    },
+
+    _threadViewRows(isPM) {
+        const h = (typeof window !== 'undefined' && window.innerHeight) || 800;
+        return Math.min((isPM ? this.pmPageSize : this.channelPageSize) || 50, Math.max(12, Math.ceil(h / 32)));
+    },
+
+    _threadHeldBusy(held, fit) {
+        if (fit.trailing.length <= this._threadViewRows(held.isPM)) return '';
+        if (held.col || (!held.place && Math.abs(held.scrollTop) < 2)) return 'render';
+        if (held.isPM || held.container.id !== 'messagesContainer') return '';
+        return this._threadOwnSince(held) ? 'render' : 'detach';
+    },
+
+    _threadRowIndexOf(list, id) {
+        for (let i = list.length - 1; i >= 0; i--) {
+            const m = list[i];
+            if (m && (((m.isPM && m.nymMessageId) ? m.nymMessageId : m.id) === id)) return i;
+        }
+        return -1;
+    },
+
+    _threadRestoreHeld(container, ctx, was) {
+        const held = this._threadHeld;
+        this._threadHeld = null;
+        if (!held) return false;
+        const sc = container.parentElement;
+        const fit = held.container === container && ctx && held.key === ctx.storageKey
+            && container.dataset.virtualScrollKey === held.key && !!container.querySelector(':scope > .thread-view-bar')
+            && held.sig === this._threadHeldSig() && !!sc && (!held.col || (this._cvActive && held.col.listEl === container))
+            ? this._threadHeldFit(held) : null;
+        const busy = fit ? this._threadHeldBusy(held, fit) : '';
+        if (!fit || busy === 'render') {
+            if (held.hold.parentNode) held.hold.parentNode.removeChild(held.hold);
+            return false;
+        }
+        if (busy === 'detach') {
+            this.channelWindowEnd.set(held.key, fit.list[fit.last].id);
+            fit.trailing = [];
+        }
+        const kids = Array.from(held.hold.childNodes);
+        const cut = this._threadHeldCut(held, kids);
+        container.innerHTML = '';
+        const frag = document.createDocumentFragment();
+        for (let i = cut; i < kids.length; i++) frag.appendChild(kids[i]);
+        container.appendChild(frag);
+        if (held.lastChannel !== undefined) container.dataset.lastChannel = held.lastChannel;
+        const starts = held.isPM ? this.pmRenderedStart : this.channelRenderedStart;
+        let shownFrom = fit.start;
+        if (cut > 0) {
+            const firstId = this._threadRowIds(container)[0];
+            const at = firstId ? this._threadRowIndexOf(fit.list, firstId) : -1;
+            if (at >= 0) shownFrom = at;
+            starts.set(held.key, shownFrom);
+            this._threadTail = { container, hold: held.hold, key: held.key, isPM: held.isPM, start: fit.start, top: container.firstChild, first: container.querySelector('[data-message-id]'), regroup: fit.trailing.length > 0 };
+            const tail = this._threadTail;
+            this._frameOrTimer(() => this._threadAttachTail(tail, false), true);
+        } else {
+            starts.set(held.key, fit.start);
+            if (held.hold.parentNode) held.hold.parentNode.removeChild(held.hold);
+        }
+        if (fit.trailing.length) {
+            this.virtualScroll.suppressAutoScroll = true;
+            this._suppressSound = true;
+            this._suppressBubbleRewrap = true;
+            this._bulkAppending = true;
+            try {
+                for (const m of fit.trailing) this.displayMessage(m);
+            } finally {
+                this._bulkAppending = false;
+                this._suppressSound = false;
+                this._suppressBubbleRewrap = false;
+                this.virtualScroll.suppressAutoScroll = false;
+            }
+            this._recomputeAllBubbleGrouping(container);
+        }
+        if (typeof this._backfillZapReceiptsForMessages === 'function') this._backfillZapReceiptsForMessages(fit.list.slice(shownFrom, fit.last + 1 + fit.trailing.length));
+        if (typeof was !== 'number' || Math.abs(was - held.scrollTop) >= 1) sc.scrollTop = held.scrollTop;
+        if (held.place && fit.trailing.length && typeof this._readerRestore === 'function') this._readerRestore(container, sc, held.place);
+        sc._readerAway = held.readerAway;
+        if (held.col) held.col._atBottom = held.atBottom;
+        this.userScrolledUp = held.scrolledUp || busy === 'detach';
+        if (typeof this._cnAfterRender === 'function') this._cnAfterRender(held.key);
+        return true;
+    },
+
+    _threadAttachTail(tail, now) {
+        if (!tail || this._threadTail !== tail) return;
+        this._threadTail = null;
+        const { container, hold, key } = tail;
+        let top = tail.top && tail.top.parentNode === container ? tail.top : tail.first;
+        while (top && top.parentNode && top.parentNode !== container) top = top.parentNode;
+        const ok = !!hold.parentNode && container.isConnected && !!top && top.parentNode === container
+            && container.dataset.virtualScrollKey === key && !container.classList.contains('thread-view-active');
+        if (!ok) {
+            if (hold.parentNode) hold.parentNode.removeChild(hold);
+            return;
+        }
+        let shifted = false;
+        for (let k = container.firstChild; k && k !== top; k = k.nextSibling) {
+            if (k.nodeType === 1 && (k.hasAttribute('data-message-id') || k.querySelector('[data-message-id]'))) { shifted = true; break; }
+        }
+        const first = shifted ? top : container.firstChild;
+        const sc = container.parentElement;
+        const anchor = !now && typeof this._chWinAnchor === 'function' ? this._chWinAnchor(container, sc) : null;
+        if (anchor && typeof this._chWinHold === 'function') this._chWinHold(sc);
+        const frag = document.createDocumentFragment();
+        while (hold.firstChild) frag.appendChild(hold.firstChild);
+        hold.parentNode.removeChild(hold);
+        container.insertBefore(frag, first);
+        const starts = tail.isPM ? this.pmRenderedStart : this.channelRenderedStart;
+        const cur = starts.get(key);
+        starts.set(key, shifted && typeof cur === 'number' ? Math.min(cur, tail.start) : tail.start);
+        if (shifted || tail.regroup) this._recomputeAllBubbleGrouping(container);
+        if (anchor && typeof this._chWinRestore === 'function') {
+            this._chWinRestore(sc, anchor);
+            requestAnimationFrame(() => this._chWinRestore(sc, anchor));
+        }
+    },
+
     _closeThreadViewNow(at, opts) {
         const container = this._threadContainer;
+        const held = this._threadHeld && container && this._threadHeld.container === container ? this._threadHeld : null;
+        const was = held && container.parentElement ? container.parentElement.scrollTop : undefined;
         this.activeThread = null;
         this._threadContainer = null;
-        this._setThreadComposerHint(false);
+        this._setThreadComposerHint();
         if (container) {
             container.classList.remove('thread-view-active');
-            this.renderMessagesWithVirtualScroll(container, at.ctx.storageKey, true, !!at.ctx.isPM);
+            const place = held ? held.place : null;
+            if (!this._threadRestoreHeld(container, at.ctx, was)) {
+                this.renderMessagesWithVirtualScroll(container, at.ctx.storageKey, true, !!at.ctx.isPM, null, place);
+            }
+        } else {
+            this._threadDropHeld();
         }
         this._typingThrottleTime = 0;
         if (typeof this.renderTypingIndicator === 'function') this.renderTypingIndicator();
@@ -629,8 +912,17 @@ Object.assign(NYM.prototype, {
                     this.openGroup(ctx.groupId);
                 }
             }
+            this.openThreadView(entry.rootId, ctx, { push: false });
+            return;
         }
-        this.openThreadView(entry.rootId, ctx, { push: false });
+        const col = this._cvColumnForKey(ctx.storageKey);
+        const open = col ? this._threadOpenFor(col.key) : null;
+        if (open && open.at.rootId === entry.rootId && open.container === col.listEl) {
+            if (this._cvFocusedId !== col.id) this._cvFocusColumn(col.id);
+        } else {
+            this.openThreadView(entry.rootId, ctx, { push: false });
+        }
+        if (col) this._cvScrollToCol(col);
     },
 
     _onThreadReplyArrived(message) {
@@ -648,14 +940,21 @@ Object.assign(NYM.prototype, {
 
         const at = this.activeThread;
         if (at && at.rootId === message.threadRoot && this._threadContainer) {
-            const container = this._threadContainer;
-            const dedupeId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-            if (!container.querySelector(`[data-message-id="${dedupeId}"]`)) {
-                this._renderThreadMessage(message, container);
-                this._updateThreadDivider();
-                if (message.isOwn) this._scheduleScrollToBottom(true);
+            this._threadAppendReply(message, this._threadContainer, at);
+        }
+        if (this._cvThreads && this._cvThreads.size) {
+            for (const [container, p] of this._cvThreads) {
+                if (p.rootId === message.threadRoot) this._threadAppendReply(message, container, p);
             }
         }
+    },
+
+    _threadAppendReply(message, container, open) {
+        const dedupeId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
+        if (container.querySelector(`[data-message-id="${dedupeId}"]`)) return;
+        this._renderThreadMessage(message, container);
+        this._updateThreadDivider(undefined, container, open);
+        if (message.isOwn && container === this._threadContainer) this._scheduleScrollToBottom(true);
     },
 
     // Once the root is here, drop stray inline copies of its replies (never from an open thread view).
@@ -780,26 +1079,56 @@ Object.assign(NYM.prototype, {
 
     // No re-render: the caller is about to render the new conversation into the same container.
     _closeThreadViewOnSwitch() {
+        this._threadDropHeld();
         if (!this.activeThread) return;
         const container = this._threadContainer;
         this.activeThread = null;
         this._threadContainer = null;
-        this._setThreadComposerHint(false);
+        this._setThreadComposerHint();
         this._typingThrottleTime = 0;
         if (container) container.classList.remove('thread-view-active');
     },
 
     _threadOnColumnFocus(colKey) {
+        const col = typeof this._cvColumnForKey === 'function' ? this._cvColumnForKey(colKey) : null;
+        const list = col ? col.listEl : null;
         const at = this.activeThread;
-        if (at && at.ctx && at.ctx.storageKey !== colKey) {
-            this.closeThreadView({ nav: false });
+        const tc = this._threadContainer;
+        if (at && tc && tc === list && at.ctx && at.ctx.storageKey === colKey) return;
+        if (at) {
+            const parkable = tc && tc !== list && tc.isConnected && at.ctx
+                && (this._cvColumns || []).some((c) => c.listEl === tc && c.key === at.ctx.storageKey);
+            if (parkable) {
+                if (!this._cvThreads) this._cvThreads = new Map();
+                this._cvThreads.set(tc, at);
+                this.activeThread = null;
+                this._threadContainer = null;
+            } else if (tc && tc === list) {
+                this._closeThreadViewOnSwitch();
+            } else {
+                this.closeThreadView({ nav: false });
+            }
         }
+        const parked = list && this._cvThreads ? this._cvThreads.get(list) : null;
+        if (parked) {
+            this._cvThreads.delete(list);
+            if (parked.ctx && parked.ctx.storageKey === colKey && this.threadsEnabled()) {
+                this.activeThread = parked;
+                this._threadContainer = list;
+                this._threadMarkOpenSeen();
+            } else {
+                list.classList.remove('thread-view-active');
+                this._threadDropHeldIn(list);
+            }
+        }
+        this._typingThrottleTime = 0;
     },
 
     applyThreadsEnabled() {
         this._threadCountCache = null;
         if (!this.threadsEnabled()) this._closeThreadViewOnSwitch();
         if (this._cvActive) {
+            this._threadDropColumns();
             if (typeof this._cvRenderAll === 'function') this._cvRenderAll();
         } else if (typeof this.rerenderCurrentView === 'function') {
             this.rerenderCurrentView();

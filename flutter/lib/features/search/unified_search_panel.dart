@@ -17,6 +17,7 @@ import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../../state/view_history.dart';
 import '../../widgets/chat/message_row.dart' show formatFullTimestamp;
 import '../../widgets/chat/messages_list.dart' show messageListScrollerProvider;
 import '../../widgets/common/nym_avatar.dart';
@@ -30,6 +31,7 @@ import '../chat_tools/chat_tools_ui.dart'
     show ChatToolsReader, chatDisplayNym, chatInfoFor, jumpToMessage;
 import '../i18n/i18n.dart';
 import '../layout/layout_model.dart' show mentionSuffixRanges;
+import '../layout/slide_out_list.dart' show showChatRequestProvider;
 import '../shortcuts/shortcuts.dart';
 import 'search_history.dart';
 import 'search_history_providers.dart';
@@ -62,13 +64,17 @@ void openSearchHit(ChatToolsReader read, String key, Message m) {
       root.isNotEmpty &&
       list.any((x) => x.threadRoot == null && threadKeyForMessage(x) == root);
   if (!(appThreadsEnabled && hasRoot)) {
+    final view = searchViewForKey(key);
+    if (view != app.view) read(appStateProvider.notifier).switchView(view);
     if (read(activeThreadProvider) != null) {
       read(activeThreadProvider.notifier).state = null;
+      read(viewHistoryProvider).dropForward();
     }
     jumpToMessage(read, m.id);
     return;
   }
   final view = searchViewForKey(key);
+  read(showChatRequestProvider.notifier).state++;
   if (view != app.view) read(appStateProvider.notifier).switchView(view);
   read(activeThreadProvider.notifier).state =
       ActiveThread(view: view, rootId: root);

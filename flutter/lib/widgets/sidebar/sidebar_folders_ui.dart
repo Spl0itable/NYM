@@ -13,6 +13,7 @@ import '../../features/i18n/i18n.dart';
 import '../../features/sidebar/sidebar_layout.dart';
 import '../../features/sidebar_folders/folders.dart';
 import '../../features/sidebar_folders/folders_providers.dart';
+import '../../features/sidebar_folders/folders_service.dart';
 import '../../features/toasts/toast_center.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
@@ -75,9 +76,17 @@ Future<String?> _promptName(
 
 Future<String> folderNew(BuildContext context, WidgetRef ref,
     {List<String> refs = const [], bool picker = false}) async {
-  final service = ref.read(sidebarFoldersProvider);
+  final id = await _folderNew(context, ref.read(sidebarFoldersProvider),
+      ref.read(sidebarSectionOrderProvider.notifier), refs);
+  if (id.isNotEmpty && picker && context.mounted) {
+    unawaited(folderOpenPicker(context, ref, id));
+  }
+  return id;
+}
+
+Future<String> _folderNew(BuildContext context, SidebarFoldersService service,
+    SidebarSectionOrder order, List<String> refs) async {
   if (!service.ready) return '';
-  final order = ref.read(sidebarSectionOrderProvider.notifier);
   final name = await _promptName(
       context, FoldersStrings.newFolder, FoldersStrings.create, '');
   if (name == null) return '';
@@ -90,9 +99,6 @@ Future<String> folderNew(BuildContext context, WidgetRef ref,
   }
   service.commit(r.state);
   if (refs.isNotEmpty) showToast(tr(FoldersStrings.added, {'folder': name}));
-  if (picker && context.mounted) {
-    unawaited(folderOpenPicker(context, ref, id));
-  }
   return id;
 }
 
@@ -163,8 +169,8 @@ bool folderMoveToken(WidgetRef ref, String token, int delta) {
   return true;
 }
 
-void folderAddRef(WidgetRef ref, String chatRef, String to, String from) {
-  final service = ref.read(sidebarFoldersProvider);
+void folderAddRef(
+    SidebarFoldersService service, String chatRef, String to, String from) {
   final r = folderAdd(service.state, to, [chatRef], service.nowMs);
   if (r.error != null) {
     folderError(r.error);
@@ -185,8 +191,8 @@ void folderAddRef(WidgetRef ref, String chatRef, String to, String from) {
   });
 }
 
-void folderRemoveRef(WidgetRef ref, String chatRef, String fid) {
-  final service = ref.read(sidebarFoldersProvider);
+void folderRemoveRef(
+    SidebarFoldersService service, String chatRef, String fid) {
   final state = service.state;
   final f = state.folders[fid];
   if (f == null) return;
@@ -210,23 +216,24 @@ Offset _menuAt(BuildContext context, Offset? at) {
   return Offset(size.width / 2, size.height / 3);
 }
 
-void folderChooser(
-    BuildContext context, WidgetRef ref, String chatRef, String from,
+void folderChooser(BuildContext context, SidebarFoldersService service,
+    SidebarSectionOrder order, String chatRef, String from,
     [Offset? anchor]) {
-  final service = ref.read(sidebarFoldersProvider);
   final items = <SidebarQuickMenuItem>[
     for (final f in folderList(service.state))
       if (f.id != from)
         SidebarQuickMenuItem(
           label: f.name,
           svg: FolderIcons.folder,
-          onSelected: () => folderAddRef(ref, chatRef, f.id, from),
+          onSelected: () => folderAddRef(service, chatRef, f.id, from),
         ),
     SidebarQuickMenuItem(
       label: '${tr(FoldersStrings.newFolder)}…',
       svg: NymIcons.plus,
       onSelected: () {
-        if (context.mounted) unawaited(folderNew(context, ref, refs: [chatRef]));
+        if (context.mounted) {
+          unawaited(_folderNew(context, service, order, [chatRef]));
+        }
       },
     ),
   ];
@@ -237,18 +244,21 @@ void folderChooser(
 }
 
 List<SidebarQuickMenuItem> folderSidebarItems(
-    BuildContext context, WidgetRef ref, String storageKey, {Offset? at}) {
+    BuildContext context, WidgetRef ref, String storageKey,
+    {Offset? at, BuildContext? root}) {
   final service = ref.read(sidebarFoldersProvider);
   if (!service.ready) return const [];
   final k = pinKeyForChat(storageKey);
   if (!folderValidRef(k)) return const [];
+  final menu = root ?? context;
+  final order = ref.read(sidebarSectionOrderProvider.notifier);
   final fid = folderOfState(service.state, k);
   if (fid.isEmpty) {
     return [
       SidebarQuickMenuItem(
         label: tr(FoldersStrings.addTo),
         svg: FolderIcons.folder,
-        onSelected: () => folderChooser(context, ref, k, '', at),
+        onSelected: () => folderChooser(menu, service, order, k, '', at),
       ),
     ];
   }
@@ -256,12 +266,12 @@ List<SidebarQuickMenuItem> folderSidebarItems(
     SidebarQuickMenuItem(
       label: tr(FoldersStrings.moveTo),
       svg: FolderIcons.move,
-      onSelected: () => folderChooser(context, ref, k, fid, at),
+      onSelected: () => folderChooser(menu, service, order, k, fid, at),
     ),
     SidebarQuickMenuItem(
       label: tr(FoldersStrings.removeFrom),
       svg: FolderIcons.remove,
-      onSelected: () => folderRemoveRef(ref, k, fid),
+      onSelected: () => folderRemoveRef(service, k, fid),
     ),
   ];
 }

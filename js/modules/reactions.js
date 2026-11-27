@@ -18,6 +18,18 @@ Object.assign(NYM.prototype, {
         }, this.GROUP_REACTION_BATCH_MS));
     },
 
+    _holdGroupReactionClaim(groupId, claim) {
+        if (!(this._groupReactionClaims instanceof Map)) this._groupReactionClaims = new Map();
+        const pending = this._groupReactionQueue && this._groupReactionQueue.get(groupId);
+        const prev = this._groupReactionClaims.get(groupId);
+        if (pending && pending.length && (!prev || prev.pubkey !== claim.pubkey)) {
+            const t = this._groupReactionTimers && this._groupReactionTimers.get(groupId);
+            if (t) { clearTimeout(t); this._groupReactionTimers.delete(groupId); }
+            this._flushGroupReactions(groupId).catch(() => { });
+        }
+        this._groupReactionClaims.set(groupId, claim);
+    },
+
     flushPendingGroupReactions() {
         if (!this._groupReactionQueue) return;
         for (const groupId of [...this._groupReactionQueue.keys()]) {
@@ -274,6 +286,7 @@ Object.assign(NYM.prototype, {
     },
 
     handleReaction(event) {
+        if (this._eventExpired(event)) return;
         if (event && this.blockedUsers && this.blockedUsers.has(event.pubkey)) return;
         if (!(typeof this._emojiSourceHidden === 'function' && this._emojiSourceHidden(event.pubkey, '', ''))) this.ingestEmojiTags(event.tags);
         const reactionContent = event.content;
@@ -592,7 +605,7 @@ Object.assign(NYM.prototype, {
         reactions.forEach((reactors, emoji) => {
             const badge = document.createElement('span');
 
-            const hasReacted = reactors.has(this.pubkey);
+            const hasReacted = this._reactedByMe(messageId, emoji, reactors);
 
             badge.className = hasReacted ? 'reaction-badge user-reacted' : 'reaction-badge';
             badge.dataset.emoji = emoji;
@@ -1190,6 +1203,40 @@ ${this._emojiSectionsHtml()}`;
         return true;
     },
 
+    _noteReactionClaim(messageId, emoji, claim, until) {
+        if (!claim || !claim.sk || !claim.chain) return;
+        if (!(this._reactionClaims instanceof Map)) this._reactionClaims = new Map();
+        const now = Math.floor(Date.now() / 1000);
+        for (const [k, v] of this._reactionClaims) if (v.until && v.until < now) this._reactionClaims.delete(k);
+        const key = messageId + '\n' + emoji;
+        this._reactionClaims.delete(key);
+        this._reactionClaims.set(key, { claim, until: until || 0 });
+        while (this._reactionClaims.size > 500) this._reactionClaims.delete(this._reactionClaims.keys().next().value);
+    },
+
+    _heldReactionEntry(messageId, emoji) {
+        const key = messageId + '\n' + emoji;
+        const entry = this._reactionClaims instanceof Map ? this._reactionClaims.get(key) : null;
+        if (!entry) return null;
+        if (entry.until && entry.until < Math.floor(Date.now() / 1000)) {
+            this._reactionClaims.delete(key);
+            return null;
+        }
+        const held = entry.claim;
+        if (this._keyChain !== held.chain || held.chain.head !== this.pubkey) return null;
+        const reactors = this.reactions.get(messageId);
+        return reactors && reactors.get(emoji) && reactors.get(emoji).has(held.pubkey) ? entry : null;
+    },
+
+    _heldReactionClaim(messageId, emoji) {
+        const entry = this._heldReactionEntry(messageId, emoji);
+        return entry ? entry.claim : null;
+    },
+
+    _reactedByMe(messageId, emoji, reactors) {
+        return !!(reactors && reactors.has(this.pubkey)) || !!this._heldReactionClaim(messageId, emoji);
+    },
+
     _pmPeerForElement(el) {
         if (typeof this._threadCtxForElement !== 'function') return this.currentPM || null;
         const ctx = this._threadCtxForElement(el);
@@ -1198,6 +1245,7 @@ ${this._emojiSectionsHtml()}`;
 
     async sendReaction(messageId, emoji) {
         if (typeof this._emojiStringBlocked === 'function' && this._emojiStringBlocked(emoji)) return;
+        let reactedAs = this.pubkey;
         try {
             if (!this._checkReactionRateLimit(messageId, emoji)) return;
 
@@ -1224,15 +1272,26 @@ ${this._emojiSectionsHtml()}`;
                 messageReactions.set(emoji, new Map());
             }
 
-            if (messageReactions.get(emoji).has(this.pubkey)) {
+            if (this._reactedByMe(messageId, emoji, messageReactions.get(emoji))) {
                 return;
             }
 
             window.nymHaptic && window.nymHaptic('light');
 
+            let originalKind = '20000';
+            if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
+                originalKind = '1059';
+            } else if (this.currentGeohash && !this.isValidGeohash(this.currentGeohash)) {
+                originalKind = '23333';
+            }
+            const createdAt = Math.floor(Date.now() / 1000);
+            const expires = !groupId && this._isChannelKind(originalKind);
+
             const claim = (typeof this._claimChannelKey === 'function' ? this._claimChannelKey() : null);
             const me = (typeof this._claimSender === 'function' ? this._claimSender(claim) : { sk: this.privkey, pubkey: this.pubkey, nym: this.nym });
+            reactedAs = me.pubkey;
             messageReactions.get(emoji).set(me.pubkey, me.nym);
+            this._noteReactionClaim(messageId, emoji, claim, expires ? createdAt + this.CHANNEL_EVENT_TTL_SEC : 0);
             this.persistReactions(messageId);
 
             this.updateMessageReactions(messageId);
@@ -1240,13 +1299,6 @@ ${this._emojiSectionsHtml()}`;
             this._burstOnBadge(messageId, emoji, messageEl);
 
             if (!lane) this.recordOwnActivity();
-
-            let originalKind = '20000';
-            if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
-                originalKind = '1059'; // NIP-17 gift wrap (covers 1:1 PMs and group messages)
-            } else if (this.currentGeohash && !this.isValidGeohash(this.currentGeohash)) {
-                originalKind = '23333'; // named (non-geohash) channel
-            }
 
             const reactionTags = [
                 ['e', messageId],
@@ -1262,9 +1314,11 @@ ${this._emojiSectionsHtml()}`;
                 reactionTags.push(['d', this.currentChannel]);
             }
 
+            if (expires) reactionTags.push(this._channelExpiryTag(createdAt));
+
             const event = {
                 kind: 7,
-                created_at: Math.floor(Date.now() / 1000),
+                created_at: createdAt,
                 tags: reactionTags,
                 content: emoji,
                 pubkey: me.pubkey
@@ -1273,8 +1327,7 @@ ${this._emojiSectionsHtml()}`;
             if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
                 if (group) {
-                    if (!(this._groupReactionClaims instanceof Map)) this._groupReactionClaims = new Map();
-                    if (claim && claim.sk) this._groupReactionClaims.set(groupId, claim);
+                    if (claim && claim.sk) this._holdGroupReactionClaim(groupId, claim);
                     this._queueGroupReaction(groupId, messageId, emoji, 'add');
                     this.addToRecentEmojis(emoji);
                     return;
@@ -1309,20 +1362,24 @@ ${this._emojiSectionsHtml()}`;
                 }
                 this.addToRecentEmojis(emoji);
             } else {
-                messageReactions.get(emoji).delete(this.pubkey);
+                messageReactions.get(emoji).delete(reactedAs);
                 this.updateMessageReactions(messageId);
                 this.displaySystemMessage('Failed to sign reaction');
             }
         } catch (error) {
             const messageReactions = this.reactions.get(messageId);
             if (messageReactions && messageReactions.has(emoji)) {
-                messageReactions.get(emoji).delete(this.pubkey);
+                messageReactions.get(emoji).delete(reactedAs);
                 this.updateMessageReactions(messageId);
             }
         }
     },
 
     async removeReaction(messageId, emoji) {
+        let reactor = this.pubkey;
+        let reactorNym = this.nym;
+        let held = null;
+        let heldUntil = 0;
         try {
             if (!this._checkReactionRateLimit(messageId, emoji)) return;
 
@@ -1343,7 +1400,16 @@ ${this._emojiSectionsHtml()}`;
 
             const messageReactions = this.reactions.get(messageId);
             if (!messageReactions || !messageReactions.has(emoji)) return;
-            messageReactions.get(emoji).delete(this.pubkey);
+            const entry = this._heldReactionEntry(messageId, emoji);
+            if (entry) {
+                held = entry.claim;
+                heldUntil = entry.until;
+                reactor = held.pubkey;
+                reactorNym = held.nym;
+            }
+            if (!lane && !messageReactions.get(emoji).has(reactor)) return;
+            messageReactions.get(emoji).delete(reactor);
+            if (this._reactionClaims instanceof Map) this._reactionClaims.delete(messageId + '\n' + emoji);
             if (messageReactions.get(emoji).size === 0) {
                 messageReactions.delete(emoji);
             }
@@ -1377,17 +1443,21 @@ ${this._emojiSectionsHtml()}`;
                 removeTags.push(['d', this.currentChannel]);
             }
 
+            const createdAt = Math.floor(Date.now() / 1000);
+            if (!groupId && this._isChannelKind(originalKind)) removeTags.push(this._channelExpiryTag(createdAt));
+
             const event = {
                 kind: 7,
-                created_at: Math.floor(Date.now() / 1000),
+                created_at: createdAt,
                 tags: removeTags,
                 content: emoji,
-                pubkey: this.pubkey
+                pubkey: reactor
             };
 
             if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
                 if (group) {
+                    if (held) this._holdGroupReactionClaim(groupId, held);
                     this._queueGroupReaction(groupId, messageId, emoji, 'remove');
                     return;
                 }
@@ -1405,13 +1475,13 @@ ${this._emojiSectionsHtml()}`;
                     tags: [['e', messageId], ['p', targetPubkey], ['k', '1059'], ['action', 'remove'],
                         ...this.customEmojiTagsForContent(emoji)],
                     content: emoji,
-                    pubkey: this.pubkey
+                    pubkey: reactor
                 };
-                await this._sendGiftWrapsAsync([this.pubkey, peer], reactionRumor, null);
+                await this._sendGiftWrapsAsync([reactor, peer], reactionRumor, null, null, held ? { claim: held } : {});
                 return;
             }
 
-            const signedEvent = await this.signEvent(event);
+            const signedEvent = await (held ? this._signClaimed(event, held) : this.signEvent(event));
 
             if (signedEvent) {
                 this.sendToRelay(["EVENT", signedEvent]);
@@ -1422,7 +1492,8 @@ ${this._emojiSectionsHtml()}`;
                 if (!this.reactions.has(messageId)) this.reactions.set(messageId, new Map());
                 const mr = this.reactions.get(messageId);
                 if (!mr.has(emoji)) mr.set(emoji, new Map());
-                mr.get(emoji).set(this.pubkey, this.nym);
+                mr.get(emoji).set(reactor, reactorNym);
+                this._noteReactionClaim(messageId, emoji, held, heldUntil);
                 this.persistReactions(messageId);
                 this.updateMessageReactions(messageId);
                 this.displaySystemMessage('Failed to sign reaction removal');
@@ -1431,7 +1502,8 @@ ${this._emojiSectionsHtml()}`;
             if (!this.reactions.has(messageId)) this.reactions.set(messageId, new Map());
             const mr = this.reactions.get(messageId);
             if (!mr.has(emoji)) mr.set(emoji, new Map());
-            mr.get(emoji).set(this.pubkey, this.nym);
+            mr.get(emoji).set(reactor, reactorNym);
+            this._noteReactionClaim(messageId, emoji, held, heldUntil);
             this.updateMessageReactions(messageId);
         }
     },

@@ -179,13 +179,22 @@
     }
 
     const SIDEBAR_MIN = 240;
-    const SIDEBAR_MAX = 400;
-    const SIDEBAR_DEFAULT = 290;
+    const SIDEBAR_MAX = 560;
+    const SIDEBAR_DEFAULT = 400;
+    const SIDEBAR_LEGACY_DEFAULT = 290;
 
     function clampSidebarWidth(w) {
         const n = Number(w);
         if (!isFinite(n) || (typeof w === 'string' && !w.trim())) return SIDEBAR_DEFAULT;
         return Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, n)));
+    }
+
+    function savedSidebarWidth(saved, legacy) {
+        const num = (v) => (v == null || (typeof v === 'string' && !v.trim()) ? NaN : Number(v));
+        if (isFinite(num(saved))) return clampSidebarWidth(num(saved));
+        if (!isFinite(num(legacy))) return null;
+        const px = clampSidebarWidth(num(legacy));
+        return px === SIDEBAR_LEGACY_DEFAULT || px >= SIDEBAR_DEFAULT ? null : px;
     }
 
     const COLUMN_MIN = 280;
@@ -208,6 +217,7 @@
         group: Object.freeze(['video', 'audio']),
         mesh: Object.freeze(['addDevice', 'ghost'])
     });
+    const HEADER_PHONE_MORE = Object.freeze(['channel']);
     const HEADER_KINDS = Object.freeze({
         channel: 'channel', geohash: 'channel', thread: 'channel',
         pm: 'pm', bot: 'pm', group: 'group', groupcall: 'group', mesh: 'mesh'
@@ -227,17 +237,22 @@
         const min = x.min == null ? HEADER_MIN_TITLE : Number(x.min);
         const base = Number(x.base) || 0;
         const more = !!x.more;
+        const all = !!x.phone && HEADER_PHONE_MORE.indexOf(x.kind) >= 0;
         let room = base;
         let shown = more;
         const moved = [];
-        if (room < min) {
+        if (room < min || all) {
             for (const id of order) {
                 if (present.indexOf(id) < 0 || HEADER_ESSENTIAL.indexOf(id) >= 0) continue;
                 moved.push(id);
                 if (shown) room += step;
                 else shown = true;
-                if (room >= min) break;
+                if (!all && room >= min) break;
             }
+        }
+        if (all) {
+            if (!shown) room -= step;
+            return { moved, room, more: true };
         }
         if (room <= base) return { moved: [], room: base, more };
         return { moved, room, more: shown };
@@ -254,7 +269,7 @@
 
     G.NymLayoutModel = {
         MAX, DOCK_MIN, SETTINGS_TWO_PANE_MIN, DOCK_WIDTH, READ_CH, CH_EM, PREVIEW_BODY_MIN_EM,
-        stripMarkdown, rowPreview, rowPreviewParts, mentionSuffixRanges, relativeTime, infoPanelMode, settingsMode, chatHeaderHeight, CHAT_HEADER_H_COMPACT, CHAT_HEADER_H_WIDE, readWidthPx, notifGroupKey, groupNotifications, formatToolbarVisible, ROLE_SECTIONS, memberSections, presenceClass, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_DEFAULT, clampSidebarWidth, COLUMN_MIN, COLUMN_MAX, COLUMN_DEFAULT, ADD_RAIL, clampColumnWidth,
-        HEADER_MIN_TITLE, HEADER_BACK_MIN_TITLE, HEADER_ESSENTIAL, HEADER_PRIORITY, HEADER_KINDS, headerActionMetrics, headerOverflow, headerBackPlan
+        stripMarkdown, rowPreview, rowPreviewParts, mentionSuffixRanges, relativeTime, infoPanelMode, settingsMode, chatHeaderHeight, CHAT_HEADER_H_COMPACT, CHAT_HEADER_H_WIDE, readWidthPx, notifGroupKey, groupNotifications, formatToolbarVisible, ROLE_SECTIONS, memberSections, presenceClass, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_DEFAULT, clampSidebarWidth, savedSidebarWidth, COLUMN_MIN, COLUMN_MAX, COLUMN_DEFAULT, ADD_RAIL, clampColumnWidth,
+        HEADER_MIN_TITLE, HEADER_BACK_MIN_TITLE, HEADER_ESSENTIAL, HEADER_PRIORITY, HEADER_PHONE_MORE, HEADER_KINDS, headerActionMetrics, headerOverflow, headerBackPlan
     };
 })();

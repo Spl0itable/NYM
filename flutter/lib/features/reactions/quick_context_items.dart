@@ -17,6 +17,7 @@ import '../chat_tools/chat_tools_ui.dart';
 import '../i18n/i18n.dart';
 import '../reports/report_record.dart';
 import '../zaps/zap_modal.dart';
+import '../../widgets/common/nym_label.dart' show isolateNym;
 import '../toasts/toast_center.dart';
 import 'message_actions.dart';
 import 'quick_react_popup.dart';
@@ -66,6 +67,9 @@ final RegExp _hex64 = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
     hexId: _hex64.hasMatch(message.id),
     bot: message.isBot,
     anonLane: message.anonLane || (stored?.anonLane ?? false),
+    noReport: !ref
+        .read(nostrControllerProvider)
+        .reportTargetAllowed(pubkey, message: message),
   );
   return (facts: facts, stored: stored, modDelete: modDelete);
 }
@@ -169,28 +173,30 @@ Future<void> _report(
   String fullNym,
 ) async {
   final controller = read(nostrControllerProvider);
+  if (!controller.reportTargetAllowed(message.pubkey, message: message)) return;
   final entry = controller.reportEntryBlocked(message.pubkey, message.id);
   if (entry.isNotEmpty) {
     controller.showReportRefusal(entry);
     return;
   }
+  final reportId = controller.reportMessageId(message.id);
   await ReportModal.show(
     context,
     targetNym: fullNym,
-    hasMessage: message.id.isNotEmpty,
+    hasMessage: reportId != null,
     reportedChanges: controller.reportedRevision,
     messageNote: controller.reportMessageLockedNote(message.pubkey, message.id),
     alreadyReported: (reportMessage) {
       final k = ReportRecord.keyFor(
           pubkey: message.pubkey,
-          messageId: message.id,
+          messageId: reportId,
           includeMessage: reportMessage);
       return controller.isTargetReported(k) ? controller.reportRefusal(k) : null;
     },
     onSubmit: (type, details, reportMessage) {
       controller.submitReport(
         pubkey: message.pubkey,
-        messageId: reportMessage ? message.id : null,
+        messageId: reportMessage ? reportId : null,
         type: type,
         details: details,
       );
@@ -205,14 +211,16 @@ Future<void> _zap(
   String baseNym,
 ) async {
   if (read(nostrControllerProvider).anonLaneZapRefused(message.id)) return;
-  showToast(tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
+  showToast(tr('Checking if @{nym} can receive zaps...',
+      {'nym': isolateNym(baseNym)}));
   final String? lnAddr;
   try {
     lnAddr = await read(nostrControllerProvider)
         .resolveLightningAddressForZap(message.pubkey);
   } catch (_) {
     showToast(
-        tr('Failed to check if @{nym} can receive zaps', {'nym': baseNym}));
+        tr('Failed to check if @{nym} can receive zaps',
+            {'nym': isolateNym(baseNym)}));
     return;
   }
   if (lnAddr == null || lnAddr.isEmpty) {

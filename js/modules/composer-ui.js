@@ -139,9 +139,9 @@
         },
 
         _composerBasePlaceholder() {
-            return typeof this._botChatOpen === 'function' && this._botChatOpen()
-                ? 'Message Nymbot, ? for commands...'
-                : 'Message, / for commands, ? for Nymbot...';
+            if (typeof this._threadRootForSend === 'function' && this._threadRootForSend()) return 'Reply in thread...';
+            if (typeof this._botChatOpen === 'function' && this._botChatOpen()) return 'Message Nymbot, ? for commands...';
+            return this.inPMMode ? 'Message, / for commands...' : 'Message, / for commands, ? for Nymbot...';
         },
 
         _syncComposerPlaceholder() {

@@ -52,6 +52,37 @@ String normalizeToastText(String? text) => (text ?? '')
     .replaceAll(RegExp(r'\s+'), ' ')
     .trim();
 
+const Set<int> _toastBreaks = {0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x85, 0x2028, 0x2029};
+
+String shownToastText(String? text) {
+  final s = text ?? '';
+  final out = StringBuffer();
+  final plain = StringBuffer();
+  var depth = 0;
+  void flush() {
+    out.write(plain
+        .toString()
+        .replaceAll(RegExp('[‘’]'), "'")
+        .replaceAll(RegExp(r'\s+'), ' '));
+    plain.clear();
+  }
+
+  for (final c in s.codeUnits) {
+    if (c >= 0x2066 && c <= 0x2068) {
+      if (depth == 0) flush();
+      depth++;
+      out.writeCharCode(c);
+    } else if (depth > 0) {
+      if (c == 0x2069) depth--;
+      out.writeCharCode(_toastBreaks.contains(c) ? 0x20 : c);
+    } else {
+      plain.writeCharCode(c);
+    }
+  }
+  flush();
+  return out.toString().trim();
+}
+
 ToastKind classifyToast(String? text) {
   final s = normalizeToastText(text);
   if (s.startsWith('❌')) return ToastKind.error;
@@ -89,7 +120,8 @@ class ToastItem {
     this.paused = false,
     this.remaining = 0,
     this.action,
-  });
+    String? shown,
+  }) : shown = shown ?? text;
 
   final int id;
   final String key;
@@ -99,6 +131,7 @@ class ToastItem {
   final bool paused;
   final int remaining;
   final String? action;
+  final String shown;
 
   ToastItem copyWith({int? expiresAt, bool? paused, int? remaining}) =>
       ToastItem(
@@ -110,6 +143,7 @@ class ToastItem {
         paused: paused ?? this.paused,
         remaining: remaining ?? this.remaining,
         action: action,
+        shown: shown,
       );
 
   Map<String, Object?> toJson() => {
@@ -193,6 +227,7 @@ ToastPush pushToast(ToastQueue q, String text, ToastKind? kind, int now,
       id: seq,
       key: key,
       text: normalizeToastText(text),
+      shown: shownToastText(text),
       kind: k,
       expiresAt: now + (hasAction ? ToastConfig.undoMs : toastDurationMs(text, k)),
       action: hasAction ? label : null,

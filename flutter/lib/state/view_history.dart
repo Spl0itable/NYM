@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../features/mesh/mesh_controller.dart' show meshScreenOpenProvider;
 import 'app_state.dart';
+import 'settings_provider.dart';
 
 @immutable
 class ViewHistoryEntry {
@@ -59,6 +60,10 @@ class ViewHistory {
     _index = _entries.length - 1;
   }
 
+  void dropForward() {
+    if (_index >= 0) _entries.removeRange(_index + 1, _entries.length);
+  }
+
   ViewHistoryEntry? step(int delta) => jump(_index + delta);
 
   ViewHistoryEntry? jump(int index) {
@@ -112,6 +117,9 @@ bool _goToEntry(ProviderContainer c, ViewHistory history, ViewHistoryEntry? entr
     history.navigating = false;
     return true;
   }
+  final across = view != null &&
+      view != c.read(appStateProvider).view &&
+      c.read(settingsProvider).useColumns;
   if (entry.mesh || view == null) {
     c.read(meshScreenOpenProvider.notifier).state = true;
   } else {
@@ -122,7 +130,7 @@ bool _goToEntry(ProviderContainer c, ViewHistory history, ViewHistoryEntry? entr
     if (view != null) {
       final root = entry.threadRoot;
       final target = root == null ? null : ActiveThread(view: view, rootId: root);
-      if (c.read(activeThreadProvider) != target) {
+      if (!(across && target == null) && c.read(activeThreadProvider) != target) {
         c.read(activeThreadProvider.notifier).state = target;
       }
     }

@@ -2482,14 +2482,13 @@ Object.assign(NYM.prototype, {
     },
 
     applyTheme(theme) {
+        const prev = this._appliedTheme;
+        const changed = prev !== theme;
+        const recolour = changed && (prev === undefined || prev === 'bitchat' || theme === 'bitchat');
         this._appliedTheme = theme;
-        document.body.classList.remove('theme-ghost', 'theme-bitchat');
-
-        if (theme === 'ghost') {
-            document.body.classList.add('theme-ghost');
-        } else if (theme === 'bitchat') {
-            document.body.classList.add('theme-bitchat');
-        }
+        if (changed) this._switchWithoutFades();
+        document.body.classList.toggle('theme-ghost', theme === 'ghost');
+        document.body.classList.toggle('theme-bitchat', theme === 'bitchat');
 
         const isLight = document.body.classList.contains('light-mode');
 
@@ -2605,26 +2604,29 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        ['--primary', '--secondary', '--text', '--text-dim', '--text-bright', '--lightning', '--field-placeholder'].forEach(v => {
-            document.documentElement.style.removeProperty(v);
-            document.body.style.removeProperty(v);
-        });
-
         const mode = isLight ? 'light' : 'dark';
         const selectedTheme = themes[theme] && themes[theme][mode];
+        const want = new Map();
         if (selectedTheme) {
             Object.entries(selectedTheme).forEach(([key, value]) => {
-                const cssVar = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
-                document.body.style.setProperty(cssVar, value);
+                want.set(`--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`, String(value));
             });
             // Wallpaper patterns tint themselves from these RGB components.
             const rgb = this._hexToRgb(selectedTheme.primary);
             if (rgb) {
-                document.body.style.setProperty('--wp-r', rgb.r);
-                document.body.style.setProperty('--wp-g', rgb.g);
-                document.body.style.setProperty('--wp-b', rgb.b);
+                want.set('--wp-r', String(rgb.r));
+                want.set('--wp-g', String(rgb.g));
+                want.set('--wp-b', String(rgb.b));
             }
         }
+
+        ['--primary', '--secondary', '--text', '--text-dim', '--text-bright', '--lightning', '--field-placeholder'].forEach(v => {
+            document.documentElement.style.removeProperty(v);
+            if (!want.has(v)) document.body.style.removeProperty(v);
+        });
+        want.forEach((value, cssVar) => {
+            if (document.body.style.getPropertyValue(cssVar) !== value) document.body.style.setProperty(cssVar, value);
+        });
         if (window.NymNameContrast) {
             window.NymNameContrast.apply(document.body, {
                 primary: selectedTheme ? selectedTheme.primary : this.themeToken('--primary'),
@@ -2633,8 +2635,27 @@ Object.assign(NYM.prototype, {
                 ghost: theme === 'ghost'
             });
         }
-        this.refreshMessages();
+        if (recolour) this.refreshMessages();
         this._emitThemeChange();
+    },
+
+    _switchWithoutFades() {
+        const body = document.body;
+        if (!body || typeof requestAnimationFrame !== 'function' || typeof setTimeout !== 'function') return;
+        if (!body.classList.contains('theme-swap')) body.classList.add('theme-swap');
+        const seq = (this._themeSwapSeq || 0) + 1;
+        this._themeSwapSeq = seq;
+        let framed = false;
+        const end = () => {
+            if (this._themeSwapSeq === seq) body.classList.remove('theme-swap');
+        };
+        requestAnimationFrame(() => {
+            framed = true;
+            setTimeout(end, 0);
+        });
+        setTimeout(() => setTimeout(() => {
+            if (!framed && !document.hidden) end();
+        }, 1000), 0);
     },
 
     onThemeChange(fn) {
@@ -2695,6 +2716,7 @@ Object.assign(NYM.prototype, {
 
     applyColorMode(mode) {
         const resolved = mode || this.resolveColorMode();
+        if (document.body.classList.contains('light-mode') !== (resolved === 'light')) this._switchWithoutFades();
         if (resolved === 'light') {
             document.body.classList.add('light-mode');
         } else {

@@ -32,6 +32,7 @@ const POOL_PROBE_BACKOFF_MAX_MS = 10 * 60 * 1000;
 const POOL_CONNECT_TIMEOUT_MS = 12000;
 const RECONNECT_QUICK_MAX_MS = 250;
 const RECONNECT_QUICK_AFTER_OPEN_MS = 2000;
+const RATE_LIMIT_RECONNECT_STEP = 4;
 
 Object.assign(NYM.prototype, {
 
@@ -2370,6 +2371,8 @@ Object.assign(NYM.prototype, {
         if (this.settings && this.settings.groupChatPMOnlyMode) {
             allRelays = this.defaultRelays;
             geoRelayUrls = [];
+        } else if (this.settings && this.settings.lowDataMode) {
+            allRelays = this.defaultRelays;
         }
         const blocked = new Set(['wss://relay.nosflare.com', 'wss://relay.nostraddress.com', 'wss://nostr-server-production.up.railway.app']);
         const permanent = this._permanentBlacklist || new Set();
@@ -2551,8 +2554,11 @@ Object.assign(NYM.prototype, {
         if (!this._getApiHost()) return;
 
         const now = Date.now();
-        if (this._lastPoolReconnectSchedule && now - this._lastPoolReconnectSchedule < 2000) return;
+        const rateLimited = !!(opts && opts.rateLimited);
+        if (!rateLimited && !(opts && opts.closed) && this._lastPoolReconnectSchedule && now - this._lastPoolReconnectSchedule < 2000) return;
         this._lastPoolReconnectSchedule = now;
+        const from = this._poolReconnectRetries || 0;
+        const stepUp = rateLimited ? Math.max(0, RATE_LIMIT_RECONNECT_STEP - from) : 0;
 
         const attempt = (retries, quick) => {
             if (this._isAnyWorkerPoolOpen()) {
@@ -2565,7 +2571,7 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            const delay = this._poolReconnectDelay(quick ? -1 : retries, Math.random());
+            const delay = this._poolReconnectDelay(quick ? -1 : retries + stepUp, Math.random());
             this.updateConnectionStatus(retries > 0
                 ? `Reconnecting (attempt ${retries + 1})...`
                 : 'Reconnecting...');
@@ -2611,7 +2617,7 @@ Object.assign(NYM.prototype, {
         };
 
         this._poolReconnecting = true;
-        attempt(this._poolReconnectRetries || 0, !(opts && opts.quick === false));
+        attempt(from, !(opts && opts.quick === false));
     },
 
     // Retries until reconnected or no longer needed; _ensureAllShardsConnected is the safety net.
@@ -2677,7 +2683,13 @@ Object.assign(NYM.prototype, {
             setTimeout(fire, delay);
         };
 
-        attempt(0, !!(opts && opts.quick));
+        let from = 0;
+        if (opts && opts.rateLimited) {
+            if (!this._shardRateStep) this._shardRateStep = new Map();
+            from = Math.max(RATE_LIMIT_RECONNECT_STEP, this._shardRateStep.get(shardId) || 0);
+            if (!opts.quick) this._shardRateStep.set(shardId, from + 1);
+        }
+        attempt(from, !!(opts && opts.quick));
     },
 
     _poolShardConnectPendingMs(entry) {
@@ -3092,8 +3104,7 @@ Object.assign(NYM.prototype, {
         let geoRelayUrls = [];
 
         if (this.settings && this.settings.lowDataMode) {
-            // Low data: only defaults + DM relays (geo added on demand).
-            geoRelayUrls = [];
+            geoRelayUrls = [...this.currentGeoRelays];
         } else {
             geoRelayUrls = (this.geoRelays || []).map(r => r.url || r).filter(Boolean);
         }
@@ -3211,8 +3222,8 @@ Object.assign(NYM.prototype, {
                 wasOpen = true;
 
                 ws.send(JSON.stringify(['RELAYS', {
-                    relays: shard.relays || [],
-                    dmRelays: shard.dmRelays || []
+                    relays: poolEntry.relays || [],
+                    dmRelays: poolEntry.dmRelays || []
                 }]));
 
                 if (this._relayUnsupportedKinds && this._relayUnsupportedKinds.size > 0) {
@@ -3246,6 +3257,7 @@ Object.assign(NYM.prototype, {
                     if (!Array.isArray(msg)) return;
 
                     const msgType = msg[0];
+                    if (!poolEntry._framed && this._shardRateStep) this._shardRateStep.delete(poolEntry.id);
                     poolEntry._framed = true;
 
                     if (poolEntry._pendingFor) {
@@ -3340,7 +3352,7 @@ Object.assign(NYM.prototype, {
             let wasOpen = false;
             let errorRejected = false;
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
                 clearTimeout(timeout);
 
                 if (poolEntry._pendingFor) {
@@ -3366,7 +3378,9 @@ Object.assign(NYM.prototype, {
                     return;
                 }
 
-                const quick = this._reconnectQuick(poolEntry._openedAt ? Date.now() - poolEntry._openedAt : null);
+                const rateLimited = this._closeNamesRateLimit(event);
+                if (rateLimited && !poolEntry._framed) this._proxyDownFailure(Date.now(), shard.id, this.poolSockets.length, true);
+                const quick = (!rateLimited || !!poolEntry._framed) && this._reconnectQuick(poolEntry._openedAt ? Date.now() - poolEntry._openedAt : null);
                 this._noteLiveGap(poolEntry._upstreamAt, true);
                 if (!this._reconnectingShards) this._reconnectingShards = new Set();
                 this._reconnectingShards.add(shard.id);
@@ -3387,9 +3401,9 @@ Object.assign(NYM.prototype, {
                     this.poolReady = false;
                     this.connected = false;
                     this.updateConnectionStatus('Disconnected');
-                    this._schedulePoolReconnect({ quick });
+                    this._schedulePoolReconnect({ quick, rateLimited, closed: true });
                 } else {
-                    this._reconnectPoolShard(shard, { quick });
+                    this._reconnectPoolShard(shard, { quick, rateLimited });
                 }
             };
 
@@ -4828,20 +4842,26 @@ Object.assign(NYM.prototype, {
         };
 
         // Each socket gets only its own shard's relays; sockets for vanished shards are closed.
+        let dropped = false;
         for (const p of this.poolSockets) {
             const shard = shardById.get(p.id);
             if (!shard) {
+                this._dropPoolNext(p);
                 p._closing = true;
                 try { if (p.ws) p.ws.close(); } catch (_) { }
+                dropped = true;
                 continue;
             }
-            if (!p.ws || p.ws.readyState !== WebSocket.OPEN) continue;
-            if (arraysEqual(p.relays, shard.relays)) continue;
-            p.relays = shard.relays;
-            p.dmRelays = shard.dmRelays || [];
-            this._safeWsSend(p.ws, JSON.stringify(['RELAYS', { relays: shard.relays, dmRelays: shard.dmRelays || [] }]), { critical: true });
+            for (const e of [p, p._next]) {
+                if (!e || !e.ws || (e.ws.readyState !== WebSocket.OPEN && e.ws.readyState !== WebSocket.CONNECTING)) continue;
+                if (arraysEqual(e.relays, shard.relays)) continue;
+                e.relays = shard.relays;
+                e.dmRelays = shard.dmRelays || [];
+                if (e.ws.readyState === WebSocket.OPEN) this._safeWsSend(e.ws, JSON.stringify(['RELAYS', { relays: shard.relays, dmRelays: shard.dmRelays || [] }]), { critical: true });
+            }
         }
         this.poolSockets = this.poolSockets.filter(p => shardById.has(p.id));
+        if (dropped) this._mergePoolStatus();
 
         this._ensureAllShardsConnected();
     },

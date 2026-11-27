@@ -9,6 +9,7 @@ import '../../state/settings_provider.dart';
 import '../../widgets/context_menu/interaction_hooks.dart'
     show pendingComposerActionProvider;
 import '../chat_tools/chat_tools_providers.dart';
+import '../commands/command_handler.dart' show nickKnownIn;
 import '../group_tools/group_tools_providers.dart';
 import '../i18n/i18n.dart';
 import '../notifications/self_reference.dart';
@@ -34,7 +35,11 @@ bool chatNavMentions(Ref ref, Message m) {
   if (hit != null && hit.$1 == m.content && hit.$2 == nym && hit.$3 == pubkey) {
     return hit.$4;
   }
-  final r = contentMentionsSelf(content: m.content, nym: nym, pubkey: pubkey);
+  final r = contentMentionsSelf(
+      content: m.content,
+      nym: nym,
+      pubkey: pubkey,
+      known: nickKnownIn(ref.read(usersProvider)));
   _selfMentionMemo[m] = (m.content, nym, pubkey, r);
   return r;
 }

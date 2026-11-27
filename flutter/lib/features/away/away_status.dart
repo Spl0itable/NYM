@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import '../../core/utils/nick_parse.dart';
 import 'away_sync.dart';
 
 class AwayStatusEngine {
@@ -180,7 +181,8 @@ class AwayStatusEngine {
     )) {
       return;
     }
-    final key = AwaySync.sessionKey(self, nym);
+    final label = nickMentionText(nym, senderPubkey).substring(1);
+    final key = AwaySync.sessionKey(self, senderPubkey);
     if (!_replied.add(key)) return;
     final armed = _state!;
     late final Timer timer;
@@ -193,12 +195,12 @@ class AwayStatusEngine {
           current.updatedAt != armed.updatedAt) {
         return;
       }
-      if (AwaySync.hasOwnAutoReply(messagesIn(channelKey), self, nym,
+      if (AwaySync.hasOwnAutoReply(messagesIn(channelKey), self, label,
           AwaySync.sinceSec(current))) {
         return;
       }
       unawaited(sendReply(
-              channelKey, AwaySync.autoReplyText(nym, current.message))
+              channelKey, AwaySync.autoReplyText(label, current.message))
           .catchError((_) {}));
     });
     _timers.add(timer);

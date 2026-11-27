@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import '../../core/utils/nym_utils.dart';
+import '../../widgets/common/nym_label.dart' show isolateNymParts;
 import '../../models/group.dart';
 import '../../models/message.dart';
 import '../chat_tools/chat_tools_service.dart' show ChatToolsPrefs;
@@ -327,6 +328,9 @@ class GroupToolsService {
 
   String _tag(String pk) => '${_nym(pk)}#${getPubkeySuffix(pk)}';
 
+  String _isolatedTag(String pk) =>
+      isolateNymParts(_nym(pk), getPubkeySuffix(pk));
+
   String _shownTag(String pk) {
     final mask = hooks.personMask?.call(pk) ?? '';
     return mask.isEmpty ? _tag(pk) : '$mask#${getPubkeySuffix(pk)}';
@@ -621,7 +625,7 @@ class GroupToolsService {
           'group': _groupLabel(g),
         }),
         _t('{nym} wants to join. Open the group menu to approve or decline.', {
-          'nym': _tag(joiner),
+          'nym': _isolatedTag(joiner),
         }),
         groupId,
         'group',
@@ -1376,7 +1380,7 @@ class GroupToolsService {
       } catch (_) {}
       if (await declineHidden()) return;
     }
-    final who = '${_nym(sender)}#${sender.substring(sender.length - 4)}';
+    final who = _isolatedTag(sender);
     hooks.notify?.call(
       _t('Call link: {name}', {'name': link.name}),
       _t('{nym} wants to join', {'nym': who}),

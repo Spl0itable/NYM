@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart' show Size;
 
-import '../../core/utils/nym_utils.dart' show capNym;
+import '../../core/utils/nym_utils.dart' show receivedNymBase;
 import '../messages/bitchat_verify.dart' show kBitchatVerifyLabel, labelBitchatVerifyLinks;
 import 'topojson.dart';
 
@@ -978,7 +978,7 @@ GeoPeekSummary summarizeGeoPeek(
         GeoPeekMessage(
           id: e['id'] as String,
           pubkey: e['pubkey'] as String,
-          nym: capNym(_tagValue(e['tags'], 'n') ?? ''),
+          nym: receivedNymBase(_tagValue(e['tags'], 'n'), e['pubkey'] as String),
           content: _clip(labelBitchatVerifyLinks(e['content'] as String, verifyLabel)),
           createdAt: e['created_at'] as int,
         ),

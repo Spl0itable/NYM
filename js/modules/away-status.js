@@ -186,11 +186,11 @@
                 state: this._awayState, selfPubkey: self, senderPubkey: o.senderPubkey,
                 mentioned: o.mentioned, historical: o.historical
             })) return;
-            const key = A().sessionKey(self, o.nym);
+            const NP = window.NymNickParse;
+            const label = NP.mentionText(o.nym, o.senderPubkey).slice(1);
+            const key = A().sessionKey(self, o.senderPubkey);
             if (!this._awayReplied) this._awayReplied = new Set();
-            let seen = this._awayReplied.has(key);
-            try { seen = seen || !!sessionStorage.getItem(key); sessionStorage.setItem(key, '1'); } catch (_) { }
-            if (seen) return;
+            if (this._awayReplied.has(key)) return;
             this._awayReplied.add(key);
             const armed = this._awayState;
             if (!this._awayTimers) this._awayTimers = new Set();
@@ -200,8 +200,8 @@
                 if (this.pubkey !== self || !current || !current.enabled || current.updatedAt !== armed.updatedAt) return;
                 const list = (this.messages && this.messages.get('#' + o.geohash)) || [];
                 const shown = list.map((m) => ({ pubkey: m.pubkey, content: m.content, createdAt: m.created_at }));
-                if (A().hasOwnAutoReply(shown, self, o.nym, A().sinceSec(current))) return;
-                Promise.resolve(this.publishMessage(A().autoReplyText(o.nym, current.message), o.geohash, o.geohash))
+                if (A().hasOwnAutoReply(shown, self, label, A().sinceSec(current))) return;
+                Promise.resolve(this.publishMessage(A().autoReplyText(label, current.message), o.geohash, o.geohash))
                     .catch(() => { });
             }, A().delayMs(Math.random()));
             this._awayTimers.add(timer);

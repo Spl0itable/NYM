@@ -564,7 +564,8 @@ window.nymHaptic = function (kind) {
         },
         'jumpToNostrRef':             function (e, t) {
             if (e && e.stopPropagation) e.stopPropagation();
-            nym().jumpToNostrRef(t && t.dataset ? t.dataset.nostrEventId : '');
+            var card = t && typeof t.closest === 'function' ? t.closest('[data-nostr-event-id]') : null;
+            nym().jumpToNostrRef(card ? card.getAttribute('data-nostr-event-id') : '');
         },
         'openNostrProfileCard':       function (e, t) {
             if (e && e.preventDefault) e.preventDefault();

@@ -11,6 +11,7 @@ import 'features/calls/call_providers.dart';
 import 'features/calls/call_wake.dart';
 import 'features/calls/ring_setting.dart';
 import 'core/theme/nym_theme.dart';
+import 'core/theme/nym_theme_swap.dart';
 import 'features/accounts/account_host.dart';
 import 'features/ai_consent/ai_consent.dart';
 import 'features/groups/group_invites_sheet.dart';
@@ -437,6 +438,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       navigatorObservers: [EventToastCenter.instance.observer],
       debugShowCheckedModeBanner: false,
       theme: buildNymThemeData(colors, a11y: ref.watch(nymA11yProvider)),
+      themeAnimationStyle: AnimationStyle.noAnimation,
       // Tint system bars per color mode and flip icon brightness so they stay legible.
       builder: (context, child) {
         final isLight = colors.isLight;
@@ -464,7 +466,9 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
                             child: NearbyInboxHost(
                                 navigatorContext: () => _navKey.currentContext,
                                 child: DuoRailFrame(
-                                    child: child ?? const SizedBox.shrink()))))),
+                                    child: NymThemeSwap(
+                                        colors: colors,
+                                        child: child ?? const SizedBox.shrink())))))),
               ),
             ),
           ),

@@ -186,7 +186,8 @@
         const rr = row.getBoundingClientRect();
         const rcs = getComputedStyle(row);
         const top = Math.max(clip.top + EDGE, rr.top);
-        const time = !bubbles && row.closest('.cv-list') ? row.querySelector(':scope > .message-time') : null;
+        const stacked = !!row.closest('.cv-list') || rcs.flexDirection === 'column';
+        const time = !bubbles && stacked ? row.querySelector(':scope > .message-time') : null;
         const tr = time ? time.getBoundingClientRect() : null;
         let x;
         let y;

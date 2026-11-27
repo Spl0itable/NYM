@@ -216,10 +216,10 @@
             });
         },
 
-        _dsTopRow(bound) {
+        _dsTopRow(bound, top) {
             const rows = (bound.rows && bound.rows.every((r, i) => i > 2 || r.isConnected)) ? bound.rows : this._dsRows(bound.list);
             if (!rows.length) return null;
-            const viewTop = bound.sc.getBoundingClientRect().top;
+            const viewTop = top === undefined ? bound.sc.getBoundingClientRect().top : top;
             let lo = 0, hi = rows.length - 1, hit = -1;
             while (lo <= hi) {
                 const mid = (lo + hi) >> 1;
@@ -231,10 +231,11 @@
         _dsFloatUpdate(bound) {
             const { sc, list } = bound;
             if (!sc.isConnected || !list.isConnected) return;
-            const row = this._dsTopRow(bound);
+            const inset = typeof this._cnTopInset === 'function' ? this._cnTopInset({ container: list, scroller: sc }) : 0;
+            const viewTop = sc.getBoundingClientRect().top + inset;
+            const row = this._dsTopRow(bound, viewTop);
             const now = this._dsNow();
             const key = row ? this._dsKeyOf(row, now) : '';
-            const viewTop = sc.getBoundingClientRect().top;
             const inline = key ? list.querySelector('.day-separator[data-day="' + key + '"]') : null;
             const idleMs = bound.lastScroll ? Date.now() - bound.lastScroll : Infinity;
             const mark = sc.querySelector('.cn-divider');
@@ -258,7 +259,7 @@
                 const span = el.firstElementChild;
                 if (span.textContent !== label) span.textContent = label;
                 el.dataset.day = key;
-                el.style.top = (sc.offsetTop + L().CONFIG.floatTopPx) + 'px';
+                el.style.top = (sc.offsetTop + inset + L().CONFIG.floatTopPx) + 'px';
                 el.style.left = (sc.offsetLeft + sc.clientWidth / 2) + 'px';
             }
             el.classList.toggle('visible', show);

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../core/utils/haptics.dart';
 import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/group_tools/group_tools_ui.dart';
@@ -288,7 +289,7 @@ class _QuickMenuRowState extends State<_QuickMenuRow> {
         onTapUp: (_) => setState(() => _pressed = false),
         onTapCancel: () => setState(() => _pressed = false),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
+          duration: NymThemeSwap.motion(context, const Duration(milliseconds: 120)),
           curve: Curves.ease,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
@@ -319,12 +320,15 @@ Future<void> showPmContextMenu(
   Offset globalPosition,
 ) async {
   if (pubkey.isEmpty) return;
+  final root = Navigator.of(context, rootNavigator: true).context;
   final controller = ref.read(nostrControllerProvider);
+  final notifier = ref.read(appStateProvider.notifier);
   final isBlocked = ref.read(appStateProvider).blockedUsers.contains(pubkey);
 
   final items = <SidebarQuickMenuItem>[
     ...chatNavSidebarItems(ref, 'pm-${pubkey.toLowerCase()}'),
-    ...folderSidebarItems(context, ref, 'pm-${pubkey.toLowerCase()}', at: globalPosition),
+    ...folderSidebarItems(context, ref, 'pm-${pubkey.toLowerCase()}',
+        at: globalPosition, root: root),
     ...chatLockSidebarItems(ref, 'pm-${pubkey.toLowerCase()}'),
     ...chatToolSidebarItems(context, PmLogic.pmStorageKey(pubkey)),
     SidebarQuickMenuItem(
@@ -338,23 +342,22 @@ Future<void> showPmContextMenu(
       svg: NymIcons.logout,
       danger: true,
       onSelected: () async {
-        if (!context.mounted) return;
+        if (!root.mounted) return;
         final ok = await showAppConfirm(
-          context,
+          root,
           tr('Delete this PM conversation?'),
           danger: true,
           okLabel: tr('Delete'),
         );
-        if (!ok || !context.mounted) return;
-        final notifier = ref.read(appStateProvider.notifier);
+        if (!ok || !root.mounted) return;
         // Mark read and drop the unread count so no stale badge survives.
         final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
         notifier.markChannelRead(pubkey, nowSec);
         notifier.markChannelRead(PmLogic.pmStorageKey(pubkey), nowSec);
-        ref.read(appStateProvider).unreadCounts
+        notifier.currentState.unreadCounts
           ..remove(pubkey)
           ..remove(PmLogic.pmStorageKey(pubkey));
-        final view = ref.read(appStateProvider).view;
+        final view = notifier.currentState.view;
         final wasViewing = view.kind == ViewKind.pm && view.id == pubkey;
         notifier.closePM(pubkey);
         controller.dropFolderRefForChat('dm', pubkey);

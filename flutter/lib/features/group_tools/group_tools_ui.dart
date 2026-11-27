@@ -2194,8 +2194,9 @@ Future<void> joinCallLinkFlow(BuildContext context, String input) async {
     _notice(context, tr('Already in a call'));
     return;
   }
-  final host =
-      '${container.read(nostrControllerProvider).gtNym(link.host)}#${link.host.substring(60)}';
+  final host = isolateNymParts(
+      container.read(nostrControllerProvider).gtNym(link.host),
+      getPubkeySuffix(link.host));
   final msg = link.kind == 'video'
       ? tr(
           'Join the video call "{name}" hosted by {host}? The host admits you. Your camera and microphone are used once you join.',

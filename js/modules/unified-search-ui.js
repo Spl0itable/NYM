@@ -545,7 +545,7 @@
                 const it = row.item;
                 const fake = { preventDefault() { }, stopPropagation() { }, clientX: 0, clientY: 0, target: document.body };
                 const suffix = this.getPubkeySuffix(it.pubkey);
-                this.showContextMenu(fake, `${window.NymSuffix.sqHtml(it.nym, suffix)}`, it.pubkey, null, null, true);
+                this.showContextMenu(fake, `${it.nym}#${suffix}`, it.pubkey, null, null, true);
                 return;
             }
             if (row.kind === 'message') this.unifiedSearchJump(row.item.key, row.item.msg);
@@ -610,10 +610,23 @@
             return { type: 'channel', channel: name, geohash: geo, storageKey: key, isPM: false };
         },
 
+        _usLeaveThread() {
+            this.closeThreadView({ nav: false });
+            if (this._threadTail && typeof this._threadAttachTail === 'function') this._threadAttachTail(this._threadTail, true);
+            const h = this.navigationHistory;
+            const at = h && h[this.navigationIndex];
+            if (!at || at.type !== 'thread' || this.navigationIndex <= 0) return;
+            this.navigationIndex--;
+            this.navigationHistory = h.slice(0, this.navigationIndex + 1);
+            try { history.replaceState(this._navState(), ''); } catch { }
+            if (typeof this._updateNavButtons === 'function') this._updateNavButtons();
+        },
+
         unifiedSearchJump(key, msg) {
             if (!key || !msg) return;
             const isPM = key.startsWith('pm-') || key.startsWith('group-');
             const domId = (msg.isPM && msg.nymMessageId) ? msg.nymMessageId : msg.id;
+            if (window.innerWidth <= 1024 && typeof this.closeSidebar === 'function') this.closeSidebar();
             if (this._usCurrentKey() !== key) this._usSwitchTo(key);
             const store = isPM ? this.pmMessages : this.messages;
             const list = (store && store.get(key)) || [];
@@ -626,7 +639,7 @@
                 });
                 return;
             }
-            if (this.activeThread && typeof this.closeThreadView === 'function') this.closeThreadView();
+            if (this.activeThread && typeof this.closeThreadView === 'function') this._usLeaveThread();
             requestAnimationFrame(() => {
                 if (!isPM && typeof this._chWinJumpTo === 'function') this._chWinJumpTo(key, msg.id);
                 const shown = isPM ? this.getFilteredPMMessages(key) : this.getFilteredMessages(key);

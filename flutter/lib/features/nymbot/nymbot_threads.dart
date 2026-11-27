@@ -1,6 +1,7 @@
 /// Nymbot in channel threads: a plain reply under its message continues the conversation with the thread as context.
 library;
 
+import '../../core/utils/nick_parse.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../../state/app_state.dart';
@@ -51,9 +52,6 @@ Message? threadBotReplyTarget(
   return bots.last;
 }
 
-/// The leading @mention to strip; the `[gc:]` token stays because ?guess reads the live game from it.
-final RegExp _rxBotMention = RegExp(r'^@\S+[ \t]+');
-final RegExp _rxZapLine = RegExp(r'^[ \t]*\u26a1.*$', multiLine: true);
 final RegExp _rxBlankRun = RegExp(r'\n{3,}');
 
 /// Entry text without the quote block (and for the bot, its @mention and zap prompt) so the model doesn't mimic the format.
@@ -62,9 +60,7 @@ String threadEntryText(String content, {bool isBot = false}) {
       .split('\n')
       .where((l) => !l.startsWith('>'))
       .join('\n');
-  if (isBot) {
-    text = text.replaceFirst(_rxBotMention, '').replaceAll(_rxZapLine, '');
-  }
+  if (isBot) text = stripNickEnvelope(text);
   return text.replaceAll(_rxBlankRun, '\n\n').trim();
 }
 
@@ -94,7 +90,11 @@ List<Map<String, String>> threadBotConversation(
     var text = threadEntryText(m.content, isBot: _isBotMessage(m, botPubkey));
     if (text.isEmpty) continue;
     if (text.length > _maxEntryChars) text = text.substring(0, _maxEntryChars);
-    entries.add({'author': threadEntryAuthor(m), 'text': text});
+    entries.add({
+      'author': threadEntryAuthor(m),
+      'text': text,
+      if (_hex64.hasMatch(m.pubkey)) 'pubkey': m.pubkey.toLowerCase(),
+    });
   }
   // Normalized like the entries.
   final tail = exclude == null ? '' : threadEntryText(exclude);
@@ -105,4 +105,29 @@ List<Map<String, String>> threadBotConversation(
     return entries.sublist(entries.length - limit);
   }
   return entries;
+}
+
+final RegExp _hex64 = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
+final RegExp _rxSpaces = RegExp(r'\s+');
+
+String _flatText(String s) => s.replaceAll(_rxSpaces, ' ').trim();
+
+List<Map<String, String>> markOwnBotEntries(
+  List<Map<String, String>> conversation,
+  AppState s,
+  String storageKey,
+  String ownPubkey,
+) {
+  final pk = ownPubkey.toLowerCase();
+  if (!_hex64.hasMatch(pk) || conversation.isEmpty) return conversation;
+  final own = <String>{
+    for (final m in s.messages[storageKey] ?? const <Message>[])
+      if (m.pubkey.toLowerCase() == pk) _flatText(threadEntryText(m.content)),
+  }..remove('');
+  return [
+    for (final e in conversation)
+      e.containsKey('pubkey') || !own.contains(_flatText(e['text'] ?? ''))
+          ? e
+          : {...e, 'pubkey': pk},
+  ];
 }

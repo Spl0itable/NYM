@@ -183,7 +183,7 @@ class NostrRefResolver {
     final nymTag = event.tagValue('n');
     final stored = _ref.read(appStateProvider).users[event.pubkey];
     final author = !isPlaceholderNym(nymTag)
-        ? stripPubkeySuffix(nymTag!)
+        ? receivedNymBase(nymTag, event.pubkey)
         : pickDisplayNym(stored?.nym, getNymFromPubkey('nym', event.pubkey));
     final channelTag = event.tagValue('g') ?? event.tagValue('d');
     return NostrRefCardData(

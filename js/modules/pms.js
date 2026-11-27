@@ -3060,6 +3060,12 @@ Object.assign(NYM.prototype, {
         this.channelDOMCache.delete(conversationKey);
         if (typeof this._cacheDelete === 'function') this._cacheDelete('pms', conversationKey);
         this.persistPMMessages(conversationKey);
+        const parked = this._cvActive && typeof this._threadOpenFor === 'function' ? this._threadOpenFor(conversationKey) : null;
+        if (parked && parked.container !== this._threadContainer) {
+            this._threadDropIn(parked.container);
+            const col = this._cvColumnForKey(conversationKey);
+            if (col) this._cvRenderColumn(col);
+        }
         if (this.inPMMode && this.currentPM === pubkey) {
             const container = document.getElementById('messagesContainer');
             if (container) {
@@ -4126,7 +4132,7 @@ Object.assign(NYM.prototype, {
         if (channelEl.dataset.pmHeaderSig === pmHeaderSig) return;
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const lastSeenHtml = typeof this._pmLastSeenHtml === 'function' ? this._pmLastSeenHtml(pubkey) : '';
-        const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterMark}${friendBadge}`;
+        const displayNym = `<span class="pm-name-text">${this.escapeHtml(window.NymSuffix.shown(baseNym))}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterMark}${friendBadge}`;
         channelEl.innerHTML = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk, ringCls)}${displayNym}</span>${lastSeenHtml}`;
         channelEl.dataset.pmHeaderSig = pmHeaderSig;
         // Preserve the header's click-to-open-profile behavior across rebuilds.
@@ -4220,8 +4226,7 @@ Object.assign(NYM.prototype, {
                     newClickable.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        const displayAuthor = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy"><span class="nym-bracket">&lt;</span>${window.NymSuffix.sqHtml(clean, suffix)}${flairHtml}`;
-                        this.showContextMenu(e, displayAuthor, pubkey, rawContent, msgId, false, isPM ? msgId : null);
+                        this.showContextMenu(e, `${clean}#${suffix}`, pubkey, rawContent, msgId, false, isPM ? msgId : null);
                         return false;
                     });
                 }
@@ -4424,10 +4429,9 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         const name = pk ? item.querySelector('.pm-name') : null;
         if (!name) return;
         const want = this.getUserColorClass(pk);
-        for (const cls of [...name.classList]) {
-            if (cls.startsWith('bitchat-user-') && cls !== want) name.classList.remove(cls);
-        }
-        if (want) name.classList.add(want);
+        const stale = [...name.classList].filter((cls) => cls.startsWith('bitchat-user-') && cls !== want);
+        if (stale.length) name.classList.remove(...stale);
+        if (want && !name.classList.contains(want)) name.classList.add(want);
     },
 
     insertPMInOrder(newItem, pmList) {
@@ -4522,7 +4526,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
                 ? `<span class="verified-badge" data-tip="${this.verifiedBot.title}">✓</span>`
                 : '';
         const supporterMark = this._supporterMarkFor(pubkey);
-        const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterMark}${friendBadge}`;
+        const displayNym = `<span class="pm-name-text">${this.escapeHtml(window.NymSuffix.shown(baseNym))}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterMark}${friendBadge}`;
         const lastSeenHtml = this._pmLastSeenHtml(pubkey);
         const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk, ringCls)}${displayNym}</span>${lastSeenHtml}`;
 
@@ -4856,68 +4860,21 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             return;
         }
 
-        // Hex or npub (`normalizePubkeyInput`, users.js), otherwise a nym to look up.
-        const targetInput = this.normalizePubkeyInput(args) || args.trim().replace(/^@/, '');
-
-        if (/^[0-9a-f]{64}$/i.test(targetInput)) {
-            const targetPubkey = targetInput.toLowerCase();
-
-            if (targetPubkey === this.pubkey) {
-                this.displaySystemMessage("You can't send private messages to yourself");
-                return;
-            }
-
-            const targetNym = this.getNymFromPubkey(targetPubkey);
-            this.openUserPM(targetNym, targetPubkey);
+        const targetInput = args.trim();
+        const hit = this.lookupNymOrReport(targetInput);
+        if (hit && hit.ambiguous) return;
+        if (!hit) {
+            this.displaySystemMessage(this.uiText(`User {targetInput} not found`, { targetInput: targetInput.replace(/^@/, '') }));
             return;
         }
 
-        let searchNym = targetInput;
-        let searchSuffix = null;
-
-        const hashIndex = targetInput.indexOf('#');
-        if (hashIndex !== -1) {
-            searchNym = targetInput.substring(0, hashIndex);
-            searchSuffix = targetInput.substring(hashIndex + 1);
-        }
-
-        const matches = [];
-        this.users.forEach((user, pubkey) => {
-            const baseNym = this.stripPubkeySuffix(user.nym);
-            if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                if (searchSuffix) {
-                    if (pubkey.endsWith(searchSuffix)) {
-                        matches.push({ nym: user.nym, pubkey: pubkey });
-                    }
-                } else {
-                    matches.push({ nym: user.nym, pubkey: pubkey });
-                }
-            }
-        });
-
-        if (matches.length === 0) {
-            this.displaySystemMessage(this.uiText(`User {targetInput} not found`, { targetInput }));
-            return;
-        }
-
-        if (matches.length > 1 && !searchSuffix) {
-            const matchList = matches.map(m =>
-                `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
-            ).join(', ');
-            this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(searchNym)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
-            this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
-            return;
-        }
-
-        const targetPubkey = matches[0].pubkey;
-        const targetNym = matches[0].nym;
-
+        const targetPubkey = hit.pubkey;
         if (targetPubkey === this.pubkey) {
             this.displaySystemMessage("You can't send private messages to yourself");
             return;
         }
 
-        this.openUserPM(targetNym, targetPubkey);
+        this.openUserPM(hit.nym || this.getNymFromPubkey(targetPubkey), targetPubkey);
     },
 
     openNewPMModal() {
@@ -5333,7 +5290,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
     },
 
     loadOlderPMMessages(conversationKey, targetId) {
-        if (this.activeThread) return false;
+        if (this._cvLoadCtx ? this._threadViewOccupies(this._cvLoadCtx.container) : this.activeThread) return false;
         const container = this._cvLoadCtx?.container || document.getElementById('messagesContainer');
         const scroller = this._cvLoadCtx?.scroller || this._getMessagesScroller();
         if (!container || !scroller) return false;
@@ -5391,7 +5348,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 
     collapsePMToLatest(conversationKey) {
         const container = document.getElementById('messagesContainer');
-        if (!container) return false;
+        if (!container || container.dataset.virtualScrollKey !== conversationKey || (typeof this._threadViewOccupies === 'function' && this._threadViewOccupies(container))) return false;
         const msgEls = container.querySelectorAll('.message');
         const excess = msgEls.length - this.pmPageSize;
         if (excess <= 0) return false;

@@ -51,7 +51,7 @@ final chatListLandingProvider = StateProvider<bool>((ref) => false);
 
 const double _kMouseClickSlop = 4;
 
-/// Responsive shell: two panes above 1024px, else a 300px off-canvas drawer; call UI mounts above everything.
+/// Responsive shell: two panes above 1024px, else a 340px off-canvas drawer; call UI mounts above everything.
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
@@ -117,6 +117,14 @@ class HomeShellState extends ConsumerState<HomeShell>
     if (_phone && _drawerOpen && mounted) setState(() => _drawerOpen = false);
   }
 
+  void _showChat() {
+    _lastPageMesh = false;
+    if (ref.read(meshScreenOpenProvider)) {
+      ref.read(meshScreenOpenProvider.notifier).state = false;
+    }
+    if (_narrow && _drawerOpen && mounted) setState(() => _drawerOpen = false);
+  }
+
   bool _lastPageMesh = false;
 
   double? _listDrag;
@@ -149,8 +157,11 @@ class HomeShellState extends ConsumerState<HomeShell>
   }
 
   void _recordCurrentView() {
+    final view = ref.read(settingsProvider).useColumns
+        ? ref.read(appStateProvider).view
+        : ref.read(currentViewProvider);
     ref.read(viewHistoryProvider).record(
-        chatViewEntry(ref.read(currentViewProvider), ref.read(activeThreadProvider)));
+        chatViewEntry(view, ref.read(activeThreadProvider)));
   }
 
   bool _stepHistory(int delta) =>
@@ -459,6 +470,7 @@ class HomeShellState extends ConsumerState<HomeShell>
     ref.listen<int>(slideOutListCloseProvider, (_, _) {
       if (!_phone && _drawerOpen && mounted) setState(() => _drawerOpen = false);
     });
+    ref.listen<int>(showChatRequestProvider, (_, _) => _showChat());
     ref.listen<ChatView>(currentViewProvider, (_, next) => _recordCurrentView());
     ref.listen<ActiveThread?>(activeThreadProvider, (_, next) => _recordCurrentView());
     ref.listen<bool>(meshScreenOpenProvider, (prev, next) {
@@ -683,12 +695,25 @@ class HomeShellState extends ConsumerState<HomeShell>
     _dockPointer = null;
   }
 
+  double _restoreSidebarWidth() {
+    final kv = ref.read(keyValueStoreProvider);
+    final legacy = kv.getString(StorageKeys.legacySidebarWidth);
+    final saved = kv.getString(StorageKeys.sidebarWidth);
+    final px = savedSidebarWidth(saved, legacy);
+    if (legacy != null) {
+      if (px != null && saved == null) {
+        kv.setString(StorageKeys.sidebarWidth, '$px');
+      }
+      kv.remove(StorageKeys.legacySidebarWidth);
+    }
+    return (px ?? kSidebarDefault).toDouble();
+  }
+
   Widget _wide(BuildContext context, bool useColumns) {
     // The mesh screen swaps in like any view; the persistent sidebar needs no hamburger.
     final meshOpen = _meshShown;
     final kv = ref.read(keyValueStoreProvider);
-    final sidebarW = _sidebarW ??=
-        clampSidebarWidth(kv.getString(StorageKeys.sidebarWidth)).toDouble();
+    final sidebarW = _sidebarW ??= _restoreSidebarWidth();
     return Row(
       children: [
         Expanded(
@@ -736,7 +761,7 @@ class HomeShellState extends ConsumerState<HomeShell>
                               StorageKeys.sidebarWidth, '${(_sidebarW ?? sidebarW).round()}'),
                           onDoubleTap: () {
                             setState(() => _sidebarW = kSidebarDefault.toDouble());
-                            kv.setString(StorageKeys.sidebarWidth, '$kSidebarDefault');
+                            kv.remove(StorageKeys.sidebarWidth);
                           },
                           child: const SizedBox.expand(),
                         ),

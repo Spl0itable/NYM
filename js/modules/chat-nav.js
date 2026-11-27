@@ -161,7 +161,7 @@
     }
 
     const JUMP = Object.freeze({ bottomPx: 48, landPx: 8, markMax: 200, storeMax: 300, storeIds: 50 });
-    const FABS = Object.freeze({ order: Object.freeze(['mention', 'jump', 'bottom']), gap: 8, right: 24, rightPhone: 16, rightColumn: 16, phoneMax: 768, floatBottom: 16 });
+    const FABS = Object.freeze({ order: Object.freeze(['mention', 'jump', 'bottom']), gap: 8, right: 24, rightPhone: 16, rightColumn: 16, phoneMax: 768, floatBottom: 16, bottomShowPx: 24, bottomHidePx: 4 });
 
     function markIndex(bottoms, viewTop, viewBottom, count) {
         const get = typeof bottoms === 'function' ? bottoms : (i) => num(bottoms[i]);
@@ -184,6 +184,13 @@
 
     function atBottom(distance) {
         return Math.abs(num(distance)) <= JUMP.bottomPx;
+    }
+
+    function bottomShown(distance, shown) {
+        const d = num(distance);
+        if (d > FABS.bottomShowPx) return true;
+        if (d <= FABS.bottomHidePx) return false;
+        return !!shown;
     }
 
     function jumpDir(o) {
@@ -436,6 +443,26 @@
             if (at <= f) continue;
             if (b > 0 && at > b) continue;
             out.push({ id: String(m.id), at: Math.floor(at) });
+        }
+        return out;
+    }
+
+    function threadOpenMark(prev, threadReadSec, convReadSec) {
+        const p = markNorm(prev);
+        if (p.at > 0) return p;
+        const t = Math.floor(num(threadReadSec));
+        return markFloor(t > 0 ? t : convReadSec);
+    }
+
+    function threadMentionScan(rows, mark, beforeSec) {
+        const out = [];
+        const b = num(beforeSec);
+        if (!Array.isArray(rows)) return out;
+        for (const r of rows) {
+            if (!r || !r.mention || r.own || r.sys || !r.id) continue;
+            if (b > 0 && num(r.at) > b) continue;
+            if (markUnder(mark, r.at, String(r.id))) continue;
+            out.push({ id: String(r.id), at: Math.floor(num(r.at)) });
         }
         return out;
     }
@@ -1009,10 +1036,10 @@
     G.NymChatNav = {
         LIMITS, KEYS, STRINGS, STATUSES,
         firstUnread, landOnDivider, jumpLabel, showJump,
-        JUMP, FABS, markIndex, effectiveAt, atBottom, jumpDir, fabRow, fabRight, markNorm, markFloor, markUnder, markAdvance, markMax,
+        JUMP, FABS, markIndex, effectiveAt, atBottom, bottomShown, jumpDir, fabRow, fabRight, markNorm, markFloor, markUnder, markAdvance, markMax,
         unseenRows, unseenCount, unseenFirst, jumpText, markStoreNorm,
         emptyMentions, normalizeMentions, mentionAdd, mentionSeen, mentionMark, mentionClear, mentionPrune, mentionDrop,
-        mentionNext, mentionCount, mentionScan,
+        mentionNext, mentionCount, mentionScan, threadOpenMark, threadMentionScan,
         pinKey, pinParse, pinKeyForChat, pinSection, emptyPins, normalizePins, pinList, isPinned, pinAdd, pinRemove,
         pinMove, pinReorderWithin, mergePins, pinImportLegacy, pinChannels, pinSort, trimPinnedPayload, pinRowBytes,
         scheduleCheck, scheduleErrorText, schedulePresets, scheduleInputValue, scheduleParseInput, wrapTime,

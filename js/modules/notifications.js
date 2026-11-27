@@ -971,7 +971,12 @@ Object.assign(NYM.prototype, {
         const thread = (threadsOn && at && at.rootId && at.ctx && at.ctx.storageKey &&
             this._threadContainer && keys.includes(at.ctx.storageKey))
             ? { key: at.ctx.storageKey, root: at.rootId } : null;
-        return { focused, keys, thread };
+        if (!threadsOn || !this._cvActive || !this._cvThreads || !this._cvThreads.size) return { focused, keys, thread };
+        const threads = [];
+        for (const p of this._cvThreads.values()) {
+            if (p && p.rootId && p.ctx && keys.includes(p.ctx.storageKey)) threads.push({ key: p.ctx.storageKey, root: p.rootId });
+        }
+        return { focused, keys, thread, threads };
     },
 
     _notifThreadRootOf(channelInfo) {

@@ -416,6 +416,18 @@ bool isLocked(Object? state, String? k) {
   return !(r != null && r >= at);
 }
 
+Set<String> lockedChannelNames(Object? state) {
+  final s = _asState(state);
+  final removed = _removed(s);
+  final out = <String>{};
+  for (final e in _items(s).entries) {
+    if (!e.key.startsWith('c:')) continue;
+    final r = removed[e.key];
+    if (!(r != null && r >= e.value)) out.add(e.key.substring(2));
+  }
+  return out;
+}
+
 int lockRowBytes(Object? state) {
   final s = normalizeLocks(state);
   final live = <String, dynamic>{

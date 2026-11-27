@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/pms/upload_activity.dart';
@@ -152,7 +153,8 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
             child: Text(split.suffix,
                 style: nymSuffixStyleOf(context, lineStyle),
                 maxLines: 1,
-                softWrap: false),
+                softWrap: false,
+                textDirection: TextDirection.ltr),
           ),
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
@@ -263,7 +265,7 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
         : const Color(0x26000000);
     return ClipRect(
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
+        duration: NymThemeSwap.motion(context, const Duration(milliseconds: 200)),
         curve: Curves.ease,
         height: active ? 24 : 0,
         width: double.infinity,

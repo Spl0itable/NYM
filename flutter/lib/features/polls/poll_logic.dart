@@ -5,6 +5,7 @@ import '../../core/utils/nym_utils.dart';
 import '../../models/channel.dart';
 import '../../models/nostr_event.dart';
 import '../../models/poll.dart';
+import '../../services/nostr/channel_expiry.dart';
 
 /// Socket-free poll logic (kind 30078): tag shapes, one vote per pubkey (latest wins), buffered early votes, expiration.
 class PollLogic {
@@ -44,6 +45,7 @@ class PollLogic {
     for (var i = 0; i < options.length; i++) {
       tags.add(['poll_option', '$i', options[i]]);
     }
+    tags.add(channelExpirationTag(now));
     return UnsignedEvent(
       pubkey: pubkey,
       createdAt: now,
@@ -53,16 +55,23 @@ class PollLogic {
     );
   }
 
+  static bool openForVotes(int pollCreatedAt, {int? nowSec}) {
+    final now = nowSec ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+    return channelExpiresAt(pollCreatedAt) >= now;
+  }
+
   /// Poll-vote rumor: d/t/e/n/g tags plus `['response', idx]`; content is empty.
-  static UnsignedEvent buildVoteEvent({
+  static UnsignedEvent? buildVoteEvent({
     required String pubkey,
     required String nym,
     required String geohash,
     required String pollId,
+    required int pollCreatedAt,
     required int optionIndex,
     int? nowSec,
   }) {
     final now = nowSec ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+    if (!openForVotes(pollCreatedAt, nowSec: now)) return null;
     return UnsignedEvent(
       pubkey: pubkey,
       createdAt: now,
@@ -74,6 +83,7 @@ class PollLogic {
         ...nymTags(nym),
         ['g', geohash],
         ['response', '$optionIndex'],
+        channelExpirationTag(pollCreatedAt),
       ],
       content: '',
     );
@@ -90,14 +100,8 @@ class PollLogic {
           .any((t) => t.length > 1 && t[1] == AppDataTopic.pollVote);
 
   /// True if an `['expiration', ts]` tag is already in the past; expired polls and votes are dropped.
-  static bool isExpired(NostrEvent e, {int? nowSec}) {
-    final exp = e.tagValue('expiration');
-    if (exp == null) return false;
-    final ts = int.tryParse(exp);
-    if (ts == null || ts == 0) return false;
-    final now = nowSec ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
-    return ts < now;
-  }
+  static bool isExpired(NostrEvent e, {int? nowSec}) =>
+      eventExpired(e, nowSec: nowSec);
 
   /// Parses a poll-create event, or null without a question or with fewer than 2 options.
   static Poll? parsePoll(NostrEvent e) {
@@ -109,7 +113,7 @@ class PollLogic {
         .map((t) => PollOption(index: int.tryParse(t[1]) ?? 0, text: t[2]))
         .toList();
     final nymTag = e.tagValue('n');
-    final nym = nymTag != null ? stripPubkeySuffix(nymTag) : 'nym';
+    final nym = nymTag != null ? receivedNymBase(nymTag, e.pubkey) : 'nym';
     final gTag = e.tagValue('g');
     if (gTag != null && !isValidChannelTag(gTag)) return null;
     final geohash = gTag ?? '';

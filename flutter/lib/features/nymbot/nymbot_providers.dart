@@ -1868,6 +1868,12 @@ class BotChatController extends StateNotifier<BotChatState> {
     if (open != null && open.view == const ChatView.pm(kNymbotPubkey)) {
       _ref.read(activeThreadProvider.notifier).state = null;
     }
+    final parked = _ref.read(columnThreadsProvider);
+    final botKey = const ChatView.pm(kNymbotPubkey).storageKey;
+    if (parked.containsKey(botKey)) {
+      _ref.read(columnThreadsProvider.notifier).state = {...parked}
+        ..remove(botKey);
+    }
     final anonChat = lane != null || anon.enabled;
     _setClearedAt(DateTime.now().millisecondsSinceEpoch ~/ 1000);
     // Best-effort server-side context wipe.

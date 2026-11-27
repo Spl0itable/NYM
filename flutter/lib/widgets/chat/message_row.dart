@@ -28,6 +28,7 @@ import '../../features/chat_tools/chat_tools_service.dart'
 import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/share/share_origin.dart';
 import '../../features/autocomplete/pending_edit.dart';
+import '../../features/commands/command_handler.dart' show nickKnownIn;
 import '../../features/commands/command_i18n.dart';
 import '../../features/composer/send_as_model.dart';
 import '../../features/composer/composer_conn.dart';
@@ -95,6 +96,7 @@ import 'composer.dart' show ComposerDrafts, composerOverhangProvider;
 import '../common/nym_tooltip.dart';
 import '../common/nym_label.dart';
 import '../../core/theme/nym_a11y.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../features/emoji/emoji_block.dart';
 
 String formatTime(DateTime t, String timeFormat) {
@@ -647,7 +649,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
     _barAvailablePx = clip.width - 2 * edge;
     final bw = hoverBarWidth(_barButtons.length);
     final top = math.max(clip.top + edge, 0.0);
-    final lineObj = !bubbles && widget.columnsMode
+    final lineObj = !bubbles && _stackedIrc
         ? _barLineKey.currentContext?.findRenderObject()
         : null;
     double x;
@@ -673,6 +675,10 @@ class _MessageRowState extends ConsumerState<MessageRow>
     y = math.max(y, 0);
     return Offset(x.roundToDouble(), y.roundToDouble());
   }
+
+  bool get _stackedIrc =>
+      widget.columnsMode ||
+      MediaQuery.sizeOf(context).width <= NymDimens.mobileBreakpoint;
 
   bool get _barThreadable =>
       appThreadsEnabled &&
@@ -793,6 +799,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
       content: message.content,
       nym: ref.read(appStateProvider).selfNym,
       pubkey: ref.read(nostrControllerProvider).identity?.pubkey,
+      known: nickKnownIn(ref.read(usersProvider)),
     );
   }
 
@@ -1735,7 +1742,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
         );
       }
       contentBody = Container(
-        width: widget.columnsMode ? double.infinity : null,
+        width: _stackedIrc ? double.infinity : null,
         padding: deco?.contentPadding,
         decoration: BoxDecoration(
           color: contentFill,
@@ -1764,7 +1771,7 @@ class _MessageRowState extends ConsumerState<MessageRow>
 
     // Full-width siblings (translation, readers) are hoisted out so they span the message; columns mode stacks the row.
     final Widget messageRow;
-    if (widget.columnsMode) {
+    if (_stackedIrc) {
       messageRow = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -2705,7 +2712,8 @@ class _MessageRowState extends ConsumerState<MessageRow>
       return;
     }
     showToast(
-        tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
+        tr('Checking if @{nym} can receive zaps...',
+            {'nym': isolateNymParts(baseNym, getPubkeySuffix(message.pubkey))}));
     final String? lnAddr;
     try {
       lnAddr = await ref
@@ -2713,13 +2721,14 @@ class _MessageRowState extends ConsumerState<MessageRow>
           .resolveLightningAddressForZap(message.pubkey);
     } catch (_) {
       showToast(
-          tr('Failed to check if @{nym} can receive zaps', {'nym': baseNym}));
+          tr('Failed to check if @{nym} can receive zaps',
+              {'nym': isolateNymParts(baseNym, getPubkeySuffix(message.pubkey))}));
       return;
     }
     if (lnAddr == null || lnAddr.isEmpty) {
       showToast(tr(
           '@{nym} cannot receive zaps (no lightning address set)',
-          {'nym': baseNym}));
+          {'nym': isolateNymParts(baseNym, getPubkeySuffix(message.pubkey))}));
       return;
     }
     if (!context.mounted || !mounted) return;
@@ -3842,7 +3851,7 @@ class _HoverActionButtonState extends State<_HoverActionButton> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: NymMotion.transition,
+          duration: NymThemeSwap.motion(context, NymMotion.transition),
           curve: NymMotion.curve,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
@@ -4229,7 +4238,7 @@ class _TimestampTextState extends State<_TimestampText> {
           textStyle:
               TextStyle(fontSize: 11, color: c.isLight ? c.text : c.textDim),
           child: AnimatedDefaultTextStyle(
-            duration: const Duration(milliseconds: 120),
+            duration: NymThemeSwap.motion(context, const Duration(milliseconds: 120)),
             curve: Curves.ease,
             style: TextStyle(
               color: _hover ? c.primary : c.textDim,

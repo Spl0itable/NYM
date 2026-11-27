@@ -3,6 +3,7 @@
 import 'dart:collection';
 import 'dart:convert';
 
+import '../../../core/utils/nick_parse.dart';
 import '../../../models/channel.dart' show isValidGeohash;
 import '../../group_tools/group_tools.dart' show GroupTools;
 import '../../media_notes/media_notes.dart';
@@ -44,6 +45,7 @@ final RegExp _rxHttpUrl = RegExp(r'^https?://.', caseSensitive: false);
 final RegExp _rxBracketedUrl = RegExp('\\[(https?://[^\\s\\[\\]<>"\x01]+)\\](?!\\()');
 
 final RegExp _rxBlockSlot = RegExp('\x01[FMV]\\d+\x01');
+final RegExp _rxMentionSlot = RegExp('\x01N(\\d+)\x01');
 
 final RegExp _rxAngledUrl = RegExp('<(https?://[^\\s<>"\x01]+)>');
 
@@ -155,6 +157,7 @@ class FormatContext {
     this.proxyBase,
     this.knownChannels = const {},
     this.commonMark = false,
+    this.knownMentions,
   });
 
   /// Active named channel (lowercase); a matching `#ref` renders active.
@@ -174,6 +177,8 @@ class FormatContext {
 
   final bool commonMark;
 
+  final String? knownMentions;
+
   static const empty = FormatContext();
 }
 
@@ -185,7 +190,8 @@ class _ParseCacheKey {
         proxyBase = c.proxyBase,
         customEmojis = c.customEmojis,
         knownChannels = c.knownChannels,
-        commonMark = c.commonMark;
+        commonMark = c.commonMark,
+        knownMentions = c.knownMentions;
 
   final String content;
   final String? currentChannel;
@@ -194,6 +200,7 @@ class _ParseCacheKey {
   final Map<String, String> customEmojis;
   final Set<String> knownChannels;
   final bool commonMark;
+  final String? knownMentions;
 
   @override
   bool operator ==(Object other) =>
@@ -204,7 +211,8 @@ class _ParseCacheKey {
       other.proxyBase == proxyBase &&
       identical(other.customEmojis, customEmojis) &&
       identical(other.knownChannels, knownChannels) &&
-      other.commonMark == commonMark;
+      other.commonMark == commonMark &&
+      other.knownMentions == knownMentions;
 
   @override
   int get hashCode => Object.hash(
@@ -215,6 +223,7 @@ class _ParseCacheKey {
         identityHashCode(customEmojis),
         identityHashCode(knownChannels),
         commonMark,
+        knownMentions,
       );
 }
 
@@ -562,19 +571,54 @@ class NymFormat {
     return out.toString();
   }
 
+  static bool _noneKnown(String name, String suffix) => false;
+
+  static NickKnown? knownIn(String? keys) {
+    if (keys == null) return null;
+    if (keys.isEmpty) return _noneKnown;
+    final set = keys.split('\n').toSet();
+    return (name, suffix) =>
+        set.contains('${nickNameKey(name)}#${suffix.toLowerCase()}');
+  }
+
+  static String _outsideMentions(String text, String Function(String) fn) {
+    final ms = nickMentions(text, known: _noneKnown);
+    if (ms.isEmpty) return fn(text);
+    final held = <String>[];
+    final out = StringBuffer();
+    var at = 0;
+    for (final m in ms) {
+      out
+        ..write(text.substring(at, m.start))
+        ..write('\x01N${held.length}\x01');
+      held.add(text.substring(m.start, m.end));
+      at = m.end;
+    }
+    out.write(text.substring(at));
+    return fn(out.toString()).replaceAllMapped(_rxMentionSlot, (m) {
+      final i = int.parse(m[1]!);
+      return i < held.length ? held[i] : m[0]!;
+    });
+  }
+
   static String maskSpoilers(String text) {
     if (!text.contains('||')) return text;
+    text = text.replaceAll('\x01', '');
     return _mapOutsideCode(
-        text, (part) => part.replaceAll(_rxSpoiler, kSpoilerMask));
+        text,
+        (part) => _outsideMentions(
+            part, (p) => p.replaceAll(_rxSpoiler, kSpoilerMask)));
   }
 
   static String stripForPreview(String text, {String? locale, DateTime? now}) {
     if (text.isEmpty) return text;
+    text = text.replaceAll('\x01', '');
     if (text.contains('#nym:')) text = previewText(text, tr);
     return _mapOutsideCode(
         text,
-        (part) => labelBitchatVerifyLinks(part, tr(kBitchatVerifyLabel))
-                .replaceAll(_rxSpoiler, kSpoilerMask)
+        (part) => _outsideMentions(
+                    labelBitchatVerifyLinks(part, tr(kBitchatVerifyLabel)),
+                    (p) => p.replaceAll(_rxSpoiler, kSpoilerMask))
                 .replaceAllMapped(_rxTimestamp, (m) {
               final seconds = parseTimestampSeconds(m[1]!);
               if (seconds == null) return m[0]!;
@@ -646,7 +690,7 @@ class NymFormat {
 
   static List<FormatBlock> _formatUncached(String content, FormatContext c) {
     // Elide the hidden game token first, including on quoted lines.
-    content = stripGameTokens(content);
+    content = stripGameTokens(content.replaceAll('\x01', ''));
 
     // Fast path when nothing can trigger formatting.
     if (!_rxTriggers.hasMatch(content) &&
@@ -655,13 +699,7 @@ class NymFormat {
       return _plainParagraphs(content);
     }
 
-    // Collapse `@name#xxxx#xxxx` to `@name#xxxx` first.
-    final collapsed = content.replaceAllMapped(
-      RegExp(r'@([^@#\s]+)#([0-9a-f]{4})#\2\b', caseSensitive: false),
-      (m) => '@${m[1]}#${m[2]}',
-    );
-
-    return _formatWithQuotes(collapsed, c, 0);
+    return _formatWithQuotes(content, c, 0);
   }
 
   static List<FormatBlock> _plainParagraphs(String content) {
@@ -693,15 +731,15 @@ class NymFormat {
         if (depth >= _maxQuoteDepth) continue;
 
         final firstLine = quoteLines.isEmpty ? '' : quoteLines[0];
-        final authorMatch = RegExp(r'^@([^:]+):\s*(.*)').firstMatch(firstLine);
-        if (authorMatch != null) {
+        final head = parseQuoteHead(firstLine);
+        if (head != null) {
           final parts = <String>[];
-          if ((authorMatch[2] ?? '').isNotEmpty) parts.add(authorMatch[2]!);
+          if (head.body.isNotEmpty) parts.add(head.body);
           for (var j = 1; j < quoteLines.length; j++) {
             parts.add(quoteLines[j]);
           }
           final quoted = parts.join('\n');
-          final author = _cleanQuoteAuthor(authorMatch[1]!.trim());
+          final author = head.label;
           out.add(QuoteBlock(
             children: _formatWithQuotes(quoted, ctx, depth + 1),
             author: author,
@@ -733,16 +771,6 @@ class NymFormat {
       return _formatInlineBlocks(content, ctx, inQuote: depth > 0);
     }
     return out;
-  }
-
-  static String _cleanQuoteAuthor(String raw) {
-    var a = raw.trim();
-    // Collapse `name#xxxx#xxxx` to `name#xxxx`.
-    a = a.replaceFirstMapped(
-      RegExp(r'^([^#]+)#([0-9a-f]{4})#\2$', caseSensitive: false),
-      (m) => '${m[1]}#${m[2]}',
-    );
-    return a;
   }
 
   // Inline passes over a token list of raw text and resolved nodes, so later passes never re-scan resolved content.
@@ -824,6 +852,24 @@ class NymFormat {
       s = s.replaceAllMapped(_rxAngledUrl, (m) => m[1]!);
     }
 
+    final mentions = <MentionNode>[];
+    if (s.contains('@')) {
+      final found = nickMentions(s, known: knownIn(ctx.knownMentions));
+      if (found.isNotEmpty) {
+        final out = StringBuffer();
+        var at = 0;
+        for (final m in found) {
+          out
+            ..write(s.substring(at, m.start))
+            ..write('\x01N${mentions.length}\x01');
+          mentions.add(MentionNode(base: '@${m.name}', suffix: m.suffix));
+          at = m.end;
+        }
+        out.write(s.substring(at));
+        s = out.toString();
+      }
+    }
+
     // Code placeholder lines become code blocks, `#` lines headings, the rest paragraphs.
     final blocks = <FormatBlock>[];
     final lines = s.split('\n');
@@ -831,17 +877,16 @@ class NymFormat {
 
     final listBuf = <_ListLine>[];
 
-    List<InlineNode> inline(String t) =>
-        _collapseMedia(
-            _parseInline(t, ctx, codeBlocks, inlineCode, stamps, notes, links));
+    List<InlineNode> inline(String t) => _collapseMedia(_parseInline(
+        t, ctx, codeBlocks, inlineCode, stamps, notes, links, mentions));
 
     void flushPara() {
       if (paraBuf.isEmpty) return;
       final joined = paraBuf.join('\n');
       paraBuf.clear();
       blocks.addAll(
-          _inlineToBlocks(
-              joined, ctx, codeBlocks, inlineCode, stamps, notes, links));
+          _inlineToBlocks(joined, ctx, codeBlocks, inlineCode, stamps, notes,
+              links, mentions));
     }
 
     void flushList() {
@@ -924,9 +969,10 @@ class NymFormat {
     List<TimestampNode> stamps,
     List<MediaNote> notes,
     List<LinkNode> links,
+    List<MentionNode> mentions,
   ) {
-    final inlines =
-        _parseInline(text, ctx, codeBlocks, inlineCode, stamps, notes, links);
+    final inlines = _parseInline(
+        text, ctx, codeBlocks, inlineCode, stamps, notes, links, mentions);
 
     // Adjacent media (whitespace between) collapse into one gallery.
     final blocks = <FormatBlock>[];
@@ -1093,11 +1139,12 @@ class NymFormat {
     List<TimestampNode> stamps,
     List<MediaNote> notes,
     List<LinkNode> links,
+    List<MentionNode> mentions,
   ) =>
       _parseMarked(
           _markEmphasis(text, ctx.commonMark),
           (leaf, blockStart, blockEnd) => _parseLeaf(
-              leaf, ctx, codeBlocks, inlineCode, stamps, notes, links,
+              leaf, ctx, codeBlocks, inlineCode, stamps, notes, links, mentions,
               blockStart: blockStart, blockEnd: blockEnd));
 
   static List<InlineNode> _labelNodes(String label, bool commonMark,
@@ -1284,11 +1331,17 @@ class NymFormat {
     List<String> inlineCode,
     List<TimestampNode> stamps,
     List<MediaNote> notes,
-    List<LinkNode> links, {
+    List<LinkNode> links,
+    List<MentionNode> mentions, {
     bool blockStart = true,
     bool blockEnd = true,
   }) {
     var tokens = <_Tok>[_RawTok(text)];
+
+    tokens = _splitByRegex(tokens, _rxMentionSlot, (m) {
+      final i = int.parse(m[1]!);
+      return i < mentions.length ? _NodeTok(mentions[i]) : _RawTok(m[0]!);
+    });
 
     tokens = _splitByRegex(tokens, RegExp('L(\\d+)'),
         (m) => _NodeTok(links[int.parse(m[1]!)]));
@@ -1386,15 +1439,6 @@ class NymFormat {
         RegExp(r'''(?<![\w/:.#=&?"'-])([0-9a-f]{64})(?![\w-])''',
             caseSensitive: false),
         (m) => _NodeTok(NostrRefNode(token: m[1]!.toLowerCase(), raw: true)));
-
-    // Suffixed mentions; the name may contain spaces, bounded by `#xxxx`, with no trailing space.
-    tokens = _splitByRegex(
-        tokens,
-        RegExp(r'@([^@#\n]*?)(?<!\s)#([0-9a-f]{4})\b', caseSensitive: false),
-        (m) => _NodeTok(MentionNode(base: '@${m[1]}', suffix: m[2])));
-
-    tokens = _splitByRegex(tokens, RegExp(r'@([^@\s][^@\s]*)'),
-        (m) => _NodeTok(MentionNode(base: m[0]!)));
 
     tokens = _splitBounded(tokens,
         RegExp(r'(^|\s)#([a-z0-9_-]+)(?=\s|$|[.,!?])', caseSensitive: false),

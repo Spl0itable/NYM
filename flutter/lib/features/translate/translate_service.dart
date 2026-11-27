@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import '../../core/utils/nick_parse.dart';
 import '../../services/api/api_client.dart';
 import '../ai_consent/ai_consent.dart';
 
@@ -25,7 +26,7 @@ class TranslateService {
 
   /// Tokens passed through untranslated, code first, then URLs, @mentions and `:shortcode:` emoji.
   static final RegExp _rxPreserve =
-      RegExp(r'`[^`\n]*`|https?://[^\s]+|@[^\s@]+|:[a-zA-Z0-9_+\-]+:');
+      RegExp(r'`[^`\n]*`|https?://[^\s]+|:[a-zA-Z0-9_+\-]+:');
 
   /// Per-chunk leading/trailing whitespace capture.
   static final RegExp _rxEdgeWhitespace = RegExp(r'^(\s*)([\s\S]*?)(\s*)$');
@@ -150,12 +151,20 @@ class TranslateService {
 
   /// Even indices are translatable text (maybe empty), odd are preserved tokens, in source order.
   static List<String> _splitOnPreserved(String text) {
+    final spans = <List<int>>[
+      for (final m in nickMentions(text)) [m.start, m.end],
+    ];
+    for (final m in _rxPreserve.allMatches(text)) {
+      if (spans.any((r) => m.start < r[1] && m.end > r[0])) continue;
+      spans.add([m.start, m.end]);
+    }
+    spans.sort((a, b) => a[0].compareTo(b[0]));
     final parts = <String>[];
     var last = 0;
-    for (final m in _rxPreserve.allMatches(text)) {
-      parts.add(text.substring(last, m.start));
-      parts.add(m.group(0)!);
-      last = m.end;
+    for (final r in spans) {
+      parts.add(text.substring(last, r[0]));
+      parts.add(text.substring(r[0], r[1]));
+      last = r[1];
     }
     parts.add(text.substring(last));
     return parts;

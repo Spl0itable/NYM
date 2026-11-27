@@ -1,14 +1,28 @@
 // WebSocket relay proxy so relays see Cloudflare IPs, not users': /api/relay?relay=wss://...
 
 import { isNymchatClient } from './_client.js';
-import { ipv6Blocked } from './_shared.js';
-import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
+import { ipv6Blocked, earlyHoldTake, earlyHoldGive } from './_shared.js';
+import { filterSet, frameHit, eventHit, noteReport, reportEventIds, reportIdsCheckable, reportTargetsArchived } from './_filters.js';
 import { reviewSpamReport, spamEngine, frameBadgeRefused } from './_spam.js';
-import { verifySignedEvent } from './relay-pool.js';
+import { verifySignedEvent, clientIpKey, connectLimiter, CONNECT_LIMIT_CODE, CONNECT_LIMIT_REASON, eventBudget } from './relay-pool.js';
 import { isEncryptedBlobChannelEvent } from './_encrypted-blob.js';
 import { isBridgeBlockedEvent, isBridgeBlockedFrame } from './_bridge-block.js';
 
 const RX_BLOB_KIND_FRAME = /"kind"\s*:\s*(?:20000|23333)\b/;
+const RX_REPORT_KIND_FRAME = /"kind"\s*:\s*1984\b/;
+const relayConnects = connectLimiter('relay-connect');
+
+function reportOf(data) {
+  if (typeof data !== 'string' || !RX_REPORT_KIND_FRAME.test(data)) return null;
+  try {
+    const arr = JSON.parse(data);
+    const ev = Array.isArray(arr) && arr[0] === 'EVENT' ? arr[1] : null;
+    const ids = reportEventIds(ev);
+    return ids ? { ev, ids } : null;
+  } catch {
+    return null;
+  }
+}
 
 function isBlobFrame(data) {
   if (typeof data !== 'string' || !RX_BLOB_KIND_FRAME.test(data)) return false;
@@ -21,6 +35,8 @@ function isBlobFrame(data) {
 }
 
 const APP_RELAY = 'wss://relay.nymchat.app';
+const RELAY_EARLY_FRAMES_MAX = 1000;
+const RELAY_EARLY_CHARS_MAX = 2 * 1024 * 1024;
 
 // Reject private/loopback/link-local relay hosts so the proxy can't reach internal services (SSRF).
 function isPrivateRelayHost(hostname) {
@@ -71,6 +87,7 @@ export async function onRequest(context) {
   if (!isNymchatClient(request, env)) {
     return new Response('Forbidden', { status: 403 });
   }
+  const ipKey = clientIpKey(request);
 
   const url = new URL(request.url);
   const targetRelay = url.searchParams.get('relay');
@@ -94,13 +111,26 @@ export async function onRequest(context) {
     return new Response('Invalid relay URL', { status: 400 });
   }
 
-  let gate = await filterSet(env);
+  if (relayConnects.knownOver(ipKey)) {
+    const { 0: client, 1: server } = new WebSocketPair();
+    server.accept();
+    try { server.close(CONNECT_LIMIT_CODE, CONNECT_LIMIT_REASON); } catch {}
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  const gateLoad = filterSet(env);
+  let gate = null;
   const spam = spamEngine(env, context);
   let sockHeld = null;
   const gateTimer = setInterval(() => { filterSet(env).then((s) => { gate = s; }, () => { }); }, 30000);
 
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
+
+  let gateOpen = false;
+  let clientGone = false;
+  const early = [];
+  let earlyChars = 0;
 
   function heldOutbound(data) {
     if (typeof data !== 'string') return false;
@@ -136,24 +166,28 @@ export async function onRequest(context) {
     return true;
   }
 
-  const upstream = new WebSocket(targetRelay);
-
+  let upstream = null;
   let upstreamOpen = false;
   const pendingMessages = [];
+  const reportBudget = eventBudget();
 
-  upstream.addEventListener('open', () => {
-    upstreamOpen = true;
-    for (const msg of pendingMessages) {
-      try { upstream.send(msg); } catch {}
-    }
-    pendingMessages.length = 0;
-  });
+  function reportForwardable(report) {
+    if (!reportIdsCheckable(report.ids) || !reportBudget.take() || !verifySignedEvent(report.ev)) return Promise.resolve(false);
+    return reportTargetsArchived(env, report.ids);
+  }
 
-  server.addEventListener('message', (event) => {
+  function fromClient(event) {
     context.waitUntil(
       (async () => {
         try {
           if (heldOutbound(event.data)) return;
+          const report = reportOf(event.data);
+          if (report && !(await reportForwardable(report))) {
+            if (typeof report.ev.id === 'string') {
+              try { server.send(JSON.stringify(['OK', report.ev.id, true, ''])); } catch {}
+            }
+            return;
+          }
           if (upstreamOpen && upstream.readyState === WebSocket.OPEN) {
             upstream.send(event.data);
           } else if (!upstreamOpen) {
@@ -163,9 +197,9 @@ export async function onRequest(context) {
         }
       })()
     );
-  });
+  }
 
-  upstream.addEventListener('message', (event) => {
+  function fromUpstream(event) {
     try {
       if (typeof event.data === 'string' && event.data.startsWith('["EVENT"') && frameHit(gate, event.data)) return;
       if (isBlobFrame(event.data)) return;
@@ -176,30 +210,110 @@ export async function onRequest(context) {
       }
     } catch {
     }
-  });
+  }
 
-  server.addEventListener('close', (event) => {
+  function dropEarly() {
+    early.length = 0;
+    earlyHoldGive(earlyChars);
+    earlyChars = 0;
+  }
+
+  function refuseEarly(code, reason) {
+    clientGone = true;
+    dropEarly();
     clearInterval(gateTimer);
-    try {
-      upstream.close(event.code, event.reason);
-    } catch {
+    try { server.close(code, reason); } catch {}
+    try { if (upstream) upstream.close(1000, 'client refused'); } catch {}
+  }
+
+  function holdUntilGate(handle, event) {
+    if (clientGone) return;
+    const size = typeof event.data === 'string' ? event.data.length : ((event.data && event.data.byteLength) || 0);
+    if (early.length >= RELAY_EARLY_FRAMES_MAX || earlyChars + size > RELAY_EARLY_CHARS_MAX) {
+      refuseEarly(1008, 'too many frames before the relay was ready');
+      return;
     }
-  });
+    if (!earlyHoldTake(size)) {
+      refuseEarly(1013, 'relay busy, reconnect shortly');
+      return;
+    }
+    early.push([handle, event]);
+    earlyChars += size;
+  }
 
-  upstream.addEventListener('close', (event) => {
-    clearInterval(gateTimer);
+  function closeFromUpstream(event) {
     try {
       server.close(event.code, event.reason);
+    } catch {
+    }
+  }
+
+  function upstreamEnded(event) {
+    if (gateOpen || clientGone) closeFromUpstream(event);
+    else early.push([closeFromUpstream, event]);
+  }
+
+  server.addEventListener('message', (event) => {
+    if (gateOpen) fromClient(event);
+    else holdUntilGate(fromClient, event);
+  });
+
+  function dial() {
+    upstream = new WebSocket(targetRelay);
+    upstream.addEventListener('open', () => {
+      upstreamOpen = true;
+      for (const msg of pendingMessages) {
+        try { upstream.send(msg); } catch {}
+      }
+      pendingMessages.length = 0;
+    });
+    upstream.addEventListener('message', (event) => {
+      if (gateOpen) fromUpstream(event);
+      else holdUntilGate(fromUpstream, event);
+    });
+    upstream.addEventListener('close', (event) => {
+      clearInterval(gateTimer);
+      upstreamEnded(event);
+    });
+    upstream.addEventListener('error', () => {
+      upstreamEnded({ code: 1011, reason: 'Upstream relay error' });
+    });
+  }
+
+  context.waitUntil(relayConnects.allowed(ipKey).then((ok) => {
+    if (clientGone) return;
+    if (!ok) { refuseEarly(CONNECT_LIMIT_CODE, CONNECT_LIMIT_REASON); return; }
+    dial();
+    return gateLoad.then((set) => {
+      if (!gate) gate = set;
+      gateOpen = true;
+      const queued = early.splice(0);
+      earlyHoldGive(earlyChars);
+      earlyChars = 0;
+      if (clientGone) return;
+      for (const [handle, event] of queued) {
+        try { handle(event); } catch {}
+      }
+    });
+  }).catch(() => {
+    clientGone = true;
+    dropEarly();
+    try { server.close(1011, 'relay unavailable'); } catch {}
+    try { if (upstream) upstream.close(1011, 'relay unavailable'); } catch {}
+  }));
+
+  server.addEventListener('close', (event) => {
+    clientGone = true;
+    dropEarly();
+    clearInterval(gateTimer);
+    try {
+      if (upstream) upstream.close(event.code, event.reason);
     } catch {
     }
   });
 
   server.addEventListener('error', () => {
-    try { upstream.close(1011, 'Client error'); } catch {}
-  });
-
-  upstream.addEventListener('error', () => {
-    try { server.close(1011, 'Upstream relay error'); } catch {}
+    try { if (upstream) upstream.close(1011, 'Client error'); } catch {}
   });
 
   return new Response(null, {

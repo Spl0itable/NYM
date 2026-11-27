@@ -1265,14 +1265,14 @@ body.light-mode {
     transition: all 0.2s;
 }
 
-.autocomplete-item:has(.ac-name-text) {
+.autocomplete-item.ac-nym-item {
     display: flex;
     align-items: center;
     min-width: 0;
     overflow: hidden;
 }
 
-.autocomplete-item:has(.ac-name-text) > strong {
+.autocomplete-item.ac-nym-item > strong {
     display: flex;
     align-items: center;
     min-width: 0;
@@ -1280,7 +1280,7 @@ body.light-mode {
     overflow: hidden;
 }
 
-.autocomplete-item:has(.ac-name-text) > strong > * {
+.autocomplete-item.ac-nym-item > strong > * {
     flex: 0 0 auto;
 }
 
@@ -1289,7 +1289,7 @@ body.light-mode {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: pre;
 }
 
 .autocomplete-item:hover,
@@ -3956,7 +3956,7 @@ body.light-mode .gx-icon-btn:hover {
     transition: background 0.3s ease;
 }
 
-body.is-scrolling ::-webkit-scrollbar-thumb,
+body .is-scrolling::-webkit-scrollbar-thumb,
 *:hover>::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.12);
 }
@@ -3971,13 +3971,11 @@ body.is-scrolling ::-webkit-scrollbar-thumb,
         scrollbar-color: transparent transparent;
     }
 
-    body.is-scrolling,
-    body.is-scrolling * {
+    .is-scrolling {
         scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
     }
 
-    body.light-mode.is-scrolling,
-    body.light-mode.is-scrolling * {
+    body.light-mode .is-scrolling {
         scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
     }
 }
@@ -5235,7 +5233,7 @@ body.light-mode input.form-range[type="range"] {
     .ssk-pm,
     .ssk-nym,
     .sb-frow {
-        min-height: 44px;
+        min-height: max(44px, var(--sb-row-h));
     }
 
     .pm-scan-btn {

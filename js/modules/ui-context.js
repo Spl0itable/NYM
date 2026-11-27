@@ -52,9 +52,7 @@ Object.assign(NYM.prototype, {
             if (this.contextMenuData) {
                 const baseNym = this.contextMenuData.nym;
                 const pubkey = this.contextMenuData.pubkey;
-                const suffix = this.getPubkeySuffix(pubkey);
-                const fullNym = `${baseNym}#${suffix}`;
-                this.insertMention(fullNym);
+                this.insertMention(window.NymNickParse.mentionText(this.stripPubkeySuffix(baseNym), pubkey).slice(1));
             }
             this.closeContextMenu();
         });
@@ -76,7 +74,7 @@ Object.assign(NYM.prototype, {
                 this.closeContextMenu();
                 if (this._zapAnonLaneBlocked(messageId)) return;
 
-                this.displaySystemMessage(this.uiText(`Checking if @{nym} can receive zaps...`, { nym }));
+                this.displaySystemMessage(this.uiText(`Checking if @{nym} can receive zaps...`, { nym: this.nymIsolatedLabel(nym, pubkey) }));
 
                 try {
                     const lnAddress = await this.fetchLightningAddressForUser(pubkey);
@@ -84,10 +82,10 @@ Object.assign(NYM.prototype, {
                     if (lnAddress) {
                         this.showZapModal(messageId, pubkey, nym);
                     } else {
-                        this.displaySystemMessage(this.uiText(`@{nym} cannot receive zaps (no lightning address set)`, { nym }));
+                        this.displaySystemMessage(this.uiText(`@{nym} cannot receive zaps (no lightning address set)`, { nym: this.nymIsolatedLabel(nym, pubkey) }));
                     }
                 } catch (error) {
-                    this.displaySystemMessage(this.uiText(`Failed to check if @{nym} can receive zaps`, { nym }));
+                    this.displaySystemMessage(this.uiText(`Failed to check if @{nym} can receive zaps`, { nym: this.nymIsolatedLabel(nym, pubkey) }));
                 }
             }
         });
@@ -294,11 +292,41 @@ Object.assign(NYM.prototype, {
         return this.uiText('You already reported this user.');
     },
 
+    _reportMessageId(messageId) {
+        if (!messageId || typeof messageId !== 'string') return '';
+        if (this.polls instanceof Map && this.polls.has(messageId)) return messageId;
+        const found = typeof this._ctFindMessage === 'function' ? this._ctFindMessage(messageId) : null;
+        const m = found && found.msg;
+        if (!m || m.isPM || m.isGroup || m.isMesh || m.anonWrap || m.anonSender) return '';
+        const key = String(found.key || '');
+        return key.startsWith('pm-') || key.startsWith('group-') ? '' : messageId;
+    },
+
+    _reportTargetOk(pubkey) {
+        if (typeof pubkey !== 'string' || !/^[0-9a-f]{64}$/.test(pubkey) || pubkey === this.pubkey) return false;
+        if (typeof this._ownOtherKey === 'function' && this._ownOtherKey(pubkey)) return false;
+        if (typeof this.isBotAnonPubkey === 'function' && this.isBotAnonPubkey(pubkey)) return false;
+        const stores = typeof this._ctStores === 'function' ? this._ctStores() : [];
+        for (const store of stores) {
+            for (const list of store.values()) {
+                if (Array.isArray(list) && list.some((m) => m && m.isOwn && m.pubkey === pubkey)) return false;
+            }
+        }
+        return true;
+    },
+
+    _reportSign() {
+        if (!(typeof this._hardcoreRotating === 'function' && this._hardcoreRotating())) return (ev) => this.signEvent(ev);
+        const sk = window.NostrTools.generateSecretKey();
+        return (ev) => window.NostrTools.finalizeEvent(ev, sk);
+    },
+
     _reportEntryKey(data) {
         const d = data || this.contextMenuData;
         const R = window.NymReportRecord;
         if (!R || !d || !d.pubkey) return '';
-        return R.keyFor({ pubkey: d.pubkey, messageId: d.messageId, includeMessage: !!d.messageId });
+        const messageId = this._reportMessageId(d.messageId);
+        return R.keyFor({ pubkey: d.pubkey, messageId, includeMessage: !!messageId });
     },
 
     _reportEntryBlocked(data) {
@@ -324,7 +352,8 @@ Object.assign(NYM.prototype, {
         const d = this.contextMenuData;
         if (!d) return '';
         const box = document.getElementById('reportMessage');
-        return R.keyFor({ pubkey: d.pubkey, messageId: d.messageId, includeMessage: !!(box && box.checked) });
+        const messageId = this._reportMessageId(d.messageId);
+        return R.keyFor({ pubkey: d.pubkey, messageId, includeMessage: !!(messageId && box && box.checked) });
     },
 
     _noteReported(key) {
@@ -391,6 +420,7 @@ Object.assign(NYM.prototype, {
         if (!pack && !this.contextMenuData) return;
         const R = window.NymReportRecord;
         const packKey = R && pack ? R.keyFor({ coord: pack.coord }) : '';
+        if (!pack && !this._reportTargetOk(this.contextMenuData.pubkey)) return;
         const blocked = pack ? (this.isTargetReported(packKey) ? packKey : '') : this._reportEntryBlocked();
         if (blocked) {
             this.displaySystemMessage(this._reportRefusal(blocked));
@@ -417,7 +447,7 @@ Object.assign(NYM.prototype, {
             targetNym.innerHTML = this.formatNymWithPubkey(this.contextMenuData.nym, this.contextMenuData.pubkey);
             delete targetNym.dataset.coord;
             if (messageRow) messageRow.style.display = '';
-            if (this.contextMenuData.messageId && !this._reportMessageLocked()) {
+            if (this._reportMessageId(this.contextMenuData.messageId) && !this._reportMessageLocked()) {
                 reportMessageCheckbox.disabled = false;
                 reportMessageCheckbox.checked = true;
             } else {
@@ -465,7 +495,8 @@ Object.assign(NYM.prototype, {
         const reportMessage = document.getElementById('reportMessage').checked;
 
         const pubkey = pack ? '' : this.contextMenuData.pubkey;
-        const messageId = pack ? '' : this.contextMenuData.messageId;
+        if (!pack && !this._reportTargetOk(pubkey)) return;
+        const messageId = pack ? '' : this._reportMessageId(this.contextMenuData.messageId);
 
         try {
             // NIP-56 kind 1984 report event.
@@ -473,7 +504,7 @@ Object.assign(NYM.prototype, {
                 kind: 1984,
                 created_at: Math.floor(Date.now() / 1000),
                 tags: [],
-                content: reportDetails || '',
+                content: '',
                 pubkey: this.pubkey
             };
 
@@ -497,10 +528,14 @@ Object.assign(NYM.prototype, {
             }
             if (key) sending.add(key);
             try {
-                const signedEvent = await this.signEvent(event);
+                const sign = this._reportSign();
+                const signedEvent = await sign(event);
 
                 if (signedEvent) {
                     this.sendToRelay(["EVENT", signedEvent]);
+                    if (typeof reportDetails === 'string' && reportDetails.trim()) {
+                        this._sendReportDetails(signedEvent, reportDetails, sign).catch(() => false);
+                    }
                     this._noteReported(key);
                     this.displaySystemMessage(`Report submitted successfully`);
                     this.closeReportModal();
@@ -512,6 +547,36 @@ Object.assign(NYM.prototype, {
         } catch (err) {
             this.displaySystemMessage('Failed to submit report');
         }
+    },
+
+    _clipReportDetails(details) {
+        const max = 4000;
+        if (details.length <= max) return details;
+        const last = details.charCodeAt(max - 1);
+        return details.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+    },
+
+    async _sendReportDetails(signedReport, details, sign) {
+        const host = typeof this._getApiHost === 'function' ? this._getApiHost() : null;
+        if (!host || !signedReport || typeof signedReport.pubkey !== 'string' || typeof sign !== 'function') return false;
+        const url = `https://${host}/api/storage`;
+        const report = JSON.parse(JSON.stringify(signedReport));
+        const body = { action: 'report-details', pubkey: report.pubkey, report, details: this._clipReportDetails(details) };
+        const auth = await sign({
+            kind: 27235,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [['domain', 'nymbot-pm'], ['method', 'POST'], ['u', url], ['action', 'report-details'], ['payload', await this._authPayloadHash(body)]],
+            content: 'nymbot-pm-auth',
+            pubkey: report.pubkey
+        });
+        if (!auth || auth.pubkey !== report.pubkey) return false;
+        body.auth = auth;
+        const resp = await this._edgeFetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        return !!(resp && resp.ok);
     },
 
     // Shared by card open and refresh so both build the same nym markup.
@@ -835,7 +900,7 @@ Object.assign(NYM.prototype, {
         if (canModDelete && kickOption && kickOption.style.display !== 'none') kickOption.before(deleteOption);
         else this._ctxDeleteHome.after(deleteOption);
 
-        document.getElementById('ctxReport').style.display = pubkey === this.pubkey ? 'none' : 'block';
+        document.getElementById('ctxReport').style.display = this._reportTargetOk(pubkey) ? 'block' : 'none';
         this._syncCtxReportEntry();
 
         // In profile-only mode (e.g. nyms sidebar) show only PM, Report, Block.
@@ -1217,7 +1282,7 @@ Object.assign(NYM.prototype, {
         for (const link of links) {
             const href = link.getAttribute('href');
             if (!href || seen.has(href)) continue;
-            if (typeof link.closest === 'function' && link.closest('.spoiler')) continue;
+            if (typeof link.closest === 'function' && link.closest('.spoiler, blockquote')) continue;
             // Skip media URLs (already embedded inline).
             if (/\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?.*)?$/i.test(href)) continue;
             seen.add(href);
@@ -1298,7 +1363,14 @@ Object.assign(NYM.prototype, {
             const mentionEl = e.target.closest('.nm-mention');
             if (!mentionEl || !mentionEl.closest('.message-content')) return;
             if (e.target.closest('a, button, .reaction-badge, .add-reaction-btn')) return;
-            const pubkey = this._resolveMentionPubkey(mentionEl);
+            const hit = this._mentionLookup(mentionEl);
+            if (hit && hit.ambiguous) {
+                e.preventDefault();
+                e.stopPropagation();
+                this.reportAmbiguousNym(hit);
+                return;
+            }
+            const pubkey = hit && hit.pubkey;
             if (!pubkey) return;
             e.preventDefault();
             e.stopPropagation();
@@ -1979,6 +2051,15 @@ Object.assign(NYM.prototype, {
 
     _syncComposerDock(wrapper) {
         if (!wrapper) return;
+        if (typeof requestAnimationFrame !== 'function') { this._measureComposerDock(wrapper); return; }
+        if (wrapper._dockFrame) return;
+        wrapper._dockFrame = requestAnimationFrame(() => {
+            wrapper._dockFrame = 0;
+            this._measureComposerDock(wrapper);
+        });
+    },
+
+    _measureComposerDock(wrapper) {
         const docked = [...wrapper.querySelectorAll('[data-composer-dock]')].some((el) => el.offsetHeight > 0);
         if (wrapper.classList.contains('composer-docked') !== docked) wrapper.classList.toggle('composer-docked', docked);
     },
@@ -2182,32 +2263,43 @@ Object.assign(NYM.prototype, {
     // Emoji shortcodes and mentions become chips; everything else stays plain so the caret model matches.
     _renderRichPlain(text, frag) {
         const pushText = (s) => { if (s) frag.appendChild(document.createTextNode(s)); };
-        const re = /:([a-zA-Z0-9_]+):|@([^\s@#]+)#([0-9a-f]{4})/gi;
-        let last = 0, m;
+        const NP = typeof window === 'undefined' ? null : window.NymNickParse;
+        const marks = [];
+        if (NP && typeof this._mentionPubkey === 'function') {
+            for (const t of NP.mentions(text, (name, sfx) => !!this._mentionPubkey(name, sfx))) {
+                if (!t.suffix) continue;
+                const pubkey = this._mentionPubkey(t.name, t.suffix);
+                if (pubkey) marks.push({ start: t.start, end: t.end, name: t.name, suffix: t.suffix.toLowerCase(), pubkey });
+            }
+        }
+        const inMention = (i) => marks.some((k) => k.pubkey && i >= k.start && i < k.end);
+        const re = /:([a-zA-Z0-9_]+):/g;
+        let m;
         while ((m = re.exec(text)) !== null) {
-            if (m[1] !== undefined) {
-                const code = m[1];
-                const url = this.customEmojis && this.customEmojis.get(code);
-                if (!url || (typeof this.isCustomEmojiBlocked === 'function' && this.isCustomEmojiBlocked(code))) continue;
-                pushText(text.slice(last, m.index));
+            const code = m[1];
+            const url = this.customEmojis && this.customEmojis.get(code);
+            if (!url || (typeof this.isCustomEmojiBlocked === 'function' && this.isCustomEmojiBlocked(code))) continue;
+            if (inMention(m.index) || inMention(re.lastIndex - 1)) continue;
+            marks.push({ start: m.index, end: re.lastIndex, code, url });
+        }
+        marks.sort((x, y) => x.start - y.start);
+        let last = 0;
+        for (const k of marks) {
+            if (k.start < last) continue;
+            pushText(text.slice(last, k.start));
+            if (k.pubkey) {
+                frag.appendChild(this._buildInputMentionChip(k.name, k.suffix, k.pubkey, text.slice(k.start, k.end)));
+            } else {
                 const img = document.createElement('img');
                 img.className = 'custom-emoji';
-                img.src = this.getProxiedEmojiUrl(url);
-                img.alt = ':' + code + ':';
-                img.title = ':' + code + ':';
-                img.dataset.emojiCode = code;
+                img.src = this.getProxiedEmojiUrl(k.url);
+                img.alt = ':' + k.code + ':';
+                img.title = ':' + k.code + ':';
+                img.dataset.emojiCode = k.code;
                 img.draggable = false;
                 frag.appendChild(img);
-                last = re.lastIndex;
-            } else if (m[2] !== undefined) {
-                const base = m[2];
-                const sfx = m[3].toLowerCase();
-                const pubkey = this._pubkeyForSuffix ? this._pubkeyForSuffix(sfx) : null;
-                if (!pubkey) continue; // Unknown user — leave the mention as plain text
-                pushText(text.slice(last, m.index));
-                frag.appendChild(this._buildInputMentionChip(base, sfx, pubkey, m[0]));
-                last = re.lastIndex;
             }
+            last = k.end;
         }
         pushText(text.slice(last));
     },

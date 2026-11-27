@@ -194,12 +194,12 @@ class _AvatarWithStatus extends StatelessWidget {
         ),
         if (status != UserStatus.hidden)
           Positioned(
-            right: -1,
-            bottom: -1,
-            // CSS content-box puts the 2px ring outside the 8px dot; ring color is hardcoded, not `--bg`.
+            right: 0,
+            bottom: 0,
             child: Container(
-              width: 12,
-              height: 12,
+              key: const ValueKey('presenceDot'),
+              width: 16,
+              height: 16,
               padding: const EdgeInsets.all(2),
               decoration: BoxDecoration(
                 color: c.isLight

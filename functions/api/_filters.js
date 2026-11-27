@@ -349,6 +349,38 @@ export function listPayload(set) {
   return { p: Array.from(set.p.keys()), e: Array.from(set.e.keys()), ep: set.k ? Array.from(set.k).sort() : [], at: set.at };
 }
 
+const REPORT_E_TAGS_MAX = 10;
+
+export function reportEventIds(ev) {
+  if (!ev || ev.kind !== 1984 || !Array.isArray(ev.tags)) return null;
+  let ids = null;
+  for (const t of ev.tags) {
+    if (!Array.isArray(t) || t[0] !== "e") continue;
+    if (!ids) ids = new Set();
+    ids.add(typeof t[1] === "string" ? t[1].toLowerCase() : "");
+  }
+  return ids;
+}
+
+export function reportIdsCheckable(ids) {
+  if (!(ids instanceof Set) || ids.size === 0 || ids.size > REPORT_E_TAGS_MAX) return false;
+  for (const id of ids) if (!HEX64.test(id)) return false;
+  return true;
+}
+
+export async function reportTargetsArchived(env, ids) {
+  try {
+    const db = env && env.DB_CHANNELS;
+    if (!reportIdsCheckable(ids) || !hasD1(db)) return false;
+    const list = Array.from(ids);
+    const rs = await db.prepare("SELECT id FROM events WHERE id IN (" + list.map(() => "?").join(", ") + ")").bind(...list).all();
+    const found = new Set(((rs && rs.results) || []).map((r) => r && r.id));
+    return list.every((id) => found.has(id));
+  } catch (e) {
+    return false;
+  }
+}
+
 function tagVals(tags, name) {
   const out = [];
   for (const t of tags) {
@@ -375,7 +407,7 @@ export async function forgetReports(env, pubkey) {
   }
 }
 
-export async function noteReport(env, ev, source) {
+export async function noteReport(env, ev, source, details) {
   try {
     const db = env && env.DB_REPORT;
     if (!hasD1(db) || !ev || ev.kind !== 1984) return false;
@@ -397,12 +429,20 @@ export async function noteReport(env, ev, source) {
     if (!targetPubkey && !targetEvent) return false;
     const type = String((targetCoord && packTags[0][2]) || (es[0] && es[0][2]) || (ps[0] && ps[0][2]) || "other").slice(0, 32);
     const content = typeof ev.content === "string" ? ev.content.slice(0, 4000) : "";
+    const typed = typeof details === "string" && details.trim() ? details.slice(0, 4000) : "";
     const now = Date.now();
     await ensureReports(db);
+    const fill = async () => {
+      if (!typed) return;
+      try {
+        await db.prepare("UPDATE reports SET content = ? WHERE id = ? AND reporter = ? AND (content IS NULL OR content = '')")
+          .bind(typed, ev.id.toLowerCase(), reporter).run();
+      } catch (_) { }
+    };
     try {
       const recent = await replica(db).prepare("SELECT COUNT(*) AS n FROM reports WHERE reporter = ? AND received_at > ?")
         .bind(reporter, now - 3600000).first();
-      if (recent && Number(recent.n) >= 30) return false;
+      if (recent && Number(recent.n) >= 30) { await fill(); return false; }
     } catch (_) { }
     let channel = null, targetKind = null, targetJson = null, resolvedPubkey = targetPubkey;
     if (targetEvent && hasD1(env.DB_CHANNELS)) {
@@ -432,10 +472,12 @@ export async function noteReport(env, ev, source) {
       "INSERT OR IGNORE INTO reports (id, reporter, target_pubkey, target_event, report_type, content, created_at, received_at, source, " +
       "channel, target_kind, target_json, status, group_key, raw, target_coord) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ? " +
       "WHERE NOT EXISTS (SELECT 1 FROM reports WHERE reporter = ? AND group_key = ?)"
-    ).bind(ev.id.toLowerCase(), reporter, resolvedPubkey, targetEvent, type, content, ev.created_at || 0, now, source || null,
+    ).bind(ev.id.toLowerCase(), reporter, resolvedPubkey, targetEvent, type, typed || content, ev.created_at || 0, now, source || null,
       channel, targetKind, targetJson, groupKey, raw, targetCoord, reporter, groupKey).run();
     const changes = res && res.meta && typeof res.meta.changes === "number" ? res.meta.changes : 1;
-    return changes > 0;
+    if (changes > 0) return true;
+    await fill();
+    return false;
   } catch (e) {
     return false;
   }

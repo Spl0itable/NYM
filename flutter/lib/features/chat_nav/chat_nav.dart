@@ -365,6 +365,8 @@ class ChatFabs {
   static const double rightColumn = 16;
   static const double phoneMax = 768;
   static const double floatBottom = 16;
+  static const double bottomShowPx = 24;
+  static const double bottomHidePx = 4;
 
   static Map<String, Object> toJson() => {
         'order': order,
@@ -374,6 +376,8 @@ class ChatFabs {
         'rightColumn': rightColumn,
         'phoneMax': phoneMax,
         'floatBottom': floatBottom,
+        'bottomShowPx': bottomShowPx,
+        'bottomHidePx': bottomHidePx,
       };
 }
 
@@ -403,6 +407,13 @@ int effectiveAt(Object? createdAt, Object? seenAt) {
 }
 
 bool atBottom(Object? distance) => _num(distance).abs() <= ChatJump.bottomPx;
+
+bool bottomShown(Object? distance, bool shown) {
+  final d = _num(distance);
+  if (d > ChatFabs.bottomShowPx) return true;
+  if (d <= ChatFabs.bottomHidePx) return false;
+  return shown;
+}
 
 String jumpDir({Object? top, Object? viewTop, Object? at, Object? firstAt}) {
   if (top is num && top.isFinite) {
@@ -748,6 +759,26 @@ List<Map<String, dynamic>> mentionScan(
     if (m.at <= f) continue;
     if (b > 0 && m.at > b) continue;
     out.add(<String, dynamic>{'id': m.id, 'at': m.at.floor()});
+  }
+  return out;
+}
+
+SeenMark threadOpenMark(Object? prev, Object? threadReadSec, Object? convReadSec) {
+  final p = markNorm(prev);
+  if (p.at > 0) return p;
+  final t = _floor(threadReadSec);
+  return markFloor(t > 0 ? t : convReadSec);
+}
+
+List<Map<String, dynamic>> threadMentionScan(
+    List<ChatNavRow> rows, Object? mark, Object? beforeSec) {
+  final out = <Map<String, dynamic>>[];
+  final b = _num(beforeSec);
+  for (final r in rows) {
+    if (!r.mention || r.own || r.sys || r.id.isEmpty) continue;
+    if (b > 0 && r.at > b) continue;
+    if (markUnder(mark, r.at, r.id)) continue;
+    out.add(<String, dynamic>{'id': r.id, 'at': r.at.floor()});
   }
   return out;
 }

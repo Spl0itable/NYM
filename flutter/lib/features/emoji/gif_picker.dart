@@ -25,6 +25,7 @@ import '../messages/inline_network_image.dart' show InlineNetworkImage;
 import 'modal_close_chip.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../core/theme/nym_a11y.dart';
+import '../../core/theme/nym_theme_swap.dart';
 
 /// Requests go through the backend proxy, which attaches the key, so the user's IP never reaches Giphy.
 const String kGiphyApiKey = kApiGiphyApiKey;
@@ -552,7 +553,7 @@ class _GifTileState extends State<_GifTile> {
         duration: const Duration(milliseconds: 250),
         curve: Curves.fastOutSlowIn,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
+          duration: NymThemeSwap.motion(context, const Duration(milliseconds: 250)),
           curve: Curves.fastOutSlowIn,
           decoration: BoxDecoration(
             border: Border.all(

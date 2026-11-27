@@ -56,8 +56,8 @@ import {
 } from "./_shared.js";
 import { isNymchatClient } from "./_client.js";
 import { isPrivateUrl, ssrfSafeFetch, readBounded } from "./proxy.js";
-import { filterSet, rowHit, pubkeyHit, listPayload, packJsonHit, packUrls, forgetReports } from "./_filters.js";
-import { hiddenAmong, hiddenSenders, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
+import { filterSet, rowHit, pubkeyHit, listPayload, packJsonHit, packUrls, forgetReports, noteReport } from "./_filters.js";
+import { hiddenAmong, hiddenSenders, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings, reviewSpamReport } from "./_spam.js";
 import { handleScheduleAction } from "./_schedule.js";
 import { archiveChannelKey, legacyArchiveChannelKey } from "./_channel-key.js";
 import { isEncryptedBlobContent } from "./_encrypted-blob.js";
@@ -2633,8 +2633,59 @@ async function handleZapAction(context, body) {
   return json({ error: "Unknown action" }, 400);
 }
 
+var REPORT_DETAILS_MAX = 16384;
+var REPORT_DETAILS_IP_RATE = 20;
+
+async function handleReportDetails(context, body) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+    });
+  };
+  if (context._wsAuthedPubkey) return json({ error: "Send report details over HTTPS." }, 400);
+  if (!(await cacheRateTake("report-details", requestIp(context), 1, REPORT_DETAILS_IP_RATE, STORAGE_RATE_WINDOW_MS))) {
+    return json({ error: "Too many requests. Try again in a minute." }, 429);
+  }
+  var reporter = typeof body.pubkey === "string" && /^[0-9a-f]{64}$/.test(body.pubkey) ? body.pubkey : "";
+  if (!reporter) return json({ error: "Invalid pubkey" }, 400);
+  var report = body.report;
+  if (!report || typeof report !== "object" || report.kind !== 1984 || report.pubkey !== reporter || report.content !== "" ||
+    !Array.isArray(report.tags) || typeof report.id !== "string" || typeof report.sig !== "string") {
+    return json({ error: "Invalid report" }, 400);
+  }
+  try {
+    if (getEventHash(report) !== report.id || !schnorr.verify(report.sig, report.id, report.pubkey)) return json({ error: "Invalid report" }, 400);
+  } catch (e) {
+    return json({ error: "Invalid report" }, 400);
+  }
+  if (typeof body.details !== "string" || !body.details.trim()) return json({ error: "Missing details" }, 400);
+  if (body.details.length > REPORT_DETAILS_MAX) return json({ error: "Details too long" }, 413);
+  if (!verifyClientAuth(body.auth, reporter, { url: context.request.url, action: body.action, body: body })) {
+    return json({ error: "Authentication failed" }, 401);
+  }
+  if (!hasD1(env.DB_REPORT)) return json({ error: "Reports are not configured." }, 503);
+  var stored = await noteReport(env, report, "api", body.details);
+  if (stored && typeof context.waitUntil === "function") {
+    context.waitUntil(reviewSpamReport(env, report, { context: context }).catch(function () { return null; }));
+  }
+  return json({ ok: true });
+}
+
 // Shared by the HTTP endpoint and the /api WebSocket (which sets context._wsAuthedPubkey).
 async function routeStorageAction(context, body) {
+  if (body && body.action === "report-details") {
+    try {
+      return await handleReportDetails(context, body);
+    } catch (e) {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+      });
+    }
+  }
+
   if (body && typeof body.action === "string" && body.action.indexOf("settings-") === 0) {
     try {
       return await handleSettingsAction(context, body);

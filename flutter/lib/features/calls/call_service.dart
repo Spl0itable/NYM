@@ -17,6 +17,8 @@ import '../../models/group.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../../widgets/common/nym_label.dart'
+    show isolateNym, isolateNymLabel, isolateNymParts;
 import '../emoji/custom_emoji.dart';
 import '../i18n/i18n.dart';
 import '../notifications/notification_sounds.dart';
@@ -894,7 +896,8 @@ class CallService {
     }
     if (!ac.isGroup) {
       _system(
-          tr('Left the call — you blocked {name}', {'name': _nymFor(pubkey)}));
+          tr('Left the call — you blocked {name}',
+              {'name': isolateNymParts(stripPubkeySuffix(_nymFor(pubkey)), getPubkeySuffix(pubkey))}));
       end();
       return;
     }
@@ -2616,7 +2619,8 @@ class CallService {
         return;
       }
     } catch (_) {}
-    _system(tr('Missed call from {name}', {'name': _peerLabel(pubkey, hint)}));
+    _system(tr('Missed call from {name}',
+        {'name': isolateNymLabel(_peerLabel(pubkey, hint))}));
   }
 
   String _nymFor(String pubkey) {
@@ -2731,7 +2735,12 @@ class CallService {
       mask = app.personMaskLabel(sender, claimed);
     }
     _system(tr('{name} requested to present',
-        {'name': mask.isNotEmpty ? mask : _nymFor(sender)}));
+        {
+          'name': mask.isNotEmpty
+              ? isolateNym(mask)
+              : isolateNymParts(
+                  stripPubkeySuffix(_nymFor(sender)), getPubkeySuffix(sender))
+        }));
     _publish();
   }
 

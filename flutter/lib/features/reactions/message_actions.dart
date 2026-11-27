@@ -42,6 +42,7 @@ class MsgActionFacts {
     this.hexId = false,
     this.bot = false,
     this.anonLane = false,
+    this.noReport = false,
   });
 
   factory MsgActionFacts.fromJson(Map<String, dynamic> j) {
@@ -62,6 +63,7 @@ class MsgActionFacts {
       hexId: b('hexId'),
       bot: b('bot'),
       anonLane: b('anonLane'),
+      noReport: b('noReport'),
     );
   }
 
@@ -80,6 +82,7 @@ class MsgActionFacts {
   final bool hexId;
   final bool bot;
   final bool anonLane;
+  final bool noReport;
 }
 
 List<MsgAction> buildMessageActions(MsgActionFacts f) {
@@ -97,7 +100,7 @@ List<MsgAction> buildMessageActions(MsgActionFacts f) {
     if (f.hasId && !f.anonLane && (f.isSelf || f.modDelete)) MsgAction.delete,
     if (f.edited && f.hasId) MsgAction.editHistory,
     if (f.hexId) MsgAction.eventDetails,
-    if (!f.isSelf && f.hasAuthor) MsgAction.report,
+    if (!f.isSelf && f.hasAuthor && !f.noReport) MsgAction.report,
   ];
 }
 

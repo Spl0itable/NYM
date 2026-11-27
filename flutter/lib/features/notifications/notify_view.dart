@@ -20,11 +20,13 @@ class NotifyViewState {
     this.focused = false,
     this.keys = const [],
     this.thread,
+    this.threads = const [],
   });
 
   final bool focused;
   final List<String> keys;
   final NotifyThread? thread;
+  final List<NotifyThread> threads;
 
   static NotifyViewState fromJson(Object? raw) {
     if (raw is! Map) return const NotifyViewState();
@@ -37,6 +39,11 @@ class NotifyViewState {
             if (k is String && k.isNotEmpty) k,
       ],
       thread: NotifyThread.fromJson(raw['thread']),
+      threads: [
+        if (raw['threads'] is List)
+          for (final t in raw['threads'] as List)
+            if (NotifyThread.fromJson(t) case final NotifyThread nt) nt,
+      ],
     );
   }
 }
@@ -297,9 +304,13 @@ abstract final class NotifyView {
   }
 
   static bool threadOpen(NotifyViewState view, NotifyEvent ev) {
+    if (ev.key.isEmpty || ev.root.isEmpty) return false;
     final t = view.thread;
-    if (ev.key.isEmpty || ev.root.isEmpty || t == null) return false;
-    return t.key == ev.key && t.root == ev.root;
+    if (t != null && t.key == ev.key && t.root == ev.root) return true;
+    for (final o in view.threads) {
+      if (o.key == ev.key && o.root == ev.root) return true;
+    }
+    return false;
   }
 
   static bool onScreen(NotifyViewState view, NotifyEvent ev) {

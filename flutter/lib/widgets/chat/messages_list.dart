@@ -159,11 +159,12 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   final ScrollOffsetController _offsetController = ScrollOffsetController();
   final List<ScrollableState> _scrollables = [];
 
-  /// Reports visible positions for the scroll-to-bottom FAB's 150px gate; index 0 is the newest message.
+  /// Reports visible positions for the scroll-to-bottom FAB; index 0 is the newest message.
   final ItemPositionsListener _positionsListener =
       ItemPositionsListener.create();
 
   final ValueNotifier<bool> _scrollButton = ValueNotifier(false);
+  bool _far = false;
 
   late final MessageAnnouncer _announcer = MessageAnnouncer(speak: _speak);
 
@@ -638,7 +639,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     return true;
   }
 
-  /// Shows the FAB beyond 150px from the bottom; offset 0 rests index 0's edge 16px inside the viewport.
+  /// Offset 0 rests index 0's edge 16px inside the viewport.
   void _onPositionsChanged() {
     final positions = _shown.itemPositions.value;
     if (positions.isEmpty) return;
@@ -651,17 +652,22 @@ class _MessagesListState extends ConsumerState<MessagesList> {
         break;
       }
     }
+    final bool far;
     final bool shouldShow;
     if (newest == null) {
+      far = true;
       shouldShow = true;
     } else if (_viewportHeight <= 0) {
+      far = false;
       shouldShow = false;
     } else {
       final distanceFromBottom = 16 - newest.itemLeadingEdge * _shownHeight;
-      shouldShow = distanceFromBottom > 150;
+      far = distanceFromBottom > 150;
+      shouldShow = bottomShown(distanceFromBottom, _scrollButton.value);
     }
+    _far = far;
     _scrollButton.value = shouldShow;
-    _updateDayFloat(positions, !shouldShow);
+    _updateDayFloat(positions, !far);
   }
 
   void _updateDayFloat(Iterable<ItemPosition> positions, bool atBottom) {
@@ -869,7 +875,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     _nav.bind(indexById, built.offset + units.length - 1,
         newestIndex: built.offset);
     _nav.observeLive(messages,
-        away: _scrollButton.value ||
+        away: _far ||
             !ref.read(appStateProvider.notifier).appVisible);
     final scroller = ref.read(messageListScrollerProvider(view.storageKey));
     scroller.bind(_itemScrollController, indexById,
@@ -957,7 +963,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                         initialScrollIndex: restore?.index ?? built.offset,
                         initialAlignment: restore?.alignment ??
                             _bottomAlignment(built.offset),
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                        padding: NymDimens.chatListPadding(context),
                         // Channels get one extra top unit, the history-edge notice, shown once the user scrolls back to it.
                         itemCount:
                             built.offset + units.length + (isChannel ? 1 : 0),
@@ -1074,10 +1080,10 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                             valueListenable: _scrollButton,
                             builder: (context, show, _) => ChatNavFabs(
                               binding: _nav,
-                              slot: _fabSlot(context),
+                              slot: chatFabSlot(context),
                               bottom: show
-                                  ? _ScrollToBottomButton(
-                                      size: _fabSlot(context),
+                                  ? ScrollToBottomFab(
+                                      size: chatFabSlot(context),
                                       onTap: _scrollToBottom)
                                   : null,
                             ),
@@ -1364,20 +1370,20 @@ String _unitIdOf(_RenderUnit unit) => unit is _GroupUnit
     ? 'group_${unit.entries.first.message.id}'
     : 'poll_${(unit as _PollUnit).poll.id}';
 
-double _fabSlot(BuildContext context) =>
+double chatFabSlot(BuildContext context) =>
     MediaQuery.sizeOf(context).width <= ChatFabs.phoneMax ? 36 : 40;
 
 /// 40x40 scroll-to-bottom FAB; unlike the columns copy, it carries the light-mode style.
-class _ScrollToBottomButton extends StatefulWidget {
-  const _ScrollToBottomButton({required this.onTap, this.size = 40});
+class ScrollToBottomFab extends StatefulWidget {
+  const ScrollToBottomFab({super.key, required this.onTap, this.size = 40});
   final VoidCallback onTap;
   final double size;
 
   @override
-  State<_ScrollToBottomButton> createState() => _ScrollToBottomButtonState();
+  State<ScrollToBottomFab> createState() => _ScrollToBottomFabState();
 }
 
-class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
+class _ScrollToBottomFabState extends State<ScrollToBottomFab> {
   bool _pointerHover = false;
   bool _focused = false;
 

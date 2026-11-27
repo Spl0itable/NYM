@@ -23,6 +23,7 @@ import '../../../services/platform/deep_links.dart';
 import '../../../state/app_state.dart';
 import '../../../state/nostr_controller.dart';
 import '../../../state/settings_provider.dart';
+import '../../../state/view_history.dart';
 import '../../../widgets/chat/message_row.dart' show hoverBarLitFill;
 import '../../../widgets/chat/row_tap.dart';
 import '../../../widgets/chat/eased.dart';
@@ -33,7 +34,8 @@ import '../../../widgets/common/nym_avatar.dart';
 import '../../../widgets/nym_icons.dart' show NymSvgIcon;
 import '../../../widgets/context_menu/context_menu_actions.dart';
 import '../../../widgets/context_menu/context_menu_panel.dart';
-import '../../commands/command_handler.dart' show resolveTarget;
+import '../../commands/command_handler.dart'
+    show ResolvedTarget, ambiguousNymText, lookupMention, mentionKnownKeys;
 import '../../group_tools/group_tools_ui.dart' show GroupToolIcons, joinCallLinkFlow;
 import '../../emoji/custom_emoji.dart' show noteMissingCustomEmoji;
 import '../../groups/group_invite_confirm.dart';
@@ -130,17 +132,18 @@ class MessageContent extends ConsumerWidget {
         (v) => v.kind == ViewKind.channel ? v.id.toLowerCase() : null));
     final c = ref.watch(nymColorsProvider);
 
+    final hiddenEmoji = ref.watch(hiddenEmojiProvider.select((h) => h));
+    final shown = hiddenEmoji.strip(ref.watch(
+        appStateProvider.select((s) => s.stripBlockedQuotes(content, quoted))));
     final ctx = FormatContext(
       currentChannel: channel,
       currentGeohash: channel,
       customEmojis:
           ref.watch(liveCustomEmojiProvider.select((s) => s.codeToUrl)),
       commonMark: commonMark,
+      knownMentions:
+          ref.watch(usersProvider.select((u) => mentionKnownKeys(shown, u))),
     );
-
-    final hiddenEmoji = ref.watch(hiddenEmojiProvider.select((h) => h));
-    final shown = hiddenEmoji.strip(ref.watch(
-        appStateProvider.select((s) => s.stripBlockedQuotes(content, quoted))));
     final blocks = NymFormat.format(shown, ctx);
     final size = fontSize ?? textSize.toDouble();
     final color = baseColor ?? c.text;
@@ -166,19 +169,23 @@ class MessageContent extends ConsumerWidget {
     // Tapping a mention opens the full context menu for the resolved user.
     void onMentionTap(MentionNode node) {
       final users = ref.read(usersProvider);
-      // Re-attach the `#suffix` so suffixed mentions resolve to the right pubkey.
-      final raw =
-          node.suffix != null ? '${node.base}#${node.suffix}' : node.base;
-      final t = resolveTarget(raw, users);
-      if (t == null) return; // unknown mention → inert (PWA: no pubkey → no-op)
+      final hit = lookupMention(_mentionName(node), node.suffix, users);
+      if (hit == null) return;
+      if (hit.isAmbiguous) {
+        final controller = ref.read(nostrControllerProvider);
+        controller.showSystemNotice(ambiguousNymText(hit));
+        controller.showSystemNotice(
+            tr('Please specify using the #xxxx suffix or full pubkey'));
+        return;
+      }
+      final pk = hit.pubkey!;
       final app = ref.read(appStateProvider);
       ContextMenuPanel.show(
         context,
-        // Full target without message content, so only person-level actions show.
         target: CtxTarget(
-          pubkey: t.pubkey,
-          nym: stripPubkeySuffix(t.nym),
-          isSelf: t.pubkey == app.selfPubkey,
+          pubkey: pk,
+          nym: stripPubkeySuffix(hit.nym),
+          isSelf: pk == app.selfPubkey,
         ),
       );
     }
@@ -279,10 +286,7 @@ class MessageContent extends ConsumerWidget {
           visitInlines(inlines);
         case ListBlock():
           visitList(b);
-        case QuoteBlock(:final children):
-          for (final ch in children) {
-            visitBlock(ch);
-          }
+        case QuoteBlock():
         case CodeBlock():
         case MediaBlock():
         case AudioBlock():
@@ -315,11 +319,12 @@ class MessageContent extends ConsumerWidget {
       return;
     }
 
+    if (target != ref.read(appStateProvider).view) app.switchView(target);
     // Leave the thread panel so the conversation's own list rebinds.
     if (ref.read(activeThreadProvider) != null) {
       ref.read(activeThreadProvider.notifier).state = null;
+      ref.read(viewHistoryProvider).dropForward();
     }
-    if (target != ref.read(appStateProvider).view) app.switchView(target);
     // Switching remounts the list, so the first frame can still miss.
     _jumpWhenBound(
       ref.read(messageListScrollerProvider(target.storageKey)),
@@ -387,10 +392,7 @@ class MessageContent extends ConsumerWidget {
           visitInlines(inlines);
         case ListBlock():
           visitList(b);
-        case QuoteBlock(:final children):
-          for (final ch in children) {
-            visitBlock(ch);
-          }
+        case QuoteBlock():
         case CodeBlock():
         case MediaBlock():
         case AudioBlock():
@@ -1507,6 +1509,9 @@ class _CodeLinkFocusState extends State<_CodeLinkFocus> {
   }
 }
 
+String _mentionName(MentionNode node) =>
+    node.base.startsWith('@') ? node.base.substring(1) : node.base;
+
 class _MentionChip extends ConsumerWidget {
   const _MentionChip({
     required this.node,
@@ -1516,60 +1521,51 @@ class _MentionChip extends ConsumerWidget {
   final MentionNode node;
   final double size;
 
-  /// Opens the mentioned user's context menu; null is inert.
   final void Function(MentionNode node)? onTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    // Secondary color at body weight.
+    final style = TextStyle(color: c.secondary, fontSize: size);
+    final name = _mentionName(node);
     final text = Text.rich(
       TextSpan(
         children: [
-          TextSpan(
-            text: capMentionBase(node.base),
-            style: TextStyle(
-              color: c.secondary,
-              fontSize: size,
-            ),
-          ),
+          TextSpan(text: '@\u2068$name\u2069', style: style),
           if (node.suffix != null)
             TextSpan(
               text: '#${node.suffix}',
-              style: nymSuffixStyle(
-                  TextStyle(color: c.secondary, fontSize: size),
-                  contrast: context.highContrast),
+              style: nymSuffixStyle(style, contrast: context.highContrast),
             ),
         ],
       ),
     );
 
-    // Resolve the mention to decorate it with avatar and flair; unresolved mentions render plain.
-    final raw = node.suffix != null ? '${node.base}#${node.suffix}' : node.base;
-    ref.watch(usersProvider.select((u) {
-      final hit = resolveTarget(raw, u);
-      return (hit?.pubkey, hit?.nym, u[hit?.pubkey]?.profile?.picture);
-    }));
-    final users = ref.read(usersProvider);
-    final t = resolveTarget(raw, users);
-    final chipHidden = t != null &&
-        ref.watch(appStateProvider
-            .select((s) => s.hasBlockedKeyword('', t.nym, t.pubkey)));
+    final suffix = node.suffix;
+    final pubkey = suffix == null
+        ? null
+        : ref.watch(usersProvider
+            .select((u) => lookupMention(name, suffix, u)?.pubkey));
+    final picture = pubkey == null
+        ? null
+        : ref.watch(usersProvider.select((u) => u[pubkey]?.profile?.picture));
+    final chipHidden = pubkey != null &&
+        ref.watch(appStateProvider.select((s) => s.hasBlockedKeyword(
+            '', s.users[pubkey]?.nym ?? name, pubkey)));
     Widget chip = text;
-    if (t != null && !chipHidden) {
-      final cosmetics = ref.watch(userCosmeticsProvider(t.pubkey));
+    if (pubkey != null && !chipHidden) {
+      final cosmetics = ref.watch(userCosmeticsProvider(pubkey));
       chip = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           NymAvatar(
-              seed: t.pubkey,
+              seed: pubkey,
               size: size,
-              imageUrl: users[t.pubkey]?.profile?.picture,
+              imageUrl: picture,
               ring: context.nym.avatarRing,
               ringId: cosmetics.ringId),
           const SizedBox(width: 3),
-          text,
-          // Flair and supporter badge, hidden when the user has none.
+          Flexible(child: text),
           CosmeticNymBadges(
             cosmetics: cosmetics,
             flairSize: size,
@@ -3360,6 +3356,7 @@ class _QuoteBox extends ConsumerWidget {
     }
     if (inThread) {
       ref.read(activeThreadProvider.notifier).state = null;
+      ref.read(viewHistoryProvider).dropForward();
       _jumpWhenBound(scroller, flash, target.id, onGiveUp: reportUnavailable);
       return;
     }
@@ -3377,9 +3374,11 @@ class _QuoteBox extends ConsumerWidget {
     final split = splitNymSuffix(author);
     final base = capMentionBase(split.base);
     final suffix = split.suffix.isEmpty ? null : split.suffix;
-    // Resolve the author for a leading avatar and trailing flair; unknown authors render plain.
     final users = ref.watch(usersProvider);
-    final t = resolveTarget(author, users);
+    final hit = suffix == null
+        ? null
+        : lookupMention(split.base, suffix.substring(1), users);
+    final t = hit?.pubkey == null ? null : ResolvedTarget(hit!.pubkey!, hit.nym);
     final authorSize = size - 1;
     final cosmetics = t == null ? null : ref.watch(userCosmeticsProvider(t.pubkey));
     return Text.rich(
@@ -3400,7 +3399,7 @@ class _QuoteBox extends ConsumerWidget {
               ),
             ),
           TextSpan(
-            text: base,
+            text: '\u2068$base\u2069',
             style: TextStyle(
               color: c.secondary,
               fontSize: authorSize,

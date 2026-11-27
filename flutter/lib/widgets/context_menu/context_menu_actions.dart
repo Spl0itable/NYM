@@ -57,6 +57,7 @@ class CtxTarget {
     this.backToGroupId,
     this.translatable = true,
     this.anonLane = false,
+    this.reportable = true,
   });
 
   final String pubkey;
@@ -90,6 +91,8 @@ class CtxTarget {
 
   final bool anonLane;
 
+  final bool reportable;
+
   bool get iCanAdminister => iAmOwner || iAmAdmin;
   bool get iCanModerate => iCanAdminister || iAmMod;
 
@@ -115,7 +118,7 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
       if (showAddToGroup) CtxAction.addToGroup,
       if (showGiftCredits) CtxAction.giftCredits,
       if (!t.isSelf) CtxAction.friend,
-      if (!t.isSelf) CtxAction.report,
+      if (!t.isSelf && t.reportable) CtxAction.report,
       if (!t.isSelf) CtxAction.block,
       if (t.isSelf) CtxAction.editProfile,
     ];
@@ -151,7 +154,7 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
     if (hasContent) CtxAction.copyMessage,
     if (hasContent && t.translatable) CtxAction.translate,
     if (!t.isSelf) CtxAction.friend,
-    if (!t.isSelf && !showKickOrBan) CtxAction.report,
+    if (!t.isSelf && t.reportable && !showKickOrBan) CtxAction.report,
     if (t.isSelf && hasMessage && hasContent && !t.anonLane) CtxAction.edit,
     if (canDeleteOwn || (canModDelete && !showKickOrBan)) CtxAction.delete,
     if (showAddMod) CtxAction.makeMod,
@@ -159,7 +162,7 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
     if (showAddAdmin) CtxAction.makeAdmin,
     if (showRemoveAdmin) CtxAction.revokeAdmin,
     if (showTransfer) CtxAction.transferOwner,
-    if (showKickOrBan) CtxAction.report,
+    if (showKickOrBan && t.reportable) CtxAction.report,
     if (canModDelete && showKickOrBan) CtxAction.delete,
     if (showKickOrBan) CtxAction.kick,
     if (showKickOrBan) CtxAction.ban,

@@ -47,7 +47,9 @@
             else if (el.getAttribute('role') === 'menuitem' && !el.classList.contains('nm-hidden')) {
                 var icon = el.querySelector('svg');
                 var text = el.querySelector('span');
-                entries.push({ label: text ? text.textContent : el.textContent, svg: icon ? icon.outerHTML : '', disabled: el.disabled, cls: el.dataset.uhId ? 'uh-chat-item uh-act-' + el.dataset.uhId : (el.classList.contains('uh-chat-item') ? 'uh-chat-item' : ''), run: function () { el.click(); } });
+                var cls = el.dataset.uhId ? 'uh-chat-item uh-act-' + el.dataset.uhId : (el.classList.contains('uh-chat-item') ? 'uh-chat-item' : '');
+                if (el.classList.contains('danger')) cls += ' danger';
+                entries.push({ label: text ? text.textContent : el.textContent, svg: icon ? icon.outerHTML : '', disabled: el.disabled, cls: cls, run: function () { el.click(); } });
             }
         });
         var n = window.nym;
@@ -269,7 +271,7 @@
                 try { body = typeof n._previewBody === 'function' ? n._previewBody(body, Array.isArray(m.quoted) ? m.quoted : []) : n._notifPreviewText(body); } catch (_) { }
                 var redacted = '';
                 if (locked) { try { redacted = n._clRedactText().body; } catch (_) { redacted = ui('New message'); } }
-                var parts = LM().rowPreviewParts({ kind: conv.kind, author: author, pubkey: m.pubkey, self: !!m.isOwn, text: typeof body === 'string' && window.NymSuffix ? window.NymSuffix.capMentions(body) : body, hide: hide, locked: locked, redacted: redacted }, ui);
+                var parts = LM().rowPreviewParts({ kind: conv.kind, author: author, pubkey: m.pubkey, self: !!m.isOwn, text: body, hide: hide, locked: locked, redacted: redacted }, ui);
                 text = parts.text;
                 dim = parts.dim;
                 sender = parts.sender || null;
@@ -301,7 +303,7 @@
     function sweepEnv(n) {
         var lang = '';
         try { lang = typeof n.getUiLanguage === 'function' ? n.getUiLanguage() : ''; } catch (_) { }
-        return [lang, (n.settings && n.settings.theme) || '', n._emojiBlockRev || 0, n._i18nRev || 0].join('\u0002');
+        return [lang, n._emojiBlockRev || 0, n._i18nRev || 0].join('\u0002');
     }
 
     function sweepPreviews() {
@@ -1158,7 +1160,8 @@
     }
 
 
-    var SIDEBAR_KEY = 'nym_sidebar_width';
+    var SIDEBAR_KEY = 'nym_sidebar_width_v2';
+    var SIDEBAR_LEGACY_KEY = 'nym_sidebar_width';
 
     function setSidebarWidth(w, save) {
         if (!LM()) return;
@@ -1178,30 +1181,40 @@
         var r = document.getElementById('sidebarResizer');
         var side = document.getElementById('sidebar');
         if (!r || !side || !LM()) return;
-        var saved = lsGet(SIDEBAR_KEY);
-        setSidebarWidth(saved ? Number(saved) : LM().SIDEBAR_DEFAULT, false);
+        var legacy = lsGet(SIDEBAR_LEGACY_KEY);
+        var saved = LM().savedSidebarWidth(lsGet(SIDEBAR_KEY), legacy);
+        if (legacy != null) {
+            if (saved != null && lsGet(SIDEBAR_KEY) == null) lsSet(SIDEBAR_KEY, String(saved));
+            lsSet(SIDEBAR_LEGACY_KEY, null);
+        }
+        setSidebarWidth(saved == null ? LM().SIDEBAR_DEFAULT : saved, false);
         var drag = null;
         r.addEventListener('pointerdown', function (e) {
             if (e.button !== 0) return;
             e.preventDefault();
-            drag = { x: e.clientX, w: side.getBoundingClientRect().width };
+            drag = { x: e.clientX, w: side.getBoundingClientRect().width, moved: false };
             try { r.setPointerCapture(e.pointerId); } catch (_) { }
             document.documentElement.classList.add('sidebar-resizing');
         });
         r.addEventListener('pointermove', function (e) {
             if (!drag) return;
+            if (e.clientX !== drag.x) drag.moved = true;
             setSidebarWidth(drag.w + e.clientX - drag.x, false);
         });
         var end = function (e) {
             if (!drag) return;
             var w = drag.w + e.clientX - drag.x;
+            var moved = drag.moved || e.clientX !== drag.x;
             drag = null;
             document.documentElement.classList.remove('sidebar-resizing');
-            setSidebarWidth(w, true);
+            if (moved) setSidebarWidth(w, true);
         };
         r.addEventListener('pointerup', end);
         r.addEventListener('pointercancel', end);
-        r.addEventListener('dblclick', function () { setSidebarWidth(LM().SIDEBAR_DEFAULT, true); });
+        r.addEventListener('dblclick', function () {
+            lsSet(SIDEBAR_KEY, null);
+            setSidebarWidth(LM().SIDEBAR_DEFAULT, false);
+        });
         r.addEventListener('keydown', function (e) {
             if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
             e.preventDefault();
@@ -1394,7 +1407,7 @@
             if (!p) return;
             if (out.length) out.push(document.createTextNode(' · '));
             if (typeof p === 'object') {
-                var s = document.createElement('span');
+                var s = document.createElement('bdi');
                 s.setAttribute('data-no-i18n', '');
                 s.textContent = p.user;
                 out.push(s);
@@ -1403,6 +1416,13 @@
             }
         });
         return out;
+    }
+
+    function subBox(cls, kids) {
+        var s = document.createElement('span');
+        s.className = cls;
+        kids.forEach(function (k) { s.appendChild(k); });
+        return s;
     }
 
     function renderHeader() {
@@ -1419,6 +1439,7 @@
         var enc = uiT(n, 'end-to-end encrypted');
         var subText = '';
         var dot = false;
+        var split = false;
         av.className = 'uh-avatar';
         av.replaceChildren();
         title.replaceChildren();
@@ -1452,19 +1473,23 @@
             av.innerHTML = n._channelGlyphSvg(true, 18);
             title.textContent = '#' + geoKey(n);
             var place = textOf(src.querySelector('.channel-location'));
-            subText = joinSub([userPart(place), textOf(meta)]);
+            subText = joinSub([textOf(meta), userPart(place)]);
+            split = subText.length > 1;
         } else {
             av.innerHTML = n._channelGlyphSvg(false, 18);
             title.textContent = textOf(src.querySelector('.channel-title-line')) || ('#' + (n.currentChannel || ''));
             subText = textOf(meta);
         }
+        var nodes = subNodes(subText);
+        if (split) nodes = [subBox('uh-sub-lead', nodes.slice(0, 1)), subBox('uh-sub-rest', nodes.slice(1))];
+        sub.classList.toggle('uh-sub-split', split);
         if (dot) {
             var d = document.createElement('span');
             d.className = 'uh-dot';
             d.setAttribute('aria-hidden', 'true');
-            sub.replaceChildren.apply(sub, [d].concat(subNodes(subText)));
+            sub.replaceChildren.apply(sub, [d].concat(nodes));
         } else {
-            sub.replaceChildren.apply(sub, subNodes(subText));
+            sub.replaceChildren.apply(sub, nodes);
         }
         var label = kind === 'geohash' ? uiT(n, 'Show this location on the map') : (kind === 'channel' ? '' : uiT(n, 'Conversation info'));
         mid.classList.toggle('uh-clickable', !!label);
@@ -1586,7 +1611,7 @@
             var was = live.filter(function (b) { return b.classList.contains('uh-over'); }).length;
             var base = room - hiddenInfo(mid) - was * step + (phone && head.classList.contains('uh-more-on') ? step : 0) + (backWanted && !backWas ? step : 0);
             var kind = mesh ? 'mesh' : (M.HEADER_KINDS[headerKind(n)] || 'channel');
-            var opts = { kind: kind, actions: live.map(function (b) { return HEADER_IDS[b.id] || b.id; }).concat('bell'), base: base, step: step, more: !phone };
+            var opts = { kind: kind, actions: live.map(function (b) { return HEADER_IDS[b.id] || b.id; }).concat('bell'), base: base, step: step, more: !phone, phone: phone };
             var plan = backWanted && typeof M.headerBackPlan === 'function' ? M.headerBackPlan(opts) : M.headerOverflow(opts);
             moved = plan.moved;
             more = phone && plan.more;
@@ -1617,6 +1642,21 @@
         overflowTimer = setTimeout(function () { overflowTimer = 0; try { applyActionOverflow(); } catch (_) { } }, 0);
     }
 
+    function channelOptions(n, kind) {
+        if ((kind !== 'channel' && kind !== 'geohash') || typeof n._buildSidebarMenuItems !== 'function') return [];
+        if (n.settings && n.settings.groupChatPMOnlyMode) return [];
+        var ch = n.currentChannel || '';
+        var gh = n.currentGeohash || '';
+        if (!ch && !gh) return [];
+        var row = document.createElement('div');
+        row.className = 'channel-item list-item';
+        row.dataset.channel = ch;
+        row.dataset.geohash = gh;
+        var list = [];
+        try { list = n._buildSidebarMenuItems(row) || []; } catch (_) { list = []; }
+        return list.filter(function (it) { return it && typeof it.action === 'function'; });
+    }
+
     function buildChatMenu(menu) {
         var n = window.nym;
         Array.prototype.slice.call(menu.querySelectorAll('.uh-chat-item, .header-more-head, .header-more-sep')).forEach(function (x) { x.remove(); });
@@ -1624,15 +1664,27 @@
         applyActionOverflow();
         var mesh = meshMode();
         var items = [];
+        var kind = mesh ? 'mesh' : headerKind(n);
+        var chan = mesh ? [] : channelOptions(n, kind);
         (mesh ? meshActions() : chatActions()).forEach(function (b) {
             if (!b.classList.contains('uh-over')) return;
+            if (chan.length && b.id === 'favoriteChannelBtn') return;
             items.push({ id: HEADER_IDS[b.id] || '', label: b.getAttribute('aria-label') || '', svg: b.querySelector('svg'), run: function () { b.click(); }, disabled: b.disabled, filled: b.id === 'favoriteChannelBtn' && b.classList.contains('active') });
         });
-        var kind = mesh ? 'mesh' : headerKind(n);
         if (kind === 'geohash') {
             var gh = geoKey(n);
             items.push({ label: uiT(n, 'Open in explorer'), html: EXPLORE_SVG, run: function () { if (typeof n.showGeohashExplorer === 'function') n.showGeohashExplorer(gh); } });
         }
+        chan.forEach(function (it) {
+            items.push({
+                label: it.label, html: it.svg || '', danger: /(^|\s)danger(\s|$)/.test(it.cls || ''),
+                run: function () {
+                    var b = moreBtn();
+                    if (b && b.offsetWidth) { var r = b.getBoundingClientRect(); n._sfMenuXY = [Math.round(r.right), Math.round(r.bottom)]; }
+                    it.action();
+                }
+            });
+        });
         var first = menu.firstChild;
         if (items.length) {
             var head = document.createElement('div');
@@ -1645,6 +1697,7 @@
                 btn.className = 'header-more-item uh-chat-item';
                 btn.setAttribute('role', 'menuitem');
                 if (it.id) btn.dataset.uhId = it.id;
+                if (it.danger) btn.classList.add('danger');
                 if (it.disabled) btn.disabled = true;
                 if (it.svg) {
                     var c = it.svg.cloneNode(true);
@@ -1654,6 +1707,11 @@
                     btn.appendChild(c);
                 } else if (it.html) {
                     btn.insertAdjacentHTML('beforeend', it.html);
+                    var ic = btn.lastElementChild;
+                    if (ic && String(ic.tagName).toLowerCase() === 'svg') {
+                        ic.setAttribute('width', '16');
+                        ic.setAttribute('height', '16');
+                    }
                 }
                 var sp = document.createElement('span');
                 sp.textContent = it.label;

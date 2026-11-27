@@ -201,7 +201,7 @@ class Message {
       localMediaPath != null && localMediaPath!.isNotEmpty;
   bool get isLocalImage => localMediaMime?.startsWith('image/') ?? false;
 
-  /// Delivered over the Bluetooth mesh; session-local.
+  /// Delivered over the Bluetooth mesh.
   bool viaMesh;
 
   bool isBot;
@@ -287,6 +287,7 @@ class Message {
         'geohash': geohash,
         'isFileOffer': isFileOffer,
         'fileOffer': fileOffer,
+        if (viaMesh) 'viaMesh': true,
         'isBot': isBot,
         'thinking': thinking,
         'kind': kind.name,
@@ -385,6 +386,7 @@ class Message {
       geohash: j['geohash'] as String?,
       isFileOffer: j['isFileOffer'] == true,
       fileOffer: (j['fileOffer'] as Map?)?.cast<String, dynamic>(),
+      viaMesh: j['viaMesh'] == true,
       isBot: j['isBot'] == true,
       thinking: j['thinking'] as String?,
       kind: messageKindFromString(j['kind'] as String?),

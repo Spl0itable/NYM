@@ -413,6 +413,10 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
+const double _kMeshIcon = 20;
+
+const double _kMeshRowMinH = 36;
+
 class _MeshRow extends StatelessWidget {
   const _MeshRow({
     super.key,
@@ -465,7 +469,7 @@ class _MeshRow extends StatelessWidget {
           onTap: onTap,
           onShowMenu: (_) => false,
           builder: (context, hovered) => Container(
-            constraints: const BoxConstraints(minHeight: kSidebarRowMinH),
+            constraints: const BoxConstraints(minHeight: _kMeshRowMinH),
             padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 6, 6, 6),
             decoration: BoxDecoration(
               color: hovered ? hoverFill : Colors.transparent,
@@ -521,7 +525,7 @@ class _PeerRow extends ConsumerWidget {
       tooltip: '${peer.displayName} · ${peer.peerID}',
       leading: NymAvatar(
         seed: pk ?? peer.peerID,
-        size: kSidebarIcon,
+        size: _kMeshIcon,
         imageUrl: peer.avatarUrl,
         label: peer.displayName,
       ),

@@ -246,8 +246,9 @@ String presenceClass(String status) {
 }
 
 const int kSidebarMin = 240;
-const int kSidebarMax = 400;
-const int kSidebarDefault = 290;
+const int kSidebarMax = 560;
+const int kSidebarDefault = 400;
+const int kSidebarLegacyDefault = 290;
 
 int clampSidebarWidth(Object? w) {
   double? n;
@@ -258,6 +259,20 @@ int clampSidebarWidth(Object? w) {
   }
   if (n == null || n.isNaN || n.isInfinite) return kSidebarDefault;
   return n.clamp(kSidebarMin.toDouble(), kSidebarMax.toDouble()).round();
+}
+
+int? savedSidebarWidth(String? saved, String? legacy) {
+  double? num(String? v) {
+    final n = v == null || v.trim().isEmpty ? null : double.tryParse(v.trim());
+    return n == null || n.isNaN || n.isInfinite ? null : n;
+  }
+
+  final s = num(saved);
+  if (s != null) return clampSidebarWidth(s);
+  final l = num(legacy);
+  if (l == null) return null;
+  final px = clampSidebarWidth(l);
+  return px == kSidebarLegacyDefault || px >= kSidebarDefault ? null : px;
 }
 
 const int kColumnMin = 280;
@@ -287,6 +302,8 @@ const Map<String, List<String>> kHeaderPriority = {
   'mesh': ['addDevice', 'ghost'],
 };
 
+const List<String> kHeaderPhoneMore = ['channel'];
+
 const Map<String, String> kHeaderKinds = {
   'channel': 'channel',
   'geohash': 'channel',
@@ -312,11 +329,13 @@ const Map<String, String> kHeaderKinds = {
   required double step,
   required bool more,
   double min = kHeaderMinTitle,
+  bool phone = false,
 }) {
+  final all = phone && kHeaderPhoneMore.contains(kind);
   var room = base;
   var shown = more;
   final moved = <String>[];
-  if (room < min) {
+  if (room < min || all) {
     for (final id in kHeaderPriority[kind] ?? const <String>[]) {
       if (!actions.contains(id) || kHeaderEssential.contains(id)) continue;
       moved.add(id);
@@ -325,8 +344,12 @@ const Map<String, String> kHeaderKinds = {
       } else {
         shown = true;
       }
-      if (room >= min) break;
+      if (!all && room >= min) break;
     }
+  }
+  if (all) {
+    if (!shown) room -= step;
+    return (moved: moved, room: room, more: true);
   }
   if (room <= base) return (moved: const <String>[], room: base, more: more);
   return (moved: moved, room: room, more: shown);

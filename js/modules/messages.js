@@ -1,36 +1,7 @@
-const _RX_REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g;
-const _RX_HTML_TAG = /<[^>]*>/g;
-const _RX_DUP_SUFFIX = /@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi;
 const _RX_WHITESPACE = /\s/g;
 const _RX_FORMAT_TRIGGERS = /[^\x20-\x7E\n]|[*_~`#>@:;/\\&<>"]/;
 const _EMOJI_UNIT = '(?:[\\u{1F1E0}-\\u{1F1FF}]{2})|(?:[#*0-9]\\u{FE0F}?\\u{20E3})|(?:(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?(?:\\u{200D}(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?)*)(?:[\\u{E0020}-\\u{E007E}]+\\u{E007F})?';
 const _RX_EMOJI_ONLY = new RegExp(`^(?:${_EMOJI_UNIT}){1,6}$`, 'u');
-
-let _mentionPatternCache = { key: null, pattern: null };
-function _getMentionPattern(cleanNym, suffix) {
-    const key = JSON.stringify([cleanNym, suffix || '']);
-    if (_mentionPatternCache.key === key) return _mentionPatternCache.pattern;
-    const escaped = cleanNym.replace(_RX_REGEX_ESCAPE, '\\$&');
-    const sfx = (suffix || '').replace(_RX_REGEX_ESCAPE, '\\$&');
-    const tail = sfx
-        ? `(?:#${sfx}\\b|(?!#[0-9a-f]{4})(?:\\b|$))`
-        : `(?!#[0-9a-f]{4})(?:\\b|$)`;
-    const pattern = new RegExp(`@${escaped}${tail}`, 'gi');
-    _mentionPatternCache = { key, pattern };
-    return pattern;
-}
-
-// Detects a quote-reply addressed to us ("> @ourNym#xxxx: ...").
-let _quoteToMePatternCache = { key: null, pattern: null };
-function _getQuoteToMePattern(cleanNym, suffix) {
-    const key = JSON.stringify([cleanNym, suffix || '']);
-    if (_quoteToMePatternCache.key === key) return _quoteToMePatternCache.pattern;
-    const escaped = cleanNym.replace(_RX_REGEX_ESCAPE, '\\$&');
-    const sfx = (suffix || '').replace(_RX_REGEX_ESCAPE, '\\$&');
-    const pattern = new RegExp(`^\\s*>+\\s*@${escaped}(?:#${sfx})?\\s*:`, 'im');
-    _quoteToMePatternCache = { key, pattern };
-    return pattern;
-}
 
 const WOT_SPAM_GATE = false;
 
@@ -743,15 +714,15 @@ Object.assign(NYM.prototype, {
         const lines = rawText.split('\n');
         let currentAuthor = null;
         let currentText = [];
+        const NP = window.NymNickParse;
         for (const line of lines) {
-            // Quote lines: "> @Author#xxxx: text" or "> continuation"
-            const authorMatch = line.match(/^>\s*@([^:]+):\s*(.*)/);
-            if (authorMatch) {
+            const head = NP && /^>/.test(line) ? NP.quoteHeader(line) : null;
+            if (head) {
                 if (currentAuthor !== null) {
                     conversation.push({ author: currentAuthor, text: currentText.join('\n').trim() });
                 }
-                currentAuthor = authorMatch[1].trim();
-                currentText = [authorMatch[2]];
+                currentAuthor = (head.author + (head.suffix ? '#' + head.suffix : '')).trim();
+                currentText = [head.body];
             } else if (line.startsWith('>') && currentAuthor !== null) {
                 currentText.push(line.replace(/^>\s?/, ''));
             } else if (currentAuthor !== null) {
@@ -1267,25 +1238,10 @@ Object.assign(NYM.prototype, {
     },
 
     isMentioned(content) {
-        if (!content || !this.nym) return false;
-
-        const cleanNym = this.parseNymFromDisplay(this.nym);
-        const mySuffix = this.getPubkeySuffix(this.pubkey);
-
-        // Cached per identity; recompiled only when nym/suffix changes.
-        const nymPattern = _getMentionPattern(cleanNym, mySuffix);
-        nymPattern.lastIndex = 0;
-
-        let cleanContent = content.replace(_RX_HTML_TAG, '');
-        cleanContent = cleanContent.replace(_RX_DUP_SUFFIX, '@$1#$2');
-
-        // A quote-reply to us counts as a mention even though its line is a blockquote.
-        if (_getQuoteToMePattern(cleanNym, mySuffix).test(cleanContent)) return true;
-
-        // Strip blockquoted lines so mentions inside quoted text don't notify.
-        cleanContent = cleanContent.split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n');
-
-        return nymPattern.test(cleanContent);
+        const NP = window.NymNickParse;
+        if (!content || !this.nym || !NP) return false;
+        const r = NP.selfMention(content, NP.baseOf({ nym: this.nym, pubkey: this.pubkey }), this.pubkey, (name, sfx) => !!this._mentionPubkey(name, sfx));
+        return r.mentioned || r.quoted;
     },
 
     isDuplicateMessage(message) {
@@ -1975,7 +1931,7 @@ Object.assign(NYM.prototype, {
                     e.preventDefault();
                     e.stopPropagation();
                     const ctxReactionId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-                    this.showContextMenu(e, displayAuthor, message.pubkey, message.content, message.id, false, ctxReactionId);
+                    this.showContextMenu(e, `${baseNym}#${this.getPubkeySuffix(message.pubkey)}`, message.pubkey, message.content, message.id, false, ctxReactionId);
                     return false;
                 });
             }
@@ -2420,27 +2376,6 @@ Object.assign(NYM.prototype, {
         return window.NymFormat.formatWithQuotes(content, Object.assign(this._mainFormatCtx(content), { commonMark }), depth);
     },
 
-    _pubkeyForSuffix(sfx) {
-        if (!sfx) return null;
-        if (!this._suffixIndex) this._suffixIndex = new Map();
-        const key = sfx.toLowerCase();
-        // Rebuild when the index size disagrees materially with the live users map.
-        const usersSize = this.users ? this.users.size : 0;
-        const stale = this._suffixIndex.size === 0 || Math.abs(this._suffixIndex.size - usersSize) > 8
-            || (!this._suffixIndex.has(key) && this._suffixIndexUsers !== usersSize);
-        if (stale) {
-            this._suffixIndex.clear();
-            this._suffixIndexUsers = usersSize;
-            this.users.forEach((_, pubkey) => {
-                if (typeof pubkey === 'string' && pubkey.length >= 4) {
-                    const s = pubkey.slice(-4).toLowerCase();
-                    if (!this._suffixIndex.has(s)) this._suffixIndex.set(s, pubkey);
-                }
-            });
-        }
-        return this._suffixIndex.get(key) || null;
-    },
-
     _mentionPersonHidden(pubkey) {
         if (!pubkey || pubkey === this.pubkey) return false;
         if (this.blockedUsers && this.blockedUsers.has(pubkey)) return true;
@@ -2450,25 +2385,67 @@ Object.assign(NYM.prototype, {
         return F.textBlocked(this._cfCtx(), '', this._cfNym(nym), pubkey);
     },
 
-    // Main-thread only (needs this.users); keyed by suffix -> { avatar, flair } in ctx.mentionInfo.
+    _suffixUsers(sfx) {
+        const key = String(sfx || '').toLowerCase();
+        const out = [];
+        if (!/^[0-9a-f]{4}$/.test(key) || !this.users) return out;
+        let idx = this._tailIndex;
+        if (!idx || idx.users !== this.users || idx.size !== this.users.size) {
+            const by = new Map();
+            this.users.forEach((u, pk) => {
+                if (typeof pk !== 'string' || pk.length < 4) return;
+                const t = pk.slice(-4).toLowerCase();
+                const list = by.get(t);
+                if (list) list.push(pk); else by.set(t, [pk]);
+            });
+            idx = this._tailIndex = { users: this.users, size: this.users.size, by };
+        }
+        const list = idx.by.get(key);
+        if (!list) return out;
+        for (const pk of list) {
+            const u = this.users.get(pk);
+            if (u) out.push({ pubkey: pk, nym: u.nym });
+        }
+        return out;
+    },
+
+    _mentionPubkey(name, sfx) {
+        const NP = window.NymNickParse;
+        if (!NP) return null;
+        const hit = NP.resolveMention(name, sfx, this._suffixUsers(sfx));
+        if (hit && hit.pubkey) return hit.pubkey;
+        if (hit || !this.pubkey || !this.nym || NP.tailOf(this.pubkey) !== String(sfx || '').toLowerCase()) return null;
+        const own = NP.resolveMention(name, sfx, [{ pubkey: this.pubkey, nym: this.nym }]);
+        return own && own.pubkey ? own.pubkey : null;
+    },
+
+    // Main-thread only (needs this.users); keyed by name#suffix -> { avatar, flair } in ctx.mentionInfo.
     _resolveMentionInfo(content) {
-        if (!content || content.indexOf('@') === -1 || !window.NymFormat
-            || typeof window.NymFormat.extractMentions !== 'function') return null;
-        const suffixes = window.NymFormat.extractMentions(content);
-        if (!suffixes || !suffixes.length) return null;
+        const NF = window.NymFormat;
+        const NP = window.NymNickParse;
+        if (!content || content.indexOf('@') === -1 || !NF || !NP
+            || typeof NF.extractMentions !== 'function') return null;
         const out = {};
-        for (const sfx of suffixes) {
-            const pubkey = this._pubkeyForSuffix(sfx);
-            if (!pubkey || this._mentionPersonHidden(pubkey)) { out[sfx] = { avatar: '', flair: '' }; continue; }
+        let any = false;
+        const note = (name, sfx) => {
+            const key = NF.mentionKey(name, sfx);
+            if (key in out) return out[key].known;
+            any = true;
+            const pubkey = this._mentionPubkey(name, sfx);
+            if (!pubkey || this._mentionPersonHidden(pubkey)) { out[key] = { avatar: '', flair: '', known: !!pubkey }; return !!pubkey; }
             const safePk = this._safePubkey(pubkey) || '';
             const avatarSrc = this.getAvatarUrl(pubkey);
             const flair = this.getFlairForUser(pubkey) || '';
-            out[sfx] = {
+            out[key] = {
                 avatar: `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message${this._ringPeek(pubkey)}" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`,
-                flair
+                flair,
+                known: true
             };
-        }
-        return out;
+            return true;
+        };
+        for (const m of NF.extractMentions(content)) note(m.name, m.suffix);
+        for (const m of NP.mentions(content, note)) if (m.suffix) note(m.name, m.suffix);
+        return any ? out : null;
     },
 
     _revokeNodeBlobs(node) {
@@ -3038,6 +3015,10 @@ Object.assign(NYM.prototype, {
     _recomputeAllBubbleGrouping(container) {
         if (!container) return;
         this._rewrapBubbleGroups(container);
+        this._applyAllBubbleGrouping(container);
+    },
+
+    _applyAllBubbleGrouping(container) {
         const messages = container.querySelectorAll('[data-message-id]');
         for (let i = 0; i < messages.length; i++) {
             this._applyBubbleGroupingTo(messages[i]);
@@ -3280,6 +3261,7 @@ Object.assign(NYM.prototype, {
     },
 
     _setQuote(author, text, sourceId, focus, pubkey) {
+        if (window.NymNickParse) author = window.NymNickParse.headerName(author);
         const src = this._quoteSourceOf(author, sourceId, pubkey);
         const pk = typeof pubkey === 'string' && pubkey ? pubkey : (src && typeof src.pubkey === 'string' ? src.pubkey : '');
         if (this._quoteSourceGone(src, sourceId, pk, author)) {
@@ -3318,7 +3300,8 @@ Object.assign(NYM.prototype, {
         if (split) {
             const base = split.base;
             const suffix = split.suffix;
-            const pubkey = this._pubkeyForSuffix(suffix.slice(1).toLowerCase());
+            const sfx = suffix.slice(1).toLowerCase();
+            const pubkey = pk && pk.slice(-4).toLowerCase() === sfx ? pk : this._mentionPubkey(base, sfx);
             let avatarHtml = '', flairHtml = '';
             if (pubkey) {
                 const safePk = this._safePubkey(pubkey) || '';
@@ -3472,7 +3455,8 @@ Object.assign(NYM.prototype, {
             if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
 
             if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
-                setTimeout(() => { this.publishDeletionEvent(signedEvent.id); }, 600000);
+                const redactAs = claim || { pubkey: me.pubkey, nym: me.nym, sk: null, chain: null };
+                setTimeout(() => { this.publishDeletionEvent(signedEvent.id, wire.kind, redactAs); }, 600000);
             }
 
             return true;
@@ -4005,7 +3989,7 @@ Object.assign(NYM.prototype, {
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
             const anonQuote = !!(this.pendingQuote.sourceId && typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(this.pendingQuote.sourceId));
-            const quoteLine = (anonQuote ? `> ${textLines[0]}` : `> @${this.pendingQuote.author}: ${textLines[0]}`) +
+            const quoteLine = (anonQuote ? `> ${textLines[0]}` : `> @${window.NymNickParse.headerName(this.pendingQuote.author)}: ${textLines[0]}`) +
                 (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
             content = content ? `${quoteLine}\n\n${content}` : quoteLine;
             this.clearQuoteReply();
@@ -4150,7 +4134,7 @@ Object.assign(NYM.prototype, {
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
             const anonQuote = !!(this.pendingQuote.sourceId && typeof this._anonLaneMsg === 'function' && this._anonLaneMsg(this.pendingQuote.sourceId));
-            const quoteLine = (anonQuote ? `> ${textLines[0]}` : `> @${this.pendingQuote.author}: ${textLines[0]}`) +
+            const quoteLine = (anonQuote ? `> ${textLines[0]}` : `> @${window.NymNickParse.headerName(this.pendingQuote.author)}: ${textLines[0]}`) +
                 (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
             content = content ? `${quoteLine}\n\n${content}` : quoteLine;
         }
@@ -4363,6 +4347,7 @@ Object.assign(NYM.prototype, {
     },
 
     cacheCurrentContainerDOM() {
+        if (this._threadTail && typeof this._threadAttachTail === 'function') this._threadAttachTail(this._threadTail, true);
         const container = document.getElementById('messagesContainer');
         if (!container) return;
         const previousKey = container.dataset.lastChannel;
@@ -4412,48 +4397,21 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _resolveMentionPubkey(mentionEl) {
-        if (!mentionEl) return null;
+    _mentionLookup(mentionEl) {
+        const NP = window.NymNickParse;
+        if (!mentionEl || !NP) return null;
         const direct = mentionEl.getAttribute('data-mention-pubkey');
-        if (direct) return direct;
-        const avatarImg = mentionEl.querySelector('img[data-avatar-pubkey]');
-        if (avatarImg) {
-            const safe = avatarImg.getAttribute('data-avatar-pubkey');
-            if (safe) {
-                for (const [pk] of this.users.entries()) {
-                    if (this._safePubkey(pk) === safe) return pk;
-                }
-            }
-        }
-        const suffixEl = mentionEl.querySelector('.nym-suffix');
-        if (suffixEl) {
-            const sfx = (suffixEl.textContent || '').replace(/^#/, '').toLowerCase();
-            if (sfx.length === 4) {
-                if (!this._suffixIndex) this._suffixIndex = new Map();
-                if (this._suffixIndex.size === 0) {
-                    this.users.forEach((_, pubkey) => {
-                        if (typeof pubkey === 'string' && pubkey.length >= 4) {
-                            const s = pubkey.slice(-4).toLowerCase();
-                            if (!this._suffixIndex.has(s)) this._suffixIndex.set(s, pubkey);
-                        }
-                    });
-                }
-                const pk = this._suffixIndex.get(sfx);
-                if (pk) return pk;
-            }
-        }
-        const text = (mentionEl.textContent || '').trim();
-        const m = text.match(/^@([^#]+)(?:#([0-9a-f]{4}))?$/i);
-        if (m) {
-            const name = m[1].trim();
-            const sfx = (m[2] || '').toLowerCase();
-            for (const [pk, user] of this.users.entries()) {
-                if (sfx && pk.slice(-4).toLowerCase() !== sfx) continue;
-                const userNym = this.parseNymFromDisplay(user.nym);
-                if (userNym === name) return pk;
-            }
-        }
-        return null;
+        if (direct) return { pubkey: direct };
+        const name = mentionEl.getAttribute('data-nym');
+        if (name == null) return null;
+        const sfx = (mentionEl.getAttribute('data-sfx') || '').toLowerCase();
+        if (sfx) return NP.resolveMention(name, sfx, this._suffixUsers(sfx));
+        return NP.resolveMention(name, '', typeof this.nickUsers === 'function' ? this.nickUsers() : []);
+    },
+
+    _resolveMentionPubkey(mentionEl) {
+        const hit = this._mentionLookup(mentionEl);
+        return hit && hit.pubkey ? hit.pubkey : null;
     },
 
     // The clicked message's own column under column view, otherwise the single container.
@@ -4513,7 +4471,8 @@ Object.assign(NYM.prototype, {
         if (inThread) {
             if (this._jumpToQuotedMessage(desc, target, { domOnly: true })) return;
             if (typeof this.closeThreadView === 'function') {
-                this.closeThreadView();
+                if (typeof this._usLeaveThread === 'function') this._usLeaveThread();
+                else this.closeThreadView();
                 requestAnimationFrame(() => this._jumpToQuotedMessage(desc, this._quoteJumpTargetFor(null)));
                 return;
             }
@@ -4949,6 +4908,7 @@ Object.assign(NYM.prototype, {
 
     // isPM: uses pmMessages with conversationKey instead of messages with storageKey.
     renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false, filtered = null, place = null) {
+        if ((this._threadTail || this._threadHeld) && typeof this._threadDropHeldIn === 'function') this._threadDropHeldIn(container);
         const messages = Array.isArray(filtered) ? filtered : (isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey));
         const mainScroller = container.id === 'messagesContainer' && !this._cvActive ? this._getMessagesScroller() : null;
         const keep = !scrollToBottom || !mainScroller ? null : (place || (container.dataset.virtualScrollKey === storageKey && this._readerAwayOn(mainScroller)
@@ -4972,10 +4932,19 @@ Object.assign(NYM.prototype, {
             const at = messages.findIndex((m) => ((m && m.isPM && m.nymMessageId) ? m.nymMessageId : (m && m.id)) === keep.id);
             if (at >= 0) startIdx = Math.min(startIdx, Math.max(0, at - 10));
         }
-        let renderMessages = startIdx > 0 ? messages.slice(startIdx) : messages;
+        const pageStart = startIdx;
+        const landId = !isPM && !keep && scrollToBottom && mainScroller && !this.activeThread && typeof this._cnLandTarget === 'function' ? this._cnLandTarget(storageKey) : null;
+        const land = landId ? this._chLandWindow(messages, startIdx, this._chWinIndex(messages, landId)) : null;
+        let endIdx = messages.length;
+        if (land) {
+            startIdx = land.from;
+            endIdx = land.to;
+        }
+        let renderMessages = startIdx > 0 || endIdx < messages.length ? messages.slice(startIdx, endIdx) : messages;
         (isPM ? this.pmRenderedStart : this.channelRenderedStart).set(storageKey, startIdx);
+        if (endIdx < messages.length) this.channelWindowEnd.set(storageKey, messages[endIdx - 1].id);
 
-        const firstRows = scrollToBottom && !keep ? this._entryFirstRows(container, isPM, storageKey, renderMessages) : 0;
+        const firstRows = scrollToBottom && !keep && !land ? this._entryFirstRows(container, isPM, storageKey, renderMessages) : 0;
         let deferredRows = 0;
         if (firstRows > 0 && renderMessages.length > firstRows) {
             deferredRows = renderMessages.length - firstRows;
@@ -5007,10 +4976,15 @@ Object.assign(NYM.prototype, {
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
 
+        if (land) {
+            if (startIdx === 0) this._chEdgeNotice(container);
+            this._cnPreplaceDivider(container, storageKey, landId);
+        }
+
         // Regroup after bulk render, since per-insert grouping is fragile to order and late bubble settings.
         this._recomputeAllBubbleGrouping(container);
 
-        this._backfillZapReceiptsForMessages(renderMessages);
+        this._backfillZapReceiptsForMessages(land ? messages.slice(pageStart) : renderMessages);
 
         // The reverse-column container keeps the bottom pinned as media loads, so no follow-up is needed.
         if (keep) {
@@ -5027,8 +5001,17 @@ Object.assign(NYM.prototype, {
                 });
             }
         }
+        if (endIdx < messages.length) this.userScrolledUp = true;
 
         if (deferredRows > 0) this._scheduleEntryFill(container, storageKey, messages, deferredRows, isPM);
+    },
+
+    _chLandWindow(messages, start, at) {
+        if (at < 0 || at >= start) return null;
+        const more = this.channelLoadMoreSize || 50;
+        if (at >= start - more) return { from: Math.max(0, start - more), to: messages.length };
+        const half = this.channelPageSize || 50;
+        return { from: Math.max(0, at - half), to: Math.min(messages.length, at + half) };
     },
 
     _entryFirstRows(container, isPM, key, list) {
@@ -5150,7 +5133,7 @@ Object.assign(NYM.prototype, {
     },
 
     loadOlderChannelMessages(storageKey, targetId) {
-        if (this.activeThread) return false;
+        if (this._cvLoadCtx ? this._threadViewOccupies(this._cvLoadCtx.container) : this.activeThread) return false;
         const container = this._cvLoadCtx?.container || document.getElementById('messagesContainer');
         const scroller = this._cvLoadCtx?.scroller || this._getMessagesScroller();
         if (!container || !scroller) return false;
@@ -5461,6 +5444,7 @@ Object.assign(NYM.prototype, {
     },
 
     _chWinRender(key, container, messages, from, to) {
+        if ((this._threadTail || this._threadHeld) && typeof this._threadDropHeldIn === 'function') this._threadDropHeldIn(container);
         container.querySelectorAll('[data-message-id]').forEach((el) => this._revokeNodeBlobs(el));
         container.innerHTML = '';
         this.channelDOMCache.delete(key);
@@ -5468,15 +5452,17 @@ Object.assign(NYM.prototype, {
         if (to < messages.length) this.channelWindowEnd.set(key, messages[to - 1].id);
         else this.channelWindowEnd.delete(key);
         this._chWinFill(container, messages.slice(from, to));
-        if (from === 0) {
-            const notice = document.createElement('div');
-            notice.className = 'system-message channel-history-limit';
-            notice.textContent = 'You\'ve reached the edge of this channel\'s history.';
-            container.insertBefore(notice, container.firstChild);
-        }
+        if (from === 0) this._chEdgeNotice(container);
         this._applyDirectHistoryNote(container);
         this._recomputeAllBubbleGrouping(container);
         if (to < messages.length) this.userScrolledUp = true;
+    },
+
+    _chEdgeNotice(container) {
+        const notice = document.createElement('div');
+        notice.className = 'system-message channel-history-limit';
+        notice.textContent = 'You\'ve reached the edge of this channel\'s history.';
+        container.insertBefore(notice, container.firstChild);
     },
 
     loadNewerChannelMessages(storageKey) {
@@ -5508,13 +5494,14 @@ Object.assign(NYM.prototype, {
 
     collapseChannelToLatest(storageKey) {
         const container = document.getElementById('messagesContainer');
-        if (!container) return false;
+        if (!container || (typeof this._threadViewOccupies === 'function' && this._threadViewOccupies(container))) return false;
         if (this._chWinDetached(storageKey)) {
             this.channelWindowEnd.delete(storageKey);
             if (container.dataset.virtualScrollKey !== storageKey) return false;
             this.renderMessagesWithVirtualScroll(container, storageKey, true);
             return true;
         }
+        if (container.dataset.virtualScrollKey !== storageKey) return false;
         const msgEls = container.querySelectorAll('.message');
         const excess = msgEls.length - this.channelPageSize;
         if (excess <= 0) return false;
@@ -5554,7 +5541,7 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            if (!container) return;
+            if (!container || (typeof this._threadViewOccupies === 'function' && this._threadViewOccupies(container))) return;
             const here = () => {
                 const sc = this._getMessagesScroller();
                 return this._readerAwayOn(sc) ? this._readerPlace(container, sc) : null;
@@ -5604,8 +5591,8 @@ Object.assign(NYM.prototype, {
                     el.classList.forEach(cls => {
                         if ((cls.startsWith('bitchat-user-') || cls === 'bitchat-theme') && cls !== colorClass) stale.push(cls);
                     });
-                    stale.forEach(cls => el.classList.remove(cls));
-                    if (colorClass) el.classList.add(colorClass);
+                    if (stale.length) el.classList.remove(...stale);
+                    if (colorClass && !el.classList.contains(colorClass)) el.classList.add(colorClass);
                 });
             });
         }
@@ -5936,17 +5923,19 @@ Object.assign(NYM.prototype, {
     // Wraps are built after the local echo is on screen, so refresh once coverage arrives.
     refreshMessagePqBadge(nymMessageId) {
         if (!nymMessageId) return;
-        const row = document.querySelector(`.message[data-message-id="${CSS.escape(nymMessageId)}"]`);
-        if (!row) return;
+        const rows = document.querySelectorAll(`.message[data-message-id="${CSS.escape(nymMessageId)}"]`);
+        if (!rows.length) return;
         const found = typeof this._findMessageById === 'function' ? this._findMessageById(nymMessageId) : null;
         const state = this._pqBadgeState(found && found.msg);
-        row.querySelectorAll('.crypto-pq-badge').forEach(el => el.remove());
-        if (!state) { delete row.dataset.pqEncrypted; return; }
-        row.dataset.pqEncrypted = state;
-        const timeEl = row.querySelector('.message-time');
-        if (timeEl) timeEl.insertAdjacentHTML('beforeend', this._pqBadgeSpan(state, 'crypto-lock-irc'));
-        const bubbleInner = row.querySelector('.bubble-time-inner');
-        if (bubbleInner) bubbleInner.insertAdjacentHTML('beforeend', this._pqBadgeSpan(state, 'crypto-lock-bubble'));
+        rows.forEach((row) => {
+            row.querySelectorAll('.crypto-pq-badge').forEach(el => el.remove());
+            if (!state) { delete row.dataset.pqEncrypted; return; }
+            row.dataset.pqEncrypted = state;
+            const timeEl = row.querySelector('.message-time');
+            if (timeEl) timeEl.insertAdjacentHTML('beforeend', this._pqBadgeSpan(state, 'crypto-lock-irc'));
+            const bubbleInner = row.querySelector('.bubble-time-inner');
+            if (bubbleInner) bubbleInner.insertAdjacentHTML('beforeend', this._pqBadgeSpan(state, 'crypto-lock-bubble'));
+        });
     },
 
     _verificationLockSpan(verified, layoutClass) {
@@ -5961,17 +5950,19 @@ Object.assign(NYM.prototype, {
     // Used when a dual-wrapped message's verified copy arrives after the unverified one rendered.
     _setMessageVerifiedDOM(messageId, verified) {
         if (!messageId) return;
-        const el = document.querySelector(`[data-message-id="${CSS.escape(String(messageId))}"]`);
-        if (!el) return;
-        el.dataset.senderVerified = String(verified);
-        el.querySelectorAll('.crypto-verified-badge').forEach(n => n.remove());
-        const timeEl = el.querySelector(':scope > .message-time');
-        if (timeEl) timeEl.insertAdjacentHTML('beforeend', this._verificationLockSpan(verified, 'crypto-lock-irc'));
-        const bubbleInner = el.querySelector('.bubble-time-inner');
-        if (bubbleInner) {
-            const txt = bubbleInner.querySelector('.bubble-time-text');
-            (txt || bubbleInner).insertAdjacentHTML(txt ? 'afterend' : 'beforeend', this._verificationLockSpan(verified, 'crypto-lock-bubble'));
-        }
+        const sel = `[data-message-id="${CSS.escape(String(messageId))}"]`;
+        document.querySelectorAll(sel).forEach((el) => {
+            if (el.parentElement && el.parentElement.closest(sel)) return;
+            el.dataset.senderVerified = String(verified);
+            el.querySelectorAll('.crypto-verified-badge').forEach(n => n.remove());
+            const timeEl = el.querySelector(':scope > .message-time');
+            if (timeEl) timeEl.insertAdjacentHTML('beforeend', this._verificationLockSpan(verified, 'crypto-lock-irc'));
+            const bubbleInner = el.querySelector('.bubble-time-inner');
+            if (bubbleInner) {
+                const txt = bubbleInner.querySelector('.bubble-time-text');
+                (txt || bubbleInner).insertAdjacentHTML(txt ? 'afterend' : 'beforeend', this._verificationLockSpan(verified, 'crypto-lock-bubble'));
+            }
+        });
     },
 
     MSG_VERIFY_PERSIST_MAX: 2000,
@@ -6186,12 +6177,8 @@ Object.assign(NYM.prototype, {
         if (!authors || !authors.length) return null;
         const out = {};
         for (const cleanAuthor of authors) {
-            let authorPubkey = null;
-            this.users.forEach((user, pubkey) => {
-                const userNym = this.parseNymFromDisplay(user.nym);
-                const fullNym = `${userNym}#${this.getPubkeySuffix(pubkey)}`;
-                if (fullNym === cleanAuthor || userNym === cleanAuthor) authorPubkey = pubkey;
-            });
+            const split = /^([\s\S]*)#([0-9a-f]{4})$/i.exec(cleanAuthor);
+            const authorPubkey = split ? this._mentionPubkey(split[1], split[2]) : null;
             if (!authorPubkey) { out[cleanAuthor] = { avatar: '', flair: '' }; continue; }
             const safePk = this._safePubkey(authorPubkey) || '';
             const avatarSrc = this.getAvatarUrl(authorPubkey);

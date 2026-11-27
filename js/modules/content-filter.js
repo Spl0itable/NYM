@@ -58,11 +58,18 @@
         return c.pack(str(text), str(nym)) === true;
     }
 
+    function quoteHeadLabel(line) {
+        const NP = G.NymNickParse;
+        if (NP) return /^>/.test(line) ? NP.quoteLabel(line) : null;
+        const m = line.match(QUOTE_HEAD);
+        return m ? m[1].trim() : null;
+    }
+
     function quoteAuthors(text) {
         const out = [];
         for (const line of str(text).split('\n')) {
-            const m = line.match(QUOTE_HEAD);
-            if (m) out.push(m[1].trim());
+            const l = quoteHeadLabel(line);
+            if (l !== null) out.push(l.trim());
         }
         return out;
     }
@@ -137,9 +144,9 @@
         let skipping = false;
         let removed = false;
         for (const line of s.split('\n')) {
-            const m = line.match(QUOTE_HEAD);
-            if (m) {
-                skipping = quoteBlocked(ctx, m[1].trim(), quoted);
+            const head = quoteHeadLabel(line);
+            if (head !== null) {
+                skipping = quoteBlocked(ctx, head.trim(), quoted);
                 if (skipping) {
                     removed = true;
                     continue;

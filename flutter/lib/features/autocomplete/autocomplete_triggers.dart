@@ -27,7 +27,8 @@ final RegExp _emojiRe =
     RegExp(r'(?:^|\s):([a-z0-9_+\-]*)$', caseSensitive: false);
 
 /// Whole-line `/` and `?` open palettes; in the bot PM the `?` palette stays live past a space for subcommands.
-TriggerMatch detectTrigger(String text, {int? caret, bool botPM = false}) {
+TriggerMatch detectTrigger(String text,
+    {int? caret, bool botPM = false, bool botPalette = true}) {
   final c =
       (caret == null || caret < 0 || caret > text.length) ? text.length : caret;
   final before = text.substring(0, c);
@@ -38,7 +39,7 @@ TriggerMatch detectTrigger(String text, {int? caret, bool botPM = false}) {
   }
 
   // Public `?` set has no subcommands so it hides after a space; the bot PM set keeps firing.
-  if (before.startsWith('?') && (botPM || !before.contains(' '))) {
+  if (botPalette && before.startsWith('?') && (botPM || !before.contains(' '))) {
     return TriggerMatch(TriggerKind.botCommand, before, 0);
   }
 

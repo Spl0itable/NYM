@@ -26,7 +26,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage(this._clRedactText().body);
             return;
         }
-        this.displaySystemMessage(this.uiText('Missed call from {name}', { name: this._callPeerName(pubkey, hint) + '#' + this.getPubkeySuffix(pubkey) }));
+        this.displaySystemMessage(this.uiText('Missed call from {name}', { name: this.nymIsolatedLabel(this._callPeerName(pubkey, hint), pubkey) }));
     },
 
     _ringTileFace(pubkey) {
@@ -1715,7 +1715,7 @@ Object.assign(NYM.prototype, {
         if (!ac || ac.callId !== data.callId || !this._isCallMod() || !this._isCallParticipant(ac, sender)) return;
         ac.presentRequests.add(sender);
         const mask = this._callMask(sender, data.nym);
-        this.displaySystemMessage(this.uiText('{name} requested to present', { name: mask || (data.nym ? this.parseNymFromDisplay(data.nym) : this._nymForPubkey(sender)) }));
+        this.displaySystemMessage(this.uiText('{name} requested to present', { name: mask ? this.nymIsolated(mask) : this.nymIsolatedLabel(data.nym ? this.parseNymFromDisplay(data.nym) : this._nymForPubkey(sender), sender) }));
         this._renderPresenterMenu();
         this._updateCallControls();
     },
@@ -2126,15 +2126,12 @@ Object.assign(NYM.prototype, {
     // Match on the raw text and escape segments individually so the regex can't split an HTML entity.
     _formatCallChatText(text) {
         const raw = String(text == null ? '' : text);
-        const re = /(^|\s)@([^\s#@]+)(#[0-9a-f]{4})?/gi;
         let out = '';
         let last = 0;
-        let m;
-        while ((m = re.exec(raw)) !== null) {
-            const pre = m[1], name = m[2], sfx = m[3];
-            out += this.escapeHtml(raw.slice(last, m.index)) + this.escapeHtml(pre);
-            out += `<span class="nm-mention">@${window.NymSuffix.sqHtml(name, sfx || '')}</span>`;
-            last = m.index + m[0].length;
+        for (const m of window.NymNickParse.mentions(raw)) {
+            out += this.escapeHtml(raw.slice(last, m.start));
+            out += `<span class="nm-mention">@${window.NymSuffix.sqHtml(m.name, m.suffix || '')}</span>`;
+            last = m.end;
         }
         out += this.escapeHtml(raw.slice(last));
         return out;
@@ -2629,15 +2626,11 @@ Object.assign(NYM.prototype, {
         const input = document.getElementById('callChatInput');
         if (!input || !pubkey) return;
         const base = this.stripPubkeySuffix(this._nymForPubkey(pubkey));
-        const suffix = this.getPubkeySuffix(pubkey);
         const cursor = typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length;
-        const before = input.value.substring(0, cursor);
-        const after = input.value.substring(cursor);
-        const atIdx = before.lastIndexOf('@');
-        if (atIdx === -1) { this._hideCallMentionAutocomplete(); return; }
-        const insert = '@' + base + '#' + suffix + ' ';
-        input.value = before.substring(0, atIdx) + insert + after;
-        const pos = atIdx + insert.length;
+        const fit = window.NymNickParse.insertMention(input.value, cursor, base, pubkey);
+        if (!fit) { this._hideCallMentionAutocomplete(); return; }
+        input.value = fit.value;
+        const pos = fit.caret;
         try { input.selectionStart = input.selectionEnd = pos; } catch (_) { }
         input.focus();
         this._hideCallMentionAutocomplete();
@@ -2654,7 +2647,7 @@ Object.assign(NYM.prototype, {
         const inCall = ac.members.includes(pubkey) || (ac.peers && ac.peers.has(pubkey));
         if (!inCall) return;
         if (!ac.isGroup) {
-            this.displaySystemMessage(this.uiText('Left the call — you blocked {name}', { name: this._nymForPubkey(pubkey) }));
+            this.displaySystemMessage(this.uiText('Left the call — you blocked {name}', { name: this.nymIsolatedLabel(this._nymForPubkey(pubkey), pubkey) }));
             this.hangupCall();
             return;
         }

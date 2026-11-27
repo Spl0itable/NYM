@@ -111,9 +111,9 @@ class _BootGateState extends ConsumerState<BootGate> {
                         from == null
                             ? tr('Back to my identities')
                             : tr('Back to {nym}', {
-                                'nym': getNymFromPubkey(
+                                'nym': isolateNymLabel(getNymFromPubkey(
                                     from.nym.isEmpty ? 'nym' : from.nym,
-                                    from.pubkey)
+                                    from.pubkey))
                               }),
                         style: TextStyle(color: context.nym.textDim),
                       ),

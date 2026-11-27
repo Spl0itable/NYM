@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../../models/poll.dart';
@@ -58,6 +59,7 @@ class _PollCardState extends ConsumerState<PollCard> {
     final controller = ref.read(nostrControllerProvider);
     // Watch app state so new votes re-tally live.
     final appState = ref.watch(appStateProvider);
+    final closed = ref.read(appStateProvider.notifier).isPollClosed(poll.id);
 
     final selfPubkey = appState.selfPubkey;
     final isOwn = poll.pubkey == selfPubkey;
@@ -190,14 +192,34 @@ class _PollCardState extends ConsumerState<PollCard> {
         children: [
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              tr('📊 POLL'),
-              style: TextStyle(
-                color: c.textDim,
-                fontSize: 11,
-                letterSpacing: 1,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Row(
+              children: [
+                Text(
+                  tr('📊 POLL'),
+                  style: TextStyle(
+                    color: c.textDim,
+                    fontSize: 11,
+                    letterSpacing: 1,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (closed) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    key: ValueKey('pollClosed-${poll.id}'),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: c.glassBorder),
+                      borderRadius: NymRadius.rxs,
+                    ),
+                    child: Text(
+                      tr('Closed'),
+                      style: TextStyle(color: c.textDim, fontSize: 11),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
           Padding(
@@ -512,7 +534,7 @@ class _PollHoverActionButtonState extends State<_PollHoverActionButton> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: NymMotion.transition,
+          duration: NymThemeSwap.motion(context, NymMotion.transition),
           curve: NymMotion.curve,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
@@ -669,7 +691,7 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
           textStyle:
               TextStyle(fontSize: 11, color: c.isLight ? c.text : c.textDim),
           child: AnimatedDefaultTextStyle(
-            duration: const Duration(milliseconds: 120),
+            duration: NymThemeSwap.motion(context, const Duration(milliseconds: 120)),
             curve: Curves.ease,
             style: TextStyle(
               color: _hover ? c.primary : c.textDim,
@@ -727,7 +749,7 @@ class _PollOptionState extends State<PollOptionTile> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: NymMotion.transition,
+          duration: NymThemeSwap.motion(context, NymMotion.transition),
           curve: NymMotion.curve,
           decoration: BoxDecoration(
             // Hover specificity beats the selected fill.
@@ -911,7 +933,7 @@ class _PollFooterState extends State<PollVotesFooter> {
               borderRadius: NymRadius.rxs,
             ),
             child: AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 150),
+              duration: NymThemeSwap.motion(context, const Duration(milliseconds: 150)),
               curve: Curves.ease,
               style: TextStyle(
                 color: _hover ? c.text : c.textDim,

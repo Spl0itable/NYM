@@ -41,6 +41,7 @@ import '../relay/relay_pool.dart';
 import '../relay/relay_pool_proxy.dart';
 import '../relay/relay_stats.dart';
 import '../../features/presence/geo_presence.dart';
+import 'channel_expiry.dart';
 import 'event_mapper.dart';
 import 'event_signer.dart';
 import 'identity_service.dart';
@@ -2355,10 +2356,11 @@ class NostrService {
     bool remove = false,
     List<List<String>> emojiTags = const [],
     EventSigner? signerOverride,
+    int? nowSec,
   }) async {
     final sig = signerOverride ?? signer;
     if (sig == null) return null;
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final createdAt = nowSec ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final tags = <List<String>>[
       ['e', messageId],
       ['p', targetPubkey],
@@ -2375,10 +2377,13 @@ class NostrService {
         channel.isNotEmpty) {
       tags.add(['d', channel]);
     }
+    if (isChannelWireKind(originalKind)) {
+      tags.add(channelExpirationTag(createdAt));
+    }
     final signed = await sig.sign(
       UnsignedEvent(
         pubkey: sig.pubkey,
-        createdAt: nowSec,
+        createdAt: createdAt,
         kind: EventKind.reaction,
         tags: tags,
         content: emoji,

@@ -416,7 +416,7 @@
                 const nip05Html = data.nip05
                     ? `<span class="nostr-card-nip05">${esc(data.nip05)}</span>` : '';
                 const aboutHtml = data.about
-                    ? `<div class="nostr-card-body">${this.formatMessage(data.about)}</div>` : '';
+                    ? `<div class="nostr-card-body">${this._cardBodyHtml(data.about, [])}</div>` : '';
                 // Only the head opens the profile menu; the body holds real content and links.
                 const profileAttr = data.pubkey
                     ? ' data-action="openNostrProfileCard" role="button" tabindex="0"' : '';
@@ -433,11 +433,12 @@
             const channelHtml = data.channel
                 ? `<span class="nostr-card-channel">${esc(data.channel)}</span>` : '';
             // Render the body as a message body, not an escaped excerpt; the event is often just media.
+            const quoted = Array.isArray(data.quoted) ? data.quoted : [];
             const body = (typeof this._shownContent === 'function'
-                ? this._shownContent({ content: data.content || '', quoted: Array.isArray(data.quoted) ? data.quoted : [] })
+                ? this._shownContent({ content: data.content || '', quoted })
                 : (data.content || '')).trim();
             const bodyHtml = body
-                ? `<div class="nostr-card-body">${this.formatMessage(body)}</div>`
+                ? `<div class="nostr-card-body">${this._cardBodyHtml(body, quoted)}</div>`
                 : '<div class="nostr-card-body nostr-card-empty">No text content</div>';
             // The head is the jump affordance, not the whole card.
             const jumpAttr = this._findStoredMessage(data.id)
@@ -446,6 +447,11 @@
                 <div class="nostr-card-head"${jumpAttr}>${avatarHtml}<div class="nostr-card-ident">${authorHtml}${channelHtml}</div><span class="nostr-card-kind">${esc(kindLabel)}</span>${timeHtml}</div>
                 ${bodyHtml}
             </div>`;
+        },
+
+        _cardBodyHtml(text, quoted) {
+            if (typeof this.noteMissingCustomEmojiIn === 'function') this.noteMissingCustomEmojiIn(text);
+            return this.formatMessageWithQuotes(text, 0, false, quoted);
         },
 
         // Idempotent, and paints straight from the cache when warm.
@@ -463,7 +469,7 @@
             for (const chip of chips) {
                 const token = chip.dataset.nostrRef;
                 if (!token || seen.has(token)) continue;
-                if (typeof chip.closest === 'function' && chip.closest('.spoiler')) continue;
+                if (typeof chip.closest === 'function' && chip.closest('.spoiler, blockquote')) continue;
                 seen.add(token);
                 tokens.push(token);
                 if (tokens.length >= 4) break;
@@ -533,9 +539,20 @@
             this.showContextMenu(e, suffix ? `${nym}#${suffix}` : nym, pubkey, null, null, false);
         },
 
-        jumpToNostrRef(id) {
+        jumpToNostrRef(id, left) {
             if (!id) return;
-            if (this._scrollToLoadedMessage(id)) return;
+            if (!left && this.activeThread && typeof this._usLeaveThread === 'function') {
+                const row = this.findMessageElementAnywhere(id);
+                if (!(row && row.closest && row.closest('.thread-view-active'))) {
+                    this._usLeaveThread();
+                    requestAnimationFrame(() => this.jumpToNostrRef(id, true));
+                    return;
+                }
+            }
+            if (this._scrollToLoadedMessage(id)) {
+                if (typeof window !== 'undefined' && window.innerWidth <= 1024 && typeof this.closeSidebar === 'function') this.closeSidebar();
+                return;
+            }
 
             const key = this._conversationHolding(id);
             if (!key) {

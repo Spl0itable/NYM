@@ -184,6 +184,9 @@ class SidebarPmEntry {
       : 'pm-${pm!.pubkey.toLowerCase()}';
 }
 
+final sidebarChannelOrderProvider =
+    Provider<ChannelOrder>((ref) => ChannelOrder());
+
 final sidebarChannelRowsProvider =
     Provider<SidebarRows<ChannelEntry>>((ref) {
   ref.watch(_channelInputsProvider);
@@ -208,7 +211,7 @@ final sidebarChannelRowsProvider =
           (!app.hiddenChannels.contains(ch.key) &&
               !(hideNonPinned && !app.pinnedChannels.contains(ch.key))))
       .toList();
-  final sorted = ChannelManager.sortChannels(
+  final sorted = ref.read(sidebarChannelOrderProvider).sort(
     visibleChannels,
     ChannelSortContext(
       activeKey: activeChannelKey,
@@ -219,11 +222,12 @@ final sidebarChannelRowsProvider =
       userLocation: location,
     ),
   );
+  final locked = chatLock.lockedChannels;
   final bands = [for (var i = 0; i < 5; i++) <SidebarRow<ChannelEntry>>[]];
   for (final ch in sorted) {
     final key = ch.key;
     final storageKey = ch.storageKey;
-    if (chatLock.isConversationLocked(storageKey)) continue;
+    if (locked.contains(key)) continue;
     final pinned = app.pinnedChannels.contains(key);
     final unread = app.unreadCounts[storageKey] ?? 0;
     final band = key == kDefaultChannel

@@ -19,6 +19,7 @@ import 'identity_vault.dart' show IdentityVault, SecureStoreLike;
 import 'modal_chrome.dart';
 import 'panic_overlay.dart';
 import 'vault_settings_modal.dart' show identityVaultProvider;
+import '../../widgets/common/nym_label.dart' show isolateNymLabel;
 
 const String nymchatWordmark = r'''                                            ##\                  ##\
                                             ## |                 ## |
@@ -199,14 +200,15 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock>
     final next = _nextAccountName();
     final current = ref.read(accountsProvider)?.changes.value.activeAccount;
     final switching = next != null && current != null;
-    final name =
-        current == null ? tr('this identity') : accountDisplayName(current);
+    final name = current == null
+        ? tr('this identity')
+        : isolateNymLabel(accountDisplayName(current));
     return showAppConfirm(
       context,
       switching
           ? tr('This permanently deletes {nym} and its data on this device, '
               'and you will switch to {next}. Continue?',
-              {'nym': name, 'next': next})
+              {'nym': name, 'next': isolateNymLabel(next)})
           : _isBiometric
               ? tr('Without your biometrics, {nym} cannot be recovered. '
                   'Starting over permanently deletes it and its data on this '

@@ -13,6 +13,7 @@ import '../../widgets/context_menu/interaction_hooks.dart';
 import '../i18n/i18n.dart';
 import '../toasts/toast_center.dart';
 import 'zap_modal.dart';
+import '../../widgets/common/nym_label.dart' show isolateNym;
 import '../../widgets/common/nym_tooltip.dart';
 
 const Color _kLightning = Color(0xFFF7931A);
@@ -231,7 +232,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     final liveNym = ref.read(appStateProvider).users[message.pubkey]?.nym;
     final baseNym = pickDisplayNym(liveNym, message.author);
     showToast(
-        tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
+        tr('Checking if @{nym} can receive zaps...', {'nym': isolateNym(baseNym)}));
     final controller = ref.read(nostrControllerProvider);
     final lnAddr =
         await controller.resolveLightningAddressForZap(message.pubkey);

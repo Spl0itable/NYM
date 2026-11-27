@@ -42,7 +42,10 @@ Object.assign(NYM.prototype, {
             if (question) {
                 content = '?ask ' + question;
             } else if (quoteContext && quoteContext.text) {
-                const quotedText = quoteContext.text.replace(/^>\s*@[^:]+:\s*/gm, '').replace(/^>\s?/gm, '').trim();
+                const quotedText = quoteContext.text.split('\n').map((l) => {
+                    const head = /^>/.test(l) ? window.NymNickParse.quoteHeader(l) : null;
+                    return head ? head.body : l.replace(/^>\s?/, '');
+                }).join('\n').trim();
                 if (quotedText) {
                     content = '?ask ' + quotedText;
                 }
@@ -766,6 +769,10 @@ Object.assign(NYM.prototype, {
         const palette = document.getElementById('commandPalette');
         // The premium Nymbot PM only supports PM commands; channel bot commands aren't wired there.
         const inBotPM = this.inPMMode && this.currentPM && this.isVerifiedBot(this.currentPM);
+        if (this.inPMMode && !inBotPM) {
+            this.hideCommandPalette();
+            return;
+        }
         const available = inBotPM ? this.botPMCommands : this.botCommands;
         const needle = input.toLowerCase();
         let matchingCommands = Object.entries(available)
@@ -1020,8 +1027,10 @@ Object.assign(NYM.prototype, {
         }
 
         if (this.inPMMode && this.currentGroup) {
+            const hit = this.lookupNymOrReport(args);
+            if (hit && hit.ambiguous) return;
             const targetInput = args.trim().replace(/^@/, '');
-            const targetPubkey = this.resolvePubkeyFromNym(targetInput);
+            const targetPubkey = hit && hit.pubkey;
             if (!targetPubkey) {
                 this.displaySystemMessage(this.uiText(`User @{targetInput} not found. They need to be visible in a channel first.`, { targetInput }));
                 return;
@@ -1039,7 +1048,9 @@ Object.assign(NYM.prototype, {
         }
 
         if (this.inPMMode && this.currentPM) {
-            const extra = args && args.trim() ? this.resolvePubkeyFromNym(args.trim().replace(/^@/, '')) : null;
+            const hit = args && args.trim() ? this.lookupNymOrReport(args) : null;
+            if (hit && hit.ambiguous) return;
+            const extra = hit && hit.pubkey;
             if (args && args.trim() && !extra) {
                 this.displaySystemMessage(this.uiText(`User @{v1} not found. They need to be visible in a channel first.`, { v1: args.trim().replace(/^@/, '') }));
                 return;
@@ -1052,64 +1063,17 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const targetInput = this.normalizePubkeyInput(args) || args.trim().replace(/^@/, '');
-        let targetPubkey = null;
-        let matchedNym = null;
-
-        if (/^[0-9a-f]{64}$/i.test(targetInput)) {
-            targetPubkey = targetInput.toLowerCase();
-
-            if (targetPubkey === this.pubkey) {
-                this.displaySystemMessage("You can't invite yourself");
-                return;
-            }
-
-            matchedNym = this.getNymFromPubkey(targetPubkey);
-        } else {
-            const hashIndex = targetInput.indexOf('#');
-            let searchNym = targetInput;
-            let searchSuffix = null;
-
-            if (hashIndex !== -1) {
-                searchNym = targetInput.substring(0, hashIndex);
-                searchSuffix = targetInput.substring(hashIndex + 1);
-            }
-
-            const matches = [];
-            this.users.forEach((user, pubkey) => {
-                const baseNym = this.stripPubkeySuffix(user.nym);
-                if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                    if (searchSuffix) {
-                        if (pubkey.endsWith(searchSuffix)) {
-                            matches.push({ nym: user.nym, pubkey: pubkey });
-                        }
-                    } else {
-                        matches.push({ nym: user.nym, pubkey: pubkey });
-                    }
-                }
-            });
-
-            if (matches.length === 0) {
-                this.displaySystemMessage(this.uiText(`User {targetInput} not found`, { targetInput }));
-                return;
-            }
-
-            if (matches.length > 1 && !searchSuffix) {
-                const matchList = matches.map(m =>
-                    `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
-                ).join(', ');
-                this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(searchNym)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
-                this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
-                return;
-            }
-
-            targetPubkey = matches[0].pubkey;
-            matchedNym = matches[0].nym;
-
-            if (targetPubkey === this.pubkey) {
-                this.displaySystemMessage("You can't invite yourself");
-                return;
-            }
+        const hit = this.lookupNymOrReport(args);
+        if (hit && hit.ambiguous) return;
+        if (!hit) {
+            this.displaySystemMessage(this.uiText(`User {targetInput} not found`, { targetInput: args.trim().replace(/^@/, '') }));
+            return;
+        }
+        const targetPubkey = hit.pubkey;
+        const matchedNym = hit.nym || this.getNymFromPubkey(targetPubkey);
+        if (targetPubkey === this.pubkey) {
+            this.displaySystemMessage("You can't invite yourself");
+            return;
         }
 
         const channelInfo = `#${this.currentGeohash}`;
@@ -1123,7 +1087,7 @@ Object.assign(NYM.prototype, {
             const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
             this.displaySystemMessage(`Invitation sent to <span data-no-i18n>${displayNym}</span> for <span data-no-i18n>${this.escapeHtml(channelInfo)}</span>`, 'system', { html: true });
 
-            const publicNotice = `@${matchedNym} you've been invited to this channel! Check your PMs for details.`;
+            const publicNotice = `${window.NymNickParse.mentionText(this.stripPubkeySuffix(matchedNym), targetPubkey)} you've been invited to this channel! Check your PMs for details.`;
             await this.publishMessage(publicNotice, this.currentChannel, this.currentGeohash);
         } else {
             this.displaySystemMessage(`Failed to send invitation to <span data-no-i18n>${this.formatNymWithPubkey(matchedNym, targetPubkey)}</span>`, 'system', { html: true });
@@ -1132,7 +1096,9 @@ Object.assign(NYM.prototype, {
 
     async cmdAddMember(args) {
         if (this.inPMMode && this.currentPM && !this.currentGroup) {
-            const extra = args && args.trim() ? this.resolvePubkeyFromNym(args.trim().replace(/^@/, '')) : null;
+            const hit = args && args.trim() ? this.lookupNymOrReport(args) : null;
+            if (hit && hit.ambiguous) return;
+            const extra = hit && hit.pubkey;
             if (args && args.trim() && !extra) {
                 this.displaySystemMessage(this.uiText(`User @{v1} not found`, { v1: args.trim().replace(/^@/, '') }));
                 return;
@@ -1148,8 +1114,10 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Usage: /addmember @nym');
             return;
         }
+        const hit = this.lookupNymOrReport(args);
+        if (hit && hit.ambiguous) return;
         const targetInput = args.trim().replace(/^@/, '');
-        const targetPubkey = this.resolvePubkeyFromNym(targetInput);
+        const targetPubkey = hit && hit.pubkey;
         if (!targetPubkey) {
             this.displaySystemMessage(this.uiText(`User @{targetInput} not found`, { targetInput }));
             return;
@@ -1174,8 +1142,10 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage(usage);
             return null;
         }
+        const hit = this.lookupNymOrReport(args);
+        if (hit && hit.ambiguous) return null;
         const targetInput = args.trim().replace(/^@/, '');
-        const targetPubkey = this.resolvePubkeyFromNym(targetInput);
+        const targetPubkey = hit && hit.pubkey;
         if (!targetPubkey) {
             this.displaySystemMessage(this.uiText(`User @{targetInput} not found. Try @nym#xxxx or a hex pubkey.`, { targetInput }));
             return null;
@@ -1263,9 +1233,10 @@ Object.assign(NYM.prototype, {
         }
 
         const target = args.trim();
+        const blockHit = window.NymNickParse.blockTarget(target, this.nickUsers());
 
-        if (target.startsWith('#') && !target.includes('@')) {
-            const channelName = target.substring(1);
+        if (blockHit && blockHit.channel) {
+            const channelName = blockHit.channel;
 
             if (this.currentGeohash === channelName) {
                 if (await window.showAppConfirm(`Block and leave channel #${channelName}?`, { danger: true, okLabel: 'Block' })) {
@@ -1299,7 +1270,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        let targetPubkey = this.normalizePubkeyInput(target);
+        let targetPubkey = /^mesh:[0-9a-f]{16}$/i.test(target) ? target : this.normalizePubkeyInput(target);
         if (!targetPubkey) {
             targetPubkey = await this.findUserPubkey(target);
             if (!targetPubkey) return;
@@ -1337,9 +1308,11 @@ Object.assign(NYM.prototype, {
         }
 
         const target = args.trim();
+        const NP = window.NymNickParse;
+        const unblockChannel = target.startsWith('#') && (this.blockedChannels.has(target.substring(1)) || (!NP.resolveTarget(target, this.nickUsers()) && !!NP.channelTarget(target)));
 
-        if (target.startsWith('#')) {
-            const channelName = target.substring(1);
+        if (unblockChannel) {
+            const channelName = this.blockedChannels.has(target.substring(1)) ? target.substring(1) : NP.channelTarget(target);
 
             if (this.blockedChannels.has(channelName)) {
                 if (this.isValidGeohash(channelName)) {
@@ -1411,62 +1384,17 @@ Object.assign(NYM.prototype, {
         }
         if (!this._checkActionCommandRateLimit()) return;
 
-        const targetInput = this.normalizePubkeyInput(args) || args.trim().replace(/^@/, '');
-        let targetNym = '';
-        let targetPubkey = null;
-
-        if (/^[0-9a-f]{64}$/i.test(targetInput)) {
-            targetPubkey = targetInput.toLowerCase();
+        const hit = this.lookupNymOrReport(args);
+        if (hit && hit.ambiguous) return;
+        const targetPubkey = hit ? hit.pubkey : null;
+        let targetNym = args.trim().replace(/^@/, '');
+        if (targetPubkey) {
             const user = this.users.get(targetPubkey);
-            if (user) {
-                targetNym = this.parseNymFromDisplay(user.nym);
-            } else {
-                targetNym = `nym#${targetPubkey.slice(-4)}`;
-            }
-        } else {
-            const hashIndex = targetInput.indexOf('#');
-            let searchNym = targetInput;
-            let searchSuffix = null;
-
-            if (hashIndex !== -1) {
-                searchNym = targetInput.substring(0, hashIndex);
-                searchSuffix = targetInput.substring(hashIndex + 1);
-            }
-
-            const matches = [];
-            this.users.forEach((user, pubkey) => {
-                const cleanNym = this.parseNymFromDisplay(user.nym);
-                if (cleanNym === searchNym || cleanNym.toLowerCase() === searchNym.toLowerCase()) {
-                    if (searchSuffix) {
-                        if (pubkey.endsWith(searchSuffix)) {
-                            matches.push({ nym: cleanNym, pubkey: pubkey });
-                        }
-                    } else {
-                        matches.push({ nym: cleanNym, pubkey: pubkey });
-                    }
-                }
-            });
-
-            if (matches.length > 1 && !searchSuffix) {
-                const matchList = matches.map(m =>
-                    `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
-                ).join(', ');
-                this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(searchNym)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
-                this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
-                return;
-            }
-
-            if (matches.length > 0) {
-                targetNym = matches[0].nym;
-                targetPubkey = matches[0].pubkey;
-            } else {
-                targetNym = searchNym;
-            }
+            targetNym = hit.nym || (user ? user.nym : 'nym');
         }
 
-        // Full @nym#suffix so the renderer attaches the avatar, suffix, and flair.
         const targetMention = targetPubkey
-            ? `@${targetNym}#${this.getPubkeySuffix(targetPubkey)}`
+            ? window.NymNickParse.mentionText(targetNym, targetPubkey)
             : `@${targetNym}`;
         const slapContent = `/me slaps ${targetMention} around a bit with a large trout 🐟`;
 
@@ -1484,61 +1412,17 @@ Object.assign(NYM.prototype, {
         }
         if (!this._checkActionCommandRateLimit()) return;
 
-        const targetInput = this.normalizePubkeyInput(args) || args.trim().replace(/^@/, '');
-        let targetNym = '';
-        let targetPubkey = null;
-
-        if (/^[0-9a-f]{64}$/i.test(targetInput)) {
-            targetPubkey = targetInput.toLowerCase();
+        const hit = this.lookupNymOrReport(args);
+        if (hit && hit.ambiguous) return;
+        const targetPubkey = hit ? hit.pubkey : null;
+        let targetNym = args.trim().replace(/^@/, '');
+        if (targetPubkey) {
             const user = this.users.get(targetPubkey);
-            if (user) {
-                targetNym = this.parseNymFromDisplay(user.nym);
-            } else {
-                targetNym = `nym#${targetPubkey.slice(-4)}`;
-            }
-        } else {
-            const hashIndex = targetInput.indexOf('#');
-            let searchNym = targetInput;
-            let searchSuffix = null;
-
-            if (hashIndex !== -1) {
-                searchNym = targetInput.substring(0, hashIndex);
-                searchSuffix = targetInput.substring(hashIndex + 1);
-            }
-
-            const matches = [];
-            this.users.forEach((user, pubkey) => {
-                const cleanNym = this.parseNymFromDisplay(user.nym);
-                if (cleanNym === searchNym || cleanNym.toLowerCase() === searchNym.toLowerCase()) {
-                    if (searchSuffix) {
-                        if (pubkey.endsWith(searchSuffix)) {
-                            matches.push({ nym: cleanNym, pubkey: pubkey });
-                        }
-                    } else {
-                        matches.push({ nym: cleanNym, pubkey: pubkey });
-                    }
-                }
-            });
-
-            if (matches.length > 1 && !searchSuffix) {
-                const matchList = matches.map(m =>
-                    `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
-                ).join(', ');
-                this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(searchNym)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
-                this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
-                return;
-            }
-
-            if (matches.length > 0) {
-                targetNym = matches[0].nym;
-                targetPubkey = matches[0].pubkey;
-            } else {
-                targetNym = searchNym;
-            }
+            targetNym = hit.nym || (user ? user.nym : 'nym');
         }
 
         const targetMention = targetPubkey
-            ? `@${targetNym}#${this.getPubkeySuffix(targetPubkey)}`
+            ? window.NymNickParse.mentionText(targetNym, targetPubkey)
             : `@${targetNym}`;
         const hugContent = `/me gives ${targetMention} a warm hug 🫂`;
 

@@ -2102,45 +2102,15 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const hashIndex = targetInput.indexOf('#');
-        let searchNym = targetInput;
-        let searchSuffix = null;
-
-        if (hashIndex !== -1) {
-            searchNym = targetInput.substring(0, hashIndex);
-            searchSuffix = targetInput.substring(hashIndex + 1);
-        }
-
-        const matches = [];
-        this.users.forEach((user, pubkey) => {
-            const baseNym = this.stripPubkeySuffix(user.nym);
-            if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                if (searchSuffix) {
-                    if (pubkey.endsWith(searchSuffix)) {
-                        matches.push({ nym: user.nym, pubkey: pubkey });
-                    }
-                } else {
-                    matches.push({ nym: user.nym, pubkey: pubkey });
-                }
-            }
-        });
-
-        if (matches.length === 0) {
+        const hit = this.lookupNymOrReport(args);
+        if (hit && hit.ambiguous) return;
+        if (!hit) {
             this.displaySystemMessage(this.uiText(`User {targetInput} not found`, { targetInput }));
             return;
         }
 
-        if (matches.length > 1 && !searchSuffix) {
-            const matchList = matches.map(m =>
-                `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
-            ).join(', ');
-            this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(searchNym)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
-            this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
-            return;
-        }
-
-        const targetPubkey = matches[0].pubkey;
-        const targetNym = matches[0].nym;
+        const targetPubkey = hit.pubkey;
+        const targetNym = hit.nym || this.getNymFromPubkey(targetPubkey);
 
         if (targetPubkey === this.pubkey) {
             this.displaySystemMessage("You can't zap yourself");

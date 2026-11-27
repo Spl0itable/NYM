@@ -332,7 +332,7 @@ Object.assign(NYM.prototype, {
 
     _createAutocompleteItem(safePk) {
         const item = document.createElement('div');
-        item.className = 'autocomplete-item';
+        item.className = 'autocomplete-item ac-nym-item';
         item.dataset.action = 'selectSpecificAutocomplete';
         const wrap = document.createElement('span');
         wrap.className = 'user-avatar-wrap';
@@ -424,15 +424,20 @@ Object.assign(NYM.prototype, {
 
     selectSpecificAutocomplete(nym, pubkey) {
         const input = document.getElementById('messageInput');
-        const value = input.value;
-        const lastAtIndex = value.lastIndexOf('@');
-
-        // Insert "@base#suffix" so the mention resolves to one pubkey and namesakes aren't notified.
-        const baseNym = this.stripPubkeySuffix(nym);
-        const suffix = this.getPubkeySuffix(pubkey);
-        input.value = value.substring(0, lastAtIndex) + '@' + baseNym + '#' + suffix + ' ';
+        this._insertMentionAtCaret(input, nym, pubkey);
         input.focus();
         this.hideAutocomplete();
+    },
+
+    _insertMentionAtCaret(input, nym, pubkey) {
+        if (!input) return false;
+        const value = String(input.value || '');
+        const caret = typeof input.selectionStart === 'number' ? input.selectionStart : value.length;
+        const fit = window.NymNickParse.insertMention(value, caret, this.stripPubkeySuffix(nym), pubkey);
+        if (!fit) return false;
+        input.value = fit.value;
+        try { input.setSelectionRange(fit.caret, fit.caret); } catch (_) { }
+        return true;
     },
 
     refreshAutocompleteIfOpen() {
@@ -482,12 +487,7 @@ Object.assign(NYM.prototype, {
             const nym = selected.dataset.nym;
             const pubkey = selected.dataset.pubkey;
             const input = document.getElementById('messageInput');
-            const value = input.value;
-            const lastAtIndex = value.lastIndexOf('@');
-
-            const baseNym = this.stripPubkeySuffix(nym);
-            const suffix = this.getPubkeySuffix(pubkey);
-            input.value = value.substring(0, lastAtIndex) + '@' + baseNym + '#' + suffix + ' ';
+            this._insertMentionAtCaret(input, nym, pubkey);
             input.focus();
             this.hideAutocomplete();
         }

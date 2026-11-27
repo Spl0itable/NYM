@@ -80,6 +80,8 @@ Object.assign(NYM.prototype, {
         if (this._cvStrip) this._cvStrip.querySelectorAll('.cv-skeleton-col').forEach(el => el.remove());
         document.body.classList.add('columns-mode');
         this._cvActive = true;
+        const carry = this.activeThread && this.activeThread.ctx && this.threadsEnabled() ? this.activeThread : null;
+        if (typeof this._closeThreadViewOnSwitch === 'function') this._closeThreadViewOnSwitch();
         // Clear the hidden single-view container so its stale nodes don't trip the global dedupe.
         const mc = document.getElementById('messagesContainer');
         if (mc) { mc.innerHTML = ''; mc.dataset.lastChannel = ''; }
@@ -95,6 +97,7 @@ Object.assign(NYM.prototype, {
         this._cvPrimaryId = firstChannel ? firstChannel.id : null;
         const first = this._cvColumns[0];
         if (first) this._cvFocusColumn(first.id);
+        if (carry) this._cvCarryThread(carry);
         this._cvRebuildHeaderDots();
         // The store is still filling here, so two settle passes catch late arrivals.
         this._cvScheduleReconcile(600);
@@ -109,6 +112,9 @@ Object.assign(NYM.prototype, {
         this._cvCancelPendingRender();
         if (!this._cvActive) return;
         const focused = this._cvColumns.find(c => c.id === this._cvFocusedId) || this._cvColumns[0];
+        const at = this.activeThread;
+        const carry = at && at.ctx && focused && focused.listEl === this._threadContainer && at.ctx.storageKey === focused.key ? at : null;
+        if (typeof this._threadDropColumns === 'function') this._threadDropColumns();
         this._cvActive = false;
         // Keep the saved layout so a re-enable rebuilds from storage rather than stale objects.
         for (const c of (this._cvColumns || [])) { if (c._observer) c._observer.disconnect(); }
@@ -128,6 +134,15 @@ Object.assign(NYM.prototype, {
         if (mc) mc.dataset.lastChannel = '';
         if (focused) this._cvOpenInSingleView(focused);
         else this.switchChannel('nymchat', 'nymchat');
+        if (carry && typeof this.openThreadView === 'function') this.openThreadView(carry.rootId, carry.ctx, { push: false });
+    },
+
+    _cvCarryThread(at) {
+        const col = this._cvColumnForKey(at.ctx.storageKey);
+        if (!col || typeof this.openThreadView !== 'function') return;
+        const focused = this._cvFocusedId;
+        this.openThreadView(at.rootId, at.ctx, { push: false });
+        if (focused && focused !== col.id) this._cvFocusColumn(focused);
     },
 
     _cvOpenInSingleView(desc) {
@@ -173,12 +188,32 @@ Object.assign(NYM.prototype, {
             if (this._cvStrip === strip) this._cvRecheckShown();
         }, { passive: true });
         if (typeof ResizeObserver === 'function') {
+            let width = strip.clientWidth;
             const sized = new ResizeObserver(() => {
                 if (this._cvStrip !== strip) { sized.disconnect(); return; }
+                if (strip.clientWidth !== width) {
+                    width = strip.clientWidth;
+                    if (!strip.querySelector('.cv-picker')) this._cvShowFocusedPage();
+                }
                 this._cvRecheckShown();
             });
             sized.observe(strip);
         }
+
+        const focusFrom = (target) => {
+            this._cvRevealId = null;
+            if (!target || !target.closest || target.closest('.cv-col-move, .cv-col-close, .cv-col-dots, .cv-add-column, .cv-picker')) return;
+            const colEl = target.closest('.cv-column');
+            if (!colEl || !colEl.dataset.colId || colEl.dataset.colId === this._cvFocusedId) return;
+            const col = this._cvColumns.find(c => c.id === colEl.dataset.colId);
+            if (!col) return;
+            this._cvOpenConversation(this._cvDescForSave(col), { reveal: false });
+            this._cvRevealId = col.id;
+        };
+        strip.addEventListener('pointerdown', (e) => focusFrom(e.target), true);
+        strip.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') focusFrom(e.target);
+        }, true);
 
         strip.addEventListener('click', (e) => {
             const move = e.target.closest('.cv-col-move');
@@ -197,9 +232,14 @@ Object.assign(NYM.prototype, {
             if (e.target.closest('.cv-add-column')) { this._cvOpenAddColumn(); return; }
             if (e.target.closest('.cv-picker')) return;
             const colEl = e.target.closest('.cv-column');
+            const reveal = this._cvRevealId;
+            this._cvRevealId = null;
             if (colEl && colEl.dataset.colId && colEl.dataset.colId !== this._cvFocusedId) {
                 const col = this._cvColumns.find(c => c.id === colEl.dataset.colId);
                 if (col) this._cvOpenConversation(this._cvDescForSave(col));
+            } else if (colEl && reveal && colEl.dataset.colId === reveal) {
+                const col = this._cvColumns.find(c => c.id === reveal);
+                if (col) this._cvScrollToCol(col);
             }
         });
     },
@@ -320,6 +360,7 @@ Object.assign(NYM.prototype, {
         const idx = this._cvColumns.findIndex(c => c.id === id);
         if (idx < 0) return;
         const col = this._cvColumns[idx];
+        if (typeof this._threadDropIn === 'function') this._threadDropIn(col.listEl);
         this._cvKeyToList.delete(col.key);
         if (col._observer) col._observer.disconnect();
         if (col.el) col.el.remove();
@@ -356,7 +397,7 @@ Object.assign(NYM.prototype, {
         const existing = this._cvColumns.find(c => c.key === key);
         if (existing) {
             this._cvFocusColumn(existing.id);
-            this._cvScrollToCol(existing);
+            if (opts.reveal !== false) this._cvScrollToCol(existing);
         } else if (!opts.forceNew && desc.type === 'channel' &&
             this._cvColumns.some(c => c.id === this._cvPrimaryId && c.type === 'channel')) {
             const primary = this._cvColumns.find(c => c.id === this._cvPrimaryId);
@@ -404,6 +445,7 @@ Object.assign(NYM.prototype, {
 
     _cvNavigateColumn(col, desc) {
         desc = this._cvNormaliseDesc(desc);
+        if (typeof this._threadDropIn === 'function') this._threadDropIn(col.listEl);
         this._cvKeyToList.delete(col.key);
         col.type = desc.type;
         col.channel = desc.channel; col.geohash = desc.geohash || '';
@@ -446,6 +488,7 @@ Object.assign(NYM.prototype, {
             if (!quiet && typeof this._saveSettingsOrHold === 'function') this._saveSettingsOrHold();
             return;
         }
+        if (typeof this._threadDropColumns === 'function') this._threadDropColumns();
         for (const c of [...this._cvColumns]) { if (c._observer) c._observer.disconnect(); if (c.el) c.el.remove(); }
         this._cvColumns = [];
         this._cvKeyToList.clear();
@@ -691,7 +734,7 @@ Object.assign(NYM.prototype, {
             this._cvRenderRAF = null;
             if (!this._cvActive || i >= cols.length) return;
             const col = cols[i++];
-            if (this._cvColumns.indexOf(col) !== -1) this._cvRenderColumn(col);
+            if (this._cvColumns.indexOf(col) !== -1 && !this._threadViewOccupies(col.listEl)) this._cvRenderColumn(col);
             this._cvRenderRAF = requestAnimationFrame(step);
         };
         this._cvRenderRAF = requestAnimationFrame(step);
@@ -729,7 +772,6 @@ Object.assign(NYM.prototype, {
     _cvFocusColumn(id) {
         const col = this._cvColumns.find(c => c.id === id);
         if (!col) return;
-        // Focusing another conversation exits an open thread view so the composer never mis-threads.
         if (typeof this._threadOnColumnFocus === 'function') this._threadOnColumnFocus(col.key);
         this._cvFocusedId = id;
         for (const c of this._cvColumns) c.el && c.el.classList.toggle('focused', c.id === id);
@@ -757,6 +799,17 @@ Object.assign(NYM.prototype, {
         } else if (col.type === 'channel' && typeof this.markVisibleChannelMessagesRead === 'function') {
             this.markVisibleChannelMessagesRead();
         }
+        this._cvShowFocusedPage();
+    },
+
+    _cvShowFocusedPage() {
+        const strip = this._cvStrip;
+        if (!strip || !this._cvActive || window.innerWidth > 768) return;
+        const idx = this._cvColumns.findIndex(c => c.id === this._cvFocusedId);
+        const w = strip.clientWidth;
+        if (idx < 0 || !w) return;
+        const want = idx * w;
+        if (Math.abs(strip.scrollLeft - want) >= 1) strip.scrollLeft = want;
     },
 
     _cvUpdateSidebarActive(col) {
@@ -766,12 +819,12 @@ Object.assign(NYM.prototype, {
             // Match on `geohash || channel`, the identity addChannel keys the sidebar on.
             const colId = col.geohash || col.channel;
             channelItems.forEach(i => i.classList.toggle('active', (i.dataset.geohash || i.dataset.channel) === colId));
-            pmItems.forEach(i => i.classList.remove('active'));
+            pmItems.forEach(i => i.classList.toggle('active', false));
         } else if (col.type === 'pm') {
-            channelItems.forEach(i => i.classList.remove('active'));
+            channelItems.forEach(i => i.classList.toggle('active', false));
             pmItems.forEach(i => i.classList.toggle('active', i.dataset.pubkey === col.pubkey));
         } else {
-            channelItems.forEach(i => i.classList.remove('active'));
+            channelItems.forEach(i => i.classList.toggle('active', false));
             pmItems.forEach(i => i.classList.toggle('active', i.dataset.groupId === col.groupId));
         }
     },
@@ -785,8 +838,10 @@ Object.assign(NYM.prototype, {
 
     _cvTypingViewRoot(col) {
         const at = this.activeThread;
-        if (!col || !at || !at.ctx || !this.threadsEnabled()) return null;
-        return at.ctx.storageKey === col.key ? (at.rootId || null) : null;
+        if (!col || !this.threadsEnabled()) return null;
+        if (at && at.ctx && at.ctx.storageKey === col.key) return at.rootId || null;
+        const p = this._cvThreads && col.listEl ? this._cvThreads.get(col.listEl) : null;
+        return p && p.ctx && p.ctx.storageKey === col.key ? (p.rootId || null) : null;
     },
 
     _cvRenderTyping() {
@@ -830,7 +885,7 @@ Object.assign(NYM.prototype, {
             const wasBottom = col._atBottom;
             col._atBottom = distanceFromBottom < 120 && !this._readerAwayOn(sc);
             if (col._atBottom && !wasBottom) this._cvMarkColumnRead(col.key);
-            if (col.scrollBtn) col.scrollBtn.classList.toggle('visible', distanceFromBottom > 150);
+            if (col.scrollBtn) col.scrollBtn.classList.toggle('visible', window.NymChatNav.bottomShown(distanceFromBottom, col.scrollBtn.classList.contains('visible')));
             const distanceFromTop = (sc.scrollHeight - sc.clientHeight) - distanceFromBottom;
             if (distanceFromTop <= 5 && !col._loadingOlder) {
                 const isPM = col.type !== 'channel';
@@ -1005,9 +1060,12 @@ Object.assign(NYM.prototype, {
         this._cvColumns.forEach((col, idx) => {
             const dotsEl = col.headerEl && col.headerEl.querySelector('.cv-col-dots');
             if (!dotsEl) return;
-            let html = '';
-            for (let i = 0; i < n; i++) html += `<span class="cv-hdot${i === idx ? ' active' : ''}"></span>`;
-            dotsEl.innerHTML = html;
+            while (dotsEl.children.length > n) dotsEl.lastElementChild.remove();
+            while (dotsEl.children.length < n) dotsEl.appendChild(document.createElement('span'));
+            for (let i = 0; i < n; i++) {
+                const want = i === idx ? 'cv-hdot active' : 'cv-hdot';
+                if (dotsEl.children[i].className !== want) dotsEl.children[i].className = want;
+            }
         });
         this._cvRebuildPager();
     },
@@ -1210,6 +1268,7 @@ Object.assign(NYM.prototype, {
         const focusAt = Math.max(0, this._cvColumns.indexOf(focused));
         for (const c of [...this._cvColumns]) {
             if (keys.includes(c.key)) continue;
+            if (typeof this._threadDropIn === 'function') this._threadDropIn(c.listEl);
             this._cvKeyToList.delete(c.key);
             if (c._observer) c._observer.disconnect();
             if (c.el) c.el.remove();

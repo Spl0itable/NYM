@@ -12,6 +12,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/utils/haptics.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../layout/layout_model.dart';
+import '../../core/utils/nick_parse.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../widgets/common/nym_label.dart' show NymLabel;
 import '../../state/app_state.dart';
@@ -1530,22 +1531,17 @@ class _InputRowState extends ConsumerState<_InputRow> {
   void _insertMention(String pubkey) {
     final users = ref.read(usersProvider);
     final base = stripPubkeySuffix(users[pubkey]?.nym ?? pubkey);
-    final sfx = getPubkeySuffix(pubkey);
     final value = widget.controller.text;
     final sel = widget.controller.selection.baseOffset;
     final cursor = sel < 0 ? value.length : sel;
-    final before = value.substring(0, cursor.clamp(0, value.length));
-    final after = value.substring(cursor.clamp(0, value.length));
-    final atIdx = before.lastIndexOf('@');
-    if (atIdx < 0) {
+    final fit = insertNickMention(value, cursor, base, pubkey);
+    if (fit == null) {
       setState(() => _mentionMatches = const []);
       return;
     }
-    final insert = '@$base#$sfx ';
-    final next = before.substring(0, atIdx) + insert + after;
     widget.controller.value = TextEditingValue(
-      text: next,
-      selection: TextSelection.collapsed(offset: atIdx + insert.length),
+      text: fit.value,
+      selection: TextSelection.collapsed(offset: fit.caret),
     );
     setState(() => _mentionMatches = const []);
   }

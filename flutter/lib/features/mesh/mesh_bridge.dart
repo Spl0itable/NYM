@@ -128,6 +128,18 @@ class MeshBridge {
   bool isMeshOnlyPubkey(String pubkey) =>
       _meshOnlyPmPubkeys.contains(pubkey.toLowerCase());
 
+  bool isSyntheticPubkey(String pubkey) {
+    final key = pubkey.toLowerCase();
+    if (_meshOnlyPmPubkeys.contains(key)) return true;
+    final id = _peerIdByPubkey[key];
+    return id != null && meshStablePubkeyForPeerId(id) == key;
+  }
+
+  bool isLinkedPubkey(String pubkey) {
+    final key = pubkey.toLowerCase();
+    return _peerIdByPubkey.containsKey(key) && !isSyntheticPubkey(key);
+  }
+
   bool isGhostPinned(String pubkey) =>
       _ghostPinnedPms.contains(pubkey.toLowerCase());
 

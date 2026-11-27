@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/nick_parse.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../state/app_state.dart';
@@ -121,23 +122,19 @@ class CallNym extends ConsumerWidget {
 TextSpan callChatTextSpans(
     BuildContext context, String text, TextStyle base, Color mentionColor) {
   final raw = text;
-  final re = RegExp(r'(^|\s)@([^\s#@]+)(#[0-9a-fA-F]{4})?');
   final spans = <InlineSpan>[];
   var last = 0;
-  for (final m in re.allMatches(raw)) {
+  for (final m in nickMentions(raw)) {
     if (m.start > last) {
       spans.add(TextSpan(text: raw.substring(last, m.start), style: base));
     }
-    final pre = m.group(1) ?? '';
-    final name = m.group(2) ?? '';
-    final sfx = m.group(3) ?? '';
-    if (pre.isNotEmpty) spans.add(TextSpan(text: pre, style: base));
     final mention =
         base.copyWith(color: mentionColor, fontWeight: FontWeight.w600);
-    spans.add(TextSpan(text: '@$name', style: mention));
-    if (sfx.isNotEmpty) {
+    spans.add(TextSpan(text: '@\u2068${m.name}\u2069', style: mention));
+    final sfx = m.suffix;
+    if (sfx != null) {
       spans.add(
-          TextSpan(text: sfx, style: nymSuffixStyleOf(context, mention)));
+          TextSpan(text: '#$sfx', style: nymSuffixStyleOf(context, mention)));
     }
     last = m.end;
   }

@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/theme/nym_theme_swap.dart';
 import '../../widgets/common/dialog_button.dart';
 import '../../widgets/common/hit_slop.dart';
 import '../../widgets/common/keyboard_inset_dialog.dart';
@@ -282,7 +283,7 @@ class _SendButtonState extends State<_SendButton> {
         child: GestureDetector(
           onTap: widget.onTap,
           child: AnimatedContainer(
-            duration: NymMotion.transition,
+            duration: NymThemeSwap.motion(context, NymMotion.transition),
             curve: NymMotion.curve,
             height: widget.large ? 52 : 42,
             padding: const EdgeInsets.symmetric(horizontal: 22),

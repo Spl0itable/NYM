@@ -2498,6 +2498,19 @@ body:not(.chat-bubbles) .message.supporter-style {
     display: none !important;
 }
 
+.user-item .user-avatar-wrap,
+.user-item .avatar-user-list {
+    width: var(--sb-icon);
+    height: var(--sb-icon);
+}
+
+.user-item .user-status-dot {
+    right: 0;
+    bottom: 0;
+    width: 12px;
+    height: 12px;
+}
+
 .ctx-status-row {
     display: flex;
     align-items: center;
@@ -2888,6 +2901,11 @@ body:not(.chat-bubbles) .message.supporter-style {
     cursor: pointer;
     -webkit-user-select: all;
     text-align: center;
+}
+
+.nm-mention > bdi {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 .nm-mention .avatar-message,

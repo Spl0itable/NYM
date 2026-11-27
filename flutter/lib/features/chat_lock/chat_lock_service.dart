@@ -135,6 +135,8 @@ class ChatLockService {
   bool isConversationLocked(String? chatKey) =>
       isLocked(state(), lockKeyForChat(chatKey, hooks.selfPubkey()));
 
+  Set<String> get lockedChannels => lockedChannelNames(state());
+
   bool get unlocked => _session.unlocked;
 
   LockSession get session => _session;

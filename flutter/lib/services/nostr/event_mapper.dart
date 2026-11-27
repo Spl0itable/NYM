@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../../core/constants/event_kinds.dart';
+import '../../core/utils/nick_parse.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/p2p/p2p_models.dart';
 import '../../models/channel.dart';
@@ -185,9 +186,9 @@ class EventMapper {
     if (tag == null || tag.length < 3 || tag[1].isEmpty || tag[2].isEmpty) {
       return content;
     }
-    final author = tag[1];
+    final author = capNym(tag[1]);
     final userMessage = content
-        .replaceFirst(RegExp('^@${RegExp.escape(author)}\\s*'), '')
+        .replaceFirst(RegExp('^@${RegExp.escape(tag[1])}\\s*'), '')
         .trim();
     final stripped = tag[2]
         .split('\n')
@@ -196,9 +197,10 @@ class EventMapper {
         .replaceAll(_rxQuoteBlankRun, '\n\n')
         .trim();
     final lines = stripped.split('\n');
+    final head = quoteHeaderName(author);
     final quote = lines.length > 1
-        ? '> @$author: ${lines.first}\n${lines.skip(1).map((l) => '> $l').join('\n')}'
-        : '> @$author: ${lines.first}';
+        ? '> @$head: ${lines.first}\n${lines.skip(1).map((l) => '> $l').join('\n')}'
+        : '> @$head: ${lines.first}';
     return userMessage.isEmpty ? quote : '$quote\n\n$userMessage';
   }
 

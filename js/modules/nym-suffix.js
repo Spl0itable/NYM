@@ -3,6 +3,13 @@
     const G = typeof window !== 'undefined' ? window : typeof self !== 'undefined' ? self : globalThis;
 
     const CLASS = 'nym-suffix';
+    const LABEL_CLASS = 'nym-l';
+    const SEG_CLASS = 'nym-seg';
+    const BIDI = /[\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]/;
+    const BIDI_ALL = new RegExp(BIDI.source, 'g');
+    const BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]/g;
+    const ISOLATE_MARK = /[\u2066-\u2069]/g;
+    const AFTER_ISOLATE = /^#[0-9a-f]{4}(?![0-9a-z_])/i;
     const LABEL = /^([\s\S]*[^\s#])(#[0-9a-f]{4})$/i;
     const MENTION = /@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b/gi;
     const GLUED = /(?<=[^\s#@(\[{\/\\"'`<>=?&:;,.!])#([0-9a-f]{4})(?![0-9a-z_])/gi;
@@ -187,15 +194,10 @@
     }
 
     function labelText(label) {
-        if (!label) return 'nym';
-        const cleaned = String(label).replace(/<span class="nym-suffix">[\s\S]*$/, '').trim()
-            .replace(/<[^>]*>/g, '').trim()
-            .replace(/&lt;/g, '').replace(/&gt;/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
-        return cleaned.replace(/#[0-9a-f]{4}$/i, '') || cleaned || 'nym';
-    }
-
-    function capMentions(text) {
-        return String(text == null ? '' : text).replace(MENTION, (m) => '@' + capBase(m.slice(1, -5)) + m.slice(-5));
+        const s = String(label == null ? '' : label);
+        const base = s.replace(/#[0-9a-f]{4}$/i, '');
+        if (base.trim()) return base;
+        return s.trim() ? s : 'nym';
     }
 
     let segmenter = null;
@@ -217,6 +219,29 @@
     let measureCtx = null;
     let measureFamily = null;
     let familyReadAt = -Infinity;
+    let familyQueued = false;
+
+    function readFamily(doc) {
+        familyReadAt = Date.now();
+        const fam = G.getComputedStyle(doc.body).fontFamily || 'sans-serif';
+        if (fam !== measureFamily) {
+            measureFamily = fam;
+            measureCtx.font = '100px ' + fam;
+            guardMemo.clear();
+        }
+    }
+
+    function queueFamily(doc) {
+        if (familyQueued) return;
+        if (typeof G.requestAnimationFrame !== 'function' || typeof G.setTimeout !== 'function') { readFamily(doc); return; }
+        familyQueued = true;
+        G.requestAnimationFrame(() => {
+            G.setTimeout(() => {
+                familyQueued = false;
+                try { if (measureCtx && doc.body) readFamily(doc); } catch (e) { }
+            }, 0);
+        });
+    }
 
     function measurer() {
         const doc = G.document;
@@ -228,16 +253,8 @@
                 if (!measureCtx) { measureCtx = false; return null; }
             }
             if (measureCtx === false) return null;
-            const now = Date.now();
-            if (now - familyReadAt >= 1000) {
-                familyReadAt = now;
-                const fam = G.getComputedStyle(doc.body).fontFamily || 'sans-serif';
-                if (fam !== measureFamily) {
-                    measureFamily = fam;
-                    measureCtx.font = '100px ' + fam;
-                    guardMemo.clear();
-                }
-            }
+            if (measureFamily === null) readFamily(doc);
+            else if (Date.now() - familyReadAt >= 1000) queueFamily(doc);
             return measureCtx;
         } catch (e) {
             return null;
@@ -263,13 +280,28 @@
         return out;
     }
 
+    function shown(name) {
+        return String(name == null ? '' : name).replace(BIDI_ALL, '').replace(BREAKS, ' ');
+    }
+
+    function balanced(text) {
+        let open = 0;
+        const out = String(text).replace(ISOLATE_MARK, (c) => {
+            if (c !== '\u2069') { open++; return c; }
+            if (!open) return '';
+            open--;
+            return c;
+        });
+        return open ? out + '\u2069'.repeat(open) : out;
+    }
+
     function sqRaw(baseHtml, suffixHtml, firstLetter, baseClass) {
         const f = firstLetter ? ' data-f="' + esc(firstLetter) + '"' : '';
-        return '<span class="nym-sq"' + f + '><span class="nym-b' + (baseClass ? ' ' + esc(baseClass) : '') + '">' + baseHtml + '</span>' + (suffixHtml ? '<span class="' + CLASS + '">' + suffixHtml + '</span>' : '') + '</span>';
+        return '<span class="nym-sq"' + f + '><span class="nym-b' + (baseClass ? ' ' + esc(baseClass) : '') + '">' + shown(baseHtml) + '</span>' + (suffixHtml ? '<span class="' + CLASS + '">' + suffixHtml + '</span>' : '') + '</span>';
     }
 
     function sqHtml(base, suffix, baseClass) {
-        const b = capBase(base);
+        const b = capBase(shown(base));
         const m = /^#?([0-9a-f]{4})$/i.exec(String(suffix == null ? '' : suffix));
         return sqRaw(esc(b), m ? '#' + m[1] : '', guard(b), baseClass);
     }
@@ -292,8 +324,8 @@
 
     function html(base, suffix) {
         const m = /^#?([0-9a-f]{4})$/i.exec(String(suffix == null ? '' : suffix));
-        if (!m) return esc(base);
-        return esc(base) + '<span class="' + CLASS + '">#' + m[1] + '</span>';
+        if (!m) return '<bdi>' + esc(shown(base)) + '</bdi>';
+        return '<span class="' + LABEL_CLASS + '"><bdi>' + esc(shown(base)) + '</bdi><span class="' + CLASS + '">#' + m[1] + '</span></span>';
     }
 
     function labelHtml(label) {
@@ -308,7 +340,7 @@
     }
 
     function listHtml(labels, sep) {
-        return (labels || []).map((l) => '<bdi>' + labelHtml(l) + '</bdi>').join(esc(sep == null ? ', ' : sep));
+        return (labels || []).map((l) => (split(l) ? labelHtml(l) : '<bdi>' + esc(shown(l)) + '</bdi>')).join(esc(sep == null ? ', ' : sep));
     }
 
     function knownSet(k) {
@@ -349,15 +381,71 @@
         return out.sort((a, b) => a[0] - b[0]);
     }
 
-    function textHtml(text, knownSuffixes) {
-        const s = String(text == null ? '' : text);
-        let out = '';
-        let at = 0;
-        for (const r of ranges(s, knownSuffixes)) {
-            out += esc(s.slice(at, r[0])) + '<span class="' + CLASS + '">' + esc(s.slice(r[0], r[1])) + '</span>';
-            at = r[1];
+    function isoRuns(s) {
+        const out = [];
+        if (s.indexOf('\u2068') < 0) return out;
+        const open = [];
+        for (let i = 0; i < s.length; i++) {
+            const c = s.charCodeAt(i);
+            if (c >= 0x2066 && c <= 0x2068) open.push(i);
+            else if (c === 0x2069 && open.length) {
+                const a = open.pop();
+                if (!open.length && s.charCodeAt(a) === 0x2068) out.push([a, i + 1]);
+            }
         }
-        return out + esc(s.slice(at));
+        return out;
+    }
+
+    function pieces(text, knownSuffixes, labels, nested) {
+        const s = String(text == null ? '' : text);
+        const marks = [];
+        const taken = (a, b) => marks.some((m) => a < m.to && b > m.from);
+        for (const [a, b] of nested ? [] : isoRuns(s)) {
+            const inner = s.slice(a + 1, b - 1);
+            if (!shown(inner).trim()) continue;
+            const one = pieces(inner, knownSuffixes, labels, true);
+            let lab = one.length === 1 && one[0].base ? one[0] : null;
+            if (!lab && one.length === 2 && one[0].text !== undefined && one[0].text.trim() && !one[1].base && one[1].suffix) lab = { base: one[0].text, suffix: one[1].suffix };
+            const tag = lab && lab.suffix ? null : AFTER_ISOLATE.exec(s.slice(b, b + 6));
+            marks.push({ from: a, to: b + (tag ? tag[0].length : 0), base: lab ? lab.base : inner, suffix: lab && lab.suffix ? lab.suffix : (tag ? tag[0] : '') });
+        }
+        const list = Array.from(new Set((labels || []).map((l) => String(l == null ? '' : l)))).filter((l) => {
+            const m = CAPPED.exec(l);
+            return !!m && !!m[1].trim();
+        }).sort((a, b) => b.length - a.length);
+        for (const l of list) {
+            for (let i = s.indexOf(l); i >= 0; i = s.indexOf(l, i + 1)) {
+                const end = i + l.length;
+                if (!/[0-9a-z_]/i.test(s.charAt(end)) && !/[\p{L}\p{N}_]/u.test(s.charAt(i - 1)) && !inLink(s, i) && !taken(i, end)) marks.push({ from: i, cut: end - 5, to: end });
+            }
+        }
+        for (const m of s.matchAll(MENTION)) {
+            const end = m.index + m[0].length;
+            if (!taken(m.index + 1, end)) marks.push({ from: m.index + 1, cut: end - 5, to: end });
+        }
+        for (const r of ranges(s, knownSuffixes)) {
+            if (!taken(r[0], r[1])) marks.push({ from: r[0], cut: r[0], to: r[1] });
+        }
+        marks.sort((a, b) => a.from - b.from);
+        const out = [];
+        let at = 0;
+        for (const m of marks) {
+            if (m.from > at) out.push({ text: s.slice(at, m.from) });
+            out.push(m.base !== undefined ? { base: m.base, suffix: m.suffix } : { base: s.slice(m.from, m.cut), suffix: s.slice(m.cut, m.to) });
+            at = m.to;
+        }
+        if (at < s.length) out.push({ text: s.slice(at) });
+        return out;
+    }
+
+    function textHtml(text, knownSuffixes, labels) {
+        let out = '';
+        for (const p of pieces(text, knownSuffixes, labels)) {
+            if (p.text !== undefined) out += BIDI.test(p.text) ? '<span class="' + SEG_CLASS + '">' + esc(balanced(p.text)) + '</span>' : esc(p.text);
+            else if (p.base) out += '<span class="' + LABEL_CLASS + '"><bdi>' + esc(shown(p.base)) + '</bdi>' + (p.suffix ? '<span class="' + CLASS + '">' + esc(p.suffix) + '</span>' : '') + '</span>';
+            else out += '<span class="' + CLASS + '">' + esc(p.suffix) + '</span>';
+        }
+        return out;
     }
 
     function dimHtml(html, knownSuffixes) {
@@ -377,23 +465,32 @@
         }).join('');
     }
 
-    function render(el, text, knownSuffixes) {
+    function render(el, text, knownSuffixes, labels) {
         if (!el) return el;
-        const s = String(text == null ? '' : text);
         const doc = el.ownerDocument || G.document;
+        const span = (cls, t) => {
+            const n = doc.createElement('span');
+            n.className = cls;
+            if (t !== undefined) n.textContent = t;
+            return n;
+        };
         el.textContent = '';
-        let at = 0;
-        for (const r of ranges(s, knownSuffixes)) {
-            if (r[0] > at) el.appendChild(doc.createTextNode(s.slice(at, r[0])));
-            const span = doc.createElement('span');
-            span.className = CLASS;
-            span.textContent = s.slice(r[0], r[1]);
-            el.appendChild(span);
-            at = r[1];
+        for (const p of pieces(text, knownSuffixes, labels)) {
+            if (p.text !== undefined) {
+                el.appendChild(BIDI.test(p.text) ? span(SEG_CLASS, balanced(p.text)) : doc.createTextNode(p.text));
+            } else if (p.base) {
+                const label = span(LABEL_CLASS);
+                const bdi = doc.createElement('bdi');
+                bdi.textContent = shown(p.base);
+                label.appendChild(bdi);
+                if (p.suffix) label.appendChild(span(CLASS, p.suffix));
+                el.appendChild(label);
+            } else {
+                el.appendChild(span(CLASS, p.suffix));
+            }
         }
-        if (at < s.length) el.appendChild(doc.createTextNode(s.slice(at)));
         return el;
     }
 
-    G.NymSuffix = { CLASS, MAX, cap, capBase, cutAt, fitInsert, fitComposed, wellFormed, initial, capMentions, labelText, guard, sqRaw, sqHtml, sqLabelHtml, sqPubkeyHtml, squeeze, split, strip, suffixOf, remember, known, html, labelHtml, pubkeyHtml, listHtml, ranges, textHtml, dimHtml, render };
+    G.NymSuffix = { CLASS, MAX, cap, capBase, cutAt, fitInsert, fitComposed, wellFormed, initial, labelText, guard, shown, sqRaw, sqHtml, sqLabelHtml, sqPubkeyHtml, squeeze, split, strip, suffixOf, remember, known, html, labelHtml, pubkeyHtml, listHtml, ranges, textHtml, dimHtml, render };
 })();

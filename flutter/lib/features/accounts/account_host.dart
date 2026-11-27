@@ -20,6 +20,7 @@ import 'account_logic.dart';
 import 'account_runtime.dart';
 import 'inactive_probe.dart';
 import 'inactive_watch.dart';
+import '../../widgets/common/nym_label.dart' show isolateNymLabel;
 
 abstract class AccountsController {
   ValueListenable<AccountIndex> get changes;
@@ -313,9 +314,9 @@ class AccountSession extends ChangeNotifier implements AccountsController {
             existing.nym.isEmpty ? 'nym' : existing.nym, existing.pubkey);
         showToast(plan.ok
             ? tr('{nym} is already saved on this device, so the app switches '
-                'to it.', {'nym': name})
+                'to it.', {'nym': isolateNymLabel(name)})
             : tr('This key is also saved as {nym}. Switch to it from '
-                'Manage Identities.', {'nym': name}));
+                'Manage Identities.', {'nym': isolateNymLabel(name)}));
       }
       await _execute(plan);
     }

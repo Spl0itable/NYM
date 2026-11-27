@@ -57,9 +57,14 @@ class NymTextSize {
 
 class NymDimens {
   NymDimens._();
-  static const double sidebarWidth = 290;
-  static const double sidebarDrawerWidth = 300;
+  static const double sidebarWidth = 400;
+  static const double sidebarDrawerWidth = 340;
   static const double contextMenuWidth = 320;
   static const double mobileBreakpoint = 768;
   static const double tabletBreakpoint = 1024;
+
+  static EdgeInsets chatListPadding(BuildContext context) =>
+      MediaQuery.sizeOf(context).width <= mobileBreakpoint
+          ? const EdgeInsets.fromLTRB(10, 8, 10, 16)
+          : const EdgeInsets.fromLTRB(20, 8, 20, 16);
 }

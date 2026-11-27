@@ -1,102 +1,38 @@
-/// Pure checks for whether an inbound message refers to the user, taking [nym] and [suffix] directly.
 library;
 
-import '../../core/utils/nym_utils.dart';
+import '../../core/utils/nick_parse.dart';
 
-/// True when [content] @-mentions the user outside quoted lines; `@nym#other` (a different suffix) doesn't count.
 bool mentionsSelf({
   required String content,
   required String nym,
   required String suffix,
-}) {
-  if (content.isEmpty || nym.isEmpty) return false;
-  final scrubbed = content
-      .split('\n')
-      .where((l) => !l.trimLeft().startsWith('>'))
-      .join('\n');
-  final esc = RegExp.escape(nym);
-  final sfx = RegExp.escape(suffix);
-  // `@nym` followed by our `#suffix` or a boundary that isn't a different suffix.
-  final tail = sfx.isNotEmpty
-      ? '(?:#$sfx\\b|(?!#[0-9a-f]{4})(?:\\b|\$))'
-      : '(?!#[0-9a-f]{4})(?:\\b|\$)';
-  return RegExp('@$esc$tail', caseSensitive: false).hasMatch(scrubbed);
-}
+}) =>
+    selfMentionOf(content, nym, suffix).mentioned;
 
-/// True when [content] quote-replies to the user's message; only a top-level quote's attribution line counts.
 bool quotesSelf({
   required String content,
   required String nym,
   required String suffix,
-}) {
-  if (content.isEmpty || nym.isEmpty) return false;
-  for (final line in content.split('\n')) {
-    final trimmed = line.trimLeft();
-    if (!trimmed.startsWith('>')) continue;
-    // Strip exactly one quote marker, so nested quotes fail the `@` test below.
-    final inner = trimmed.substring(1).trim();
-    if (!inner.startsWith('@')) continue;
-    final colon = inner.indexOf(':');
-    if (colon < 0) continue;
-    if (_isSelfAuthor(inner.substring(1, colon).trim(),
-        nym: nym, suffix: suffix)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/// Accepts `nym`, `nym#suffix` and doubled `nym#suffix#suffix`; rejects a different suffix.
-bool _isSelfAuthor(String author, {required String nym, required String suffix}) {
-  var label = author.trim();
-  if (label.isEmpty) return false;
-  final hash = label.indexOf('#');
-  if (hash < 0) {
-    return label.toLowerCase() == nym.toLowerCase();
-  }
-  final base = label.substring(0, hash);
-  if (base.toLowerCase() != nym.toLowerCase()) return false;
-  if (suffix.isEmpty) return true;
-  // The suffix may repeat (`#ab12#ab12`); every segment must be ours.
-  final tail = label.substring(hash + 1).split('#');
-  return tail.every((s) => s.toLowerCase() == suffix.toLowerCase());
-}
-
-final RegExp _htmlTagRe = RegExp(r'<[^>]*>');
-final RegExp _dupSuffixRe =
-    RegExp(r'@([^@#\s]+)#([0-9a-f]{4})#\2\b', caseSensitive: false);
-
-String? _selfRxKey;
-RegExp? _selfQuoteRx;
-RegExp? _selfAtRx;
+}) =>
+    selfMentionOf(content, nym, suffix).quoted;
 
 bool contentMentionsSelf({
   required String content,
   required String nym,
   String? pubkey,
+  NickKnown? known,
 }) {
-  final cleanNym = stripPubkeySuffix(nym);
-  if (cleanNym.isEmpty || content.isEmpty) return false;
-  final rawSuffix = pubkey != null ? getPubkeySuffix(pubkey) : '';
-  final sfx = rawSuffix == '????' ? '' : RegExp.escape(rawSuffix);
-  final rxKey = '$cleanNym\u0000$sfx';
-  if (_selfRxKey != rxKey) {
-    final esc = RegExp.escape(cleanNym);
-    final tail = sfx.isNotEmpty
-        ? '(?:#$sfx\\b|(?!#[0-9a-f]{4})(?:\\b|\$))'
-        : '(?!#[0-9a-f]{4})(?:\\b|\$)';
-    _selfQuoteRx = RegExp('^\\s*>+\\s*@$esc(?:#$sfx)?\\s*:',
-        caseSensitive: false, multiLine: true);
-    _selfAtRx = RegExp('@$esc$tail', caseSensitive: false);
-    _selfRxKey = rxKey;
+  var pk = pubkey ?? '';
+  var base = nickBase(nym, pk);
+  if (nickTail(pk).isEmpty) {
+    final m = _ownTag.firstMatch(nym);
+    if (m != null) {
+      base = nym.substring(0, m.start);
+      pk = m[1]!;
+    }
   }
-  var clean = content
-      .replaceAll(_htmlTagRe, '')
-      .replaceAllMapped(_dupSuffixRe, (m) => '@${m[1]}#${m[2]}');
-  if (_selfQuoteRx!.hasMatch(clean)) return true;
-  clean = clean
-      .split('\n')
-      .where((line) => !line.trimLeft().startsWith('>'))
-      .join('\n');
-  return _selfAtRx!.hasMatch(clean);
+  final r = selfMentionOf(content, base, pk, known: known);
+  return r.mentioned || r.quoted;
 }
+
+final RegExp _ownTag = RegExp(r'#([0-9a-f]{4})$', caseSensitive: false);

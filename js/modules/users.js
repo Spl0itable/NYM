@@ -301,11 +301,66 @@ Object.assign(NYM.prototype, {
     },
 
     nymTextHtml(text, known) {
-        return window.NymSuffix.textHtml(text, known === undefined ? this._nymKnown() : known);
+        return window.NymSuffix.textHtml(text, known === undefined ? this._nymKnown() : known, this._nymLabelsIn(text));
+    },
+
+    nymIsolated(name) {
+        return '\u2068' + window.NymSuffix.shown(name) + '\u2069';
+    },
+
+    nymIsolatedLabel(name, pubkey) {
+        return this.nymIsolated(name) + '#' + this.getPubkeySuffix(pubkey);
     },
 
     renderNymText(el, text, known) {
-        return window.NymSuffix.render(el, text, known === undefined ? this._nymKnown() : known);
+        return window.NymSuffix.render(el, text, known === undefined ? this._nymKnown() : known, this._nymLabelsIn(text));
+    },
+
+    _nymTailIndex(map) {
+        if (!map) return null;
+        const cache = this._nymTails || (this._nymTails = new WeakMap());
+        let idx = cache.get(map);
+        if (!idx || idx.size !== map.size) {
+            const by = new Map();
+            for (const pk of map.keys()) {
+                if (typeof pk !== 'string' || pk.length < 4) continue;
+                const t = pk.slice(-4).toLowerCase();
+                const list = by.get(t);
+                if (list) list.push(pk); else by.set(t, [pk]);
+            }
+            idx = { size: map.size, by };
+            cache.set(map, idx);
+        }
+        return idx.by;
+    },
+
+    _nymLabelsIn(text) {
+        const S = window.NymSuffix;
+        const tails = new Set();
+        for (const m of String(text == null ? '' : text).matchAll(/#([0-9a-f]{4})(?![0-9a-z_])/gi)) tails.add(m[1].toLowerCase());
+        if (!tails.size) return [];
+        const labels = new Set();
+        const add = (pk, nym, tail) => {
+            if (typeof pk !== 'string' || typeof nym !== 'string' || !nym) return;
+            if (/^[0-9a-f]{64}$/i.test(pk)) S.remember(pk);
+            const stored = nym.replace(/#[0-9a-f]{4}$/i, '');
+            if (stored.trim()) labels.add(stored + '#' + tail);
+            labels.add(this.parseNymFromDisplay(nym) + '#' + tail);
+        };
+        const users = this._nymTailIndex(this.users);
+        const convos = this._nymTailIndex(this.pmConversations);
+        for (const tail of tails) {
+            for (const pk of (users && users.get(tail)) || []) {
+                const u = this.users.get(pk);
+                if (u) add(pk, u.nym, tail);
+            }
+            for (const pk of (convos && convos.get(tail)) || []) {
+                const c = this.pmConversations.get(pk);
+                if (c) add(pk, c.nym, tail);
+            }
+            if (typeof this.pubkey === 'string' && this.pubkey.slice(-4).toLowerCase() === tail) add(this.pubkey, this.nym, tail);
+        }
+        return [...labels];
     },
 
     _nymKnown() {
@@ -426,7 +481,11 @@ Object.assign(NYM.prototype, {
     },
 
     parseNymFromDisplay(displayNym) {
-        return window.NymSuffix.capBase(window.NymSuffix.labelText(displayNym));
+        const S = window.NymSuffix;
+        const raw = String(displayNym == null ? '' : displayNym);
+        const base = this.stripPubkeySuffix(raw);
+        if (base && S.shown(base).trim()) return base;
+        return S.shown(raw).trim() ? S.capBase(raw) : 'nym';
     },
 
     displayTextFromLabel(displayNym) {
@@ -1992,6 +2051,7 @@ Object.assign(NYM.prototype, {
 
     _dropUser(pk, user) {
         this.users.delete(pk);
+        this._tailIndex = null;
         if (this._nameSources) this._nameSources.delete(pk);
         if (this.userColors) this.userColors.delete(pk);
         if (!this.channelUsers) return;
@@ -2151,7 +2211,7 @@ Object.assign(NYM.prototype, {
         const saved = this.listExpansionStates ? this.listExpansionStates.get('userListContent') : 0;
         const shown = typeof saved === 'number' && saved > first ? saved : first;
         const totalCount = displayUsers.length;
-        const win = M ? M.window(totalCount, shown, [], { searching: !!term })
+        const win = M ? M.window(totalCount, shown, { searching: !!term })
             : { shown, visible: term ? totalCount : Math.min(totalCount, shown), hidden: 0, buttons: [] };
         if (!term && this.listExpansionStates) {
             if (win.shown > first) this.listExpansionStates.set('userListContent', win.shown);
@@ -2247,9 +2307,7 @@ Object.assign(NYM.prototype, {
                 if (!pk) return;
                 const baseNym = item.dataset.nym || '';
                 const suffix = this.getPubkeySuffix(pk);
-                const flairHtml = this.getFlairForUser(pk);
-                const displayNym = `${window.NymSuffix.sqHtml(baseNym, suffix)}${flairHtml}`;
-                this.showContextMenu(e, displayNym, pk, null, null, true);
+                this.showContextMenu(e, `${baseNym}#${suffix}`, pk, null, null, true);
             };
             container.addEventListener('click', handler);
             container.addEventListener('contextmenu', handler);
@@ -2487,7 +2545,7 @@ Object.assign(NYM.prototype, {
         listElement.textContent = '';
         const frag = document.createDocumentFragment();
         blockedArray.forEach(pubkey => {
-            const safePk = this._safePubkey(pubkey);
+            const safePk = this._safePubkey(pubkey) || (/^mesh:[0-9a-f]{16}$/i.test(pubkey) ? pubkey : '');
             if (!safePk) return;
             const row = document.createElement('div');
             row.className = 'blocked-item';
@@ -2505,6 +2563,7 @@ Object.assign(NYM.prototype, {
     },
 
     async fetchMetadataForBlockedUsers(pubkeys) {
+        pubkeys = (pubkeys || []).filter((pk) => !!this._safePubkey(pk));
         if (pubkeys.length === 0) return;
 
         if (this._getApiHost && this._getApiHost()) {
@@ -2783,96 +2842,61 @@ Object.assign(NYM.prototype, {
         return (n / 1000000).toFixed(1) + 'M';
     },
 
+    nickUsers() {
+        const out = [];
+        if (this.users) this.users.forEach((u, pk) => out.push({ pubkey: pk, nym: u && u.nym }));
+        return out;
+    },
+
+    _nickAuthors() {
+        const out = [];
+        const seen = new Set();
+        const take = (msg) => {
+            if (!msg || !msg.pubkey || !msg.author || seen.has(msg.pubkey)) return;
+            seen.add(msg.pubkey);
+            out.push({ pubkey: msg.pubkey, nym: this.stripPubkeySuffix(msg.author) });
+        };
+        if (this.messages) this.messages.forEach((list) => (list || []).forEach(take));
+        if (this.pmMessages) this.pmMessages.forEach((list) => (list || []).forEach(take));
+        return out;
+    },
+
+    lookupNym(input, opts) {
+        const NP = window.NymNickParse;
+        const raw = String(input == null ? '' : input).trim();
+        if (!raw || !NP) return null;
+        const asPubkey = this.normalizePubkeyInput(raw);
+        if (asPubkey) return { pubkey: asPubkey, nym: '' };
+        const hit = NP.resolveTarget(raw, this.nickUsers());
+        if (hit || !(opts && opts.authors)) return hit;
+        return NP.resolveTarget(raw, this._nickAuthors());
+    },
+
+    reportAmbiguousNym(hit) {
+        if (!hit || !hit.ambiguous) return;
+        const matchList = hit.ambiguous.map((m) => this.formatNymWithPubkey(m.nym, m.pubkey)).join(', ');
+        this.displaySystemMessage(`Multiple users found with nym "<span data-no-i18n>${this.escapeHtml(hit.name)}</span>": <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
+        this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
+    },
+
+    lookupNymOrReport(input, opts) {
+        const hit = this.lookupNym(input, opts);
+        if (hit && hit.ambiguous) {
+            this.reportAmbiguousNym(hit);
+            return { ambiguous: true };
+        }
+        return hit;
+    },
+
     async findUserPubkey(input) {
-        // A public key in either form resolves as itself.
-        const asPubkey = this.normalizePubkeyInput(input);
-        if (asPubkey) return asPubkey;
-
-        const cleanInput = input.replace(/^@/, '');
-        const hashIndex = cleanInput.indexOf('#');
-        let searchNym = cleanInput;
-        let searchSuffix = null;
-
-        if (hashIndex !== -1) {
-            searchNym = cleanInput.substring(0, hashIndex);
-            searchSuffix = cleanInput.substring(hashIndex + 1);
-        }
-
-        const matches = [];
-
-        this.users.forEach((user, pubkey) => {
-            const baseNym = this.stripPubkeySuffix(user.nym);
-            if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                if (searchSuffix) {
-                    if (pubkey.endsWith(searchSuffix)) {
-                        matches.push({ nym: user.nym, pubkey: pubkey });
-                    }
-                } else {
-                    matches.push({ nym: user.nym, pubkey: pubkey });
-                }
-            }
-        });
-
-        if (matches.length === 0) {
-            this.messages.forEach((channelMessages, channel) => {
-                channelMessages.forEach(msg => {
-                    if (msg.pubkey && msg.author) {
-                        const baseNym = this.stripPubkeySuffix(msg.author);
-                        if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                            if (searchSuffix) {
-                                if (msg.pubkey.endsWith(searchSuffix)) {
-                                    if (!matches.find(m => m.pubkey === msg.pubkey)) {
-                                        matches.push({ nym: msg.author, pubkey: msg.pubkey });
-                                    }
-                                }
-                            } else {
-                                if (!matches.find(m => m.pubkey === msg.pubkey)) {
-                                    matches.push({ nym: msg.author, pubkey: msg.pubkey });
-                                }
-                            }
-                        }
-                    }
-                });
-            });
-
-            this.pmMessages.forEach((conversationMessages, conversationKey) => {
-                conversationMessages.forEach(msg => {
-                    if (msg.pubkey && msg.author) {
-                        const baseNym = this.stripPubkeySuffix(msg.author);
-                        if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
-                            if (searchSuffix) {
-                                if (msg.pubkey.endsWith(searchSuffix)) {
-                                    if (!matches.find(m => m.pubkey === msg.pubkey)) {
-                                        matches.push({ nym: msg.author, pubkey: msg.pubkey });
-                                    }
-                                }
-                            } else {
-                                if (!matches.find(m => m.pubkey === msg.pubkey)) {
-                                    matches.push({ nym: msg.author, pubkey: msg.pubkey });
-                                }
-                            }
-                        }
-                    }
-                });
-            });
-
-        }
-
-        if (matches.length === 0) {
+        const hit = this.lookupNymOrReport(input, { authors: true });
+        if (hit && hit.ambiguous) return null;
+        if (!hit) {
+            const cleanInput = String(input == null ? '' : input).trim().replace(/^@/, '');
             this.displaySystemMessage(this.uiText(`User {cleanInput} not found. Try using the full nym#xxxx format if you know their pubkey suffix.`, { cleanInput }));
             return null;
         }
-
-        if (matches.length > 1 && !searchSuffix) {
-            const matchList = matches.map(m =>
-                `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
-            ).join(', ');
-            this.displaySystemMessage(`Multiple users found: <span data-no-i18n>${matchList}</span>`, 'system', { html: true, feed: true });
-            this.displaySystemMessage('Please specify using the #xxxx suffix', 'system', { feed: true });
-            return null;
-        }
-
-        return matches[0].pubkey;
+        return hit.pubkey;
     },
 
 });

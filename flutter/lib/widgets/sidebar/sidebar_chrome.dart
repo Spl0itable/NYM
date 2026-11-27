@@ -48,13 +48,14 @@ class RenderReportExtent extends RenderProxyBox {
   }
 }
 
-const double kSidebarIcon = 20;
+const double kSidebarIcon = 40;
 
 const double kSidebarGap = 8;
 
-const double kSidebarRowMinH = 36;
+const double kSidebarRowMinH = 54;
 
-double sidebarRowMinH() => touchPlatform() ? kMinTouchTarget : kSidebarRowMinH;
+double sidebarRowMinH() =>
+    touchPlatform() && kMinTouchTarget > kSidebarRowMinH ? kMinTouchTarget : kSidebarRowMinH;
 
 const double kSidebarMenuInset = 1;
 

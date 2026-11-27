@@ -625,44 +625,73 @@ class ChatNavFabs extends ConsumerWidget {
         final key = binding.storageKey;
         final nav = ref.read(chatNavProvider);
         final count = key.isEmpty ? 0 : nav.mentionCountFor(key);
-        final jump = binding.jumpShown;
-        final order =
-            fabRow(bottom: bottom != null, jump: jump, mention: count > 0);
-        if (order.isEmpty) return const SizedBox.shrink();
         final scroller = ref.read(messageListScrollerProvider(key));
-        final children = <Widget>[];
-        for (final k in order) {
-          if (children.isNotEmpty) {
-            children.add(const SizedBox(width: ChatFabs.gap));
-          }
-          switch (k) {
-            case 'mention':
-              children.add(_MentionFab(
-                count: count,
-                onTap: () => binding.jumpMention(scroller),
-              ));
-            case 'jump':
-              children.add(Flexible(
-                child: _JumpPill(
-                  label: binding.jumpLabel,
-                  down: binding.jumpDown,
-                  onTap: () => unawaited(binding.jumpFirst(scroller)),
-                ),
-              ));
-            case 'bottom':
-              children.add(bottom!);
-          }
-        }
-        return ConstrainedBox(
-          key: const ValueKey('chat-nav-row'),
-          constraints: BoxConstraints(minHeight: slot),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: children,
-          ),
+        return ChatNavFabRow(
+          mentions: count,
+          jump: binding.jumpShown,
+          jumpLabel: binding.jumpLabel,
+          jumpDown: binding.jumpDown,
+          onMention: () => binding.jumpMention(scroller),
+          onJump: () => unawaited(binding.jumpFirst(scroller)),
+          bottom: bottom,
+          slot: slot,
         );
       },
+    );
+  }
+}
+
+class ChatNavFabRow extends StatelessWidget {
+  const ChatNavFabRow({
+    super.key,
+    required this.mentions,
+    required this.jump,
+    required this.jumpLabel,
+    required this.jumpDown,
+    required this.onMention,
+    required this.onJump,
+    this.bottom,
+    this.slot = 40,
+  });
+
+  final int mentions;
+  final bool jump;
+  final String jumpLabel;
+  final bool jumpDown;
+  final VoidCallback onMention;
+  final VoidCallback onJump;
+  final Widget? bottom;
+  final double slot;
+
+  @override
+  Widget build(BuildContext context) {
+    final order =
+        fabRow(bottom: bottom != null, jump: jump, mention: mentions > 0);
+    if (order.isEmpty) return const SizedBox.shrink();
+    final children = <Widget>[];
+    for (final k in order) {
+      if (children.isNotEmpty) {
+        children.add(const SizedBox(width: ChatFabs.gap));
+      }
+      switch (k) {
+        case 'mention':
+          children.add(_MentionFab(count: mentions, onTap: onMention));
+        case 'jump':
+          children.add(Flexible(
+            child: _JumpPill(label: jumpLabel, down: jumpDown, onTap: onJump),
+          ));
+        case 'bottom':
+          children.add(bottom!);
+      }
+    }
+    return ConstrainedBox(
+      key: const ValueKey('chat-nav-row'),
+      constraints: BoxConstraints(minHeight: slot),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: children,
+      ),
     );
   }
 }

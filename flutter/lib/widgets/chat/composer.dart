@@ -16,6 +16,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/utils/haptics.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/theme/nym_theme_swap.dart';
+import '../../core/utils/nick_parse.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/layout/layout_model.dart';
 import '../../features/toasts/toast_center.dart';
@@ -129,6 +131,16 @@ Set<String> groupMentionPriority(AppStateNotifier app, Group g) => app
     .groupAccepted(g)
     .where((p) => p != app.currentState.selfPubkey)
     .toSet();
+
+String composerHint(ChatView view, ActiveThread? thread,
+    {required bool botDm, required bool threadsOn}) {
+  if (threadsOn && thread != null && thread.view == view) {
+    return tr('Reply in thread...');
+  }
+  if (botDm) return tr('Message Nymbot, ? for commands...');
+  if (view.kind != ViewKind.channel) return tr('Message, / for commands...');
+  return tr('Message, / for commands, ? for Nymbot...');
+}
 
 class ComposerOverhangInset extends ConsumerWidget {
   const ComposerOverhangInset({super.key, required this.child});
@@ -811,12 +823,13 @@ class _ComposerState extends ConsumerState<Composer>
       openZap: (pubkey, nym) async {
         final baseNym = stripPubkeySuffix(nym);
         _onSystemMessage(
-            tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
+            tr('Checking if @{nym} can receive zaps...',
+                {'nym': isolateNymParts(baseNym, getPubkeySuffix(pubkey))}));
         final lnAddr = await controller.resolveLightningAddressForZap(pubkey);
         if (lnAddr == null || lnAddr.isEmpty) {
           _onSystemMessage(tr(
               '@{nym} cannot receive zaps (no lightning address set)',
-              {'nym': baseNym}));
+              {'nym': isolateNymParts(baseNym, getPubkeySuffix(pubkey))}));
           return;
         }
         if (!mounted) return;
@@ -875,7 +888,8 @@ class _ComposerState extends ConsumerState<Composer>
     if (!mounted) return;
     final nym = ref.read(appStateProvider).selfNym;
     _onSystemMessage(
-        tr('Identity verified. You are now logged in as {nym}.', {'nym': nym}));
+        tr('Identity verified. You are now logged in as {nym}.',
+            {'nym': isolateNymLabel(nym)}));
   }
 
   void _withCurrentGroup(Future<void> Function(String groupId) action) {
@@ -889,14 +903,21 @@ class _ComposerState extends ConsumerState<Composer>
       _onSystemMessage(tr('You must be in a group to add members.'));
       return;
     }
-    final target = resolveTarget(arg, ref.read(usersProvider));
-    if (target == null) {
+    final hit = lookupTarget(arg, ref.read(usersProvider));
+    if (hit != null && hit.isAmbiguous) {
+      _onSystemMessage(ambiguousNymText(hit));
+      _onSystemMessage(
+          tr('Please specify using the #xxxx suffix or full pubkey'));
+      return;
+    }
+    final pubkey = hit?.pubkey;
+    if (pubkey == null) {
       _onSystemMessage(tr('User {user} not found', {'user': arg.trim()}));
       return;
     }
     unawaited(ref
         .read(nostrControllerProvider)
-        .addGroupMembers(view.id, [target.pubkey]));
+        .addGroupMembers(view.id, [pubkey]));
   }
 
   /// Owner/mod only; the target must be banned; publishes `group-unban` to every member.
@@ -922,7 +943,8 @@ class _ComposerState extends ConsumerState<Composer>
     final nym = ref.read(usersProvider)[pubkey]?.nym ??
         'anon#${pubkey.substring(pubkey.length - 4)}';
     ref.read(appStateProvider.notifier).addSystemMessage(
-        tr('@{nym} was unbanned. They can be re-invited.', {'nym': nym}));
+        tr('@{nym} was unbanned. They can be re-invited.',
+            {'nym': isolateNymLabel(nym)}));
   }
 
   /// Emits the `.group-info` block: owner, mods, then members, each alphabetized; prefetches unknown profiles.
@@ -1152,7 +1174,11 @@ class _ComposerState extends ConsumerState<Composer>
     final caret = sel.isValid ? sel.start : _controller.text.length;
     // In the bot PM the `?` palette must survive a space for multi-step subcommands.
     final botPM = _inBotPM();
-    final trigger = detectTrigger(_controller.text, caret: caret, botPM: botPM);
+    final trigger = detectTrigger(_controller.text,
+        caret: caret,
+        botPM: botPM,
+        botPalette:
+            botPM || ref.read(appStateProvider).view.kind == ViewKind.channel);
     _trigger = trigger;
     _selectedIndex = 0;
 
@@ -1334,7 +1360,7 @@ class _ComposerState extends ConsumerState<Composer>
       _replaceTriggerToken(m.insertText);
       return;
     }
-    final fullNym = '${m.baseNym}#${m.suffix}';
+    final fullNym = nickMentionText(m.baseNym, m.pubkey).substring(1);
     final ch = _controller.mentionSentinel(fullNym: fullNym, pubkey: m.pubkey);
     _replaceTriggerToken(ch != null ? '$ch ' : m.insertText);
   }
@@ -1620,7 +1646,7 @@ class _ComposerState extends ConsumerState<Composer>
           : '';
       final quoteLine = ref.read(nostrControllerProvider).anonLaneMessage(_pendingQuoteId)
           ? '> ${lines.first}$quoteRest'
-          : '> @${capNym(quote.author)}: ${lines.first}$quoteRest';
+          : '> @${quoteHeaderName(capNym(quote.author))}: ${lines.first}$quoteRest';
       content = content.isNotEmpty ? '$quoteLine\n\n$content' : quoteLine;
       _pendingQuote = null;
     }
@@ -2679,6 +2705,7 @@ class _ComposerState extends ConsumerState<Composer>
       bottom: const Radius.circular(NymRadius.md),
     );
     final border = _FieldBorder(
+      look: c,
       borderRadius: radius,
       borderSide:
           BorderSide(color: fade(c.glassBorder)),
@@ -2743,11 +2770,11 @@ class _ComposerState extends ConsumerState<Composer>
         isDense: true,
         visualDensity: VisualDensity.standard,
         // Inside an open thread the composer replies into it, so the placeholder says so.
-        hintText: ref.watch(activeThreadProvider) != null
-            ? tr('Reply in thread...')
-            : _isBotDm(ref.watch(currentViewProvider))
-                ? tr('Message Nymbot, ? for commands...')
-                : tr('Message, / for commands, ? for Nymbot...'),
+        hintText: composerHint(
+            ref.watch(currentViewProvider), ref.watch(activeThreadProvider),
+            botDm: _isBotDm(ref.watch(currentViewProvider)),
+            threadsOn:
+                ref.watch(settingsProvider.select((s) => s.threadsEnabled))),
         // One line with ellipsis, or longer translated hints wrap and push the buttons down.
         hintMaxLines: 1,
         hintStyle: TextStyle(
@@ -3421,7 +3448,7 @@ class _ComposerState extends ConsumerState<Composer>
     final quote = _pendingQuote;
     if (quote != null) {
       final first = quote.text.split('\n').first;
-      content = '> @${quote.author}: $first\n\n$content';
+      content = '> @${quoteHeaderName(quote.author)}: $first\n\n$content';
     }
     return content;
   }
@@ -3836,7 +3863,7 @@ class _IconBtnState extends State<_IconBtn> {
         onEnter: enabled ? (_) => setState(() => _hover = true) : null,
         onExit: enabled ? (_) => setState(() => _hover = false) : null,
         child: AnimatedContainer(
-          duration: NymMotion.transition,
+          duration: NymThemeSwap.motion(context, NymMotion.transition),
           curve: NymMotion.curve,
           decoration: BoxDecoration(
             color: shownFill,
@@ -3998,7 +4025,7 @@ class _SendButtonState extends State<_SendButton> {
           onPointerUp: (_) => _cancelHold(),
           onPointerCancel: (_) => _cancelHold(),
           child: AnimatedContainer(
-            duration: NymMotion.transition,
+            duration: NymThemeSwap.motion(context, NymMotion.transition),
             curve: NymMotion.curve,
             decoration: BoxDecoration(
               color: c.primaryA(hovering ? 0.18 : 0.10),
@@ -4101,11 +4128,26 @@ class _SendButtonState extends State<_SendButton> {
 }
 
 class _FieldBorder extends OutlineInputBorder {
-  const _FieldBorder({super.borderSide, super.borderRadius});
+  const _FieldBorder({required this.look, super.borderSide, super.borderRadius});
+
+  final NymColors look;
+
+  @override
+  _FieldBorder copyWith({
+    BorderSide? borderSide,
+    BorderRadius? borderRadius,
+    double? gapPadding,
+  }) =>
+      _FieldBorder(
+        look: look,
+        borderSide: borderSide ?? this.borderSide,
+        borderRadius: borderRadius ?? this.borderRadius,
+      );
 
   @override
   ShapeBorder? lerpFrom(ShapeBorder? a, double t) =>
-      a is OutlineInputBorder && a.borderSide == borderSide
+      (a is _FieldBorder && !NymThemeSwap.sameLook(a.look, look)) ||
+              (a is OutlineInputBorder && a.borderSide == borderSide)
           ? this
           : super.lerpFrom(a, t);
 }
@@ -4236,7 +4278,9 @@ class _QuotePreviewChip extends ConsumerWidget {
     final suffix = split.suffix;
     // Unresolved authors render plain.
     final users = ref.watch(usersProvider);
-    final t = resolveTarget(author, users);
+    final hit =
+        suffix.isEmpty ? null : lookupMention(base, suffix.substring(1), users);
+    final t = hit?.pubkey == null ? null : ResolvedTarget(hit!.pubkey!, hit.nym);
     return _PreviewChip(
       barColor: c.primary,
       onClose: onClose,

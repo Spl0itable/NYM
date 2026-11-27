@@ -10,6 +10,7 @@ import '../../widgets/common/nym_sheet.dart';
 import '../group_tools/group_tools_ui.dart' show GtPanelShell;
 import '../i18n/i18n.dart';
 import '../messages/format/discord_timestamp.dart';
+import '../../widgets/common/nym_label.dart' show isolateNymLabel;
 import 'group_invites.dart';
 import 'group_invites_service.dart';
 import 'group_logic.dart' show kMaxGroupMembers;
@@ -246,8 +247,8 @@ class _InviteCardState extends State<_InviteCard> {
     final gid = '${item['gid']}';
     final at = GroupInvites.toInt(item['it']);
     final line = item['via'] == 'add'
-        ? tr('{nym} added you', {'nym': nym})
-        : tr('Invited by {nym}', {'nym': nym});
+        ? tr('{nym} added you', {'nym': isolateNymLabel(nym)})
+        : tr('Invited by {nym}', {'nym': isolateNymLabel(nym)});
     final dim = TextStyle(color: c.textDim, fontSize: 12);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -311,7 +312,8 @@ class _InviteCardState extends State<_InviteCard> {
                     PopupMenuItem<String>(
                       value: 'block',
                       child:
-                          Text(tr('Decline and block {nym}', {'nym': nym})),
+                          Text(tr('Decline and block {nym}',
+                              {'nym': isolateNymLabel(nym)})),
                     ),
                   ],
                 ),

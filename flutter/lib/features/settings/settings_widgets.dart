@@ -10,6 +10,7 @@ import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/common/hit_slop.dart';
 import '../../widgets/common/nym_switch.dart';
 import '../../core/theme/nym_a11y.dart';
+import '../../core/theme/nym_theme_swap.dart';
 
 /// Shared form controls matching the PWA's settings styling, colored from `context.nym`.
 
@@ -564,7 +565,7 @@ class SegmentGroup<T> extends StatelessWidget {
                 child: GestureDetector(
                 onTap: () => onChanged(s.value),
                 child: AnimatedContainer(
-                  duration: NymMotion.transition,
+                  duration: NymThemeSwap.motion(context, NymMotion.transition),
                   curve: NymMotion.curve,
                   padding:
                       const EdgeInsets.symmetric(vertical: 8, horizontal: 4),

@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
 
+import '../../core/theme/nym_theme_swap.dart';
+
 abstract class Eased<T> extends StatefulWidget {
   const Eased({super.key, required this.duration, this.curve = Curves.linear});
 
@@ -28,7 +30,7 @@ class _EasedState<T> extends State<Eased<T>> with SingleTickerProviderStateMixin
     _from = _run?.isAnimating == true ? _shown : old.target;
     _shown = _from;
     final run = _run ??= AnimationController(vsync: this)..addListener(_step);
-    run.duration = widget.duration;
+    run.duration = NymThemeSwap.motion(context, widget.duration);
     run.forward(from: 0);
   }
 

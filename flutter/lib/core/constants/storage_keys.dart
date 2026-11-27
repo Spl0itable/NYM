@@ -127,7 +127,8 @@ class StorageKeys {
   static const attestAuthority = 'nym_attest_authority';
   static const hideNonPinned = 'nym_hide_non_pinned';
   static const hidePreviews = 'nym_hide_previews';
-  static const sidebarWidth = 'nym_sidebar_width';
+  static const sidebarWidth = 'nym_sidebar_width_v2';
+  static const legacySidebarWidth = 'nym_sidebar_width';
   static const columnWidth = 'nym_column_width';
   static const colorfulMessages = 'nym_colorful_messages';
   static const largeTargets = 'nym_large_targets';

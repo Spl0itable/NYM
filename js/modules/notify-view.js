@@ -5,12 +5,17 @@
         return typeof v === 'string' ? v : '';
     }
 
+    const NO_THREADS = Object.freeze([]);
+
     function normView(view) {
         const v = view && typeof view === 'object' ? view : {};
         const keys = Array.isArray(v.keys) ? v.keys.filter((k) => typeof k === 'string' && k) : [];
         const t = v.thread && typeof v.thread === 'object' ? v.thread : null;
         const thread = t && str(t.key) && str(t.root) ? { key: t.key, root: t.root } : null;
-        return { focused: v.focused === true, keys, thread };
+        const threads = Array.isArray(v.threads) && v.threads.length
+            ? v.threads.filter((x) => x && typeof x === 'object' && str(x.key) && str(x.root)).map((x) => ({ key: x.key, root: x.root }))
+            : NO_THREADS;
+        return { focused: v.focused === true, keys, thread, threads };
     }
 
     function normEvent(ev) {
@@ -21,8 +26,9 @@
     function threadOpen(view, ev) {
         const v = normView(view);
         const e = normEvent(ev);
-        if (!e.key || !e.root || !v.thread) return false;
-        return v.thread.key === e.key && v.thread.root === e.root;
+        if (!e.key || !e.root) return false;
+        if (v.thread && v.thread.key === e.key && v.thread.root === e.root) return true;
+        return v.threads.some((t) => t.key === e.key && t.root === e.root);
     }
 
     function onScreen(view, ev) {

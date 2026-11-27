@@ -19,7 +19,7 @@ class MeshPeer {
     this.avatarFilePath,
     this.supportsPrivateMedia = false,
     DateTime? lastSeen,
-  })  : _nickname = nickname == null ? null : capNym(nickname),
+  })  : _nickname = nickname == null ? null : nymWellFormed(nickname),
         lastSeen = lastSeen ?? DateTime.now();
 
   /// 16-hex mesh id: first 8 bytes of SHA-256(noise pubkey).
@@ -27,9 +27,11 @@ class MeshPeer {
 
   String? _nickname;
 
-  String? get nickname => _nickname;
+  String? get nickname => _nickname == null
+      ? null
+      : meshNym(_nickname!, nostrLinkVerified ? nostrPubkey : null);
 
-  set nickname(String? v) => _nickname = v == null ? null : capNym(v);
+  set nickname(String? v) => _nickname = v;
 
   /// Curve25519 static key (Noise identity) from the announcement.
   Uint8List? noisePublicKey;

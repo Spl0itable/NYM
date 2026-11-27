@@ -1,3 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 final slideOutListCloseProvider = StateProvider<int>((ref) => 0);
+
+final showChatRequestProvider = StateProvider<int>((ref) => 0);

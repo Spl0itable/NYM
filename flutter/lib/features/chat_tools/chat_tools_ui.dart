@@ -25,6 +25,7 @@ import '../../widgets/context_menu/interaction_hooks.dart';
 import '../../widgets/nym_icons.dart';
 import '../duo/duo_rail.dart';
 import '../i18n/i18n.dart';
+import '../layout/slide_out_list.dart' show showChatRequestProvider;
 import '../media_notes/media_notes.dart' show parseMeshFileName;
 import '../messages/format/message_content.dart';
 import '../messages/inline_network_image.dart';
@@ -301,6 +302,7 @@ void jumpToMessage(ChatToolsReader read, String id) {
         tr("The original message isn't loaded on this device anymore."));
     return;
   }
+  read(showChatRequestProvider.notifier).state++;
   final key = found.key;
   final ChatView target = key.startsWith('pm-')
       ? ChatView.pm(key.substring(3))
@@ -601,7 +603,8 @@ class SavedMessagesPanel extends ConsumerWidget {
                       ? '${chat['n']}'
                       : chat['t'] == 'group'
                           ? _savedGroupLabel(app, chat)
-                          : tr('PM with {name}', {'name': '${chat['n']}'});
+                          : tr('PM with {name}',
+                              {'name': isolateNymLabel('${chat['n']}')});
                   final when = formatFullTimestamp(
                       DateTime.fromMillisecondsSinceEpoch(
                           ((e['at'] as num?)?.toInt() ?? 0) * 1000),

@@ -737,9 +737,11 @@ class MeshService {
     }
     if (isBitchatVerifyContent(content)) return true;
     _touchPeer(senderPeerID, nickname: tlv.sender);
+    final sender = _peers[senderPeerID];
     _publicMessages.add(MeshPublicMessage(
       senderPeerID: tlv.senderPeerID ?? senderPeerID,
-      senderNickname: capNym(tlv.sender),
+      senderNickname: meshNym(tlv.sender,
+          sender != null && sender.nostrLinkVerified ? sender.nostrPubkey : null),
       content: content,
       messageId: tlv.id,
       timestampMs: tlv.timestampMs,

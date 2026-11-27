@@ -200,26 +200,175 @@
         _cnUnseen(entry) {
             const m = entry && entry.mark;
             if (!m || !(m.at > 0)) return [];
+            if (entry.root) return N().unseenRows(this._tnRowsOf(entry), m);
             return N().unseenRows(this._cnShown(entry.key, m.at), m);
         },
 
-        _cnPlaceDivider(key) {
-            const entry = this._cnEntries().get(key);
+        _tnMap() {
+            if (!this._tnEntryMap) this._tnEntryMap = new Map();
+            return this._tnEntryMap;
+        },
+
+        _tnMentions() {
+            if (!this._tnMentionState) this._tnMentionState = N().emptyMentions();
+            return this._tnMentionState;
+        },
+
+        _tnFor(key) {
+            const open = key && typeof this._threadOpenFor === 'function' ? this._threadOpenFor(key) : null;
+            if (!open || !open.container.isConnected) return null;
             const ctx = this._cnContextFor(key);
-            if (!entry || !ctx) return;
-            entry.placed = true;
-            ctx.container.querySelectorAll('.cn-divider').forEach((d) => d.remove());
+            if (!ctx || ctx.container !== open.container) return null;
+            return this._tnMap().get(key + '|' + open.at.rootId) || this._tnCapture(open.at.rootId, open.at.ctx);
+        },
+
+        _tnCapture(rootId, ctx) {
+            if (!rootId || !ctx || !ctx.storageKey) return null;
+            const k = ctx.storageKey + '|' + rootId;
+            const map = this._tnMap();
+            const had = map.get(k);
+            const e = had || { key: k, conv: ctx.storageKey, root: rootId };
+            const read = typeof this._threadLastReadMap === 'function' && typeof this._threadReadKey === 'function'
+                ? (this._threadLastReadMap().get(this._threadReadKey(ctx.storageKey, rootId)) || 0) : 0;
+            const chat = this._cnEntries().get(ctx.storageKey);
+            const conv = chat ? chat.lastRead : ((this.channelLastRead && this.channelLastRead.get(ctx.storageKey)) || 0);
+            e.mark = N().threadOpenMark(had && had.mark, read, conv);
+            if (!had) {
+                map.set(k, e);
+                if (map.size > 200) map.delete(map.keys().next().value);
+            }
+            Object.assign(e, { openedAt: nowSec(), openedMs: Date.now(), info: null, placed: false, landed: false, landing: false, scrolled: false, pin: null, base: e.mark.at });
+            const items = N().threadMentionScan(this._tnRowsOf(e), e.mark, e.openedAt);
+            if (items.length) this._tnMentionState = N().mentionAdd(this._tnMentions(), k, items, Date.now());
+            return e;
+        },
+
+        _tnRowsOf(e) {
+            const list = this._cnRaw(e.conv);
+            const ver = (this._cfVersion || 0) + ':' + (this._cfEditEpoch || 0) + ':' + (this._cnFilterEpoch || 0) + ':' + ((this.deletedEventIds && this.deletedEventIds.size) || 0);
+            const c = e._rows;
+            if (c && c.list === list && c.len === list.length && c.ver === ver) return c.rows;
+            const replies = [];
+            for (const m of list) {
+                if (!m || m.threadRoot !== e.root) continue;
+                if (typeof this._threadReplyFiltered === 'function' && this._threadReplyFiltered(m)) continue;
+                replies.push(m);
+            }
+            if (typeof this._compareMessages === 'function') replies.sort((a, b) => this._compareMessages(a, b));
+            const rows = replies.map((m) => Object.assign(this._cnRow(m), { mention: this._cnIsMention(m) }));
+            e._rows = { list, len: list.length, ver, rows };
+            return rows;
+        },
+
+        _tnTrack(ctx, e) {
+            if (typeof document === 'undefined' || document.hidden) return;
+            if (!e.placed || e.landing || !ctx.scroller) return;
+            const sc = ctx.scroller;
+            if (sc._cnKeep && sc._cnKeep.shift && Math.abs(sc._cnKeep.shift()) >= 1) return;
+            const v = sc.getBoundingClientRect();
+            if (!(v.height > 0)) return;
+            const els = this._cnRows(ctx);
+            const n = els.length;
+            const bottom = N().atBottom(sc.scrollTop);
+            const i = bottom ? n - 1 : N().markIndex((k) => els[k].getBoundingClientRect().bottom, v.top, v.bottom + 1, n);
+            const rows = this._tnRowsOf(e);
+            let mark = e.mark;
+            if (i >= 0) {
+                const at = this._cnRowAt(els[i]);
+                const id = els[i].dataset.messageId;
+                const same = rows.filter((r) => r.at === at);
+                const k = same.findIndex((r) => r.id === id);
+                mark = N().markAdvance(mark, at, k >= 0 ? same.slice(Math.max(0, k + 1 - N().JUMP.markMax), k + 1).map((r) => r.id) : [id]);
+            }
+            if (bottom && rows.length) {
+                const last = rows[rows.length - 1].at;
+                mark = N().markAdvance(mark, last, rows.filter((r) => r.at === last).map((r) => r.id));
+            }
+            e.mark = mark;
+            if (this._cnOffScreen(ctx)) return;
+            const ms = this._tnMentions();
+            const mc = ms.chats[e.key];
+            if (!mc || !mc.ids.length) return;
+            this._tnMentionState = bottom ? N().mentionClear(ms, e.key, Date.now()) : N().mentionMark(ms, e.key, e.mark, Date.now());
+        },
+
+        _tnShownMentions(e) {
+            const ms = this._tnMentions();
+            const mc = ms.chats[e.key];
+            if (!mc || !mc.ids.length) return ms;
+            const live = new Set(this._tnRowsOf(e).map((r) => r.id));
+            const gone = mc.ids.map((x) => x.id).filter((id) => !live.has(id));
+            return gone.length ? N().mentionDrop(ms, e.key, gone) : ms;
+        },
+
+        _tnOnReply(message) {
+            if (!message || !message.threadRoot || typeof this._threadConvKeyForMessage !== 'function') return;
+            const key = this._threadConvKeyForMessage(message);
+            const e = this._tnFor(key);
+            if (!e || e.root !== message.threadRoot) return;
+            const ctx = this._cnContextFor(key);
+            if (!ctx) return;
+            const row = this._cnRow(message);
+            if (!message.isHistorical) {
+                if (row.own) e.mark = N().markAdvance(e.mark, row.at, [row.id]);
+                else if (!N().markUnder(e.mark, row.at, row.id) && this._cnIsMention(message)
+                    && (document.hidden || this._cnOffScreen(ctx) || !N().atBottom(ctx.scroller.scrollTop))) {
+                    this._tnMentionState = N().mentionAdd(this._tnMentions(), e.key, [{ id: row.id, at: row.at }], Date.now());
+                }
+            }
+            this._cnSchedule(key);
+        },
+
+        _cnInfo(entry) {
             if (!entry.info && !entry.landed && entry.base > 0 && entry.mark.at > 0) {
-                const rows = this._cnShown(key, entry.mark.at);
+                const rows = entry.root ? this._tnRowsOf(entry) : this._cnShown(entry.key, entry.mark.at);
                 const first = N().unseenFirst(rows, entry.mark);
                 const row = first ? rows.find((r) => r.id === first) : null;
                 if (row && row.at <= entry.openedAt) entry.info = { id: first };
             }
-            const info = entry.info;
+            return entry.info;
+        },
+
+        _cnWantsLanding(entry) {
+            return !entry.landed && !entry.scrolled && Date.now() - (entry.openedMs || 0) < 8000;
+        },
+
+        _cnLandTarget(key) {
+            const entry = this._cnEntries().get(key);
+            if (!entry || !this._cnWantsLanding(entry) || !this._cnContextFor(key)) return null;
+            const info = this._cnInfo(entry);
+            return info ? info.id : null;
+        },
+
+        _cnDividerEl(key) {
+            const divider = document.createElement('div');
+            divider.className = 'cn-divider';
+            divider.setAttribute('role', 'separator');
+            divider.dataset.cnKey = key;
+            divider.innerHTML = `<span>${this.escapeHtml(this._cn(N().STRINGS.newMessages))}</span>`;
+            return divider;
+        },
+
+        _cnDividerBefore(ctx, el, key) {
+            const group = el.closest('.message-group');
+            const head = group && group.parentElement === ctx.container && group.querySelector('[data-message-id]') === el ? group : el;
+            const prev = head.previousElementSibling;
+            return prev && prev.classList.contains('cn-divider') && prev.dataset.cnKey === key ? prev : null;
+        },
+
+        _cnPlaceDivider(key) {
+            const thread = this._tnFor(key);
+            const entry = thread || this._cnEntries().get(key);
+            const ctx = this._cnContextFor(key);
+            if (!entry || !ctx) return;
+            entry.placed = true;
+            const info = this._cnInfo(entry);
+            const find = () => this._cnFindMessage(ctx, info.id);
+            let el = info ? find() : null;
+            const kept = el && el.parentNode ? this._cnDividerBefore(ctx, el, key) : null;
+            ctx.container.querySelectorAll('.cn-divider').forEach((d) => { if (d !== kept) d.remove(); });
             if (info) {
-                const wanted = !entry.landed && !entry.scrolled && Date.now() - (entry.openedMs || 0) < 8000;
-                const find = () => this._cnFindMessage(ctx, info.id);
-                let el = find();
+                const wanted = this._cnWantsLanding(entry);
                 let loaded = false;
                 this._olderRegroupLater = true;
                 try {
@@ -236,13 +385,13 @@
                 if (loaded && !(el && el.parentNode) && typeof this._recomputeAllBubbleGrouping === 'function') this._recomputeAllBubbleGrouping(ctx.container);
                 if (wanted && !el) entry.landed = true;
                 if (el && el.parentNode) {
-                    const divider = document.createElement('div');
-                    divider.className = 'cn-divider';
-                    divider.setAttribute('role', 'separator');
-                    divider.dataset.cnKey = key;
-                    divider.innerHTML = `<span>${this.escapeHtml(this._cn(N().STRINGS.newMessages))}</span>`;
-                    el.parentNode.insertBefore(divider, el);
-                    if (typeof this._recomputeAllBubbleGrouping === 'function') this._recomputeAllBubbleGrouping(ctx.container);
+                    if (!kept) {
+                        el.parentNode.insertBefore(this._cnDividerEl(key), el);
+                        if (typeof this._recomputeAllBubbleGrouping === 'function') this._recomputeAllBubbleGrouping(ctx.container);
+                    } else if (kept !== entry.preplaced && typeof this._applyAllBubbleGrouping === 'function') {
+                        this._applyAllBubbleGrouping(ctx.container);
+                    }
+                    entry.preplaced = null;
                     if (wanted) {
                         entry.landed = true;
                         entry.landing = true;
@@ -254,7 +403,7 @@
                             const mark = now && now.container.querySelector('.cn-divider');
                             if (mark) {
                                 const sc = now.scroller;
-                                if (sc) sc.scrollTop += mark.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+                                if (sc) sc.scrollTop += mark.getBoundingClientRect().top - sc.getBoundingClientRect().top - this._cnTopInset(now);
                                 if (ctx.col) ctx.col._atBottom = false;
                                 else this.userScrolledUp = true;
                             }
@@ -263,7 +412,22 @@
                     }
                 }
             }
-            this._cnUpdateFabs(key);
+            if (!entry.landing) this._cnUpdateFabs(key);
+        },
+
+        _cnPreplaceDivider(container, key, id) {
+            const el = this._cnFindMessage({ container }, id);
+            const entry = this._cnEntries().get(key);
+            if (!el || !el.parentNode || !entry) return;
+            entry.preplaced = this._cnDividerEl(key);
+            el.parentNode.insertBefore(entry.preplaced, el);
+        },
+
+        _cnTopInset(ctx) {
+            const bar = ctx && ctx.container && ctx.scroller && ctx.container.classList.contains('thread-view-active')
+                ? ctx.container.querySelector(':scope > .thread-view-bar') : null;
+            if (!bar) return 0;
+            return Math.max(0, bar.getBoundingClientRect().bottom - ctx.scroller.getBoundingClientRect().top);
         },
 
         _cnFindMessage(ctx, id) {
@@ -299,6 +463,8 @@
             if (typeof document === 'undefined' || document.hidden) return;
             const ctx = this._cnContextFor(key);
             if (!ctx || !ctx.scroller) return;
+            const thread = this._tnFor(key);
+            if (thread) return this._tnTrack(ctx, thread);
             const entry = this._cnEntries().get(key);
             if (!entry || !entry.placed || entry.landing) return;
             const sc = ctx.scroller;
@@ -440,9 +606,11 @@
             const host = this._cnFabHost(ctx);
             if (!host) return;
             host.dataset.cnKey = key;
-            if (!this._cnSweeping) this._cnTrack(key);
+            const thread = this._tnFor(key);
+            if (thread) this._tnTrack(ctx, thread);
+            else if (!this._cnSweeping) this._cnTrack(key);
             const { jump, at } = this._cnFabButtons(host);
-            const entry = this._cnEntries().get(key);
+            const entry = thread || this._cnEntries().get(key);
             const unseen = entry ? this._cnUnseen(entry) : [];
             const showJump = unseen.length > 0;
             if (showJump) {
@@ -460,7 +628,7 @@
                 delete jump.dataset.cnDir;
             }
             jump.classList.toggle('nm-hidden', !showJump);
-            const n = N().mentionCount(this._cnShownMentions(key), key);
+            const n = thread ? N().mentionCount(this._tnShownMentions(thread), thread.key) : N().mentionCount(this._cnShownMentions(key), key);
             at.classList.toggle('nm-hidden', n <= 0);
             at.querySelector('.cn-at-count').textContent = n > 0 ? String(n) : '';
             at.setAttribute('aria-label', n ? this._cn('Unread mentions ({n})', { n }) : this._cn(N().STRINGS.mentions));
@@ -497,7 +665,7 @@
             let pending = false;
             const mark = () => {
                 const k = ctx.col ? ctx.col.key : this._cnSingleKey();
-                const e = this._cnEntries().get(k);
+                const e = this._tnFor(k) || this._cnEntries().get(k);
                 if (e) {
                     e.scrolled = true;
                     e.pin = null;
@@ -523,7 +691,7 @@
             const ctx = this._cnContextFor(key);
             if (!ctx) return;
             this._cnBindScroll(ctx);
-            if (!this._cnEntries().has(key)) {
+            if (!this._tnFor(key) && !this._cnEntries().has(key)) {
                 this._cnUpdateFabs(key);
                 return;
             }
@@ -533,7 +701,7 @@
 
         async jumpToFirstUnread(key) {
             const k = key || this._cnActiveKey();
-            const entry = this._cnEntries().get(k);
+            const entry = this._tnFor(k) || this._cnEntries().get(k);
             const ctx = this._cnContextFor(k);
             if (!entry || !ctx) return false;
             entry.placed = true;
@@ -563,18 +731,18 @@
         },
 
         _cnUnpin(key) {
-            const entry = key ? this._cnEntries().get(key) : null;
+            const entry = key ? (this._tnFor(key) || this._cnEntries().get(key)) : null;
             if (entry) entry.pin = null;
         },
 
         _cnCenter(key) {
-            const entry = this._cnEntries().get(key);
+            const entry = this._tnFor(key) || this._cnEntries().get(key);
             const ctx = this._cnContextFor(key);
             const pin = entry && entry.pin;
             if (!ctx || !pin || Date.now() > pin.until) return;
             const anchor = this._cnAnchor(ctx, entry, pin.id);
             if (!anchor) return;
-            const want = anchor.getBoundingClientRect().top - ctx.scroller.getBoundingClientRect().top - N().JUMP.landPx;
+            const want = anchor.getBoundingClientRect().top - ctx.scroller.getBoundingClientRect().top - N().JUMP.landPx - this._cnTopInset(ctx);
             if (Math.abs(want) < 2) return;
             ctx.scroller.scrollTop += want;
             if (ctx.col) ctx.col._atBottom = false;
@@ -809,16 +977,43 @@
                 }
             }
             if (!this._bulkAppending && !message.isHistorical && entry && !N().markUnder(entry.mark, row.at, row.id) && this._cnIsMention(message)
-                && (document.hidden || this._cnOffScreen(ctx) || !N().atBottom(ctx.scroller.scrollTop))) {
+                && (document.hidden || this._cnOffScreen(ctx) || !N().atBottom(ctx.scroller.scrollTop) || !!this._tnFor(key))) {
                 this._cnSetMentions(N().mentionAdd(this._cnMentions(), key, [{ id: row.id, at: row.at }], Date.now()), [key]);
             }
             this._cnSchedule(key);
+        },
+
+        _tnJumpMention(k, ctx, e) {
+            for (let guard = 0; guard < 200; guard++) {
+                const id = N().mentionNext(this._tnShownMentions(e), e.key);
+                if (!id) { this._cnUpdateFabs(k); return false; }
+                const el = this._cnFindMessage(ctx, id);
+                if (!el) {
+                    this._tnMentionState = N().mentionDrop(this._tnMentions(), e.key, [id]);
+                    continue;
+                }
+                e.scrolled = true;
+                e.pin = null;
+                el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                el.classList.remove('cn-flash');
+                void el.offsetWidth;
+                el.classList.add('cn-flash');
+                setTimeout(() => el.classList.remove('cn-flash'), 1600);
+                if (ctx.col) ctx.col._atBottom = false;
+                else this.userScrolledUp = true;
+                this._tnMentionState = N().mentionSeen(this._tnMentions(), e.key, id, Date.now());
+                this._cnUpdateFabs(k);
+                return true;
+            }
+            return false;
         },
 
         async jumpToNextMention(key) {
             const k = key || this._cnActiveKey();
             const ctx = this._cnContextFor(k);
             if (!ctx) return false;
+            const thread = this._tnFor(k);
+            if (thread) return this._tnJumpMention(k, ctx, thread);
             for (let guard = 0; guard < 200; guard++) {
                 const id = N().mentionNext(this._cnShownMentions(k), k);
                 if (!id) { this._cnUpdateFabs(k); return false; }
@@ -2247,6 +2442,13 @@
         if (c) c.querySelectorAll('.cn-divider').forEach((d) => d.remove());
     });
     wrap('displayMessage', function (args) { this._cnOnDisplayed(args[0]); });
+    wrap('openThreadView', function (args) {
+        const at = this.activeThread;
+        if (at && at.rootId === args[0] && at.ctx) this._cnAfterRender(at.ctx.storageKey);
+    }, function (rootId, ctx) {
+        if (typeof this.threadsEnabled === 'function' && this.threadsEnabled()) this._tnCapture(rootId, ctx);
+    });
+    wrap('_onThreadReplyArrived', function (args) { this._tnOnReply(args[0]); });
     wrap('_msgIndexRekey', function (args) { this._cnRejudgeMentions(this._cnKeyOf(args[1])); });
     wrap('hideMessagesFromBlockedUser', function () { for (const k of this._cnOpenKeys()) this._cnSchedule(k); });
     wrap('handleDeletionEvent', function () { for (const k of this._cnOpenKeys()) this._cnSchedule(k); });

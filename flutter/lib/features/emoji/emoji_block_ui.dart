@@ -22,6 +22,7 @@ import '../settings/settings_widgets.dart' show DangerPillButton;
 import 'custom_emoji.dart';
 import 'emoji_block.dart';
 import 'emoji_data.dart' show kEmojiPackFavoritesKey;
+import '../../widgets/common/nym_label.dart' show isolateNymLabel;
 
 class EmojiPackBlockButton extends StatelessWidget {
   const EmojiPackBlockButton({super.key, required this.onTap});
@@ -214,7 +215,8 @@ class BlockedEmojiPacksList extends ConsumerWidget {
                       style: TextStyle(color: c.text, fontSize: 13)),
                   Text(
                       tr('by {author}', {
-                        'author': emojiPackAuthorLabel(users, e.author),
+                        'author': isolateNymLabel(
+                            emojiPackAuthorLabel(users, e.author)),
                       }),
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: c.textDim, fontSize: 12)),
